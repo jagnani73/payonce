@@ -157,7 +157,7 @@ export function newInvoiceId(ledger: Ledger): string {
 // What a standing line is about. A standing line says how things are now and is
 // written again on every check. A line with no topic records something that
 // happened.
-type Topic = "decision" | "waiting" | "cost" | "bank-details";
+type Topic = "decision" | "waiting" | "approval" | "cost" | "bank-details";
 
 // True when the timeline's last word on a topic is this message and nothing has
 // happened since.
@@ -753,6 +753,8 @@ export function approveReplacement(
     invoiceId,
     "approval",
     `Approved by ${approver}: ${formatMoney(terms.amountMinor, terms.currency)} to ${terms.payTo} (the account on file)`,
+    // Standing, so the check that follows does not restate the decision.
+    "approval",
   );
   return terms;
 }
