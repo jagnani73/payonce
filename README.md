@@ -4,7 +4,7 @@ A payment incident agent that recovers failed supplier transfers without paying 
 
 PayOnce is my entry for the Airwallex Agentic Banking Hackathon 2026. It starts from starter kit 3, Payment Ops Incident Commander.
 
-> Status: early build. PayOnce runs a full incident against the Airwallex sandbox: it sends a transfer, fails it, decides, and sends one replacement under a duplicate lock. Approvals and email reading are not built yet.
+> Status: early build. PayOnce runs a full incident against the Airwallex sandbox: it sends a transfer, fails it, decides, and sends one replacement under a duplicate lock. A person can approve a replacement the policy will not send on its own. Email reading is not built yet.
 
 ## The problem
 
@@ -33,6 +33,12 @@ PayOnce writes every payment attempt to a SQLite ledger (`payonce.db`) before it
 
 Each attempt keeps its `request_id`. A retry reuses it, and Airwallex then returns the transfer it already has. An incident closes only when one attempt is paid and every other attempt has failed.
 
+## Approvals
+
+When the original has failed and the policy escalates, PayOnce records an approval request with the exact terms: the amount, the currency, the beneficiary and the evidence behind the escalation. `pnpm approve <INVOICE> <NAME>` shows those terms and records the approval.
+
+The next `pnpm recover` run for that invoice rebuilds the terms from current data and compares them with what was approved. If they match, it sends the replacement. If anything changed, the approval is void and PayOnce opens a new request. An approval is spent on one attempt, and it cannot override the duplicate lock.
+
 ## Run it
 
 ```bash
@@ -54,6 +60,16 @@ pnpm recover CHANNEL_TIMEOUT INV-2001
 
 The second argument names the invoice. Running the same invoice again reports its state and sends nothing. The client refuses any host that is not the Airwallex sandbox.
 
+To approve an escalated replacement:
+
+```bash
+pnpm recover BENEFICIARY_BANK_RETURNED INV-3001
+pnpm approve INV-3001 Yash
+pnpm recover - INV-3001
+```
+
+The first command ends in an escalation. The second shows the terms and records the approval. The third sends the replacement. The failure type is ignored for an invoice that already exists, so `-` works as a placeholder.
+
 ## Layout
 
 | File | Contents |
@@ -63,6 +79,8 @@ The second argument names the invoice. Running the same invoice again reports it
 | `src/assess.ts` | Maps an Airwallex transfer to the facts the policy reads |
 | `src/ledger.ts` | Obligations and payment attempts in SQLite, with the duplicate lock |
 | `src/payments.ts` | Sends an attempt under its `request_id` and syncs transfer state into the ledger |
+| `src/approval.ts` | Approval terms and the hash that binds an approval to them |
+| `src/approve.ts` | Records a person's approval for an escalated invoice |
 | `src/recover.ts` | One incident run against the sandbox |
 | `src/index.ts` | Three sample incidents run through the policy |
 | `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, balances and the simulation calls |
@@ -71,6 +89,6 @@ The code holds amounts in minor units and converts at the Airwallex boundary.
 
 ## Not built yet
 
-- Approvals bound to the amount, currency, beneficiary and evidence shown.
 - The model reading supplier emails.
+- Approving payment to new bank details. An approval covers a replacement to the same beneficiary.
 - Payout webhooks. The run polls for status.
