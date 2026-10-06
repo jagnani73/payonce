@@ -9,10 +9,10 @@ import { KeywordReader } from "./keyword-reader.js";
 // Gemini's OpenAI-compatible endpoint. Any service that speaks the same chat
 // completions format can stand in for it.
 const DEFAULT_BASE_URL: string = "https://generativelanguage.googleapis.com/v1beta/openai";
-const DEFAULT_MODEL: string = "gemini-3.8-flash";
-const REQUEST_TIMEOUT_MS: number = 30_000;
-const MAX_TRIES: number = 2;
-const RETRY_DELAY_MS: number = 2_000;
+// Tried in order. Free-tier capacity comes and goes, so a second model is what
+// keeps one busy model from sending an incident to a person.
+const DEFAULT_MODELS: string[] = ["gemini-3.5-flash", "gemini-3.1-flash-lite"];
+const REQUEST_TIMEOUT_MS: number = 8_000;
 const MAX_ERROR_LENGTH: number = 200;
 
 const SYSTEM: string = `You read supplier emails for a company's accounts payable team. The team paid an invoice and the supplier has written in about it. A payment system uses your reading to decide whether to wait, send a replacement payment or hand the case to a person.
@@ -54,9 +54,9 @@ class ModelError extends Error {
   }
 }
 
-// A rate limit or a server error may pass. Any other error status will not.
-function worthRetrying(error: unknown): boolean {
-  return !(error instanceof ModelError) || error.status === 429 || error.status >= 500;
+// The service refused the key, so asking another model will not help.
+function keyRefused(error: unknown): boolean {
+  return error instanceof ModelError && (error.status === 401 || error.status === 403);
 }
 
 // An email cannot close the tag it sits in.
@@ -103,9 +103,10 @@ function toAnswers(content: string): Answers {
   return { claimsNonReceipt, asksForNewBankDetails };
 }
 
-// Reads the thread with one chat completion. It throws on an error status, a
-// cut-off answer or an answer that is not the findings. The engine then marks
-// the thread unread, which sends the invoice to a person.
+// Reads the thread with one chat completion. If a model fails, the next one in
+// the list is asked. If every model fails, or an answer is cut off or is not
+// the findings, it throws. The engine then marks the thread unread, which sends
+// the invoice to a person.
 //
 // The keyword check runs on the same thread, and a finding is true if either
 // says so. Both findings lead to more caution, so an email that tricks the model
@@ -115,21 +116,23 @@ export class ModelReader implements EmailReader {
   private readonly keywords: KeywordReader = new KeywordReader();
   private readonly url: string;
   private readonly apiKey: string;
+  private readonly models: string[];
   private readonly send: typeof fetch;
 
   constructor(
     apiKey: string,
     baseUrl: string = DEFAULT_BASE_URL,
-    model: string = DEFAULT_MODEL,
+    models: string[] = DEFAULT_MODELS,
     send: typeof fetch = fetch,
   ) {
-    this.name = model;
+    this.models = models.length > 0 ? models : DEFAULT_MODELS;
+    this.name = this.models.join(", then ");
     this.url = `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
     this.apiKey = apiKey;
     this.send = send;
   }
 
-  private async complete(prompt: string): Promise<string> {
+  private async complete(model: string, prompt: string): Promise<string> {
     const response: Response = await this.send(this.url, {
       method: "POST",
       headers: {
@@ -137,7 +140,7 @@ export class ModelReader implements EmailReader {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: this.name,
+        model,
         reasoning_effort: "low",
         messages: [
           { role: "system", content: SYSTEM },
@@ -165,29 +168,41 @@ export class ModelReader implements EmailReader {
     return content;
   }
 
-  private async ask(prompt: string): Promise<Answers> {
-    for (let attempt: number = 1; ; attempt += 1) {
+  // Returns the first model's answers, with the model that gave them.
+  private async ask(prompt: string): Promise<{ answers: Answers; model: string }> {
+    let failure: unknown = new Error("No model is set up");
+    for (const model of this.models) {
+      const started: number = Date.now();
       try {
-        return toAnswers(await this.complete(prompt));
+        return { answers: toAnswers(await this.complete(model, prompt)), model };
       } catch (error: unknown) {
-        if (attempt >= MAX_TRIES || !worthRetrying(error)) {
-          throw error;
+        failure = error;
+        // Kept off the timeline unless every model fails, but worth seeing.
+        console.warn(
+          `  reader   ${model} gave no answer after ${Date.now() - started} ms: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        if (keyRefused(error)) {
+          break;
         }
-        await new Promise<void>((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
       }
     }
+    throw failure;
   }
 
   async read(emails: SupplierEmail[]): Promise<EmailFindings> {
-    const model: Answers = await this.ask(render(emails));
+    const { answers, model }: { answers: Answers; model: string } = await this.ask(
+      render(emails),
+    );
     const keywords: EmailFindings = await this.keywords.read(emails);
-    const claimsNonReceipt: boolean = model.claimsNonReceipt || keywords.claimsNonReceipt;
+    const claimsNonReceipt: boolean =
+      answers.claimsNonReceipt || keywords.claimsNonReceipt;
     const asksForNewBankDetails: boolean =
-      model.asksForNewBankDetails || keywords.asksForNewBankDetails;
+      answers.asksForNewBankDetails || keywords.asksForNewBankDetails;
     return {
       claimsNonReceipt,
       asksForNewBankDetails,
       summary: summarise(claimsNonReceipt, asksForNewBankDetails),
+      readBy: model,
     };
   }
 }

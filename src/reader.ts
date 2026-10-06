@@ -6,11 +6,17 @@ import { ModelReader } from "./model-reader.js";
 // placeholder does, so the commands still run.
 export function readerFromEnv(): EmailReader {
   const apiKey: string | undefined = process.env["READER_API_KEY"];
-  return apiKey
-    ? new ModelReader(
-        apiKey,
-        process.env["READER_BASE_URL"] || undefined,
-        process.env["READER_MODEL"] || undefined,
-      )
-    : new KeywordReader();
+  if (!apiKey) {
+    return new KeywordReader();
+  }
+  // READER_MODEL is a comma-separated list, tried in order.
+  const models: string[] = (process.env["READER_MODEL"] ?? "")
+    .split(",")
+    .map((model: string): string => model.trim())
+    .filter((model: string): boolean => model !== "");
+  return new ModelReader(
+    apiKey,
+    process.env["READER_BASE_URL"] || undefined,
+    models.length > 0 ? models : undefined,
+  );
 }

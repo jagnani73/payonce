@@ -12,6 +12,8 @@ export interface EmailFindings {
   claimsNonReceipt: boolean;
   asksForNewBankDetails: boolean;
   summary: string;
+  // What read the thread, when that is more exact than the reader's name.
+  readBy?: string;
 }
 
 // The summary a person reads. It is written here from the two findings, so no

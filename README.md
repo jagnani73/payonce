@@ -37,7 +37,7 @@ Two of these checks do not depend on how the email text is read. The sender's do
 
 A model reads the supplier emails. It holds no credentials and moves no money. It answers two yes-or-no questions, and PayOnce writes the summary a person sees from those answers, so no wording from an email or from the model reaches the approval card. A keyword check reads the same thread, and a finding is yes if either says yes. Both findings lead to more caution, so an email that tricks the model cannot remove a finding the keyword check makes. An email that the keyword check misses and that also tricks the model can still hide a finding, which is why the sender check and the bank-details check are in code. The emails go to the model marked as untrusted text. If the model fails, or its answer is not two yes-or-no values, the thread counts as unread and the incident goes to a person.
 
-The reader is Gemini 3.8 Flash by default, called through Google's OpenAI-compatible endpoint, so any service that speaks the same format can replace it. Without a key, a keyword placeholder in `src/keyword-reader.ts` reads the emails. The page names the reader under its findings.
+The reader is Gemini 3.5 Flash by default, with Gemini 3.1 Flash-Lite as a second model if the first does not answer. Both are on Google's free tier and are called through its OpenAI-compatible endpoint, so any service that speaks the same format can replace them. Without a key, a keyword placeholder in `src/keyword-reader.ts` reads the emails. The page names the reader under its findings.
 
 ## The duplicate lock
 
@@ -72,7 +72,7 @@ pnpm dev
 
 Everything else talks to the Airwallex sandbox. Copy `.env.example` to `.env` and fill in a sandbox Client ID and API key.
 
-For a model to read the emails, create a Gemini API key in Google AI Studio and set it as `READER_API_KEY`. The free tier needs no billing account. Google may use free-tier content to improve its products, so keep real supplier emails out of it.
+For a model to read the emails, create a Gemini API key in Google AI Studio and set it as `READER_API_KEY`. The free tier needs no billing account. Google may use free-tier content to improve its products, so keep real supplier emails out of it. `READER_MODEL` takes a comma-separated list of models to try in order.
 
 ### The web page
 

@@ -104,7 +104,6 @@ export const DEFAULT_EMAILS: string = "nothing-arrived";
 interface StoredFindings extends EmailFindings {
   unverifiedSenders?: string[];
   unread?: boolean;
-  readBy?: string;
 }
 
 const NO_FINDINGS: StoredFindings = {
@@ -276,7 +275,7 @@ async function receive(
     ...read,
     unverifiedSenders: sendersNotOnFile(obligation, thread),
     unread,
-    ...(unread ? {} : { readBy: engine.reader.name }),
+    ...(unread ? {} : { readBy: read.readBy ?? engine.reader.name }),
   };
   engine.ledger.saveFindings(invoiceId, JSON.stringify(findings));
   note(engine.ledger, invoiceId, "email", `Emails read: ${findings.summary}`);

@@ -67,15 +67,23 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 
 ## Email reader
 
-- `READER_API_KEY` in `.env` turns the model reader on. `READER_BASE_URL` and `READER_MODEL` default to Gemini's OpenAI-compatible endpoint and `gemini-3.8-flash`, which is on Google's free tier.
+- `READER_API_KEY` in `.env` turns the model reader on. `READER_BASE_URL` defaults to Gemini's OpenAI-compatible endpoint. `READER_MODEL` is a comma-separated list tried in order and defaults to `gemini-3.5-flash,gemini-3.1-flash-lite`, both on Google's free tier.
 - `pnpm dev` loads no env file, so it always uses the keyword placeholder.
 - The request is one chat completion with `reasoning_effort: "low"` and a `json_schema` response format. The model answers two booleans and no text. `toAnswers` checks the answer again, so a service that ignores the schema still cannot return anything else.
 - `summarise` in `src/emails.ts` writes the summary from the two findings for both readers, so no wording from an email or a model reaches the approval card or the approval binding.
 - `ModelReader` also runs the keyword check and ORs the findings. Both findings only make the policy more cautious, so a tricked model cannot remove a finding the keywords make. It can still hide one the keywords miss.
-- A 429, a server error, a timeout or a bad answer is retried once after two seconds. Any other error status is not. A failure throws, the engine marks the thread unread, and the policy escalates.
+- Each model gets one request with an 8 second timeout. If it fails, the next model is asked, and the console gets a `reader` line saying why. A refused key (401 or 403) stops at once. If every model fails, `read` throws, the engine marks the thread unread, and the policy escalates.
+- Findings carry `readBy`, the model that answered, and the page shows it.
 - The API key is cut out of any error text before it reaches the timeline.
 - Google may use free-tier content to improve its products. The fixtures are synthetic.
-- It has not been run against Gemini yet. The request shape, the retries and the failure paths were run against a fake `fetch`.
+
+Found by running it on 2026-10-06:
+
+- The key goes in `Authorization: Bearer`. A strict `json_schema` response format and `reasoning_effort: "low"` are accepted, and a good answer has `finish_reason` `stop`.
+- `gemini-3.8-flash`, the model in Google's examples, answered 503 "high demand" on 5 of 8 calls. In about 35 reader calls, `gemini-3.5-flash` and `gemini-3.1-flash-lite` between them always returned an answer, usually in 1.6 to 5.8 seconds. `gemini-3.5-flash-lite` took 8 to 18 seconds. The 2.5 models return 404 for new users.
+- `gemini-3.5-flash` returns 429 after about six calls in a minute and answers again a minute later. The second model answered each time. Daily limits are shown only in AI Studio.
+- Both default models gave the expected findings on the two fixtures, a reworded email the keywords miss, a thank-you email and an email with an injected instruction to answer false. The one difference: `gemini-3.5-flash` once read the injection email as a non-receipt claim.
+- One "new account" incident on the page took 21 seconds, against 8 with the keyword reader. Its first read took 12 seconds, before the timeout was cut from 15 seconds to 8.
 
 ## Web server
 
