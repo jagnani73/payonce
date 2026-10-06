@@ -22,6 +22,10 @@ There is no lint script and there are no tests.
 - `src/airwallex/`: `client.ts` (login, bearer token refresh, refuses non-sandbox hosts), `transfers.ts`, `beneficiaries.ts`, `balances.ts`, `simulation.ts` (every sandbox-only call).
 - `src/ledger.ts`: obligations and attempts in SQLite, with the duplicate lock.
 - `src/payments.ts`: idempotent send and status sync between Airwallex and the ledger.
+- `src/emails.ts`: `EmailReader` interface, `EmailFindings` and the fixture loader.
+- `src/keyword-reader.ts`: placeholder reader. Replace it with a Claude-backed reader once `ANTHROPIC_API_KEY` is available.
+- `fixtures/emails/`: sample supplier emails. `new-account.json` uses a look-alike sender domain on purpose.
+- `src/recover.ts` does not use a reader yet and passes `supplierAsksForNewBankDetails: false`.
 - `src/approval.ts`: `ApprovalTerms`, `termsFor` and `bindingOf` (SHA-256 of the terms JSON).
 - `src/approve.ts`: CLI that shows the requested terms and records the approval.
 - `src/recover.ts`: one incident end to end. A second run for the same invoice reports its state, and pays only when a matching approval is on file.

@@ -25,7 +25,7 @@ A supplier says a payment never arrived and their deadline has passed. The trans
 
 `src/decide.ts` checks the rules in that order. A resend can fix a failure only when it happened on the sending side: a system error or a channel timeout. Any other failure, including a return from the beneficiary's bank, goes to a person.
 
-The model will read supplier emails and explain each decision. It will not hold credentials or move money directly.
+The model will read supplier emails and explain each decision. It will not hold credentials or move money directly. Until a model is connected, a keyword placeholder in `src/keyword-reader.ts` reads the sample emails. A reader returns two findings and a summary, with no amounts or bank details, so it cannot change what is paid or to whom.
 
 ## The duplicate lock
 
@@ -46,7 +46,7 @@ pnpm install
 pnpm dev
 ```
 
-`pnpm dev` needs no credentials. It prints the decision for three sample incidents.
+`pnpm dev` needs no credentials. It reads the sample supplier emails in `fixtures/emails/` and prints the findings and the decision for three incidents.
 
 To run a full incident against the sandbox, copy `.env.example` to `.env`, fill in a sandbox Client ID and API key, then:
 
@@ -83,12 +83,15 @@ The first command ends in an escalation. The second shows the terms and records 
 | `src/approve.ts` | Records a person's approval for an escalated invoice |
 | `src/recover.ts` | One incident run against the sandbox |
 | `src/index.ts` | Three sample incidents run through the policy |
+| `src/emails.ts` | The email reader interface and the findings a reader returns |
+| `src/keyword-reader.ts` | Keyword placeholder that stands in for the model |
+| `fixtures/emails/` | Sample supplier emails |
 | `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, balances and the simulation calls |
 
 The code holds amounts in minor units and converts at the Airwallex boundary.
 
 ## Not built yet
 
-- The model reading supplier emails.
+- A model as the email reader. The sandbox run does not read emails yet.
 - Approving payment to new bank details. An approval covers a replacement to the same beneficiary.
 - Payout webhooks. The run polls for status.
