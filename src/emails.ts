@@ -15,6 +15,8 @@ export interface EmailFindings {
 }
 
 export interface EmailReader {
+  // Shown next to the findings, so a person knows what read the emails.
+  readonly name: string;
   read(emails: SupplierEmail[]): Promise<EmailFindings>;
 }
 

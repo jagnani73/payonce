@@ -26,7 +26,7 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 - `src/ledger.ts`: SQLite tables for obligations, attempts, approvals, emails, findings and events.
 - `src/payments.ts`: idempotent send and status sync between Airwallex and the ledger.
 - `src/approval.ts`: `ApprovalTerms`, `termsFor` and `bindingOf` (SHA-256 of the terms JSON).
-- `src/emails.ts`: `EmailReader` interface, `EmailFindings`, `unverifiedSenders` and the fixture loader.
+- `src/emails.ts`: `EmailReader` interface (a `name` shown on the page, and `read`), `EmailFindings`, `unverifiedSenders` and the fixture loader.
 - `src/keyword-reader.ts`: placeholder reader. Replace it with a Claude-backed reader once `ANTHROPIC_API_KEY` is available.
 - `src/server.ts`: `node:http` server for `web/` and the JSON API. It runs incidents in the background and tracks them in an in-memory `busy` set.
 - `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/reset.ts`, `src/index.ts`: the CLI commands.

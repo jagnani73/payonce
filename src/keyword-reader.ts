@@ -20,6 +20,8 @@ function matchesAny(text: string, patterns: RegExp[]): boolean {
 }
 
 export class KeywordReader implements EmailReader {
+  readonly name: string = "keyword placeholder";
+
   read(emails: SupplierEmail[]): Promise<EmailFindings> {
     const text: string = emails
       .map((email: SupplierEmail): string => `${email.subject}\n${email.body}`)

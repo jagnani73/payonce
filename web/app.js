@@ -967,6 +967,7 @@ function buildFindings(findings, unverified, emailCount) {
     );
   }
   const asksForNewDetails = findings.asksForNewBankDetails === true;
+  const readBy = typeof findings.readBy === "string" ? findings.readBy.trim() : "";
   return h(
     "div",
     { class: "findings" },
@@ -994,6 +995,7 @@ function buildFindings(findings, unverified, emailCount) {
       h("dt", null, "Asks for new bank details"),
       h("dd", { class: asksForNewDetails ? "is-caution" : null }, asksForNewDetails ? "Yes" : "No"),
     ),
+    readBy !== "" && h("p", { class: "hint" }, `Reader: ${readBy}`),
   );
 }
 

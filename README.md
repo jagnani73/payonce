@@ -35,7 +35,7 @@ PayOnce follows one supplier payment through an incident. It sends the transfer,
 
 Two of these checks do not depend on how the email text is read. The sender's domain is compared with the one on file. The supplier's bank details are read from Airwallex again and compared with the account the original payment went to. When they differ the timeline says so, whatever reason the policy escalates for.
 
-The model will read supplier emails and explain each decision. It will not hold credentials or move money directly. Until a model is connected, a keyword placeholder in `src/keyword-reader.ts` reads the emails. A reader returns two findings and a summary, with no amounts or bank details, so it cannot change what is paid or to whom.
+The model will read supplier emails and explain each decision. It will not hold credentials or move money directly. Until a model is connected, a keyword placeholder in `src/keyword-reader.ts` reads the emails, and the page names the reader under its findings. A reader returns two findings and a summary, with no amounts or bank details, so it cannot change what is paid or to whom.
 
 ## The duplicate lock
 
