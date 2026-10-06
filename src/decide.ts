@@ -8,6 +8,13 @@ export function decide(incident: Incident): Decision {
     };
   }
 
+  if (incident.emailFromUnverifiedSender) {
+    return {
+      action: "escalate",
+      reason: "an email came from an address that does not match the supplier on file",
+    };
+  }
+
   if (incident.evidenceConflicts) {
     return { action: "escalate", reason: "evidence conflicts" };
   }
@@ -48,7 +55,7 @@ export function decide(incident: Incident): Decision {
   if (balanceAfterMinor < incident.reserveFloorMinor) {
     return {
       action: "escalate",
-      reason: "replacement would push cash below the reserve floor",
+      reason: "a replacement and its transfer fee would push cash below the reserve floor",
     };
   }
 

@@ -46,19 +46,49 @@ const SCHEMA: string = `
     invoice_id TEXT PRIMARY KEY REFERENCES obligations(invoice_id),
     findings TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    invoice_id TEXT NOT NULL REFERENCES obligations(invoice_id),
+    at TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    message TEXT NOT NULL
+  );
 `;
 
 export type ObligationState = "open" | "settled" | "escalated";
 export type AttemptKind = "original" | "replacement";
 export type AttemptState = "pending" | "in_flight" | "paid" | "failed";
 export type ApprovalState = "requested" | "approved" | "used" | "void";
+export type EventKind =
+  | "payment"
+  | "email"
+  | "bank"
+  | "decision"
+  | "approval"
+  | "warning"
+  | "lock"
+  | "closed"
+  | "error";
+
+// One line of an incident's timeline.
+export interface LedgerEvent {
+  id: number;
+  at: string;
+  kind: EventKind;
+  message: string;
+}
+
+export type TransferMethod = "LOCAL" | "SWIFT";
 
 export interface NewObligation {
   invoiceId: string;
   supplier: string;
+  supplierDomain: string;
   beneficiaryId: string;
   currency: string;
   amountMinor: number;
+  transferMethod: TransferMethod;
+  reserveFloorMinor: number;
 }
 
 export interface Obligation extends NewObligation {
@@ -106,11 +136,26 @@ interface FindingsRow {
 interface ObligationRow {
   invoice_id: string;
   supplier: string;
+  supplier_domain: string;
   beneficiary_id: string;
   currency: string;
   amount_minor: number;
+  transfer_method: TransferMethod;
+  reserve_floor_minor: number;
   state: ObligationState;
 }
+
+interface ColumnRow {
+  name: string;
+}
+
+// Columns added after the first version of the ledger. A database created
+// earlier gets them on open.
+const ADDED_OBLIGATION_COLUMNS: Record<string, string> = {
+  supplier_domain: "TEXT NOT NULL DEFAULT ''",
+  transfer_method: "TEXT NOT NULL DEFAULT 'LOCAL'",
+  reserve_floor_minor: "INTEGER NOT NULL DEFAULT 0",
+};
 
 interface AttemptRow {
   request_id: string;
@@ -144,9 +189,12 @@ function toObligation(row: ObligationRow): Obligation {
   return {
     invoiceId: row.invoice_id,
     supplier: row.supplier,
+    supplierDomain: row.supplier_domain,
     beneficiaryId: row.beneficiary_id,
     currency: row.currency,
     amountMinor: row.amount_minor,
+    transferMethod: row.transfer_method,
+    reserveFloorMinor: row.reserve_floor_minor,
     state: row.state,
   };
 }
@@ -179,26 +227,69 @@ export class Ledger {
   constructor(path: string) {
     this.db = new DatabaseSync(path);
     this.db.exec(SCHEMA);
+    const existing: string[] = (
+      this.db.prepare("PRAGMA table_info(obligations)").all() as unknown as ColumnRow[]
+    ).map((column: ColumnRow): string => column.name);
+    for (const [name, definition] of Object.entries(ADDED_OBLIGATION_COLUMNS)) {
+      if (!existing.includes(name)) {
+        this.db.exec(`ALTER TABLE obligations ADD COLUMN ${name} ${definition}`);
+      }
+    }
   }
 
   openObligation(input: NewObligation): Obligation {
     this.db
       .prepare(
         `INSERT OR IGNORE INTO obligations
-           (invoice_id, supplier, beneficiary_id, currency, amount_minor)
-         VALUES (?, ?, ?, ?, ?)`,
+           (invoice_id, supplier, supplier_domain, beneficiary_id, currency,
+            amount_minor, transfer_method, reserve_floor_minor)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.invoiceId,
         input.supplier,
+        input.supplierDomain,
         input.beneficiaryId,
         input.currency,
         input.amountMinor,
+        input.transferMethod,
+        input.reserveFloorMinor,
       );
     const row: ObligationRow = this.db
       .prepare("SELECT * FROM obligations WHERE invoice_id = ?")
       .get(input.invoiceId) as unknown as ObligationRow;
     return toObligation(row);
+  }
+
+  obligation(invoiceId: string): Obligation | undefined {
+    const row: ObligationRow | undefined = this.db
+      .prepare("SELECT * FROM obligations WHERE invoice_id = ?")
+      .get(invoiceId) as unknown as ObligationRow | undefined;
+    return row === undefined ? undefined : toObligation(row);
+  }
+
+  // Newest first.
+  obligations(): Obligation[] {
+    const rows: ObligationRow[] = this.db
+      .prepare("SELECT * FROM obligations ORDER BY rowid DESC")
+      .all() as unknown as ObligationRow[];
+    return rows.map(toObligation);
+  }
+
+  addEvent(invoiceId: string, kind: EventKind, message: string): void {
+    this.db
+      .prepare(
+        "INSERT INTO events (invoice_id, at, kind, message) VALUES (?, ?, ?, ?)",
+      )
+      .run(invoiceId, new Date().toISOString(), kind, message);
+  }
+
+  events(invoiceId: string): LedgerEvent[] {
+    return this.db
+      .prepare(
+        "SELECT id, at, kind, message FROM events WHERE invoice_id = ? ORDER BY id",
+      )
+      .all(invoiceId) as unknown as LedgerEvent[];
   }
 
   openAttempt(invoiceId: string, kind: AttemptKind): Attempt {

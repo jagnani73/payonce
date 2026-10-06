@@ -8,3 +8,11 @@ export function toMinor(amountMajor: number): number {
 export function toMajor(amountMinor: number): number {
   return amountMinor / MINOR_UNITS_PER_MAJOR;
 }
+
+export function formatMoney(amountMinor: number, currency: string): string {
+  const amount: string = toMajor(amountMinor).toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  return `${amount} ${currency}`;
+}

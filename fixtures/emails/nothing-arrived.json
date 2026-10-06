@@ -1,7 +1,7 @@
 [
   {
     "from": "accounts@example-supplier.test",
-    "subject": "INV-1042 payment not received",
-    "body": "Hi,\n\nOur records show INV-1042 was due on Friday and we have not received the payment. Can you confirm when it was sent? We will have to hold the next shipment until this is settled.\n\nRegards,\nAccounts, Example Supplier LLC"
+    "subject": "{{invoice}} payment not received",
+    "body": "Hi,\n\nOur records show {{invoice}} was due on Friday and we have not received the payment. Can you confirm when it was sent? We will have to hold the next shipment until this is settled.\n\nRegards,\nAccounts, Example Supplier"
   }
 ]

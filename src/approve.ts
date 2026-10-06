@@ -1,6 +1,7 @@
 import type { ApprovalTerms } from "./approval.js";
-import { Ledger, LEDGER_PATH, type Approval } from "./ledger.js";
-import { toMajor } from "./money.js";
+import { approveReplacement } from "./engine.js";
+import { Ledger, LEDGER_PATH } from "./ledger.js";
+import { formatMoney } from "./money.js";
 
 function main(): void {
   const invoiceId: string | undefined = process.argv[2];
@@ -11,27 +12,25 @@ function main(): void {
     return;
   }
 
-  const ledger: Ledger = new Ledger(LEDGER_PATH);
-  const approval: Approval | undefined = ledger.latestApproval(invoiceId);
-  if (approval === undefined || approval.state !== "requested") {
-    console.log(`No approval is waiting for ${invoiceId}`);
+  let terms: ApprovalTerms;
+  try {
+    terms = approveReplacement(new Ledger(LEDGER_PATH), invoiceId, approver);
+  } catch (error: unknown) {
+    console.log(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
     return;
   }
 
-  const terms: ApprovalTerms = JSON.parse(approval.terms) as ApprovalTerms;
   const failure: string =
     terms.evidence.failureCode === null ? "" : ` (${terms.evidence.failureCode})`;
   console.log(`Replacement payment for ${terms.invoiceId}`);
-  console.log(`  pay      ${toMajor(terms.amountMinor)} ${terms.currency}`);
+  console.log(`  pay      ${formatMoney(terms.amountMinor, terms.currency)}`);
   console.log(`  to       ${terms.payTo} (the account on file)`);
   console.log(
     `  because  original ${terms.evidence.originalReference} ${terms.evidence.originalState}${failure}: ${terms.evidence.reason}`,
   );
   console.log(`  emails   ${terms.evidence.emails}`);
-
-  ledger.setApprovalState(approval.id, "approved", approver);
-  console.log(`Approved by ${approver}. The approval covers these terms only`);
+  console.log("The approval covers these terms only");
 }
 
 main();

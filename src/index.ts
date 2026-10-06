@@ -1,7 +1,16 @@
 import { decide } from "./decide.js";
-import { loadEmails, type EmailFindings, type EmailReader } from "./emails.js";
+import {
+  loadEmails,
+  unverifiedSenders,
+  type EmailFindings,
+  type EmailReader,
+  type SupplierEmail,
+} from "./emails.js";
 import type { Decision, Incident, OriginalTransferState } from "./incident.js";
 import { KeywordReader } from "./keyword-reader.js";
+
+const INVOICE_ID: string = "INV-1042";
+const SUPPLIER_DOMAIN: string = "example-supplier.test";
 
 interface Sample {
   label: string;
@@ -34,9 +43,11 @@ const samples: Sample[] = [
 const reader: EmailReader = new KeywordReader();
 
 for (const sample of samples) {
-  const findings: EmailFindings = await reader.read(loadEmails(sample.emails));
+  const emails: SupplierEmail[] = loadEmails(sample.emails, INVOICE_ID);
+  const findings: EmailFindings = await reader.read(emails);
+  const unverified: string[] = unverifiedSenders(emails, SUPPLIER_DOMAIN);
   const incident: Incident = {
-    invoiceId: "INV-1042",
+    invoiceId: INVOICE_ID,
     supplier: "Example Supplier LLC",
     currency: "USD",
     amountMinor: 400_000,
@@ -44,6 +55,7 @@ for (const sample of samples) {
     originalState: sample.originalState,
     resendCanFix: sample.resendCanFix,
     supplierAsksForNewBankDetails: findings.asksForNewBankDetails,
+    emailFromUnverifiedSender: unverified.length > 0,
     evidenceConflicts: false,
     availableBalanceMinor: 2_500_000,
     reserveFloorMinor: 1_000_000,
@@ -51,5 +63,8 @@ for (const sample of samples) {
   const decision: Decision = decide(incident);
   console.log(sample.label);
   console.log(`  emails: ${findings.summary}`);
+  if (unverified.length > 0) {
+    console.log(`  sender not on file: ${unverified.join(", ")}`);
+  }
   console.log(`  decision: ${decision.action} (${decision.reason})`);
 }

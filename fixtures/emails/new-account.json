@@ -1,12 +1,12 @@
 [
   {
     "from": "accounts@example-supplier.test",
-    "subject": "INV-1042 payment not received",
-    "body": "Hi,\n\nOur records show INV-1042 was due on Friday and we have not received the payment. Can you confirm when it was sent? We will have to hold the next shipment until this is settled.\n\nRegards,\nAccounts, Example Supplier LLC"
+    "subject": "{{invoice}} payment not received",
+    "body": "Hi,\n\nOur records show {{invoice}} was due on Friday and we have not received the payment. Can you confirm when it was sent? We will have to hold the next shipment until this is settled.\n\nRegards,\nAccounts, Example Supplier"
   },
   {
     "from": "accounts@example-supp1ier.test",
-    "subject": "RE: INV-1042 payment not received",
-    "body": "Hi,\n\nFollowing up on INV-1042. Our bank has put the old account under audit, so please resend the payment to our new account today:\n\nBank: First Example Bank\nRouting: 000000000\nAccount: 9988776655\n\nThis is urgent.\n\nRegards,\nAccounts"
+    "subject": "RE: {{invoice}} payment not received",
+    "body": "Hi,\n\nFollowing up on {{invoice}}. Our bank has put the old account under audit, so please resend the payment to our new account today:\n\nBank: First Example Bank\nRouting: 000000000\nAccount: 9988776655\n\nThis is urgent.\n\nRegards,\nAccounts"
   }
 ]

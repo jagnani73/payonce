@@ -33,6 +33,7 @@ export async function sendAttempt(
       beneficiaryId: obligation.beneficiaryId,
       currency: obligation.currency,
       amountMajor: toMajor(obligation.amountMinor),
+      method: obligation.transferMethod,
       reference: obligation.invoiceId,
     });
   } catch (error: unknown) {

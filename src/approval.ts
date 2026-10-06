@@ -30,8 +30,9 @@ function payTo(obligation: Obligation, original: Transfer): string {
   if (details.bank_name !== undefined) {
     parts.push(details.bank_name);
   }
-  if (details.account_number !== undefined) {
-    parts.push(`account ending ${details.account_number.slice(-4)}`);
+  const account: string | undefined = details.account_number ?? details.iban;
+  if (account !== undefined) {
+    parts.push(`account ending ${account.slice(-4)}`);
   }
   return parts.join(", ");
 }

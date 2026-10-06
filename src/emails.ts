@@ -18,7 +18,24 @@ export interface EmailReader {
   read(emails: SupplierEmail[]): Promise<EmailFindings>;
 }
 
-export function loadEmails(name: string): SupplierEmail[] {
+// Senders whose domain is not the one on file for the supplier. This is a plain
+// comparison in code, so it holds whatever the reader makes of the text.
+export function unverifiedSenders(
+  emails: SupplierEmail[],
+  domainOnFile: string,
+): string[] {
+  const expected: string = domainOnFile.toLowerCase();
+  const senders: string[] = emails
+    .map((email: SupplierEmail): string => email.from.trim().toLowerCase())
+    .filter(
+      (from: string): boolean => from.slice(from.lastIndexOf("@") + 1) !== expected,
+    );
+  return [...new Set<string>(senders)];
+}
+
+// Fixture threads refer to their invoice as {{invoice}}.
+export function loadEmails(name: string, invoiceId: string): SupplierEmail[] {
   const url: URL = new URL(`../fixtures/emails/${name}.json`, import.meta.url);
-  return JSON.parse(readFileSync(url, "utf8")) as SupplierEmail[];
+  const text: string = readFileSync(url, "utf8").replaceAll("{{invoice}}", invoiceId);
+  return JSON.parse(text) as SupplierEmail[];
 }

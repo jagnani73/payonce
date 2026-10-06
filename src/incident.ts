@@ -9,6 +9,7 @@ export interface Incident {
   originalState: OriginalTransferState;
   resendCanFix: boolean;
   supplierAsksForNewBankDetails: boolean;
+  emailFromUnverifiedSender: boolean;
   evidenceConflicts: boolean;
   availableBalanceMinor: number;
   reserveFloorMinor: number;

@@ -11,6 +11,7 @@ export interface TransferFailure {
 export interface TransferBankDetails {
   account_name?: string;
   account_number?: string;
+  iban?: string;
   bank_name?: string;
 }
 
@@ -32,6 +33,7 @@ export interface NewTransfer {
   beneficiaryId: string;
   currency: string;
   amountMajor: number;
+  method: "LOCAL" | "SWIFT";
   reference: string;
 }
 
@@ -45,7 +47,7 @@ export function createTransfer(
     source_currency: input.currency,
     transfer_currency: input.currency,
     transfer_amount: input.amountMajor,
-    transfer_method: "LOCAL",
+    transfer_method: input.method,
     reason: "professional_business_services",
     reference: input.reference,
   });
