@@ -25,7 +25,7 @@ import {
   type Engine,
   type ScenarioDef,
 } from "./engine.js";
-import { KeywordReader } from "./keyword-reader.js";
+import { readerFromEnv } from "./reader.js";
 import {
   Ledger,
   LEDGER_PATH,
@@ -75,7 +75,7 @@ class HttpError extends Error {
 const engine: Engine = {
   client: AirwallexClient.fromEnv(),
   ledger: new Ledger(LEDGER_PATH),
-  reader: new KeywordReader(),
+  reader: readerFromEnv(),
 };
 
 const ALLOWED_HOSTS: ReadonlySet<string> = new Set<string>([
@@ -422,5 +422,6 @@ process.on("unhandledRejection", (reason: unknown): void => {
 
 server.listen(PORT, HOST, (): void => {
   console.log(`PayOnce is at http://${HOST}:${PORT} (sandbox only, no real money)`);
+  console.log(`Supplier emails are read by: ${engine.reader.name}`);
   pickUpInterrupted();
 });

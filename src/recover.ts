@@ -9,8 +9,8 @@ import {
   runScenario,
   type Engine,
 } from "./engine.js";
-import { KeywordReader } from "./keyword-reader.js";
 import { Ledger, LEDGER_PATH, type Obligation } from "./ledger.js";
+import { readerFromEnv } from "./reader.js";
 
 const DEFAULT_OUTCOME: string = "CHANNEL_TIMEOUT";
 
@@ -19,7 +19,7 @@ async function main(): Promise<void> {
   const engine: Engine = {
     client: AirwallexClient.fromEnv(),
     ledger: new Ledger(LEDGER_PATH),
-    reader: new KeywordReader(),
+    reader: readerFromEnv(),
   };
   const invoiceId: string = process.argv[3] ?? newInvoiceId(engine.ledger);
   const emailsName: string = process.argv[4] ?? DEFAULT_EMAILS;

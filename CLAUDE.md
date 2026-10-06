@@ -27,7 +27,9 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 - `src/payments.ts`: idempotent send and status sync between Airwallex and the ledger.
 - `src/approval.ts`: `ApprovalTerms`, `termsFor` and `bindingOf` (SHA-256 of the terms JSON).
 - `src/emails.ts`: `EmailReader` interface (a `name` shown on the page, and `read`), `EmailFindings`, `unverifiedSenders` and the fixture loader.
-- `src/keyword-reader.ts`: placeholder reader. Replace it with a Claude-backed reader once `ANTHROPIC_API_KEY` is available.
+- `src/model-reader.ts`: `ModelReader` reads the thread with one chat completion over plain `fetch`, with no SDK.
+- `src/reader.ts`: `readerFromEnv` picks `ModelReader` when `READER_API_KEY` is set and the keyword placeholder otherwise.
+- `src/keyword-reader.ts`: the fallback reader. It matches a handful of phrases.
 - `src/server.ts`: `node:http` server for `web/` and the JSON API. It runs incidents in the background and tracks them in an in-memory `busy` set.
 - `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/reset.ts`, `src/index.ts`: the CLI commands.
 - `docs/demo.md`: the recording script for the four demo incidents, with measured sandbox times.
@@ -62,6 +64,17 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 - `events` holds the timeline. A line with a `topic` says how things stand: the decision, what the invoice is waiting on, an approval, the cost of a replacement, or a bank-details mismatch. `note` skips one when the timeline's last line on that topic says the same and nothing has happened since, so checking an invoice again when nothing has changed adds nothing. A line with no topic records an event and is skipped only when it repeats the line before it.
 - On an escalated invoice the decision line says when the policy would now replace or close and why it does not.
 - Columns added after the first version are listed in `ADDED_COLUMNS` and added when the database is opened.
+
+## Email reader
+
+- `READER_API_KEY` in `.env` turns the model reader on. `READER_BASE_URL` and `READER_MODEL` default to Gemini's OpenAI-compatible endpoint and `gemini-3.8-flash`, which is on Google's free tier.
+- `pnpm dev` loads no env file, so it always uses the keyword placeholder.
+- The request is one chat completion with `reasoning_effort: "low"` and a `json_schema` response format. `toFindings` checks the answer again, so a service that ignores the schema still cannot return anything but two booleans and a string.
+- `tidy` replaces any token with four or more digits in the summary with `[number removed]`, because the approver reads the summary.
+- A 429, a server error, a timeout or a bad answer is retried once after two seconds. Any other error status is not. A failure throws, the engine marks the thread unread, and the policy escalates.
+- The API key is cut out of any error text before it reaches the timeline.
+- Google may use free-tier content to improve its products. The fixtures are synthetic.
+- It has not been run against Gemini yet. The request shape, the retries and the failure paths were run against a fake `fetch`.
 
 ## Web server
 

@@ -4,7 +4,7 @@ A payment incident agent that recovers failed supplier transfers without paying 
 
 PayOnce is my entry for the Airwallex Agentic Banking Hackathon 2026. It starts from starter kit 3, Payment Ops Incident Commander.
 
-> Status: working demo against the Airwallex sandbox. A keyword placeholder reads supplier emails until a model is connected. Sandbox only, no real money.
+> Status: working demo against the Airwallex sandbox. A model reads supplier emails when a key is set, and a keyword placeholder reads them when it is not. Sandbox only, no real money.
 
 ## The problem
 
@@ -35,7 +35,9 @@ PayOnce follows one supplier payment through an incident. It sends the transfer,
 
 Two of these checks do not depend on how the email text is read. The sender's domain is compared with the one on file. The supplier's bank details are read from Airwallex again and compared with the account the original payment went to. When they differ the timeline says so, whatever reason the policy escalates for.
 
-The model will read supplier emails and explain each decision. It will not hold credentials or move money directly. Until a model is connected, a keyword placeholder in `src/keyword-reader.ts` reads the emails, and the page names the reader under its findings. A reader returns two findings and a summary, with no amounts or bank details, so it cannot change what is paid or to whom.
+A model reads the supplier emails. It holds no credentials and moves no money. It returns two yes-or-no findings and a one-sentence summary, and PayOnce removes anything that looks like an account number or an amount from the summary before a person sees it. So a reader cannot change what is paid or to whom. The emails go to the model marked as untrusted text. If the model fails, or its answer is not the findings, the thread counts as unread and the incident goes to a person.
+
+The reader is Gemini 3.8 Flash by default, called through Google's OpenAI-compatible endpoint, so any service that speaks the same format can replace it. Without a key, a keyword placeholder in `src/keyword-reader.ts` reads the emails. The page names the reader under its findings.
 
 ## The duplicate lock
 
@@ -69,6 +71,8 @@ pnpm dev
 `pnpm dev` needs no credentials. It reads the sample supplier emails in `fixtures/emails/` and prints the findings and the decision for four incidents.
 
 Everything else talks to the Airwallex sandbox. Copy `.env.example` to `.env` and fill in a sandbox Client ID and API key.
+
+For a model to read the emails, create a Gemini API key in Google AI Studio and set it as `READER_API_KEY`. The free tier needs no billing account. Google may use free-tier content to improve its products, so keep real supplier emails out of it.
 
 ### The web page
 
@@ -126,7 +130,9 @@ In the fourth, the bank pays the original while the supplier says it never arriv
 | `src/payments.ts` | Sends an attempt under its `request_id` and syncs transfer state into the ledger |
 | `src/approval.ts` | Approval terms and the hash that binds an approval to them |
 | `src/emails.ts` | The email reader interface, the findings a reader returns, and the sender check |
-| `src/keyword-reader.ts` | Keyword placeholder that stands in for the model |
+| `src/model-reader.ts` | The model reader: one chat completion that returns the findings |
+| `src/reader.ts` | Picks the model reader, or the keyword placeholder when no key is set |
+| `src/keyword-reader.ts` | Keyword placeholder that reads the emails when no key is set |
 | `src/server.ts` | Local web server and JSON API |
 | `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/reset.ts`, `src/index.ts` | The commands |
 | `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, balances and the simulation calls |
@@ -137,7 +143,7 @@ The code holds amounts in minor units and converts at the Airwallex boundary. Th
 
 ## Not built yet
 
-- A model as the email reader.
+- A model's explanation of each decision. The reasons on the timeline come from the policy.
 - Approving payment to new bank details. An approval covers a replacement to the account on file.
 - Closing an incident without a payment. A person can close one only when the bank reports the original as paid.
 - Payout webhooks. Airwallex needs a public URL to deliver them, so a local run polls for status.
