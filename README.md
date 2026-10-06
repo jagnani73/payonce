@@ -4,7 +4,7 @@ A payment incident agent that recovers failed supplier transfers without paying 
 
 PayOnce is my entry for the Airwallex Agentic Banking Hackathon 2026. It starts from starter kit 3, Payment Ops Incident Commander.
 
-> Status: early build. The decision policy runs a full incident against the Airwallex sandbox: send a transfer, fail it, decide, and send one replacement. The ledger, approvals and email reading are not built yet.
+> Status: early build. PayOnce runs a full incident against the Airwallex sandbox: it sends a transfer, fails it, decides, and sends one replacement under a duplicate lock. Approvals and email reading are not built yet.
 
 ## The problem
 
@@ -27,6 +27,12 @@ A supplier says a payment never arrived and their deadline has passed. The trans
 
 The model will read supplier emails and explain each decision. It will not hold credentials or move money directly.
 
+## The duplicate lock
+
+PayOnce writes every payment attempt to a SQLite ledger (`payonce.db`) before it creates the transfer. A unique index allows one attempt per invoice that has not failed, so the database refuses a second live payment. PayOnce can open a replacement only after the ledger records the original as failed.
+
+Each attempt keeps its `request_id`. A retry reuses it, and Airwallex then returns the transfer it already has. An incident closes only when one attempt is paid and every other attempt has failed.
+
 ## Run it
 
 ```bash
@@ -41,9 +47,12 @@ To run a full incident against the sandbox, copy `.env.example` to `.env`, fill 
 ```bash
 pnpm recover
 pnpm recover ACCOUNT_CLOSED
+pnpm recover CHANNEL_TIMEOUT INV-2001
 ```
 
-`pnpm recover` sends a transfer, marks it sent, fails it with a channel timeout and sends one replacement. Passing another failure type, such as `ACCOUNT_CLOSED`, ends in an escalation and no second payment. The client refuses any host that is not the Airwallex sandbox.
+`pnpm recover` sends a transfer, marks it sent, fails it with a channel timeout and sends one replacement. It then tries to pay the same invoice again and prints the ledger's refusal. Passing another failure type, such as `ACCOUNT_CLOSED`, ends in an escalation and no second payment.
+
+The second argument names the invoice. Running the same invoice again reports its state and sends nothing. The client refuses any host that is not the Airwallex sandbox.
 
 ## Layout
 
@@ -52,6 +61,8 @@ pnpm recover ACCOUNT_CLOSED
 | `src/incident.ts` | Types for an incident and a decision |
 | `src/decide.ts` | The decision policy, a pure function |
 | `src/assess.ts` | Maps an Airwallex transfer to the facts the policy reads |
+| `src/ledger.ts` | Obligations and payment attempts in SQLite, with the duplicate lock |
+| `src/payments.ts` | Sends an attempt under its `request_id` and syncs transfer state into the ledger |
 | `src/recover.ts` | One incident run against the sandbox |
 | `src/index.ts` | Three sample incidents run through the policy |
 | `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, balances and the simulation calls |
@@ -60,9 +71,6 @@ The code holds amounts in minor units and converts at the Airwallex boundary.
 
 ## Not built yet
 
-- An obligation ledger with a lock, so one invoice can have only one live payment.
-- Reusing a `request_id` on a retry. A replacement already gets a new one.
 - Approvals bound to the amount, currency, beneficiary and evidence shown.
-- Closing an incident only after both the original and the replacement are reconciled.
 - The model reading supplier emails.
 - Payout webhooks. The run polls for status.

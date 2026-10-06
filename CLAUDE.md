@@ -8,7 +8,7 @@ Payment incident agent for the Airwallex Agentic Banking Hackathon 2026, built o
 pnpm install
 pnpm typecheck        # tsc --noEmit
 pnpm dev              # policy on three sample incidents, no credentials
-pnpm recover [TYPE]   # full incident against the sandbox; TYPE is a simulated failure type, default CHANNEL_TIMEOUT
+pnpm recover [TYPE] [INVOICE]   # full incident against the sandbox; TYPE is a simulated failure type (default CHANNEL_TIMEOUT), INVOICE names the incident
 ```
 
 There is no lint script and there are no tests.
@@ -19,7 +19,17 @@ There is no lint script and there are no tests.
 - `src/incident.ts`: `Incident` and `Decision` types. Amounts are minor units.
 - `src/assess.ts`: maps an Airwallex transfer to `originalState` and `resendCanFix`.
 - `src/airwallex/`: `client.ts` (login, bearer token refresh, refuses non-sandbox hosts), `transfers.ts`, `beneficiaries.ts`, `balances.ts`, `simulation.ts` (every sandbox-only call).
-- `src/recover.ts`: one incident end to end.
+- `src/ledger.ts`: obligations and attempts in SQLite, with the duplicate lock.
+- `src/payments.ts`: idempotent send and status sync between Airwallex and the ledger.
+- `src/recover.ts`: one incident end to end. A second run for the same invoice only reports.
+
+## Ledger
+
+- `src/ledger.ts` uses `node:sqlite`, which ships with Node 24, so there is no database dependency or server.
+- The file is `payonce.db` in the working directory and is git-ignored. Delete it to reset local state. Transfers already sent in the sandbox stay there.
+- The duplicate lock is the partial unique index `one_live_attempt_per_invoice` on `attempts(invoice_id) WHERE state <> 'failed'`. A violation has `errcode` 2067 and is rethrown as `DuplicatePaymentError`.
+- `openAttempt` writes the attempt before any API call. `sendAttempt` in `src/payments.ts` reuses the stored `request_id`, and on `duplicate_request_id` it looks the transfer up by that id.
+- `settle` closes an obligation only when one attempt is paid and every other attempt has failed.
 
 ## Sandbox behaviour found by running it
 
