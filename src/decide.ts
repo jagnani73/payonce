@@ -8,6 +8,13 @@ export function decide(incident: Incident): Decision {
     };
   }
 
+  if (incident.beneficiaryChanged) {
+    return {
+      action: "escalate",
+      reason: "the supplier's bank details on file changed after the original payment",
+    };
+  }
+
   if (incident.emailFromUnverifiedSender) {
     return {
       action: "escalate",
@@ -15,8 +22,11 @@ export function decide(incident: Incident): Decision {
     };
   }
 
-  if (incident.evidenceConflicts) {
-    return { action: "escalate", reason: "evidence conflicts" };
+  if (incident.emailsUnread) {
+    return {
+      action: "escalate",
+      reason: "supplier emails are on file that could not be read",
+    };
   }
 
   if (incident.originalState === "unknown") {
@@ -51,6 +61,18 @@ export function decide(incident: Incident): Decision {
     incident.amountMinor + incident.transferFeeMinor;
   const balanceAfterMinor: number =
     incident.availableBalanceMinor - replacementCostMinor;
+
+  // A NaN compares false against everything, so an unreadable cash position must
+  // be caught here and not allowed to pass as "above the floor".
+  if (
+    !Number.isFinite(balanceAfterMinor) ||
+    !Number.isFinite(incident.reserveFloorMinor)
+  ) {
+    return {
+      action: "escalate",
+      reason: "the cash position could not be read",
+    };
+  }
 
   if (balanceAfterMinor < incident.reserveFloorMinor) {
     return {

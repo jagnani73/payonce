@@ -16,5 +16,8 @@ export async function getAvailableMinor(
   const balance: Balance | undefined = balances.find(
     (entry: Balance): boolean => entry.currency === currency,
   );
-  return balance === undefined ? 0 : toMinor(balance.available_amount);
+  if (balance === undefined) {
+    throw new Error(`Airwallex returned no ${currency} balance`);
+  }
+  return toMinor(balance.available_amount);
 }

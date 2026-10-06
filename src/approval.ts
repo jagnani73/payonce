@@ -24,8 +24,7 @@ export interface ApprovalTerms {
   evidence: ApprovalEvidence;
 }
 
-function payTo(obligation: Obligation, original: Transfer): string {
-  const details: TransferBankDetails = original.beneficiary?.bank_details ?? {};
+function payTo(obligation: Obligation, details: TransferBankDetails): string {
   const parts: string[] = [details.account_name ?? obligation.supplier];
   if (details.bank_name !== undefined) {
     parts.push(details.bank_name);
@@ -37,11 +36,14 @@ function payTo(obligation: Obligation, original: Transfer): string {
   return parts.join(", ");
 }
 
+// bankDetails is what the beneficiary record holds now, which is where a new
+// transfer would go. It is not taken from the original transfer.
 export function termsFor(
   obligation: Obligation,
   original: Transfer,
   decision: Decision,
   emailSummary: string,
+  bankDetails: TransferBankDetails,
 ): ApprovalTerms {
   return {
     action: "replace",
@@ -49,7 +51,7 @@ export function termsFor(
     amountMinor: obligation.amountMinor,
     currency: obligation.currency,
     beneficiaryId: obligation.beneficiaryId,
-    payTo: payTo(obligation, original),
+    payTo: payTo(obligation, bankDetails),
     evidence: {
       originalReference: original.short_reference_id,
       originalState: originalStateOf(original),

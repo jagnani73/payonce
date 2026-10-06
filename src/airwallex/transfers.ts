@@ -8,11 +8,14 @@ export interface TransferFailure {
   message?: string;
 }
 
+// Airwallex returns the same object on a transfer and on the beneficiary record.
+// Only the fields the code reads are named.
 export interface TransferBankDetails {
   account_name?: string;
   account_number?: string;
   iban?: string;
   bank_name?: string;
+  [field: string]: unknown;
 }
 
 export interface Transfer {
@@ -71,7 +74,9 @@ export async function findTransferByRequestId(
   const list: TransferList = await client.get<TransferList>(
     `/api/v1/transfers?request_id=${encodeURIComponent(requestId)}`,
   );
-  return list.items?.[0];
+  return list.items?.find(
+    (transfer: Transfer): boolean => transfer.request_id === requestId,
+  );
 }
 
 export async function waitForTransfer(

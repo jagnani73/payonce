@@ -1,5 +1,6 @@
 const DEFAULT_BASE_URL: string = "https://api.sandbox.airwallex.com";
 const TOKEN_REFRESH_MARGIN_MS: number = 60_000;
+const REQUEST_TIMEOUT_MS: number = 30_000;
 
 export type HttpMethod = "GET" | "POST";
 
@@ -14,17 +15,29 @@ interface ErrorBody {
   source?: string;
 }
 
+// Airwallex answered with an error status.
 export class AirwallexError extends Error {
   readonly status: number;
   readonly code: string | undefined;
   readonly source: string | undefined;
 
-  constructor(status: number, body: ErrorBody, fallback: string) {
-    super(body.message ?? fallback);
+  constructor(request: string, status: number, body: ErrorBody, fallback: string) {
+    const code: string = body.code === undefined ? "" : ` ${body.code}`;
+    super(`${request} failed with ${status}${code}: ${body.message ?? fallback}`);
     this.name = "AirwallexError";
     this.status = status;
     this.code = body.code;
     this.source = body.source;
+  }
+}
+
+// No answer came back, so whether Airwallex acted on the request is unknown.
+export class AirwallexUnreachableError extends Error {
+  constructor(request: string, cause: unknown) {
+    const inner: unknown = cause instanceof Error ? (cause.cause ?? cause) : cause;
+    const detail: string = inner instanceof Error ? inner.message : String(inner);
+    super(`${request} did not complete: ${detail}`, { cause });
+    this.name = "AirwallexUnreachableError";
   }
 }
 
@@ -36,8 +49,23 @@ function requireEnv(name: string): string {
   return value;
 }
 
-async function parse<T>(response: Response): Promise<T> {
-  const text: string = await response.text();
+async function send<T>(
+  request: string,
+  url: string,
+  init: RequestInit,
+): Promise<T> {
+  let response: Response;
+  let text: string;
+  try {
+    response = await fetch(url, {
+      ...init,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    text = await response.text();
+  } catch (error: unknown) {
+    throw new AirwallexUnreachableError(request, error);
+  }
+
   if (!response.ok) {
     let body: ErrorBody = {};
     try {
@@ -46,6 +74,7 @@ async function parse<T>(response: Response): Promise<T> {
       body = {};
     }
     throw new AirwallexError(
+      request,
       response.status,
       body,
       text || response.statusText,
@@ -87,14 +116,15 @@ export class AirwallexClient {
       return this.token;
     }
 
-    const response: Response = await fetch(
-      `${this.baseUrl}/api/v1/authentication/login`,
+    const path: string = "/api/v1/authentication/login";
+    const login: LoginResponse = await send<LoginResponse>(
+      `POST ${path}`,
+      `${this.baseUrl}${path}`,
       {
         method: "POST",
         headers: { "x-client-id": this.clientId, "x-api-key": this.apiKey },
       },
     );
-    const login: LoginResponse = await parse<LoginResponse>(response);
     this.token = login.token;
     this.tokenExpiresAtMs = new Date(login.expires_at).getTime();
     return login.token;
@@ -102,15 +132,16 @@ export class AirwallexClient {
 
   async request<T>(method: HttpMethod, path: string, body?: unknown): Promise<T> {
     const token: string = await this.bearer();
-    const response: Response = await fetch(`${this.baseUrl}${path}`, {
+    // The query string can carry ids, so only the path goes into error messages.
+    const request: string = `${method} ${path.split("?")[0] ?? path}`;
+    return send<T>(request, `${this.baseUrl}${path}`, {
       method,
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-    return parse<T>(response);
   }
 
   get<T>(path: string): Promise<T> {

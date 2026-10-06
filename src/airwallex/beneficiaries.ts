@@ -1,4 +1,5 @@
 import type { AirwallexClient } from "./client.js";
+import type { TransferBankDetails } from "./transfers.js";
 
 export interface Beneficiary {
   id: string;
@@ -67,6 +68,25 @@ export const DE_SWIFT_SUPPLIER: BeneficiarySpec = {
     },
   },
 };
+
+interface BeneficiaryRecord {
+  beneficiary?: { bank_details?: TransferBankDetails };
+}
+
+// The bank details a new transfer to this beneficiary would be paid to.
+export async function getBankDetails(
+  client: AirwallexClient,
+  beneficiaryId: string,
+): Promise<TransferBankDetails> {
+  const record: BeneficiaryRecord = await client.get<BeneficiaryRecord>(
+    `/api/v1/beneficiaries/${beneficiaryId}`,
+  );
+  const details: TransferBankDetails | undefined = record.beneficiary?.bank_details;
+  if (details === undefined) {
+    throw new Error(`Beneficiary ${beneficiaryId} has no bank details`);
+  }
+  return details;
+}
 
 export async function findOrCreateBeneficiary(
   client: AirwallexClient,

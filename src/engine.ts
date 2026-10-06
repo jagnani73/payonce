@@ -1,8 +1,10 @@
+import { randomInt } from "node:crypto";
 import { getAvailableMinor } from "./airwallex/balances.js";
 import {
   DE_SWIFT_SUPPLIER,
   US_LOCAL_SUPPLIER,
   findOrCreateBeneficiary,
+  getBankDetails,
   type Beneficiary,
   type BeneficiarySpec,
 } from "./airwallex/beneficiaries.js";
@@ -12,6 +14,7 @@ import {
   getTransfer,
   waitForTransfer,
   type Transfer,
+  type TransferBankDetails,
 } from "./airwallex/transfers.js";
 import {
   bindingOf,
@@ -19,7 +22,7 @@ import {
   termsFor,
   type ApprovalTerms,
 } from "./approval.js";
-import { originalStateOf, resendCanFix } from "./assess.js";
+import { originalStateOf, resendCanFix, sameBankDetails } from "./assess.js";
 import { decide } from "./decide.js";
 import {
   loadEmails,
@@ -41,7 +44,7 @@ import {
   type TransferMethod,
 } from "./ledger.js";
 import { formatMoney, toMinor } from "./money.js";
-import { sendAttempt, syncTransfer } from "./payments.js";
+import { sendAttempt, syncTransfer, wasRejected } from "./payments.js";
 
 const AMPLE_RESERVE_MINOR: number = 100_000_000;
 const SUPPLIER_DOMAIN: string = "example-supplier.test";
@@ -82,7 +85,7 @@ export const SCENARIOS: ScenarioDef[] = [
   },
   {
     id: "eur-swift-low-reserve",
-    label: "EUR, SWIFT transfer, cash near the reserve floor",
+    label: "EUR, SWIFT, low cash reserve",
     supplier: "Example Supplier GmbH",
     beneficiary: DE_SWIFT_SUPPLIER,
     currency: "EUR",
@@ -94,16 +97,24 @@ export const SCENARIOS: ScenarioDef[] = [
 
 export const DEFAULT_SCENARIO: string = "usd-local";
 
-// What the reader found, plus the sender check done in code.
+// What the reader found. unverifiedSenders is kept for display; the policy works
+// the sender check out again from the stored emails. unread marks a thread the
+// reader failed on.
 interface StoredFindings extends EmailFindings {
   unverifiedSenders?: string[];
+  unread?: boolean;
 }
 
 const NO_FINDINGS: StoredFindings = {
   claimsNonReceipt: false,
   asksForNewBankDetails: false,
   summary: "no emails on file",
-  unverifiedSenders: [],
+};
+
+const UNREAD_FINDINGS: EmailFindings = {
+  claimsNonReceipt: false,
+  asksForNewBankDetails: false,
+  summary: "the emails could not be read",
 };
 
 export interface Engine {
@@ -120,11 +131,22 @@ export interface Scenario {
 interface Assessment {
   original: Transfer;
   findings: StoredFindings;
+  unverified: string[];
+  bankDetails: TransferBankDetails;
   decision: Decision;
 }
 
-export function newInvoiceId(): string {
-  return `INV-${Date.now().toString().slice(-6)}`;
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function newInvoiceId(ledger: Ledger): string {
+  for (;;) {
+    const invoiceId: string = `INV-${randomInt(100_000, 1_000_000)}`;
+    if (ledger.obligation(invoiceId) === undefined) {
+      return invoiceId;
+    }
+  }
 }
 
 // Adds a line to the incident's timeline and prints it. A line identical to the
@@ -141,6 +163,25 @@ function note(
   }
   ledger.addEvent(invoiceId, kind, message);
   console.log(`  ${kind.padEnd(8)} ${message}`);
+}
+
+// Puts a failure on the incident's timeline. It must not throw, because it runs
+// from error handlers.
+export function noteError(ledger: Ledger, invoiceId: string, error: unknown): void {
+  console.error(error);
+  try {
+    note(ledger, invoiceId, "error", messageOf(error));
+  } catch (inner: unknown) {
+    console.error(`Could not record the error for ${invoiceId}: ${messageOf(inner)}`);
+  }
+}
+
+// An obligation recorded before the domain column existed has none on file, and
+// there is nothing to compare its senders with.
+function sendersNotOnFile(obligation: Obligation, emails: SupplierEmail[]): string[] {
+  return obligation.supplierDomain === ""
+    ? []
+    : unverifiedSenders(emails, obligation.supplierDomain);
 }
 
 function describe(transfer: Transfer): string {
@@ -175,7 +216,7 @@ async function receive(
   for (const email of emails) {
     note(engine.ledger, invoiceId, "email", `Email from ${email.from}: ${email.subject}`);
   }
-  for (const sender of unverifiedSenders(emails, obligation.supplierDomain)) {
+  for (const sender of sendersNotOnFile(obligation, emails)) {
     note(
       engine.ledger,
       invoiceId,
@@ -184,26 +225,36 @@ async function receive(
     );
   }
 
+  // If the reader fails, the thread is marked unread so the policy escalates
+  // and does not act on findings from before these emails arrived.
   const thread: SupplierEmail[] = engine.ledger.emails(invoiceId);
+  let read: EmailFindings = UNREAD_FINDINGS;
+  let unread: boolean = false;
+  try {
+    read = await engine.reader.read(thread);
+  } catch (error: unknown) {
+    unread = true;
+    note(
+      engine.ledger,
+      invoiceId,
+      "error",
+      `Supplier emails could not be read: ${messageOf(error)}`,
+    );
+  }
   const findings: StoredFindings = {
-    ...(await engine.reader.read(thread)),
-    unverifiedSenders: unverifiedSenders(thread, obligation.supplierDomain),
+    ...read,
+    unverifiedSenders: sendersNotOnFile(obligation, thread),
+    unread,
   };
   engine.ledger.saveFindings(invoiceId, JSON.stringify(findings));
   note(engine.ledger, invoiceId, "email", `Emails read: ${findings.summary}`);
 }
 
-function findingsFor(ledger: Ledger, invoiceId: string): StoredFindings {
-  const stored: string | undefined = ledger.findings(invoiceId);
-  return stored === undefined ? NO_FINDINGS : (JSON.parse(stored) as StoredFindings);
-}
-
 // The email evidence a person sees and approves against.
-function evidenceSummary(findings: StoredFindings): string {
-  const senders: string[] = findings.unverifiedSenders ?? [];
-  return senders.length === 0
-    ? findings.summary
-    : `${findings.summary}, sender ${senders.join(", ")} does not match the supplier on file`;
+function evidenceSummary(assessment: Assessment): string {
+  return assessment.unverified.length === 0
+    ? assessment.findings.summary
+    : `${assessment.findings.summary}, sender ${assessment.unverified.join(", ")} does not match the supplier on file`;
 }
 
 async function assess(
@@ -212,7 +263,17 @@ async function assess(
   originalId: string,
 ): Promise<Assessment> {
   const original: Transfer = await getTransfer(engine.client, originalId);
-  const findings: StoredFindings = findingsFor(engine.ledger, obligation.invoiceId);
+  const emails: SupplierEmail[] = engine.ledger.emails(obligation.invoiceId);
+  const stored: string | undefined = engine.ledger.findings(obligation.invoiceId);
+  const findings: StoredFindings =
+    stored === undefined ? NO_FINDINGS : (JSON.parse(stored) as StoredFindings);
+  const unverified: string[] = sendersNotOnFile(obligation, emails);
+  // A replacement is paid by beneficiary id, so what counts is the account that
+  // record points to now, not the one the original went to.
+  const bankDetails: TransferBankDetails = await getBankDetails(
+    engine.client,
+    obligation.beneficiaryId,
+  );
   const feeMinor: number = toMinor(original.fee_amount);
   const availableMinor: number = await getAvailableMinor(
     engine.client,
@@ -226,9 +287,14 @@ async function assess(
     transferFeeMinor: feeMinor,
     originalState: originalStateOf(original),
     resendCanFix: resendCanFix(original),
-    supplierAsksForNewBankDetails: findings.asksForNewBankDetails,
-    emailFromUnverifiedSender: (findings.unverifiedSenders ?? []).length > 0,
-    evidenceConflicts: false,
+    supplierAsksForNewBankDetails: findings.asksForNewBankDetails === true,
+    beneficiaryChanged: !sameBankDetails(
+      original.beneficiary?.bank_details,
+      bankDetails,
+    ),
+    emailFromUnverifiedSender: unverified.length > 0,
+    emailsUnread:
+      findings.unread === true || (emails.length > 0 && stored === undefined),
     availableBalanceMinor: availableMinor,
     reserveFloorMinor: obligation.reserveFloorMinor,
   };
@@ -253,7 +319,7 @@ async function assess(
     "decision",
     `${capitalise(decision.action)}: ${decision.reason}`,
   );
-  return { original, findings, decision };
+  return { original, findings, unverified, bankDetails, decision };
 }
 
 // Opening the attempt takes the duplicate lock, so this throws if the invoice
@@ -264,12 +330,30 @@ async function pay(
   kind: AttemptKind,
 ): Promise<Transfer> {
   const attempt: Attempt = engine.ledger.openAttempt(obligation.invoiceId, kind);
-  const created: Transfer = await sendAttempt(
-    engine.client,
+  let created: Transfer;
+  try {
+    created = await sendAttempt(engine.client, engine.ledger, obligation, attempt);
+  } catch (error: unknown) {
+    throw new Error(
+      wasRejected(error)
+        ? `${capitalise(kind)} payment was refused and nothing was sent. ${messageOf(error)}`
+        : `${capitalise(kind)} payment request did not complete, so the transfer may or may not exist. Run ${obligation.invoiceId} again to reconcile it. ${messageOf(error)}`,
+      { cause: error },
+    );
+  }
+
+  // Noted as soon as the transfer exists, so a later failure cannot hide it.
+  const fee: string =
+    created.fee_amount > 0
+      ? `, plus a ${formatMoney(toMinor(created.fee_amount), obligation.currency)} transfer fee`
+      : "";
+  note(
     engine.ledger,
-    obligation,
-    attempt,
+    obligation.invoiceId,
+    "payment",
+    `${capitalise(kind)} ${created.short_reference_id} sent: ${money(obligation)} to ${obligation.supplier}${fee}`,
   );
+
   // The simulator rejects a transition until the transfer has left SCHEDULED.
   await waitForTransfer(
     engine.client,
@@ -277,18 +361,7 @@ async function pay(
     (transfer: Transfer): boolean => transfer.status !== "SCHEDULED",
   );
   await simulateTransfer(engine.client, created.id, "SENT");
-  const sent: Transfer = await syncTransfer(engine.client, engine.ledger, created.id);
-  const fee: string =
-    sent.fee_amount > 0
-      ? `, plus a ${formatMoney(toMinor(sent.fee_amount), obligation.currency)} transfer fee`
-      : "";
-  note(
-    engine.ledger,
-    obligation.invoiceId,
-    "payment",
-    `${capitalise(kind)} ${sent.short_reference_id} sent: ${money(obligation)} to ${obligation.supplier}${fee}`,
-  );
-  return sent;
+  return syncTransfer(engine.client, engine.ledger, created.id);
 }
 
 function close(engine: Engine, invoiceId: string): boolean {
@@ -309,21 +382,49 @@ function close(engine: Engine, invoiceId: string): boolean {
   return true;
 }
 
+// Sandbox scaffolding: the scripted bank pays the replacement.
+async function settleReplacement(
+  engine: Engine,
+  obligation: Obligation,
+  originalId: string,
+  replacementId: string,
+): Promise<void> {
+  const current: Transfer = await waitForTransfer(
+    engine.client,
+    replacementId,
+    (transfer: Transfer): boolean => transfer.status !== "SCHEDULED",
+  );
+  if (current.status !== "PAID") {
+    if (current.status !== "SENT") {
+      await simulateTransfer(engine.client, replacementId, "SENT");
+    }
+    await simulateTransfer(engine.client, replacementId, "PAID");
+  }
+
+  await syncTransfer(engine.client, engine.ledger, originalId);
+  const paid: Transfer = await syncTransfer(
+    engine.client,
+    engine.ledger,
+    replacementId,
+  );
+  note(engine.ledger, obligation.invoiceId, "bank", `Replacement ${describe(paid)}`);
+  if (!close(engine, obligation.invoiceId)) {
+    note(
+      engine.ledger,
+      obligation.invoiceId,
+      "error",
+      `Replacement ${paid.short_reference_id} did not read back as paid, so the incident stays open`,
+    );
+  }
+}
+
 async function replaceAndSettle(
   engine: Engine,
   obligation: Obligation,
   originalId: string,
 ): Promise<void> {
   const replacement: Transfer = await pay(engine, obligation, "replacement");
-  await simulateTransfer(engine.client, replacement.id, "PAID");
-  await syncTransfer(engine.client, engine.ledger, originalId);
-  const paid: Transfer = await syncTransfer(
-    engine.client,
-    engine.ledger,
-    replacement.id,
-  );
-  note(engine.ledger, obligation.invoiceId, "bank", `Replacement ${describe(paid)}`);
-  close(engine, obligation.invoiceId);
+  await settleReplacement(engine, obligation, originalId, replacement.id);
 }
 
 function termsOf(obligation: Obligation, assessment: Assessment): ApprovalTerms {
@@ -331,7 +432,8 @@ function termsOf(obligation: Obligation, assessment: Assessment): ApprovalTerms 
     obligation,
     assessment.original,
     assessment.decision,
-    evidenceSummary(assessment.findings),
+    evidenceSummary(assessment),
+    assessment.bankDetails,
   );
 }
 
@@ -373,12 +475,17 @@ async function continueEscalated(
   obligation: Obligation,
   originalId: string,
 ): Promise<void> {
+  // Once an invoice has gone to a person, only an approval releases a payment,
+  // even if the policy would now replace it unprompted.
   const assessment: Assessment = await assess(engine, obligation, originalId);
   if (assessment.decision.action === "replace") {
-    await replaceAndSettle(engine, obligation, originalId);
-    return;
+    note(
+      engine.ledger,
+      obligation.invoiceId,
+      "approval",
+      "This invoice was escalated, so it still needs a person's approval",
+    );
   }
-
   const approval: Approval | undefined = engine.ledger.latestApproval(
     obligation.invoiceId,
   );
@@ -412,10 +519,26 @@ async function continueEscalated(
   await replaceAndSettle(engine, obligation, originalId);
 }
 
-// Picks up an invoice that already has payments. It never pays on its own: it
-// retries an attempt that has no transfer yet under its original request_id,
-// syncs the rest, and acts on an escalated invoice only when a matching approval
-// is on file.
+// Carries out a decision: replace, hand over to a person, or leave it waiting.
+async function act(
+  engine: Engine,
+  obligation: Obligation,
+  assessment: Assessment,
+): Promise<boolean> {
+  if (assessment.decision.action === "replace") {
+    await replaceAndSettle(engine, obligation, assessment.original.id);
+    return true;
+  }
+  if (assessment.decision.action === "escalate") {
+    escalate(engine, obligation, assessment);
+  }
+  return false;
+}
+
+// Picks up an invoice that already has payments. It retries an attempt that has
+// no transfer yet under its original request_id and syncs the rest. A replacement
+// already out is finished. An escalated invoice pays only on a matching approval.
+// An open one that stopped before its decision was carried out gets that decision.
 export async function resumeIncident(
   engine: Engine,
   invoiceId: string,
@@ -426,34 +549,74 @@ export async function resumeIncident(
   }
 
   let originalId: string | null = null;
+  let liveReplacementId: string | null = null;
   for (const attempt of engine.ledger.attempts(invoiceId)) {
+    // An attempt Airwallex refused never became a transfer. Only one still
+    // pending is retried.
+    if (attempt.transferId === null && attempt.state !== "pending") {
+      continue;
+    }
     const transfer: Transfer =
       attempt.transferId === null
         ? await sendAttempt(engine.client, engine.ledger, obligation, attempt)
         : await syncTransfer(engine.client, engine.ledger, attempt.transferId);
     if (attempt.kind === "original") {
       originalId = transfer.id;
+    } else if (originalStateOf(transfer) === "in_flight") {
+      liveReplacementId = transfer.id;
     }
     console.log(`  ${attempt.kind} ${describe(transfer)}`);
   }
 
-  if (close(engine, invoiceId)) {
+  if (close(engine, invoiceId) || originalId === null) {
     return;
   }
-  if (obligation.state === "escalated" && originalId !== null) {
-    await continueEscalated(engine, obligation, originalId);
+  // A replacement that is already out is finished, never approved a second time.
+  if (liveReplacementId !== null) {
+    note(
+      engine.ledger,
+      invoiceId,
+      "payment",
+      "Picking up a replacement that was already sent",
+    );
+    await settleReplacement(engine, obligation, originalId, liveReplacementId);
+    return;
   }
+  if (obligation.state === "escalated") {
+    await continueEscalated(engine, obligation, originalId);
+    return;
+  }
+  await act(engine, obligation, await assess(engine, obligation, originalId));
 }
 
 // Records a person's approval of the replacement an escalated invoice is waiting on.
+// Returns the request an escalated invoice is waiting on, if there is one.
+export function pendingApproval(
+  ledger: Ledger,
+  invoiceId: string,
+): { id: number; terms: ApprovalTerms } | undefined {
+  const approval: Approval | undefined = ledger.latestApproval(invoiceId);
+  return approval === undefined || approval.state !== "requested"
+    ? undefined
+    : { id: approval.id, terms: JSON.parse(approval.terms) as ApprovalTerms };
+}
+
+// approvalId is the request the approver was shown. If a newer one has replaced
+// it, the approval is refused so nobody approves terms they did not see.
 export function approveReplacement(
   ledger: Ledger,
   invoiceId: string,
   approver: string,
+  approvalId: number,
 ): ApprovalTerms {
   const approval: Approval | undefined = ledger.latestApproval(invoiceId);
   if (approval === undefined || approval.state !== "requested") {
     throw new Error(`No approval is waiting for ${invoiceId}`);
+  }
+  if (approval.id !== approvalId) {
+    throw new Error(
+      `The approval request for ${invoiceId} has changed. Review the current terms`,
+    );
   }
   const terms: ApprovalTerms = JSON.parse(approval.terms) as ApprovalTerms;
   ledger.setApprovalState(approval.id, "approved", approver);
@@ -477,6 +640,11 @@ export async function openScenario(
   );
   if (def === undefined) {
     throw new Error(`Unknown scenario ${scenarioId}`);
+  }
+  // openObligation leaves an existing row as it is, so a reused invoice number
+  // would run this scenario against someone else's invoice.
+  if (engine.ledger.obligation(invoiceId) !== undefined) {
+    throw new Error(`${invoiceId} is already in the ledger`);
   }
   const beneficiary: Beneficiary = await findOrCreateBeneficiary(
     engine.client,
@@ -525,18 +693,16 @@ export async function runScenario(
   note(engine.ledger, invoiceId, "bank", `Original ${describe(failed)}`);
   await receive(engine, obligation, thread.slice(1));
   const assessment: Assessment = await assess(engine, obligation, original.id);
-
-  if (assessment.decision.action !== "replace") {
-    escalate(engine, obligation, assessment);
+  if (!(await act(engine, obligation, assessment))) {
     return;
   }
 
-  await replaceAndSettle(engine, obligation, original.id);
-
   // Shows the lock holding: a second payment for a settled invoice is refused.
   try {
-    engine.ledger.openAttempt(invoiceId, "replacement");
-    note(engine.ledger, invoiceId, "error", "A second payment was allowed");
+    const extra: Attempt = engine.ledger.openAttempt(invoiceId, "replacement");
+    // Not expected. Fail the stray attempt so a later run cannot send it.
+    engine.ledger.failAttempt(extra.requestId, null);
+    note(engine.ledger, invoiceId, "error", "The lock let a second payment through");
   } catch (error: unknown) {
     if (!(error instanceof DuplicatePaymentError)) {
       throw error;

@@ -55,8 +55,9 @@ for (const sample of samples) {
     originalState: sample.originalState,
     resendCanFix: sample.resendCanFix,
     supplierAsksForNewBankDetails: findings.asksForNewBankDetails,
+    beneficiaryChanged: false,
     emailFromUnverifiedSender: unverified.length > 0,
-    evidenceConflicts: false,
+    emailsUnread: false,
     availableBalanceMinor: 2_500_000,
     reserveFloorMinor: 1_000_000,
   };

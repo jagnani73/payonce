@@ -1,4 +1,8 @@
-import { AirwallexError, type AirwallexClient } from "./client.js";
+import {
+  AirwallexError,
+  AirwallexUnreachableError,
+  type AirwallexClient,
+} from "./client.js";
 import { getTransfer, type Transfer } from "./transfers.js";
 
 export type SimulatedStatus = "SENT" | "PAID" | "FAILED";
@@ -12,9 +16,17 @@ const REACHED: Record<SimulatedStatus, ReadonlySet<string>> = {
   FAILED: new Set<string>(["FAILED", "CANCELLED"]),
 };
 
+function isAmbiguous(error: unknown): boolean {
+  return (
+    error instanceof AirwallexUnreachableError ||
+    (error instanceof AirwallexError && error.status >= 500)
+  );
+}
+
 // Sandbox-only. Everything that fakes a bank outcome goes through this file.
 // The simulator sometimes answers 500 after applying the transition, so a server
-// error is treated as ambiguous: read the transfer before trying again.
+// error or a lost connection is treated as ambiguous: read the transfer before
+// trying again.
 export async function simulateTransfer(
   client: AirwallexClient,
   id: string,
@@ -31,10 +43,16 @@ export async function simulateTransfer(
         },
       );
     } catch (error: unknown) {
-      if (!(error instanceof AirwallexError) || error.status < 500) {
+      if (!isAmbiguous(error)) {
         throw error;
       }
-      const current: Transfer = await getTransfer(client, id);
+      let current: Transfer;
+      try {
+        current = await getTransfer(client, id);
+      } catch {
+        // The transition error says more than a failed read of the transfer.
+        throw error;
+      }
       if (REACHED[nextStatus].has(current.status)) {
         return current;
       }

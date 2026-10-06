@@ -1,4 +1,4 @@
-import type { Transfer } from "./airwallex/transfers.js";
+import type { Transfer, TransferBankDetails } from "./airwallex/transfers.js";
 import type { OriginalTransferState } from "./incident.js";
 import type { AttemptState } from "./ledger.js";
 
@@ -39,6 +39,24 @@ export function originalStateOf(transfer: Transfer): OriginalTransferState {
 export function attemptStateOf(transfer: Transfer): AttemptState | null {
   const state: OriginalTransferState = originalStateOf(transfer);
   return state === "unknown" ? null : state;
+}
+
+function canonical(details: TransferBankDetails | undefined): string {
+  return JSON.stringify(
+    Object.entries(details ?? {}).sort(
+      ([a]: [string, unknown], [b]: [string, unknown]): number => a.localeCompare(b),
+    ),
+  );
+}
+
+// True when a new transfer would go to the same account the original went to.
+// Any difference counts, so a change Airwallex makes to its own formatting
+// escalates and does not slip through.
+export function sameBankDetails(
+  original: TransferBankDetails | undefined,
+  current: TransferBankDetails,
+): boolean {
+  return original !== undefined && canonical(original) === canonical(current);
 }
 
 export function resendCanFix(transfer: Transfer): boolean {

@@ -13,6 +13,7 @@ import {
   approveReplacement,
   DEFAULT_SCENARIO,
   newInvoiceId,
+  noteError,
   openScenario,
   resumeIncident,
   runScenario,
@@ -25,6 +26,7 @@ import {
   Ledger,
   LEDGER_PATH,
   type Approval,
+  type Attempt,
   type Obligation,
 } from "./ledger.js";
 
@@ -131,13 +133,30 @@ function runInBackground(invoiceId: string, task: () => Promise<void>): void {
   busy.add(invoiceId);
   task()
     .catch((error: unknown): void => {
-      const message: string = error instanceof Error ? error.message : String(error);
-      console.error(`${invoiceId}: ${message}`);
-      engine.ledger.addEvent(invoiceId, "error", message);
+      noteError(engine.ledger, invoiceId, error);
     })
     .finally((): void => {
       busy.delete(invoiceId);
     });
+}
+
+// The busy set lives in memory, so a restart forgets what was running. Any
+// invoice with a payment still pending or in flight is picked up again, which
+// syncs it with Airwallex and never sends a new payment by itself.
+function pickUpInterrupted(): void {
+  for (const obligation of engine.ledger.obligations()) {
+    const unfinished: boolean = engine.ledger
+      .attempts(obligation.invoiceId)
+      .some(
+        (attempt: Attempt): boolean =>
+          attempt.state === "pending" || attempt.state === "in_flight",
+      );
+    if (unfinished && obligation.state !== "settled") {
+      runInBackground(obligation.invoiceId, (): Promise<void> =>
+        resumeIncident(engine, obligation.invoiceId),
+      );
+    }
+  }
 }
 
 function requireObligation(invoiceId: string): Obligation {
@@ -205,7 +224,7 @@ async function startIncident(request: IncomingMessage): Promise<unknown> {
     throw new HttpError(400, "Unknown scenario");
   }
 
-  const invoiceId: string = newInvoiceId();
+  const invoiceId: string = newInvoiceId(engine.ledger);
   const obligation: Obligation = await openScenario(engine, invoiceId, scenarioId);
   runInBackground(invoiceId, (): Promise<void> =>
     runScenario(engine, obligation, { failureType, emailsName }),
@@ -224,13 +243,28 @@ async function approveIncident(
   if (approver === "" || approver.length > 80) {
     throw new HttpError(400, "Enter the approver's name");
   }
+  const approvalId: unknown = body["approvalId"];
+  if (typeof approvalId !== "number" || !Number.isInteger(approvalId)) {
+    throw new HttpError(400, "Say which approval request is being approved");
+  }
   if (busy.has(invoiceId)) {
     throw new HttpError(409, `${invoiceId} is still being worked on`);
   }
   try {
-    approveReplacement(engine.ledger, invoiceId, approver);
+    approveReplacement(engine.ledger, invoiceId, approver, approvalId);
   } catch (error: unknown) {
     throw new HttpError(409, error instanceof Error ? error.message : String(error));
+  }
+  runInBackground(invoiceId, (): Promise<void> => resumeIncident(engine, invoiceId));
+  return { ok: true };
+}
+
+// Continues an incident that stopped part-way. It cannot send a second live
+// payment, and an escalated invoice still needs its approval.
+function resume(invoiceId: string): unknown {
+  requireObligation(invoiceId);
+  if (busy.has(invoiceId)) {
+    throw new HttpError(409, `${invoiceId} is still being worked on`);
   }
   runInBackground(invoiceId, (): Promise<void> => resumeIncident(engine, invoiceId));
   return { ok: true };
@@ -242,11 +276,14 @@ function serveStatic(response: ServerResponse, pathname: string): void {
   if (!readdirSync(WEB_DIR).includes(name)) {
     throw new HttpError(404, "Not found");
   }
+  // Read before any header goes out, so a failed read can still become an error
+  // response.
+  const content: Buffer = readFileSync(new URL(name, WEB_DIR));
   response.writeHead(200, {
     "Content-Type": CONTENT_TYPES[extname(name)] ?? "application/octet-stream",
     "Cache-Control": "no-store",
   });
-  response.end(readFileSync(new URL(name, WEB_DIR)));
+  response.end(content);
 }
 
 async function route(
@@ -295,6 +332,14 @@ async function route(
     parts.length === 4
   ) {
     sendJson(response, 200, await approveIncident(request, invoiceId));
+  } else if (
+    method === "POST" &&
+    parts[1] === "incidents" &&
+    invoiceId !== undefined &&
+    parts[3] === "resume" &&
+    parts.length === 4
+  ) {
+    sendJson(response, 200, resume(invoiceId));
   } else {
     throw new HttpError(404, "Not found");
   }
@@ -306,13 +351,23 @@ const server: Server = createServer(
       const status: number = error instanceof HttpError ? error.status : 500;
       const message: string = error instanceof Error ? error.message : String(error);
       if (status === 500) {
-        console.error(message);
+        console.error(error);
+      }
+      if (response.headersSent) {
+        response.end();
+        return;
       }
       sendJson(response, status, { error: message });
     });
   },
 );
 
+// One failed step must not take the server, and every other incident, down with it.
+process.on("unhandledRejection", (reason: unknown): void => {
+  console.error("Unhandled rejection:", reason);
+});
+
 server.listen(PORT, HOST, (): void => {
   console.log(`PayOnce is at http://${HOST}:${PORT} (sandbox only, no real money)`);
+  pickUpInterrupted();
 });

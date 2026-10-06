@@ -5,6 +5,7 @@ import type { SupplierEmail } from "./emails.js";
 export const LEDGER_PATH: string = "payonce.db";
 
 const SQLITE_CONSTRAINT_UNIQUE: number = 2067;
+const BUSY_TIMEOUT_MS: number = 5_000;
 
 // The partial unique index is the duplicate lock: an invoice can hold one attempt
 // that is not failed, so a second live payment is refused by the database itself.
@@ -100,6 +101,8 @@ export interface Attempt {
   invoiceId: string;
   kind: AttemptKind;
   transferId: string | null;
+  // The bank's short reference, as shown to people.
+  reference: string | null;
   state: AttemptState;
   failureCode: string | null;
 }
@@ -149,12 +152,17 @@ interface ColumnRow {
   name: string;
 }
 
-// Columns added after the first version of the ledger. A database created
-// earlier gets them on open.
-const ADDED_OBLIGATION_COLUMNS: Record<string, string> = {
-  supplier_domain: "TEXT NOT NULL DEFAULT ''",
-  transfer_method: "TEXT NOT NULL DEFAULT 'LOCAL'",
-  reserve_floor_minor: "INTEGER NOT NULL DEFAULT 0",
+// Columns added after the first version of the ledger, by table. A database
+// created earlier gets them on open.
+const ADDED_COLUMNS: Record<string, Record<string, string>> = {
+  obligations: {
+    supplier_domain: "TEXT NOT NULL DEFAULT ''",
+    transfer_method: "TEXT NOT NULL DEFAULT 'LOCAL'",
+    reserve_floor_minor: "INTEGER NOT NULL DEFAULT 0",
+  },
+  attempts: {
+    reference: "TEXT",
+  },
 };
 
 interface AttemptRow {
@@ -162,6 +170,7 @@ interface AttemptRow {
   invoice_id: string;
   kind: AttemptKind;
   transfer_id: string | null;
+  reference: string | null;
   state: AttemptState;
   failure_code: string | null;
 }
@@ -205,6 +214,7 @@ function toAttempt(row: AttemptRow): Attempt {
     invoiceId: row.invoice_id,
     kind: row.kind,
     transferId: row.transfer_id,
+    reference: row.reference,
     state: row.state,
     failureCode: row.failure_code,
   };
@@ -225,14 +235,18 @@ export class Ledger {
   private readonly db: DatabaseSync;
 
   constructor(path: string) {
-    this.db = new DatabaseSync(path);
+    // The CLI and the web server can have the file open at once, so a write
+    // waits for the other instead of failing on the first lock.
+    this.db = new DatabaseSync(path, { timeout: BUSY_TIMEOUT_MS });
     this.db.exec(SCHEMA);
-    const existing: string[] = (
-      this.db.prepare("PRAGMA table_info(obligations)").all() as unknown as ColumnRow[]
-    ).map((column: ColumnRow): string => column.name);
-    for (const [name, definition] of Object.entries(ADDED_OBLIGATION_COLUMNS)) {
-      if (!existing.includes(name)) {
-        this.db.exec(`ALTER TABLE obligations ADD COLUMN ${name} ${definition}`);
+    for (const [table, columns] of Object.entries(ADDED_COLUMNS)) {
+      const existing: string[] = (
+        this.db.prepare(`PRAGMA table_info(${table})`).all() as unknown as ColumnRow[]
+      ).map((column: ColumnRow): string => column.name);
+      for (const [name, definition] of Object.entries(columns)) {
+        if (!existing.includes(name)) {
+          this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+        }
       }
     }
   }
@@ -312,6 +326,7 @@ export class Ledger {
       invoiceId,
       kind,
       transferId: null,
+      reference: null,
       state: "pending",
       failureCode: null,
     };
@@ -328,16 +343,31 @@ export class Ledger {
   record(
     requestId: string,
     transferId: string,
+    reference: string,
     state: AttemptState | null,
     failureCode: string | null,
   ): void {
-    this.db
+    const result: { changes: number | bigint } = this.db
       .prepare(
         `UPDATE attempts
-            SET transfer_id = ?, state = COALESCE(?, state), failure_code = ?
+            SET transfer_id = ?, reference = ?, state = COALESCE(?, state),
+                failure_code = ?
           WHERE request_id = ?`,
       )
-      .run(transferId, state, failureCode, requestId);
+      .run(transferId, reference, state, failureCode, requestId);
+    if (Number(result.changes) !== 1) {
+      throw new Error(`No payment attempt has request_id ${requestId}`);
+    }
+  }
+
+  // For an attempt Airwallex refused to create. It never became a transfer, so
+  // it releases the lock.
+  failAttempt(requestId: string, failureCode: string | null): void {
+    this.db
+      .prepare(
+        "UPDATE attempts SET state = 'failed', failure_code = ? WHERE request_id = ?",
+      )
+      .run(failureCode, requestId);
   }
 
   escalate(invoiceId: string): void {
@@ -438,6 +468,13 @@ export class Ledger {
     }
     this.db
       .prepare("UPDATE obligations SET state = 'settled' WHERE invoice_id = ?")
+      .run(invoiceId);
+    // Nothing is left to approve on a settled invoice.
+    this.db
+      .prepare(
+        `UPDATE approvals SET state = 'void'
+          WHERE invoice_id = ? AND state IN ('requested', 'approved')`,
+      )
       .run(invoiceId);
     return true;
   }
