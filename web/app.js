@@ -67,7 +67,7 @@ const els = {
   form: byId("new-form"),
   scenarioField: byId("scenario-field"),
   scenario: byId("scenario"),
-  failureType: byId("failure-type"),
+  bankOutcome: byId("bank-outcome"),
   emailThread: byId("email-thread"),
   startButton: byId("start-button"),
   newError: byId("new-error"),
@@ -84,6 +84,7 @@ const els = {
   timeline: byId("timeline"),
   timelineEmpty: byId("timeline-empty"),
   working: byId("working"),
+  review: byId("review"),
   approval: byId("approval"),
   payments: byId("payments"),
   emails: byId("emails"),
@@ -106,15 +107,19 @@ const state = {
   started: null,
   approving: false,
   approveError: null,
+  closing: false,
+  closeError: null,
   resuming: false,
   resumeError: null,
   fastUntil: 0,
   drafts: new Map(),
+  closeDrafts: new Map(),
 };
 
 // Signatures of what each section last drew, so an unchanged poll touches nothing.
 const painted = new Map();
 let approvalRefs = null;
+let reviewRefs = null;
 let headerRefs = null;
 
 // ---------- helpers ----------
@@ -294,7 +299,7 @@ async function loadOptions() {
   try {
     const options = await api("/api/options");
     state.options = {
-      failureTypes: Array.isArray(options.failureTypes) ? options.failureTypes : [],
+      bankOutcomes: Array.isArray(options.bankOutcomes) ? options.bankOutcomes : [],
       emailThreads: Array.isArray(options.emailThreads) ? options.emailThreads : [],
       scenarios: Array.isArray(options.scenarios) ? options.scenarios : [],
     };
@@ -411,6 +416,7 @@ function setSelected(id) {
   state.revealSelected = id !== null;
   state.detailError = null;
   state.approveError = null;
+  state.closeError = null;
   state.resumeError = null;
   const hash = id === null ? "" : `#${encodeURIComponent(id)}`;
   if (window.location.hash !== hash) {
@@ -444,8 +450,8 @@ function renderForm() {
   const options = state.options;
   if (options !== null && changed("options", options)) {
     fillSelect(
-      els.failureType,
-      options.failureTypes.map((value) => ({ value, label: humanize(value) })),
+      els.bankOutcome,
+      options.bankOutcomes.map((value) => ({ value, label: humanize(value) })),
     );
     fillSelect(
       els.emailThread,
@@ -461,10 +467,10 @@ function renderForm() {
     els.scenarioField.hidden = options.scenarios.length === 0;
   }
   const ready =
-    options !== null && options.failureTypes.length > 0 && options.emailThreads.length > 0;
+    options !== null && options.bankOutcomes.length > 0 && options.emailThreads.length > 0;
   const locked = !ready || state.creating;
   els.scenario.disabled = locked;
-  els.failureType.disabled = locked;
+  els.bankOutcome.disabled = locked;
   els.emailThread.disabled = locked;
   els.startButton.disabled = locked;
   setText(els.startButton, state.creating ? "Starting" : "Start incident");
@@ -477,7 +483,7 @@ async function startIncident(event) {
     return;
   }
   const body = {
-    failureType: els.failureType.value,
+    bankOutcome: els.bankOutcome.value,
     emails: els.emailThread.value,
   };
   if (state.options.scenarios.length > 0 && els.scenario.value !== "") {
@@ -1207,6 +1213,173 @@ async function submitApproval(invoiceId) {
   }
 }
 
+// The card for an incident a person has to close: the bank reports the original
+// as paid, so there is no payment to approve.
+function buildReview(invoiceId, review, emailSummary) {
+  const hasReference = typeof review.reference === "string" && review.reference !== "";
+  const draft = state.closeDrafts.get(invoiceId) ?? { closedBy: "", finding: "" };
+  const remember = () => {
+    state.closeDrafts.set(invoiceId, { closedBy: closedBy.value, finding: finding.value });
+    if (state.closeError !== null) {
+      state.closeError = null;
+      syncReviewControls();
+    }
+  };
+
+  const closedBy = h("input", {
+    type: "text",
+    id: "closed-by",
+    name: "closedBy",
+    autocomplete: "name",
+    maxlength: "80",
+  });
+  closedBy.value = draft.closedBy;
+  closedBy.addEventListener("input", remember);
+  const finding = h("input", {
+    type: "text",
+    id: "finding",
+    name: "finding",
+    autocomplete: "off",
+    maxlength: "200",
+  });
+  finding.value = draft.finding;
+  finding.addEventListener("input", remember);
+
+  const button = h("button", { class: "button button--primary", type: "submit" }, "Close incident");
+  const error = h("p", { class: "form-error", role: "alert", hidden: true });
+  const form = h(
+    "form",
+    { class: "close-form", novalidate: true },
+    h("label", { class: "field" }, h("span", { class: "field__label" }, "Your name"), closedBy),
+    h(
+      "label",
+      { class: "field" },
+      h("span", { class: "field__label" }, "What you confirmed"),
+      finding,
+    ),
+    button,
+    error,
+    h("p", { class: "hint" }, "Closing records your name and this note on the timeline. It does not move money."),
+  );
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitClose(invoiceId);
+  });
+  reviewRefs = { closedBy, finding, button, error };
+
+  setClass(els.review, "card approval approval--requested");
+  els.review.replaceChildren(
+    h(
+      "div",
+      { class: "approval__head" },
+      h("h2", { id: "review-title" }, "Close this incident"),
+      badge(OBLIGATION_STATES.escalated, "escalated", false),
+    ),
+    h(
+      "p",
+      { class: "approval__lead" },
+      "The bank reports the original payment as paid, so PayOnce will not send another. Check with the supplier, then close the incident.",
+    ),
+    h(
+      "dl",
+      { class: "terms" },
+      h("dt", null, "Original payment"),
+      h(
+        "dd",
+        null,
+        hasReference ? h("span", { class: "mono" }, review.reference) : "Paid",
+        hasReference && h("span", { class: "terms__sub" }, "Paid"),
+      ),
+      review.reason !== "" && [
+        h("dt", null, "Why it needs a person"),
+        h("dd", null, sentence(review.reason)),
+      ],
+      emailSummary !== "" && [
+        h("dt", null, "Email evidence"),
+        h("dd", null, sentence(emailSummary)),
+      ],
+    ),
+    form,
+  );
+  els.review.hidden = false;
+}
+
+function syncReviewControls() {
+  if (reviewRefs === null) {
+    return;
+  }
+  reviewRefs.button.disabled = state.closing;
+  reviewRefs.closedBy.readOnly = state.closing;
+  reviewRefs.finding.readOnly = state.closing;
+  setText(reviewRefs.button, state.closing ? "Closing" : "Close incident");
+  if (liveMessage("review", state.closeError) === null) {
+    state.closeError = null;
+  }
+  const wasHidden = reviewRefs.error.hidden;
+  showMessage(reviewRefs.error, state.closeError?.message);
+  if (wasHidden && !reviewRefs.error.hidden) {
+    reviewRefs.error.scrollIntoView({ block: "nearest" });
+  }
+}
+
+function renderReview(detail) {
+  const invoiceId = detail.obligation.invoiceId;
+  const review = detail.review ?? null;
+  const emailSummary = typeof detail.findings?.summary === "string" ? detail.findings.summary : "";
+  if (changed("review", [invoiceId, review, emailSummary])) {
+    if (review === null) {
+      reviewRefs = null;
+      els.review.hidden = true;
+      els.review.replaceChildren();
+    } else {
+      buildReview(invoiceId, { reference: review.reference, reason: String(review.reason ?? "") }, emailSummary);
+    }
+  }
+  syncReviewControls();
+}
+
+async function submitClose(invoiceId) {
+  if (state.closing || reviewRefs === null) {
+    return;
+  }
+  const closedBy = reviewRefs.closedBy.value.trim();
+  const finding = reviewRefs.finding.value.trim();
+  const missing =
+    closedBy === ""
+      ? { field: reviewRefs.closedBy, message: "Enter your name to close." }
+      : finding === ""
+        ? { field: reviewRefs.finding, message: "Say what you confirmed." }
+        : null;
+  if (missing !== null) {
+    state.closeError = actionError("review", missing.message);
+    syncReviewControls();
+    missing.field.focus();
+    return;
+  }
+  state.closing = true;
+  state.closeError = null;
+  syncReviewControls();
+  let failure = null;
+  try {
+    await api(`${incidentPath(invoiceId)}/close`, {
+      method: "POST",
+      body: { closedBy, finding },
+    });
+    state.closeDrafts.delete(invoiceId);
+  } catch (error) {
+    failure = error.message;
+  }
+  try {
+    await refresh();
+  } finally {
+    state.closing = false;
+    if (failure !== null && state.selectedId === invoiceId) {
+      state.closeError = actionError("review", failure);
+    }
+    syncReviewControls();
+  }
+}
+
 function renderMain() {
   const id = state.selectedId;
   const detail = currentDetail();
@@ -1233,6 +1406,7 @@ function renderMain() {
   );
   renderHeader(detail);
   renderTimeline(detail);
+  renderReview(detail);
   renderApproval(detail);
   renderPayments(detail);
   renderEmails(detail);

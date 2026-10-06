@@ -38,6 +38,12 @@ const samples: Sample[] = [
     originalState: "failed",
     resendCanFix: true,
   },
+  {
+    label: "bank reports the original as paid",
+    emails: "nothing-arrived",
+    originalState: "paid",
+    resendCanFix: false,
+  },
 ];
 
 const reader: EmailReader = new KeywordReader();
@@ -54,6 +60,7 @@ for (const sample of samples) {
     transferFeeMinor: 0,
     originalState: sample.originalState,
     resendCanFix: sample.resendCanFix,
+    supplierReportsNonReceipt: findings.claimsNonReceipt,
     supplierAsksForNewBankDetails: findings.asksForNewBankDetails,
     beneficiaryChanged: false,
     emailFromUnverifiedSender: unverified.length > 0,

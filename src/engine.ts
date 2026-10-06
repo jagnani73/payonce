@@ -31,7 +31,7 @@ import {
   type EmailReader,
   type SupplierEmail,
 } from "./emails.js";
-import type { Decision, Incident } from "./incident.js";
+import type { Decision, Incident, OriginalTransferState } from "./incident.js";
 import {
   DuplicatePaymentError,
   type Approval,
@@ -123,8 +123,12 @@ export interface Engine {
   reader: EmailReader;
 }
 
+// The bank outcome that settles the original. Any other outcome is the failure
+// type the simulator fails it with.
+export const PAID_OUTCOME: string = "PAID";
+
 export interface Scenario {
-  failureType: string;
+  bankOutcome: string;
   emailsName: string;
 }
 
@@ -287,6 +291,7 @@ async function assess(
     transferFeeMinor: feeMinor,
     originalState: originalStateOf(original),
     resendCanFix: resendCanFix(original),
+    supplierReportsNonReceipt: findings.claimsNonReceipt === true,
     supplierAsksForNewBankDetails: findings.asksForNewBankDetails === true,
     beneficiaryChanged: !sameBankDetails(
       original.beneficiary?.bank_details,
@@ -438,15 +443,31 @@ function termsOf(obligation: Obligation, assessment: Assessment): ApprovalTerms 
 }
 
 // A replacement is only on offer when the original has failed, and it goes to the
-// beneficiary on file. Any other escalation has no payment a person could approve yet.
+// beneficiary on file. A paid original leaves nothing to pay, so the person closes
+// the incident. Any other escalation has no payment a person could approve yet.
 function escalate(
   engine: Engine,
   obligation: Obligation,
   assessment: Assessment,
 ): void {
-  engine.ledger.escalate(obligation.invoiceId);
-  if (originalStateOf(assessment.original) !== "failed") {
-    note(engine.ledger, obligation.invoiceId, "approval", "Waiting on a person");
+  // An invoice that is already with a person keeps the reason it went there for
+  // when the policy would now do something else.
+  engine.ledger.escalate(
+    obligation.invoiceId,
+    assessment.decision.action === "escalate"
+      ? assessment.decision.reason
+      : obligation.escalationReason,
+  );
+  const originalState: OriginalTransferState = originalStateOf(assessment.original);
+  if (originalState !== "failed") {
+    note(
+      engine.ledger,
+      obligation.invoiceId,
+      "approval",
+      originalState === "paid"
+        ? "Waiting on a person to check with the supplier and close the incident. PayOnce will not send a second payment"
+        : "Waiting on a person",
+    );
     return;
   }
 
@@ -475,8 +496,8 @@ async function continueEscalated(
   obligation: Obligation,
   originalId: string,
 ): Promise<void> {
-  // Once an invoice has gone to a person, only an approval releases a payment,
-  // even if the policy would now replace it unprompted.
+  // Once an invoice has gone to a person, only an approval releases a payment and
+  // only a person closes it, even if the policy would now do either unprompted.
   const assessment: Assessment = await assess(engine, obligation, originalId);
   if (assessment.decision.action === "replace") {
     note(
@@ -484,6 +505,14 @@ async function continueEscalated(
       obligation.invoiceId,
       "approval",
       "This invoice was escalated, so it still needs a person's approval",
+    );
+  }
+  if (assessment.decision.action === "close") {
+    note(
+      engine.ledger,
+      obligation.invoiceId,
+      "approval",
+      "This invoice was escalated, so a person closes it",
     );
   }
   const approval: Approval | undefined = engine.ledger.latestApproval(
@@ -519,7 +548,8 @@ async function continueEscalated(
   await replaceAndSettle(engine, obligation, originalId);
 }
 
-// Carries out a decision: replace, hand over to a person, or leave it waiting.
+// Carries out a decision: replace, close, hand over to a person, or leave it
+// waiting. Returns true when a replacement was sent.
 async function act(
   engine: Engine,
   obligation: Obligation,
@@ -531,6 +561,14 @@ async function act(
   }
   if (assessment.decision.action === "escalate") {
     escalate(engine, obligation, assessment);
+  }
+  if (assessment.decision.action === "close" && !close(engine, obligation.invoiceId)) {
+    note(
+      engine.ledger,
+      obligation.invoiceId,
+      "error",
+      "The ledger does not show this invoice as paid once, so the incident stays open",
+    );
   }
   return false;
 }
@@ -568,8 +606,20 @@ export async function resumeIncident(
     console.log(`  ${attempt.kind} ${describe(transfer)}`);
   }
 
-  if (close(engine, invoiceId) || originalId === null) {
+  if (originalId === null) {
     return;
+  }
+  if (engine.ledger.paidOnce(invoiceId)) {
+    // Closed already, by the policy or by a person.
+    if (obligation.state === "settled") {
+      return;
+    }
+    // A paid replacement was sent on a decision already made, so it closes the
+    // incident. A paid original goes to the policy, which may want a person.
+    if (paidOriginal(engine.ledger, invoiceId) === undefined) {
+      close(engine, invoiceId);
+      return;
+    }
   }
   // A replacement that is already out is finished, never approved a second time.
   if (liveReplacementId !== null) {
@@ -589,7 +639,51 @@ export async function resumeIncident(
   await act(engine, obligation, await assess(engine, obligation, originalId));
 }
 
-// Records a person's approval of the replacement an escalated invoice is waiting on.
+// The original, when it is the one payment the invoice has been paid with.
+function paidOriginal(ledger: Ledger, invoiceId: string): Attempt | undefined {
+  if (!ledger.paidOnce(invoiceId)) {
+    return undefined;
+  }
+  return ledger
+    .attempts(invoiceId)
+    .find(
+      (attempt: Attempt): boolean =>
+        attempt.kind === "original" && attempt.state === "paid",
+    );
+}
+
+// What a person is shown before closing an escalated invoice whose original the
+// bank reports as paid.
+export interface CloseReview {
+  reference: string | null;
+  reason: string;
+}
+
+export function pendingClose(
+  ledger: Ledger,
+  invoiceId: string,
+): CloseReview | undefined {
+  const obligation: Obligation | undefined = ledger.obligation(invoiceId);
+  const paid: Attempt | undefined = paidOriginal(ledger, invoiceId);
+  return obligation?.state !== "escalated" || paid === undefined
+    ? undefined
+    : { reference: paid.reference, reason: obligation.escalationReason };
+}
+
+// Records a person closing such an invoice. It moves no money, so it is not bound
+// to terms the way an approval is.
+export function closeIncident(
+  ledger: Ledger,
+  invoiceId: string,
+  closedBy: string,
+  finding: string,
+): void {
+  if (pendingClose(ledger, invoiceId) === undefined || !ledger.settle(invoiceId)) {
+    throw new Error(`${invoiceId} is not waiting on a person to close it`);
+  }
+  note(ledger, invoiceId, "closed", `Incident closed by ${closedBy}: ${finding}`);
+}
+
 // Returns the request an escalated invoice is waiting on, if there is one.
 export function pendingApproval(
   ledger: Ledger,
@@ -669,7 +763,7 @@ export async function openScenario(
 }
 
 // The scripted sandbox incident: pay an invoice, let the supplier write in while
-// the transfer is in flight, fail the transfer, then act on the decision. The
+// the transfer is in flight, apply the bank outcome, then act on the decision. The
 // first email of the thread arrives before the bank outcome, the rest with it.
 export async function runScenario(
   engine: Engine,
@@ -684,13 +778,17 @@ export async function runScenario(
   await receive(engine, obligation, thread.slice(0, 1));
   await assess(engine, obligation, original.id);
 
-  await simulateTransfer(engine.client, original.id, "FAILED", scenario.failureType);
-  const failed: Transfer = await syncTransfer(
+  if (scenario.bankOutcome === PAID_OUTCOME) {
+    await simulateTransfer(engine.client, original.id, "PAID");
+  } else {
+    await simulateTransfer(engine.client, original.id, "FAILED", scenario.bankOutcome);
+  }
+  const outcome: Transfer = await syncTransfer(
     engine.client,
     engine.ledger,
     original.id,
   );
-  note(engine.ledger, invoiceId, "bank", `Original ${describe(failed)}`);
+  note(engine.ledger, invoiceId, "bank", `Original ${describe(outcome)}`);
   await receive(engine, obligation, thread.slice(1));
   const assessment: Assessment = await assess(engine, obligation, original.id);
   if (!(await act(engine, obligation, assessment))) {

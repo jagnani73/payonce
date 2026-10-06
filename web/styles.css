@@ -1099,10 +1099,15 @@ input:read-only {
   display: none;
 }
 
-.approve-form {
+.approve-form,
+.close-form {
   margin-top: 16px;
   padding-top: 14px;
   border-top: 1px solid var(--line);
+}
+
+.close-form .button {
+  margin-top: 2px;
 }
 
 .approve-form__row {

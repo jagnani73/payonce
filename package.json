@@ -7,6 +7,7 @@
     "dev": "tsx src/index.ts",
     "recover": "tsx --env-file=.env src/recover.ts",
     "approve": "tsx src/approve.ts",
+    "close": "tsx src/close.ts",
     "ui": "tsx --env-file=.env src/server.ts",
     "typecheck": "tsc --noEmit"
   },

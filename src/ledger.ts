@@ -94,6 +94,8 @@ export interface NewObligation {
 
 export interface Obligation extends NewObligation {
   state: ObligationState;
+  // Why the invoice last went to a person. Empty if it never has.
+  escalationReason: string;
 }
 
 export interface Attempt {
@@ -146,6 +148,7 @@ interface ObligationRow {
   transfer_method: TransferMethod;
   reserve_floor_minor: number;
   state: ObligationState;
+  escalation_reason: string;
 }
 
 interface ColumnRow {
@@ -159,6 +162,7 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     supplier_domain: "TEXT NOT NULL DEFAULT ''",
     transfer_method: "TEXT NOT NULL DEFAULT 'LOCAL'",
     reserve_floor_minor: "INTEGER NOT NULL DEFAULT 0",
+    escalation_reason: "TEXT NOT NULL DEFAULT ''",
   },
   attempts: {
     reference: "TEXT",
@@ -205,6 +209,7 @@ function toObligation(row: ObligationRow): Obligation {
     transferMethod: row.transfer_method,
     reserveFloorMinor: row.reserve_floor_minor,
     state: row.state,
+    escalationReason: row.escalation_reason,
   };
 }
 
@@ -370,10 +375,13 @@ export class Ledger {
       .run(failureCode, requestId);
   }
 
-  escalate(invoiceId: string): void {
+  escalate(invoiceId: string, reason: string): void {
     this.db
-      .prepare("UPDATE obligations SET state = 'escalated' WHERE invoice_id = ?")
-      .run(invoiceId);
+      .prepare(
+        `UPDATE obligations SET state = 'escalated', escalation_reason = ?
+          WHERE invoice_id = ?`,
+      )
+      .run(reason, invoiceId);
   }
 
   addEmails(invoiceId: string, emails: SupplierEmail[]): void {
@@ -453,8 +461,8 @@ export class Ledger {
       .run(state, approver, id);
   }
 
-  // Settles only when one attempt is paid and every other attempt has failed.
-  settle(invoiceId: string): boolean {
+  // True when one attempt is paid and every other attempt has failed.
+  paidOnce(invoiceId: string): boolean {
     const attempts: Attempt[] = this.attempts(invoiceId);
     const paid: number = attempts.filter(
       (attempt: Attempt): boolean => attempt.state === "paid",
@@ -463,7 +471,12 @@ export class Ledger {
       (attempt: Attempt): boolean =>
         attempt.state !== "paid" && attempt.state !== "failed",
     ).length;
-    if (paid !== 1 || unresolved > 0) {
+    return paid === 1 && unresolved === 0;
+  }
+
+  // Settles only when the invoice has been paid once.
+  settle(invoiceId: string): boolean {
+    if (!this.paidOnce(invoiceId)) {
       return false;
     }
     this.db

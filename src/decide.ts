@@ -36,11 +36,18 @@ export function decide(incident: Incident): Decision {
     };
   }
 
+  // A paid original holds the duplicate lock, so nothing more can be sent. What is
+  // left to decide is whether a person has to hear about it.
   if (incident.originalState === "paid") {
-    return {
-      action: "escalate",
-      reason: "original transfer settled but the supplier reports non-receipt",
-    };
+    return incident.supplierReportsNonReceipt
+      ? {
+          action: "escalate",
+          reason: "original transfer settled but the supplier reports non-receipt",
+        }
+      : {
+          action: "close",
+          reason: "original transfer settled and no supplier email reports it missing",
+        };
   }
 
   if (incident.originalState === "in_flight") {

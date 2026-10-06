@@ -11,10 +11,13 @@ import type { ApprovalTerms } from "./approval.js";
 import type { EmailFindings } from "./emails.js";
 import {
   approveReplacement,
+  closeIncident,
   DEFAULT_SCENARIO,
   newInvoiceId,
   noteError,
   openScenario,
+  PAID_OUTCOME,
+  pendingClose,
   resumeIncident,
   runScenario,
   SCENARIOS,
@@ -38,12 +41,18 @@ const WEB_DIR: URL = new URL("../web/", import.meta.url);
 const EMAILS_DIR: URL = new URL("../fixtures/emails/", import.meta.url);
 const INVOICE_PATTERN: RegExp = /^[A-Za-z0-9-]{1,40}$/;
 
-const FAILURE_TYPES: string[] = [
+const MAX_NAME_LENGTH: number = 80;
+const MAX_FINDING_LENGTH: number = 200;
+
+// What the scripted bank can do to the original: fail it one of these ways, or
+// pay it.
+const BANK_OUTCOMES: string[] = [
   "CHANNEL_TIMEOUT",
   "SYSTEM_ERROR",
   "BENEFICIARY_BANK_RETURNED",
   "ACCOUNT_CLOSED",
   "INVALID_ACCOUNT_NAME_OR_NUMBER",
+  PAID_OUTCOME,
 ];
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -201,6 +210,7 @@ function incidentDetail(invoiceId: string): unknown {
             approver: approval.approver,
             terms: JSON.parse(approval.terms) as ApprovalTerms,
           },
+    review: pendingClose(engine.ledger, invoiceId) ?? null,
     events: engine.ledger.events(invoiceId),
     busy: busy.has(invoiceId),
   };
@@ -208,10 +218,10 @@ function incidentDetail(invoiceId: string): unknown {
 
 async function startIncident(request: IncomingMessage): Promise<unknown> {
   const body: Record<string, unknown> = await readJson(request);
-  const failureType: unknown = body["failureType"];
+  const bankOutcome: unknown = body["bankOutcome"];
   const emailsName: unknown = body["emails"];
-  if (typeof failureType !== "string" || !FAILURE_TYPES.includes(failureType)) {
-    throw new HttpError(400, "Unknown failure type");
+  if (typeof bankOutcome !== "string" || !BANK_OUTCOMES.includes(bankOutcome)) {
+    throw new HttpError(400, "Unknown bank outcome");
   }
   if (typeof emailsName !== "string" || !emailThreads().includes(emailsName)) {
     throw new HttpError(400, "Unknown email thread");
@@ -227,7 +237,7 @@ async function startIncident(request: IncomingMessage): Promise<unknown> {
   const invoiceId: string = newInvoiceId(engine.ledger);
   const obligation: Obligation = await openScenario(engine, invoiceId, scenarioId);
   runInBackground(invoiceId, (): Promise<void> =>
-    runScenario(engine, obligation, { failureType, emailsName }),
+    runScenario(engine, obligation, { bankOutcome, emailsName }),
   );
   return { invoiceId };
 }
@@ -240,7 +250,7 @@ async function approveIncident(
   const body: Record<string, unknown> = await readJson(request);
   const approver: string =
     typeof body["approver"] === "string" ? body["approver"].trim() : "";
-  if (approver === "" || approver.length > 80) {
+  if (approver === "" || approver.length > MAX_NAME_LENGTH) {
     throw new HttpError(400, "Enter the approver's name");
   }
   const approvalId: unknown = body["approvalId"];
@@ -256,6 +266,35 @@ async function approveIncident(
     throw new HttpError(409, error instanceof Error ? error.message : String(error));
   }
   runInBackground(invoiceId, (): Promise<void> => resumeIncident(engine, invoiceId));
+  return { ok: true };
+}
+
+// A person closes an escalated incident whose original the bank reports as paid.
+// Nothing is sent, so there is no background step to wait for.
+async function closeByPerson(
+  request: IncomingMessage,
+  invoiceId: string,
+): Promise<unknown> {
+  requireObligation(invoiceId);
+  const body: Record<string, unknown> = await readJson(request);
+  const closedBy: string =
+    typeof body["closedBy"] === "string" ? body["closedBy"].trim() : "";
+  if (closedBy === "" || closedBy.length > MAX_NAME_LENGTH) {
+    throw new HttpError(400, "Enter your name");
+  }
+  const finding: string =
+    typeof body["finding"] === "string" ? body["finding"].trim() : "";
+  if (finding === "" || finding.length > MAX_FINDING_LENGTH) {
+    throw new HttpError(400, "Say what you confirmed");
+  }
+  if (busy.has(invoiceId)) {
+    throw new HttpError(409, `${invoiceId} is still being worked on`);
+  }
+  try {
+    closeIncident(engine.ledger, invoiceId, closedBy, finding);
+  } catch (error: unknown) {
+    throw new HttpError(409, error instanceof Error ? error.message : String(error));
+  }
   return { ok: true };
 }
 
@@ -306,7 +345,7 @@ async function route(
   const invoiceId: string | undefined = parts[2];
   if (method === "GET" && pathname === "/api/options") {
     sendJson(response, 200, {
-      failureTypes: FAILURE_TYPES,
+      bankOutcomes: BANK_OUTCOMES,
       emailThreads: emailThreads(),
       scenarios: SCENARIOS.map((scenario: ScenarioDef) => ({
         id: scenario.id,
@@ -332,6 +371,14 @@ async function route(
     parts.length === 4
   ) {
     sendJson(response, 200, await approveIncident(request, invoiceId));
+  } else if (
+    method === "POST" &&
+    parts[1] === "incidents" &&
+    invoiceId !== undefined &&
+    parts[3] === "close" &&
+    parts.length === 4
+  ) {
+    sendJson(response, 200, await closeByPerson(request, invoiceId));
   } else if (
     method === "POST" &&
     parts[1] === "incidents" &&

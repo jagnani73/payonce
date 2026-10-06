@@ -8,6 +8,7 @@ export interface Incident {
   transferFeeMinor: number;
   originalState: OriginalTransferState;
   resendCanFix: boolean;
+  supplierReportsNonReceipt: boolean;
   supplierAsksForNewBankDetails: boolean;
   beneficiaryChanged: boolean;
   emailFromUnverifiedSender: boolean;
@@ -16,7 +17,7 @@ export interface Incident {
   reserveFloorMinor: number;
 }
 
-export type Action = "wait" | "replace" | "escalate";
+export type Action = "wait" | "replace" | "escalate" | "close";
 
 export interface Decision {
   action: Action;

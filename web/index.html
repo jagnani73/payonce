@@ -68,7 +68,7 @@
             </label>
             <label class="field">
               <span class="field__label">Bank outcome</span>
-              <select id="failure-type" name="failureType" disabled></select>
+              <select id="bank-outcome" name="bankOutcome" disabled></select>
             </label>
             <label class="field">
               <span class="field__label">Supplier emails</span>
@@ -77,7 +77,7 @@
             <button id="start-button" class="button button--primary" type="submit" disabled>
               Start incident
             </button>
-            <p class="hint">PayOnce sends a sandbox transfer, then fails it with the bank outcome above.</p>
+            <p class="hint">PayOnce sends a sandbox transfer, then applies the bank outcome above.</p>
             <p id="new-error" class="form-error" role="alert" hidden></p>
           </form>
         </section>
@@ -115,6 +115,8 @@
             </section>
 
             <div class="detail__side">
+              <section id="review" class="card approval" aria-labelledby="review-title" hidden></section>
+
               <section id="approval" class="card approval" aria-labelledby="approval-title" hidden></section>
 
               <section class="card" aria-labelledby="payments-title">

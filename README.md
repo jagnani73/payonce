@@ -12,7 +12,7 @@ A supplier says a payment never arrived and their deadline has passed. The trans
 
 ## What it does
 
-PayOnce follows one supplier payment through an incident. It sends the transfer, reads the supplier's emails, watches the bank outcome, and then waits, replaces the payment, or hands the decision to a person. A web page shows each incident as a timeline, with the emails, the payments and the approval a person is asked for.
+PayOnce follows one supplier payment through an incident. It sends the transfer, reads the supplier's emails, watches the bank outcome, and then waits, replaces the payment, closes the incident, or hands the decision to a person. A web page shows each incident as a timeline, with the emails, the payments and whatever a person is asked to approve or close.
 
 ## What the agent decides
 
@@ -24,6 +24,7 @@ PayOnce follows one supplier payment through an incident. It sends the transfer,
 | Supplier emails are on file that could not be read | Escalate to a person |
 | The original is in a status the policy does not recognise | Escalate to a person |
 | The original settled but the supplier reports non-receipt | Escalate to a person |
+| The original settled and no supplier email reports it missing | Close |
 | The original transfer is still in flight | Wait |
 | The original failed for a reason a resend cannot fix | Escalate to a person |
 | The cash position could not be read | Escalate to a person |
@@ -48,6 +49,12 @@ When the original has failed and the policy escalates, PayOnce records an approv
 
 Before paying, PayOnce rebuilds the terms from current data and compares them with what was approved. If they match, it sends the replacement. If anything changed, the approval is void and PayOnce opens a new request. An approval is spent on one attempt, and it cannot override the duplicate lock. Once an invoice has gone to a person, only an approval releases a payment, even if the policy would now replace it unprompted.
 
+## Closing a paid incident
+
+A paid original holds the duplicate lock, so PayOnce cannot send anything more for that invoice. If no supplier email reports the payment missing, the incident closes. If one does, or anything else on file sends it to a person, the incident stays open until a person closes it.
+
+The page shows the paid transfer and the reason, and takes a name and a note of what the person confirmed. `pnpm close` does the same in the terminal. Both the name and the note go on the timeline. Closing moves no money, so it is not bound to terms the way an approval is. "Check again" never closes an incident that is waiting on a person.
+
 ## The cost of a second transfer
 
 A failed SWIFT transfer gets its amount back but not its fee, so a replacement pays the fee again. PayOnce adds that fee to the cost of a replacement before it checks the cash reserve. In the `eur-swift-low-reserve` scenario the reserve floor is set so that the second fee is what breaches it, and the incident goes to a person.
@@ -59,7 +66,7 @@ pnpm install
 pnpm dev
 ```
 
-`pnpm dev` needs no credentials. It reads the sample supplier emails in `fixtures/emails/` and prints the findings and the decision for three incidents.
+`pnpm dev` needs no credentials. It reads the sample supplier emails in `fixtures/emails/` and prints the findings and the decision for four incidents.
 
 Everything else talks to the Airwallex sandbox. Copy `.env.example` to `.env` and fill in a sandbox Client ID and API key.
 
@@ -69,25 +76,26 @@ Everything else talks to the Airwallex sandbox. Copy `.env.example` to `.env` an
 pnpm ui
 ```
 
-Open `http://127.0.0.1:4310`. Choose a payment, a bank outcome and a supplier email thread, then start an incident. The page follows it step by step, which takes 10 to 20 seconds in the sandbox. When an incident is waiting on a person, the approval card shows the terms and takes a name. "Check again" continues an incident that stopped part-way.
+Open `http://127.0.0.1:4310`. Choose a payment, a bank outcome and a supplier email thread, then start an incident. The page follows it step by step, which takes 10 to 20 seconds in the sandbox. When an incident is waiting on a person, the approval card shows the terms and takes a name. If the bank has paid the original, a close card takes a name and a note instead. "Check again" continues an incident that stopped part-way.
 
 The server has no login. It listens on this machine only and accepts changes only from its own page.
 
 ### The terminal
 
 ```bash
-pnpm recover [FAILURE_TYPE] [INVOICE] [EMAILS] [SCENARIO]
+pnpm recover [OUTCOME] [INVOICE] [EMAILS] [SCENARIO]
 pnpm approve <INVOICE> [NAME]
+pnpm close <INVOICE> [NAME] [NOTE]
 ```
 
 | Argument | Values | Default |
 | --- | --- | --- |
-| `FAILURE_TYPE` | A simulated bank outcome, such as `CHANNEL_TIMEOUT`, `SYSTEM_ERROR`, `BENEFICIARY_BANK_RETURNED` or `ACCOUNT_CLOSED` | `CHANNEL_TIMEOUT` |
+| `OUTCOME` | A simulated bank outcome. Either `PAID` or a failure type, such as `CHANNEL_TIMEOUT`, `SYSTEM_ERROR`, `BENEFICIARY_BANK_RETURNED` or `ACCOUNT_CLOSED` | `CHANNEL_TIMEOUT` |
 | `INVOICE` | Any invoice number. A new one starts an incident and an existing one continues it | A random number |
 | `EMAILS` | `nothing-arrived` or `new-account` | `nothing-arrived` |
 | `SCENARIO` | `usd-local`, `eur-swift` or `eur-swift-low-reserve` | `usd-local` |
 
-Three runs to try:
+Four runs to try:
 
 ```bash
 pnpm recover
@@ -96,9 +104,14 @@ pnpm recover CHANNEL_TIMEOUT INV-5001 new-account
 pnpm approve INV-5001
 pnpm approve INV-5001 Yash
 pnpm recover - INV-5001
+pnpm recover PAID INV-5002
+pnpm close INV-5002
+pnpm close INV-5002 Yash supplier found the payment
 ```
 
-The first replaces the payment and shows the lock refusing a second one. The second ends in an escalation. In the third, the supplier asks for payment to a new account from a look-alike address, so it escalates although a channel timeout on its own would be replaced. `pnpm approve` with no name shows the terms and with a name approves them. The last command then sends the replacement to the account on file. The failure type is ignored for an invoice that already exists, so `-` works as a placeholder.
+The first replaces the payment and shows the lock refusing a second one. The second ends in an escalation. In the third, the supplier asks for payment to a new account from a look-alike address, so it escalates although a channel timeout on its own would be replaced. `pnpm approve` with no name shows the terms and with a name approves them. `pnpm recover - INV-5001` then sends the replacement to the account on file. The outcome is ignored for an invoice that already exists, so `-` works as a placeholder.
+
+In the fourth, the bank pays the original while the supplier says it never arrived, so the incident goes to a person. `pnpm close` with no name shows what is waiting, and with a name and a note it closes the incident.
 
 ## Layout
 
@@ -114,7 +127,7 @@ The first replaces the payment and shows the lock refusing a second one. The sec
 | `src/emails.ts` | The email reader interface, the findings a reader returns, and the sender check |
 | `src/keyword-reader.ts` | Keyword placeholder that stands in for the model |
 | `src/server.ts` | Local web server and JSON API |
-| `src/recover.ts`, `src/approve.ts`, `src/index.ts` | The commands |
+| `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/index.ts` | The commands |
 | `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, balances and the simulation calls |
 | `web/` | The page: plain HTML, CSS and JavaScript with no build step |
 | `fixtures/emails/` | Sample supplier emails |
@@ -125,5 +138,6 @@ The code holds amounts in minor units and converts at the Airwallex boundary. Th
 
 - A model as the email reader.
 - Approving payment to new bank details. An approval covers a replacement to the account on file.
+- Closing an incident without a payment. A person can close one only when the bank reports the original as paid.
 - Payout webhooks. Airwallex needs a public URL to deliver them, so a local run polls for status.
 - Real bank outcomes. The run uses the sandbox simulator to send, fail and pay transfers.
