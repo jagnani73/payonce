@@ -8,7 +8,7 @@ Payment incident agent for the Airwallex Agentic Banking Hackathon 2026, built o
 pnpm install
 pnpm typecheck        # tsc --noEmit
 pnpm dev              # policy on three sample incidents, no credentials
-pnpm recover [TYPE] [INVOICE]   # full incident against the sandbox; TYPE is a simulated failure type (default CHANNEL_TIMEOUT), INVOICE names the incident
+pnpm recover [TYPE] [INVOICE] [EMAILS]   # full incident against the sandbox; TYPE is a simulated failure type (default CHANNEL_TIMEOUT), INVOICE names the incident, EMAILS is a thread in fixtures/emails (default nothing-arrived)
 pnpm approve <INVOICE> <NAME>   # approve the replacement an escalated invoice is waiting on
 ```
 
@@ -25,7 +25,7 @@ There is no lint script and there are no tests.
 - `src/emails.ts`: `EmailReader` interface, `EmailFindings` and the fixture loader.
 - `src/keyword-reader.ts`: placeholder reader. Replace it with a Claude-backed reader once `ANTHROPIC_API_KEY` is available.
 - `fixtures/emails/`: sample supplier emails. `new-account.json` uses a look-alike sender domain on purpose.
-- `src/recover.ts` does not use a reader yet and passes `supplierAsksForNewBankDetails: false`.
+- `src/recover.ts` stores the email thread in the ledger, the first email while the transfer is in flight and the rest with the bank outcome, and the policy reads the stored findings.
 - `src/approval.ts`: `ApprovalTerms`, `termsFor` and `bindingOf` (SHA-256 of the terms JSON).
 - `src/approve.ts`: CLI that shows the requested terms and records the approval.
 - `src/recover.ts`: one incident end to end. A second run for the same invoice reports its state, and pays only when a matching approval is on file.
@@ -40,6 +40,8 @@ There is no lint script and there are no tests.
 - Approvals live in the `approvals` table with states `requested`, `approved`, `used` and `void`. The binding is the hash of the terms JSON, so build terms only through `termsFor` to keep the key order stable.
 - A new request voids any earlier request or approval for the invoice that is still open. An approval is marked `used` before the payment is tried, so it covers one attempt.
 - An approval request is created only when the original has failed. The duplicate lock still applies to an approved replacement.
+- Supplier emails and the reader's findings are stored per invoice in `emails` and `email_findings`. The thread is read once when new emails arrive and the findings are reused, so a reader that words its summary differently on a second call cannot void an approval.
+- Approval evidence includes the email summary, so new emails that change the findings void an approval.
 
 ## Sandbox behaviour found by running it
 

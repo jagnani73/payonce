@@ -4,7 +4,7 @@ A payment incident agent that recovers failed supplier transfers without paying 
 
 PayOnce is my entry for the Airwallex Agentic Banking Hackathon 2026. It starts from starter kit 3, Payment Ops Incident Commander.
 
-> Status: early build. PayOnce runs a full incident against the Airwallex sandbox: it sends a transfer, fails it, decides, and sends one replacement under a duplicate lock. A person can approve a replacement the policy will not send on its own. Email reading is not built yet.
+> Status: early build. PayOnce runs a full incident against the Airwallex sandbox: it sends a transfer, fails it, reads the supplier's emails, decides, and sends one replacement under a duplicate lock. A person can approve a replacement the policy will not send on its own. A keyword placeholder reads the emails until a model is connected.
 
 ## The problem
 
@@ -60,15 +60,15 @@ pnpm recover CHANNEL_TIMEOUT INV-2001
 
 The second argument names the invoice. Running the same invoice again reports its state and sends nothing. The client refuses any host that is not the Airwallex sandbox.
 
-To approve an escalated replacement:
+The third argument picks a supplier email thread from `fixtures/emails/`. The default is `nothing-arrived`. In `new-account`, the supplier asks for payment to a different account once the transfer has failed:
 
 ```bash
-pnpm recover BENEFICIARY_BANK_RETURNED INV-3001
-pnpm approve INV-3001 Yash
-pnpm recover - INV-3001
+pnpm recover CHANNEL_TIMEOUT INV-5001 new-account
+pnpm approve INV-5001 Yash
+pnpm recover - INV-5001
 ```
 
-The first command ends in an escalation. The second shows the terms and records the approval. The third sends the replacement. The failure type is ignored for an invoice that already exists, so `-` works as a placeholder.
+The first command ends in an escalation, although a channel timeout on its own would be replaced automatically. The second shows the terms and records the approval. The third sends the replacement to the account on file. The failure type is ignored for an invoice that already exists, so `-` works as a placeholder.
 
 ## Layout
 
@@ -92,6 +92,6 @@ The code holds amounts in minor units and converts at the Airwallex boundary.
 
 ## Not built yet
 
-- A model as the email reader. The sandbox run does not read emails yet.
+- A model as the email reader.
 - Approving payment to new bank details. An approval covers a replacement to the same beneficiary.
 - Payout webhooks. The run polls for status.
