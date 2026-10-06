@@ -6,42 +6,61 @@ Payment incident agent for the Airwallex Agentic Banking Hackathon 2026, built o
 
 ```bash
 pnpm install
-pnpm typecheck        # tsc --noEmit
-pnpm dev              # policy on three sample incidents, no credentials
-pnpm recover [TYPE] [INVOICE] [EMAILS]   # full incident against the sandbox; TYPE is a simulated failure type (default CHANNEL_TIMEOUT), INVOICE names the incident, EMAILS is a thread in fixtures/emails (default nothing-arrived)
-pnpm approve <INVOICE> <NAME>   # approve the replacement an escalated invoice is waiting on
+pnpm typecheck                                      # tsc --noEmit
+pnpm dev                                            # policy on three sample incidents, no credentials
+pnpm ui                                             # web page and JSON API at http://127.0.0.1:4310
+pnpm recover [TYPE] [INVOICE] [EMAILS] [SCENARIO]   # one incident against the sandbox, or continue an existing invoice
+pnpm approve <INVOICE> [NAME]                       # show the waiting approval; with NAME, approve it
 ```
 
-There is no lint script and there are no tests.
+Defaults: TYPE `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-local`. There is no lint script and there are no tests.
 
 ## Structure
 
 - `src/decide.ts`: pure decision policy (wait / replace / escalate). Rules stay in code; the model never decides amounts or moves money.
 - `src/incident.ts`: `Incident` and `Decision` types. Amounts are minor units.
-- `src/assess.ts`: maps an Airwallex transfer to `originalState` and `resendCanFix`.
-- `src/airwallex/`: `client.ts` (login, bearer token refresh, refuses non-sandbox hosts), `transfers.ts`, `beneficiaries.ts`, `balances.ts`, `simulation.ts` (every sandbox-only call).
-- `src/ledger.ts`: obligations and attempts in SQLite, with the duplicate lock.
+- `src/engine.ts`: the incident flow shared by the CLI and the server. `runScenario` is the scripted sandbox incident, `resumeIncident` continues an invoice, `approveReplacement` records an approval, `note` writes the timeline. `SCENARIOS` defines the demo payments.
+- `src/assess.ts`: maps an Airwallex transfer to `originalState` and `resendCanFix`, and compares bank details.
+- `src/ledger.ts`: SQLite tables for obligations, attempts, approvals, emails, findings and events.
 - `src/payments.ts`: idempotent send and status sync between Airwallex and the ledger.
-- `src/emails.ts`: `EmailReader` interface, `EmailFindings` and the fixture loader.
-- `src/keyword-reader.ts`: placeholder reader. Replace it with a Claude-backed reader once `ANTHROPIC_API_KEY` is available.
-- `fixtures/emails/`: sample supplier emails. `new-account.json` uses a look-alike sender domain on purpose.
-- `src/recover.ts` stores the email thread in the ledger, the first email while the transfer is in flight and the rest with the bank outcome, and the policy reads the stored findings.
 - `src/approval.ts`: `ApprovalTerms`, `termsFor` and `bindingOf` (SHA-256 of the terms JSON).
-- `src/approve.ts`: CLI that shows the requested terms and records the approval.
-- `src/recover.ts`: one incident end to end. A second run for the same invoice reports its state, and pays only when a matching approval is on file.
+- `src/emails.ts`: `EmailReader` interface, `EmailFindings`, `unverifiedSenders` and the fixture loader.
+- `src/keyword-reader.ts`: placeholder reader. Replace it with a Claude-backed reader once `ANTHROPIC_API_KEY` is available.
+- `src/server.ts`: `node:http` server for `web/` and the JSON API. It runs incidents in the background and tracks them in an in-memory `busy` set.
+- `src/recover.ts`, `src/approve.ts`, `src/index.ts`: the CLI commands.
+- `src/airwallex/`: `client.ts` (login, token refresh, 30 s timeout, refuses non-sandbox hosts), `transfers.ts`, `beneficiaries.ts`, `balances.ts`, `simulation.ts` (every sandbox-only call).
+- `web/`: static page (`index.html`, `styles.css`, `app.js`) with no build step and no external requests.
+- `fixtures/emails/`: sample supplier threads. `{{invoice}}` is replaced with the invoice number. `new-account.json` uses a look-alike sender domain on purpose.
+
+## Rules the engine keeps
+
+- The engine writes an attempt row, with its `request_id`, before the Airwallex call. A 4xx marks the attempt failed. Any other error leaves it pending, because the transfer may exist, and a later run retries it under the same `request_id`.
+- Once an invoice is escalated, only a matching approval releases a payment, even if the policy would now replace.
+- A replacement that is already out is finished on resume. It is never approved a second time.
+- Approval terms take the pay-to account from the beneficiary record as it is now, and the policy escalates if that differs from the account on the original transfer.
+- A reader failure marks the thread unread, which escalates.
+- A non-finite amount throws in `toMinor`, and the policy escalates if the cash position is not a number.
+- On resume, an original the bank now reports as paid closes the incident, even if the supplier reported non-receipt earlier.
 
 ## Ledger
 
 - `src/ledger.ts` uses `node:sqlite`, which ships with Node 24, so there is no database dependency or server.
 - The file is `payonce.db` in the working directory and is git-ignored. Delete it to reset local state. Transfers already sent in the sandbox stay there.
 - The duplicate lock is the partial unique index `one_live_attempt_per_invoice` on `attempts(invoice_id) WHERE state <> 'failed'`. A violation has `errcode` 2067 and is rethrown as `DuplicatePaymentError`.
-- `openAttempt` writes the attempt before any API call. `sendAttempt` in `src/payments.ts` reuses the stored `request_id`, and on `duplicate_request_id` it looks the transfer up by that id.
-- `settle` closes an obligation only when one attempt is paid and every other attempt has failed.
+- `settle` closes an obligation only when one attempt is paid and every other attempt has failed. It also voids any approval still open.
 - Approvals live in the `approvals` table with states `requested`, `approved`, `used` and `void`. The binding is the hash of the terms JSON, so build terms only through `termsFor` to keep the key order stable.
 - A new request voids any earlier request or approval for the invoice that is still open. An approval is marked `used` before the payment is tried, so it covers one attempt.
 - An approval request is created only when the original has failed. The duplicate lock still applies to an approved replacement.
 - Supplier emails and the reader's findings are stored per invoice in `emails` and `email_findings`. The thread is read once when new emails arrive and the findings are reused, so a reader that words its summary differently on a second call cannot void an approval.
 - Approval evidence includes the email summary, so new emails that change the findings void an approval.
+- `events` holds the timeline. `note` skips a line identical to the previous one.
+- Columns added after the first version are listed in `ADDED_COLUMNS` and added when the database is opened.
+
+## Web server
+
+- It binds to loopback and has no login. `guard` checks the Host header and, for writes, the Origin header and a JSON content type.
+- Routes: `GET /api/options`, `GET /api/incidents`, `GET /api/incidents/:id`, `POST /api/incidents`, `POST /api/incidents/:id/approve` (needs `approver` and `approvalId`), `POST /api/incidents/:id/resume`.
+- On start it resumes every invoice that still has a pending or in-flight attempt.
 
 ## Sandbox behaviour found by running it
 
@@ -52,9 +71,12 @@ There is no lint script and there are no tests.
 - `PROCESSING` to `SENT` and `SENT` to `FAILED` (with `failure_type`) both work. A failed transfer reads `FAILED`, then `CANCELLED` a few seconds later. The `failure` object survives the change.
 - `failure.details.type` is `INCORRECT_ROUTING` for every simulated failure. Read `failure.code` instead: 91401 system error, 91402 channel timeout, 90701 account closed, 90101 invalid account name or number, 90802 beneficiary bank returned, 91001 recall requested, 91301 duplication return, 99901 unable to apply, 99902 other.
 - Creating a transfer takes the amount out of `available_amount` immediately. A failed transfer is refunded a few seconds later.
+- A EUR SWIFT transfer of 4,000 carried a fee of 13.91 or 13.92 EUR. When it failed, the 4,000 came back and the fee did not.
+- The beneficiary record and a transfer's `beneficiary.bank_details` hold the same object.
 - Reusing a `request_id` returns `400 duplicate_request_id` and names the original transfer.
 - LOCAL USD transfers carry no fee in the sandbox.
 - The client sends no `x-api-version` header. The account default returns the newer status set (`FAILED` exists) with a nested `failure` object.
+- Airwallex emails the account owner for every sent and cancelled transfer unless transfer notifications are turned off under Settings > User settings > Notifications.
 
 ## Conventions
 

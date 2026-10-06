@@ -4,28 +4,37 @@ A payment incident agent that recovers failed supplier transfers without paying 
 
 PayOnce is my entry for the Airwallex Agentic Banking Hackathon 2026. It starts from starter kit 3, Payment Ops Incident Commander.
 
-> Status: early build. PayOnce runs a full incident against the Airwallex sandbox: it sends a transfer, fails it, reads the supplier's emails, decides, and sends one replacement under a duplicate lock. A person can approve a replacement the policy will not send on its own. A keyword placeholder reads the emails until a model is connected.
+> Status: working demo against the Airwallex sandbox. A keyword placeholder reads supplier emails until a model is connected. Sandbox only, no real money.
 
 ## The problem
 
 A supplier says a payment never arrived and their deadline has passed. The transfer shows as sent but not settled. Finance can wait, send a replacement, or escalate, and each choice can go wrong: wait too long and the supplier stops shipping, replace too early and you have paid twice. This is also when fraudsters send the "please resend to our new account" email.
+
+## What it does
+
+PayOnce follows one supplier payment through an incident. It sends the transfer, reads the supplier's emails, watches the bank outcome, and then waits, replaces the payment, or hands the decision to a person. A web page shows each incident as a timeline, with the emails, the payments and the approval a person is asked for.
 
 ## What the agent decides
 
 | Situation | Action |
 | --- | --- |
 | The supplier asks for payment to different bank details | Escalate to a person |
-| The evidence conflicts | Escalate to a person |
+| The supplier's bank details on file changed after the original payment | Escalate to a person |
+| An email came from an address that does not match the supplier on file | Escalate to a person |
+| Supplier emails are on file that could not be read | Escalate to a person |
 | The original is in a status the policy does not recognise | Escalate to a person |
 | The original settled but the supplier reports non-receipt | Escalate to a person |
 | The original transfer is still in flight | Wait |
 | The original failed for a reason a resend cannot fix | Escalate to a person |
-| The original failed and a replacement would push cash below the reserve floor | Escalate to a person |
+| The cash position could not be read | Escalate to a person |
+| The original failed and a replacement with its transfer fee would push cash below the reserve floor | Escalate to a person |
 | The original failed, a resend can fix it and the beneficiary details are unchanged | Replace |
 
 `src/decide.ts` checks the rules in that order. A resend can fix a failure only when it happened on the sending side: a system error or a channel timeout. Any other failure, including a return from the beneficiary's bank, goes to a person.
 
-The model will read supplier emails and explain each decision. It will not hold credentials or move money directly. Until a model is connected, a keyword placeholder in `src/keyword-reader.ts` reads the sample emails. A reader returns two findings and a summary, with no amounts or bank details, so it cannot change what is paid or to whom.
+Two of these checks do not depend on how the email text is read. The sender's domain is compared with the one on file. The supplier's bank details are read from Airwallex again and compared with the account the original payment went to.
+
+The model will read supplier emails and explain each decision. It will not hold credentials or move money directly. Until a model is connected, a keyword placeholder in `src/keyword-reader.ts` reads the emails. A reader returns two findings and a summary, with no amounts or bank details, so it cannot change what is paid or to whom.
 
 ## The duplicate lock
 
@@ -35,9 +44,13 @@ Each attempt keeps its `request_id`. A retry reuses it, and Airwallex then retur
 
 ## Approvals
 
-When the original has failed and the policy escalates, PayOnce records an approval request with the exact terms: the amount, the currency, the beneficiary and the evidence behind the escalation. `pnpm approve <INVOICE> <NAME>` shows those terms and records the approval.
+When the original has failed and the policy escalates, PayOnce records an approval request with the exact terms: the amount, the currency, the account the supplier's record points to now, and the evidence behind the escalation. A person approves it on the web page or with `pnpm approve`, and the approval names the request they were shown.
 
-The next `pnpm recover` run for that invoice rebuilds the terms from current data and compares them with what was approved. If they match, it sends the replacement. If anything changed, the approval is void and PayOnce opens a new request. An approval is spent on one attempt, and it cannot override the duplicate lock.
+Before paying, PayOnce rebuilds the terms from current data and compares them with what was approved. If they match, it sends the replacement. If anything changed, the approval is void and PayOnce opens a new request. An approval is spent on one attempt, and it cannot override the duplicate lock. Once an invoice has gone to a person, only an approval releases a payment, even if the policy would now replace it unprompted.
+
+## The cost of a second transfer
+
+A failed SWIFT transfer gets its amount back but not its fee, so a replacement pays the fee again. PayOnce adds that fee to the cost of a replacement before it checks the cash reserve. In the `eur-swift-low-reserve` scenario the reserve floor is set so that the second fee is what breaches it, and the incident goes to a person.
 
 ## Run it
 
@@ -48,50 +61,69 @@ pnpm dev
 
 `pnpm dev` needs no credentials. It reads the sample supplier emails in `fixtures/emails/` and prints the findings and the decision for three incidents.
 
-To run a full incident against the sandbox, copy `.env.example` to `.env`, fill in a sandbox Client ID and API key, then:
+Everything else talks to the Airwallex sandbox. Copy `.env.example` to `.env` and fill in a sandbox Client ID and API key.
+
+### The web page
+
+```bash
+pnpm ui
+```
+
+Open `http://127.0.0.1:4310`. Choose a payment, a bank outcome and a supplier email thread, then start an incident. The page follows it step by step, which takes 10 to 20 seconds in the sandbox. When an incident is waiting on a person, the approval card shows the terms and takes a name. "Check again" continues an incident that stopped part-way.
+
+The server has no login. It listens on this machine only and accepts changes only from its own page.
+
+### The terminal
+
+```bash
+pnpm recover [FAILURE_TYPE] [INVOICE] [EMAILS] [SCENARIO]
+pnpm approve <INVOICE> [NAME]
+```
+
+| Argument | Values | Default |
+| --- | --- | --- |
+| `FAILURE_TYPE` | A simulated bank outcome, such as `CHANNEL_TIMEOUT`, `SYSTEM_ERROR`, `BENEFICIARY_BANK_RETURNED` or `ACCOUNT_CLOSED` | `CHANNEL_TIMEOUT` |
+| `INVOICE` | Any invoice number. A new one starts an incident and an existing one continues it | A random number |
+| `EMAILS` | `nothing-arrived` or `new-account` | `nothing-arrived` |
+| `SCENARIO` | `usd-local`, `eur-swift` or `eur-swift-low-reserve` | `usd-local` |
+
+Three runs to try:
 
 ```bash
 pnpm recover
 pnpm recover ACCOUNT_CLOSED
-pnpm recover CHANNEL_TIMEOUT INV-2001
-```
-
-`pnpm recover` sends a transfer, marks it sent, fails it with a channel timeout and sends one replacement. It then tries to pay the same invoice again and prints the ledger's refusal. Passing another failure type, such as `ACCOUNT_CLOSED`, ends in an escalation and no second payment.
-
-The second argument names the invoice. Running the same invoice again reports its state and sends nothing. The client refuses any host that is not the Airwallex sandbox.
-
-The third argument picks a supplier email thread from `fixtures/emails/`. The default is `nothing-arrived`. In `new-account`, the supplier asks for payment to a different account once the transfer has failed:
-
-```bash
 pnpm recover CHANNEL_TIMEOUT INV-5001 new-account
+pnpm approve INV-5001
 pnpm approve INV-5001 Yash
 pnpm recover - INV-5001
 ```
 
-The first command ends in an escalation, although a channel timeout on its own would be replaced automatically. The second shows the terms and records the approval. The third sends the replacement to the account on file. The failure type is ignored for an invoice that already exists, so `-` works as a placeholder.
+The first replaces the payment and shows the lock refusing a second one. The second ends in an escalation. In the third, the supplier asks for payment to a new account from a look-alike address, so it escalates although a channel timeout on its own would be replaced. `pnpm approve` with no name shows the terms and with a name approves them. The last command then sends the replacement to the account on file. The failure type is ignored for an invoice that already exists, so `-` works as a placeholder.
 
 ## Layout
 
 | File | Contents |
 | --- | --- |
-| `src/incident.ts` | Types for an incident and a decision |
 | `src/decide.ts` | The decision policy, a pure function |
+| `src/incident.ts` | Types for an incident and a decision |
+| `src/engine.ts` | The incident flow: pay, read emails, assess, replace or escalate, and the timeline |
 | `src/assess.ts` | Maps an Airwallex transfer to the facts the policy reads |
-| `src/ledger.ts` | Obligations and payment attempts in SQLite, with the duplicate lock |
+| `src/ledger.ts` | Obligations, payment attempts, approvals, emails and the timeline in SQLite |
 | `src/payments.ts` | Sends an attempt under its `request_id` and syncs transfer state into the ledger |
 | `src/approval.ts` | Approval terms and the hash that binds an approval to them |
-| `src/approve.ts` | Records a person's approval for an escalated invoice |
-| `src/recover.ts` | One incident run against the sandbox |
-| `src/index.ts` | Three sample incidents run through the policy |
-| `src/emails.ts` | The email reader interface and the findings a reader returns |
+| `src/emails.ts` | The email reader interface, the findings a reader returns, and the sender check |
 | `src/keyword-reader.ts` | Keyword placeholder that stands in for the model |
-| `fixtures/emails/` | Sample supplier emails |
+| `src/server.ts` | Local web server and JSON API |
+| `src/recover.ts`, `src/approve.ts`, `src/index.ts` | The commands |
 | `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, balances and the simulation calls |
+| `web/` | The page: plain HTML, CSS and JavaScript with no build step |
+| `fixtures/emails/` | Sample supplier emails |
 
-The code holds amounts in minor units and converts at the Airwallex boundary.
+The code holds amounts in minor units and converts at the Airwallex boundary. The ledger is `payonce.db` in the working directory. Delete it to start with an empty ledger.
 
 ## Not built yet
 
 - A model as the email reader.
-- Approving payment to new bank details. An approval covers a replacement to the same beneficiary.
-- Payout webhooks. The run polls for status.
+- Approving payment to new bank details. An approval covers a replacement to the account on file.
+- Payout webhooks. Airwallex needs a public URL to deliver them, so a local run polls for status.
+- Real bank outcomes. The run uses the sandbox simulator to send, fail and pay transfers.
