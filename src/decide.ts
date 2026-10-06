@@ -1,0 +1,52 @@
+import type { Decision, Incident } from "./incident.js";
+
+export function decide(incident: Incident): Decision {
+  if (incident.supplierAsksForNewBankDetails) {
+    return {
+      action: "escalate",
+      reason: "supplier asked for payment to different bank details",
+    };
+  }
+
+  if (incident.evidenceConflicts) {
+    return { action: "escalate", reason: "evidence conflicts" };
+  }
+
+  if (incident.originalState === "paid") {
+    return {
+      action: "escalate",
+      reason: "original transfer settled but the supplier reports non-receipt",
+    };
+  }
+
+  if (incident.originalState === "in_flight") {
+    return {
+      action: "wait",
+      reason: "original transfer is still in flight, a replacement risks a double payment",
+    };
+  }
+
+  if (!incident.resendCanFix) {
+    return {
+      action: "escalate",
+      reason: "original failed for a reason a resend cannot fix",
+    };
+  }
+
+  const replacementCostMinor: number =
+    incident.amountMinor + incident.transferFeeMinor;
+  const balanceAfterMinor: number =
+    incident.availableBalanceMinor - replacementCostMinor;
+
+  if (balanceAfterMinor < incident.reserveFloorMinor) {
+    return {
+      action: "escalate",
+      reason: "replacement would push cash below the reserve floor",
+    };
+  }
+
+  return {
+    action: "replace",
+    reason: "original failed, a resend can fix it and the beneficiary details are unchanged",
+  };
+}
