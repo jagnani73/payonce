@@ -1,7 +1,12 @@
-import type { EmailFindings, EmailReader, SupplierEmail } from "./emails.js";
+import {
+  summarise,
+  type EmailFindings,
+  type EmailReader,
+  type SupplierEmail,
+} from "./emails.js";
 
-// Placeholder until a model is connected. It matches a handful of phrases and
-// understands nothing else.
+// Matches a handful of phrases and understands nothing else. It reads the emails
+// when no model is set up, and runs beside the model when one is.
 const NON_RECEIPT_PATTERNS: RegExp[] = [
   /(not|n't) (yet )?(been )?received/i,
   /(not|n't) (yet )?arrived/i,
@@ -31,18 +36,10 @@ export class KeywordReader implements EmailReader {
       text,
       NEW_BANK_DETAILS_PATTERNS,
     );
-
-    const parts: string[] = [];
-    if (claimsNonReceipt) {
-      parts.push("supplier reports the payment has not arrived");
-    }
-    if (asksForNewBankDetails) {
-      parts.push("asks for payment to a different account");
-    }
     return Promise.resolve({
       claimsNonReceipt,
       asksForNewBankDetails,
-      summary: parts.length > 0 ? parts.join(", ") : "nothing relevant found",
+      summary: summarise(claimsNonReceipt, asksForNewBankDetails),
     });
   }
 }

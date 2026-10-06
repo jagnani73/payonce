@@ -26,7 +26,7 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 - `src/ledger.ts`: SQLite tables for obligations, attempts, approvals, emails, findings and events.
 - `src/payments.ts`: idempotent send and status sync between Airwallex and the ledger.
 - `src/approval.ts`: `ApprovalTerms`, `termsFor` and `bindingOf` (SHA-256 of the terms JSON).
-- `src/emails.ts`: `EmailReader` interface (a `name` shown on the page, and `read`), `EmailFindings`, `unverifiedSenders` and the fixture loader.
+- `src/emails.ts`: `EmailReader` interface (a `name` shown on the page, and `read`), `EmailFindings`, `summarise`, `unverifiedSenders` and the fixture loader.
 - `src/model-reader.ts`: `ModelReader` reads the thread with one chat completion over plain `fetch`, with no SDK.
 - `src/reader.ts`: `readerFromEnv` picks `ModelReader` when `READER_API_KEY` is set and the keyword placeholder otherwise.
 - `src/keyword-reader.ts`: the fallback reader. It matches a handful of phrases.
@@ -69,8 +69,9 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 
 - `READER_API_KEY` in `.env` turns the model reader on. `READER_BASE_URL` and `READER_MODEL` default to Gemini's OpenAI-compatible endpoint and `gemini-3.8-flash`, which is on Google's free tier.
 - `pnpm dev` loads no env file, so it always uses the keyword placeholder.
-- The request is one chat completion with `reasoning_effort: "low"` and a `json_schema` response format. `toFindings` checks the answer again, so a service that ignores the schema still cannot return anything but two booleans and a string.
-- `tidy` replaces any token with four or more digits in the summary with `[number removed]`, because the approver reads the summary.
+- The request is one chat completion with `reasoning_effort: "low"` and a `json_schema` response format. The model answers two booleans and no text. `toAnswers` checks the answer again, so a service that ignores the schema still cannot return anything else.
+- `summarise` in `src/emails.ts` writes the summary from the two findings for both readers, so no wording from an email or a model reaches the approval card or the approval binding.
+- `ModelReader` also runs the keyword check and ORs the findings. Both findings only make the policy more cautious, so a tricked model cannot remove a finding the keywords make. It can still hide one the keywords miss.
 - A 429, a server error, a timeout or a bad answer is retried once after two seconds. Any other error status is not. A failure throws, the engine marks the thread unread, and the policy escalates.
 - The API key is cut out of any error text before it reaches the timeline.
 - Google may use free-tier content to improve its products. The fixtures are synthetic.

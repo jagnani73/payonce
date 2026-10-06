@@ -14,6 +14,22 @@ export interface EmailFindings {
   summary: string;
 }
 
+// The summary a person reads. It is written here from the two findings, so no
+// wording from an email or from a model reaches the approval card.
+export function summarise(
+  claimsNonReceipt: boolean,
+  asksForNewBankDetails: boolean,
+): string {
+  const parts: string[] = [];
+  if (claimsNonReceipt) {
+    parts.push("supplier reports the payment has not arrived");
+  }
+  if (asksForNewBankDetails) {
+    parts.push("asks for payment to a different account");
+  }
+  return parts.length > 0 ? parts.join(", ") : "nothing relevant found";
+}
+
 export interface EmailReader {
   // Shown next to the findings, so a person knows what read the emails.
   readonly name: string;
