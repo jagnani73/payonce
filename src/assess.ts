@@ -1,0 +1,40 @@
+import type { Transfer } from "./airwallex/transfers.js";
+import type { OriginalTransferState } from "./incident.js";
+
+const IN_FLIGHT_STATUSES: ReadonlySet<string> = new Set<string>([
+  "SCHEDULED",
+  "PROCESSING",
+  "SENT",
+]);
+
+const FAILED_STATUSES: ReadonlySet<string> = new Set<string>([
+  "FAILED",
+  "CANCELLED",
+]);
+
+// 91401 system error, 91402 channel timeout. Both fail on the sending side, so the
+// beneficiary details were never rejected and the same payment can be sent again.
+// The sandbox reports failure.details.type as INCORRECT_ROUTING for every failure,
+// so the code is the only field worth reading.
+const RESENDABLE_FAILURE_CODES: ReadonlySet<string> = new Set<string>([
+  "91401",
+  "91402",
+]);
+
+export function originalStateOf(transfer: Transfer): OriginalTransferState {
+  if (IN_FLIGHT_STATUSES.has(transfer.status)) {
+    return "in_flight";
+  }
+  if (transfer.status === "PAID") {
+    return "paid";
+  }
+  if (FAILED_STATUSES.has(transfer.status)) {
+    return "failed";
+  }
+  return "unknown";
+}
+
+export function resendCanFix(transfer: Transfer): boolean {
+  const code: string | undefined = transfer.failure?.code;
+  return code !== undefined && RESENDABLE_FAILURE_CODES.has(code);
+}

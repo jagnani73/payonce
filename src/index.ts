@@ -23,7 +23,7 @@ const base: Incident = {
 const samples: Sample[] = [
   { label: "original still in flight", incident: base },
   {
-    label: "original returned by the bank",
+    label: "original timed out on the sending side",
     incident: { ...base, originalState: "failed", resendCanFix: true },
   },
   {

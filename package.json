@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx src/index.ts",
+    "recover": "tsx --env-file=.env src/recover.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

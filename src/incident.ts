@@ -1,4 +1,4 @@
-export type OriginalTransferState = "in_flight" | "paid" | "failed";
+export type OriginalTransferState = "in_flight" | "paid" | "failed" | "unknown";
 
 export interface Incident {
   invoiceId: string;

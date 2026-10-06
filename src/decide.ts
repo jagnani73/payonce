@@ -12,6 +12,13 @@ export function decide(incident: Incident): Decision {
     return { action: "escalate", reason: "evidence conflicts" };
   }
 
+  if (incident.originalState === "unknown") {
+    return {
+      action: "escalate",
+      reason: "original transfer is in a status the policy does not recognise",
+    };
+  }
+
   if (incident.originalState === "paid") {
     return {
       action: "escalate",
