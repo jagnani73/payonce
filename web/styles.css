@@ -623,6 +623,7 @@ input:read-only {
   grid-template-columns: var(--time-w) var(--marker) minmax(0, 1fr);
   column-gap: var(--rail-gap);
   padding-bottom: 14px;
+  scroll-margin-bottom: 28px;
 }
 
 .event::before {
@@ -816,6 +817,7 @@ input:read-only {
   grid-template-columns: var(--time-w) var(--marker) minmax(0, 1fr);
   column-gap: var(--rail-gap);
   align-items: center;
+  scroll-margin-bottom: 28px;
 }
 
 .working__marker {

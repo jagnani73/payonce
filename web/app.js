@@ -1,6 +1,6 @@
 const POLL_BUSY_MS = 1500;
 const POLL_IDLE_MS = 5000;
-// After a start or an approval the backend is about to work, so keep polling fast.
+// After an action the backend is about to work, so keep polling fast and follow the timeline.
 const EXPECT_WORK_MS = 15000;
 // A new incident may not be readable until the backend has written it.
 const STARTING_GRACE_MS = 30000;
@@ -800,6 +800,17 @@ function createEventNode(event, key, signature) {
   );
 }
 
+// The newest thing in the timeline card: the working line while a step runs,
+// otherwise the last event.
+function timelineTail() {
+  return els.working.hidden ? (els.timeline.lastElementChild ?? els.timeline) : els.working;
+}
+
+function inView(node) {
+  const box = node.getBoundingClientRect();
+  return box.bottom > 0 && box.top < window.innerHeight;
+}
+
 function renderTimeline(detail) {
   const invoiceId = detail.obligation.invoiceId;
   const events = Array.isArray(detail.events) ? detail.events : [];
@@ -810,6 +821,10 @@ function renderTimeline(detail) {
     els.timeline.replaceChildren();
     els.timeline.dataset.invoice = invoiceId;
   }
+  // A long timeline runs past the bottom of the window. The page follows new
+  // lines while the newest one is on screen, or just after an action.
+  const follow = !fresh && (Date.now() < state.fastUntil || inView(timelineTail()));
+  const linesBefore = els.timeline.childElementCount;
   reconcile(
     els.timeline,
     events,
@@ -831,6 +846,9 @@ function renderTimeline(detail) {
   els.timeline.classList.toggle("is-busy", busy);
   els.working.hidden = !busy;
   els.timelineEmpty.hidden = events.length > 0 || busy;
+  if (follow && els.timeline.childElementCount > linesBefore) {
+    timelineTail().scrollIntoView({ block: "nearest" });
+  }
 }
 
 function buildAttempt(attempt) {
@@ -1366,6 +1384,7 @@ async function submitClose(invoiceId) {
       body: { closedBy, finding },
     });
     state.closeDrafts.delete(invoiceId);
+    state.fastUntil = Date.now() + EXPECT_WORK_MS;
   } catch (error) {
     failure = error.message;
   }

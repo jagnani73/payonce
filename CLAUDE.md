@@ -68,6 +68,7 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 - It binds to loopback and has no login. `guard` checks the Host header and, for writes, the Origin header and a JSON content type.
 - Routes: `GET /api/options`, `GET /api/incidents`, `GET /api/incidents/:id`, `POST /api/incidents` (takes `bankOutcome`, `emails` and `scenario`), `POST /api/incidents/:id/approve` (needs `approver` and `approvalId`), `POST /api/incidents/:id/close` (needs `closedBy` and `finding`), `POST /api/incidents/:id/resume`.
 - An incident's detail carries `review` when a person can close it, and the page shows the close card from that.
+- The page scrolls to keep the newest timeline line on screen when that line was already visible, and for 15 seconds after an action.
 - On start it resumes every invoice that still has a pending or in-flight attempt.
 - `GET /api/options` lists the default email thread first, so the form opens on the incident that is replaced without a person.
 
