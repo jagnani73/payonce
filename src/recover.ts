@@ -1,5 +1,6 @@
 import { AirwallexClient } from "./airwallex/client.js";
 import {
+  DEFAULT_EMAILS,
   DEFAULT_SCENARIO,
   newInvoiceId,
   noteError,
@@ -12,7 +13,6 @@ import { KeywordReader } from "./keyword-reader.js";
 import { Ledger, LEDGER_PATH, type Obligation } from "./ledger.js";
 
 const DEFAULT_OUTCOME: string = "CHANNEL_TIMEOUT";
-const DEFAULT_EMAILS: string = "nothing-arrived";
 
 async function main(): Promise<void> {
   const bankOutcome: string = process.argv[2] ?? DEFAULT_OUTCOME;

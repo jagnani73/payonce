@@ -12,6 +12,7 @@ import type { EmailFindings } from "./emails.js";
 import {
   approveReplacement,
   closeIncident,
+  DEFAULT_EMAILS,
   DEFAULT_SCENARIO,
   newInvoiceId,
   noteError,
@@ -105,10 +106,15 @@ function guard(request: IncomingMessage, method: string): void {
 // Invoices with a step still running in the background.
 const busy: Set<string> = new Set<string>();
 
+// The default thread comes first, so the form starts on it.
 function emailThreads(): string[] {
   return readdirSync(EMAILS_DIR)
     .filter((name: string): boolean => name.endsWith(".json"))
-    .map((name: string): string => name.slice(0, -".json".length));
+    .map((name: string): string => name.slice(0, -".json".length))
+    .sort(
+      (a: string, b: string): number =>
+        Number(b === DEFAULT_EMAILS) - Number(a === DEFAULT_EMAILS),
+    );
 }
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {

@@ -96,6 +96,7 @@ export const SCENARIOS: ScenarioDef[] = [
 ];
 
 export const DEFAULT_SCENARIO: string = "usd-local";
+export const DEFAULT_EMAILS: string = "nothing-arrived";
 
 // What the reader found. unverifiedSenders is kept for display; the policy works
 // the sender check out again from the stored emails. unread marks a thread the

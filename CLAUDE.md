@@ -12,6 +12,7 @@ pnpm ui                                             # web page and JSON API at h
 pnpm recover [OUTCOME] [INVOICE] [EMAILS] [SCENARIO] # one incident against the sandbox, or continue an existing invoice
 pnpm approve <INVOICE> [NAME]                       # show the waiting approval; with NAME, approve it
 pnpm close <INVOICE> [NAME] [NOTE]                  # show a paid incident waiting on a person; with NAME and NOTE, close it
+pnpm reset                                          # move payonce.db aside so the next run starts an empty ledger
 ```
 
 Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-local`. OUTCOME is a simulator failure type or `PAID`. There is no lint script and there are no tests.
@@ -28,7 +29,8 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 - `src/emails.ts`: `EmailReader` interface, `EmailFindings`, `unverifiedSenders` and the fixture loader.
 - `src/keyword-reader.ts`: placeholder reader. Replace it with a Claude-backed reader once `ANTHROPIC_API_KEY` is available.
 - `src/server.ts`: `node:http` server for `web/` and the JSON API. It runs incidents in the background and tracks them in an in-memory `busy` set.
-- `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/index.ts`: the CLI commands.
+- `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/reset.ts`, `src/index.ts`: the CLI commands.
+- `docs/demo.md`: the recording script for the four demo incidents, with measured sandbox times.
 - `src/airwallex/`: `client.ts` (login, token refresh, 30 s timeout, refuses non-sandbox hosts), `transfers.ts`, `beneficiaries.ts`, `balances.ts`, `simulation.ts` (every sandbox-only call).
 - `web/`: static page (`index.html`, `styles.css`, `app.js`) with no build step and no external requests.
 - `fixtures/emails/`: sample supplier threads. `{{invoice}}` is replaced with the invoice number. `new-account.json` uses a look-alike sender domain on purpose.
@@ -48,7 +50,7 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 ## Ledger
 
 - `src/ledger.ts` uses `node:sqlite`, which ships with Node 24, so there is no database dependency or server.
-- The file is `payonce.db` in the working directory and is git-ignored. Delete it to reset local state. Transfers already sent in the sandbox stay there.
+- The file is `payonce.db` in the working directory and is git-ignored. `pnpm reset` renames it with a timestamp, which is also ignored, so the next run starts empty. The rename fails with `EBUSY` while `pnpm ui` has the file open. Transfers already sent in the sandbox stay there.
 - The duplicate lock is the partial unique index `one_live_attempt_per_invoice` on `attempts(invoice_id) WHERE state <> 'failed'`. A violation has `errcode` 2067 and is rethrown as `DuplicatePaymentError`.
 - `paidOnce` is true when one attempt is paid and every other attempt has failed. `settle` closes an obligation only then. It also voids any approval still open.
 - `obligations.escalation_reason` holds the policy's last reason for sending the invoice to a person.
@@ -67,6 +69,7 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 - Routes: `GET /api/options`, `GET /api/incidents`, `GET /api/incidents/:id`, `POST /api/incidents` (takes `bankOutcome`, `emails` and `scenario`), `POST /api/incidents/:id/approve` (needs `approver` and `approvalId`), `POST /api/incidents/:id/close` (needs `closedBy` and `finding`), `POST /api/incidents/:id/resume`.
 - An incident's detail carries `review` when a person can close it, and the page shows the close card from that.
 - On start it resumes every invoice that still has a pending or in-flight attempt.
+- `GET /api/options` lists the default email thread first, so the form opens on the incident that is replaced without a person.
 
 ## Sandbox behaviour found by running it
 

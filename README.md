@@ -76,7 +76,7 @@ Everything else talks to the Airwallex sandbox. Copy `.env.example` to `.env` an
 pnpm ui
 ```
 
-Open `http://127.0.0.1:4310`. Choose a payment, a bank outcome and a supplier email thread, then start an incident. The page follows it step by step, which takes 10 to 20 seconds in the sandbox. When an incident is waiting on a person, the approval card shows the terms and takes a name. If the bank has paid the original, a close card takes a name and a note instead. "Check again" continues an incident that stopped part-way.
+Open `http://127.0.0.1:4310`. `docs/demo.md` walks through four incidents in under five minutes. Choose a payment, a bank outcome and a supplier email thread, then start an incident. The page follows it step by step, which takes 10 to 20 seconds in the sandbox. When an incident is waiting on a person, the approval card shows the terms and takes a name. If the bank has paid the original, a close card takes a name and a note instead. "Check again" continues an incident that stopped part-way.
 
 The server has no login. It listens on this machine only and accepts changes only from its own page.
 
@@ -86,6 +86,7 @@ The server has no login. It listens on this machine only and accepts changes onl
 pnpm recover [OUTCOME] [INVOICE] [EMAILS] [SCENARIO]
 pnpm approve <INVOICE> [NAME]
 pnpm close <INVOICE> [NAME] [NOTE]
+pnpm reset
 ```
 
 | Argument | Values | Default |
@@ -127,12 +128,12 @@ In the fourth, the bank pays the original while the supplier says it never arriv
 | `src/emails.ts` | The email reader interface, the findings a reader returns, and the sender check |
 | `src/keyword-reader.ts` | Keyword placeholder that stands in for the model |
 | `src/server.ts` | Local web server and JSON API |
-| `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/index.ts` | The commands |
+| `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/reset.ts`, `src/index.ts` | The commands |
 | `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, balances and the simulation calls |
 | `web/` | The page: plain HTML, CSS and JavaScript with no build step |
 | `fixtures/emails/` | Sample supplier emails |
 
-The code holds amounts in minor units and converts at the Airwallex boundary. The ledger is `payonce.db` in the working directory. Delete it to start with an empty ledger.
+The code holds amounts in minor units and converts at the Airwallex boundary. The ledger is `payonce.db` in the working directory. `pnpm reset` moves it aside, and the next run starts an empty one. Stop `pnpm ui` first.
 
 ## Not built yet
 
