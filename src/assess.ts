@@ -1,5 +1,6 @@
 import type { Transfer } from "./airwallex/transfers.js";
 import type { OriginalTransferState } from "./incident.js";
+import type { AttemptState } from "./ledger.js";
 
 const IN_FLIGHT_STATUSES: ReadonlySet<string> = new Set<string>([
   "SCHEDULED",
@@ -32,6 +33,12 @@ export function originalStateOf(transfer: Transfer): OriginalTransferState {
     return "failed";
   }
   return "unknown";
+}
+
+// Null means the status is not recognised, so the ledger keeps what it had.
+export function attemptStateOf(transfer: Transfer): AttemptState | null {
+  const state: OriginalTransferState = originalStateOf(transfer);
+  return state === "unknown" ? null : state;
 }
 
 export function resendCanFix(transfer: Transfer): boolean {

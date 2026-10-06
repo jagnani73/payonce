@@ -51,6 +51,20 @@ export function getTransfer(
   return client.get<Transfer>(`/api/v1/transfers/${id}`);
 }
 
+interface TransferList {
+  items?: Transfer[];
+}
+
+export async function findTransferByRequestId(
+  client: AirwallexClient,
+  requestId: string,
+): Promise<Transfer | undefined> {
+  const list: TransferList = await client.get<TransferList>(
+    `/api/v1/transfers?request_id=${encodeURIComponent(requestId)}`,
+  );
+  return list.items?.[0];
+}
+
 export async function waitForTransfer(
   client: AirwallexClient,
   id: string,
