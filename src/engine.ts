@@ -156,7 +156,7 @@ export function newInvoiceId(ledger: Ledger): string {
 // What a standing line is about. A standing line says how things are now and is
 // written again on every check. A line with no topic records something that
 // happened.
-type Topic = "decision" | "waiting" | "cost";
+type Topic = "decision" | "waiting" | "cost" | "bank-details";
 
 // True when the timeline's last word on a topic is this message and nothing has
 // happened since.
@@ -328,6 +328,17 @@ async function assess(
     availableBalanceMinor: availableMinor,
     reserveFloorMinor: obligation.reserveFloorMinor,
   };
+
+  // Said whatever the policy escalates for, because it checks other things first.
+  if (incident.beneficiaryChanged) {
+    note(
+      engine.ledger,
+      obligation.invoiceId,
+      "warning",
+      "The supplier's bank details on file are not the ones the original payment went to",
+      "bank-details",
+    );
+  }
 
   // A failed transfer keeps its fee, so a replacement pays the fee a second time.
   if (incident.originalState === "failed" && feeMinor > 0) {
