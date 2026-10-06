@@ -39,7 +39,6 @@ import {
   type AttemptKind,
   type EventKind,
   type Ledger,
-  type LedgerEvent,
   type Obligation,
   type TransferMethod,
 } from "./ledger.js";
@@ -153,17 +152,33 @@ export function newInvoiceId(ledger: Ledger): string {
   }
 }
 
-// Adds a line to the incident's timeline and prints it. A line identical to the
-// previous one is skipped, so running an invoice again does not repeat itself.
+// Kinds that record something new happening. The other kinds are what PayOnce
+// made of it.
+const FACT_KINDS: ReadonlySet<EventKind> = new Set<EventKind>([
+  "payment",
+  "email",
+  "bank",
+  "lock",
+  "closed",
+  "error",
+]);
+
+// Adds a line to the incident's timeline and prints it. A line already written
+// since the last new fact is skipped, so checking an invoice again when nothing
+// has changed does not repeat its decision.
 function note(
   ledger: Ledger,
   invoiceId: string,
   kind: EventKind,
   message: string,
 ): void {
-  const last: LedgerEvent | undefined = ledger.events(invoiceId).at(-1);
-  if (last?.kind === kind && last.message === message) {
-    return;
+  for (const event of ledger.events(invoiceId).reverse()) {
+    if (event.kind === kind && event.message === message) {
+      return;
+    }
+    if (FACT_KINDS.has(event.kind)) {
+      break;
+    }
   }
   ledger.addEvent(invoiceId, kind, message);
   console.log(`  ${kind.padEnd(8)} ${message}`);

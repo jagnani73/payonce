@@ -57,7 +57,7 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 - An approval request is created only when the original has failed. The duplicate lock still applies to an approved replacement.
 - Supplier emails and the reader's findings are stored per invoice in `emails` and `email_findings`. The thread is read once when new emails arrive and the findings are reused, so a reader that words its summary differently on a second call cannot void an approval.
 - Approval evidence includes the email summary, so new emails that change the findings void an approval.
-- `events` holds the timeline. `note` skips a line identical to the previous one.
+- `events` holds the timeline. `note` skips a line already written since the last payment, email, bank, lock, closed or error line, so checking an invoice again when nothing has changed adds nothing.
 - Columns added after the first version are listed in `ADDED_COLUMNS` and added when the database is opened.
 
 ## Web server
