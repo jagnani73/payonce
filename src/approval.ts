@@ -8,6 +8,7 @@ export interface ApprovalEvidence {
   originalReference: string;
   originalState: OriginalTransferState;
   failureCode: string | null;
+  emails: string;
   reason: string;
 }
 
@@ -39,6 +40,7 @@ export function termsFor(
   obligation: Obligation,
   original: Transfer,
   decision: Decision,
+  emailSummary: string,
 ): ApprovalTerms {
   return {
     action: "replace",
@@ -51,6 +53,7 @@ export function termsFor(
       originalReference: original.short_reference_id,
       originalState: originalStateOf(original),
       failureCode: original.failure?.code ?? null,
+      emails: emailSummary,
       reason: decision.reason,
     },
   };

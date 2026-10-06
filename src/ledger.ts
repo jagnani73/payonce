@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
+import type { SupplierEmail } from "./emails.js";
 
 export const LEDGER_PATH: string = "payonce.db";
 
@@ -33,6 +34,17 @@ const SCHEMA: string = `
     terms TEXT NOT NULL,
     state TEXT NOT NULL DEFAULT 'requested',
     approver TEXT
+  );
+  CREATE TABLE IF NOT EXISTS emails (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    invoice_id TEXT NOT NULL REFERENCES obligations(invoice_id),
+    sender TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS email_findings (
+    invoice_id TEXT PRIMARY KEY REFERENCES obligations(invoice_id),
+    findings TEXT NOT NULL
   );
 `;
 
@@ -79,6 +91,16 @@ interface ApprovalRow {
   terms: string;
   state: ApprovalState;
   approver: string | null;
+}
+
+interface EmailRow {
+  sender: string;
+  subject: string;
+  body: string;
+}
+
+interface FindingsRow {
+  findings: string;
 }
 
 interface ObligationRow {
@@ -231,6 +253,49 @@ export class Ledger {
     this.db
       .prepare("UPDATE obligations SET state = 'escalated' WHERE invoice_id = ?")
       .run(invoiceId);
+  }
+
+  addEmails(invoiceId: string, emails: SupplierEmail[]): void {
+    for (const email of emails) {
+      this.db
+        .prepare(
+          "INSERT INTO emails (invoice_id, sender, subject, body) VALUES (?, ?, ?, ?)",
+        )
+        .run(invoiceId, email.from, email.subject, email.body);
+    }
+  }
+
+  emails(invoiceId: string): SupplierEmail[] {
+    const rows: EmailRow[] = this.db
+      .prepare(
+        "SELECT sender, subject, body FROM emails WHERE invoice_id = ? ORDER BY id",
+      )
+      .all(invoiceId) as unknown as EmailRow[];
+    return rows.map(
+      (row: EmailRow): SupplierEmail => ({
+        from: row.sender,
+        subject: row.subject,
+        body: row.body,
+      }),
+    );
+  }
+
+  // Findings are stored once per email thread so a later run reads the same
+  // result instead of asking the reader again.
+  saveFindings(invoiceId: string, findings: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO email_findings (invoice_id, findings) VALUES (?, ?)
+         ON CONFLICT(invoice_id) DO UPDATE SET findings = excluded.findings`,
+      )
+      .run(invoiceId, findings);
+  }
+
+  findings(invoiceId: string): string | undefined {
+    const row: FindingsRow | undefined = this.db
+      .prepare("SELECT findings FROM email_findings WHERE invoice_id = ?")
+      .get(invoiceId) as unknown as FindingsRow | undefined;
+    return row?.findings;
   }
 
   // A new request voids any earlier one for the invoice that is still open.

@@ -18,7 +18,14 @@ import {
 } from "./approval.js";
 import { originalStateOf, resendCanFix } from "./assess.js";
 import { decide } from "./decide.js";
+import {
+  loadEmails,
+  type EmailFindings,
+  type EmailReader,
+  type SupplierEmail,
+} from "./emails.js";
 import type { Decision, Incident } from "./incident.js";
+import { KeywordReader } from "./keyword-reader.js";
 import {
   DuplicatePaymentError,
   Ledger,
@@ -36,9 +43,17 @@ const CURRENCY: string = "USD";
 const AMOUNT_MINOR: number = 400_000;
 const RESERVE_FLOOR_MINOR: number = 100_000_000;
 const DEFAULT_FAILURE_TYPE: string = "CHANNEL_TIMEOUT";
+const DEFAULT_EMAILS: string = "nothing-arrived";
+
+const NO_FINDINGS: EmailFindings = {
+  claimsNonReceipt: false,
+  asksForNewBankDetails: false,
+  summary: "no emails on file",
+};
 
 interface Assessment {
   original: Transfer;
+  findings: EmailFindings;
   decision: Decision;
 }
 
@@ -58,12 +73,36 @@ function describe(transfer: Transfer): string {
   return `${transfer.short_reference_id} ${transfer.status}${failure}`;
 }
 
+// Stores new supplier emails, then reads the whole thread once and keeps the
+// findings so later runs see the same result.
+async function receive(
+  ledger: Ledger,
+  reader: EmailReader,
+  invoiceId: string,
+  emails: SupplierEmail[],
+): Promise<void> {
+  if (emails.length === 0) {
+    return;
+  }
+  ledger.addEmails(invoiceId, emails);
+  const findings: EmailFindings = await reader.read(ledger.emails(invoiceId));
+  ledger.saveFindings(invoiceId, JSON.stringify(findings));
+  log(`  emails: ${findings.summary}`);
+}
+
+function findingsFor(ledger: Ledger, invoiceId: string): EmailFindings {
+  const stored: string | undefined = ledger.findings(invoiceId);
+  return stored === undefined ? NO_FINDINGS : (JSON.parse(stored) as EmailFindings);
+}
+
 async function assess(
   client: AirwallexClient,
+  ledger: Ledger,
   obligation: Obligation,
   originalId: string,
 ): Promise<Assessment> {
   const original: Transfer = await getTransfer(client, originalId);
+  const findings: EmailFindings = findingsFor(ledger, obligation.invoiceId);
   const incident: Incident = {
     invoiceId: obligation.invoiceId,
     supplier: obligation.supplier,
@@ -72,7 +111,7 @@ async function assess(
     transferFeeMinor: toMinor(original.fee_amount),
     originalState: originalStateOf(original),
     resendCanFix: resendCanFix(original),
-    supplierAsksForNewBankDetails: false,
+    supplierAsksForNewBankDetails: findings.asksForNewBankDetails,
     evidenceConflicts: false,
     availableBalanceMinor: await getAvailableMinor(client, obligation.currency),
     reserveFloorMinor: RESERVE_FLOOR_MINOR,
@@ -80,7 +119,7 @@ async function assess(
   const decision: Decision = decide(incident);
   log(`  original ${describe(original)}`);
   log(`  decision: ${decision.action} (${decision.reason})`);
-  return { original, decision };
+  return { original, findings, decision };
 }
 
 // Opening the attempt takes the duplicate lock, so this throws if the invoice
@@ -119,8 +158,17 @@ async function replaceAndSettle(
   );
 }
 
-// A replacement is only on offer when the original has failed. Any other
-// escalation has no payment a person could approve yet.
+function termsOf(obligation: Obligation, assessment: Assessment): ApprovalTerms {
+  return termsFor(
+    obligation,
+    assessment.original,
+    assessment.decision,
+    assessment.findings.summary,
+  );
+}
+
+// A replacement is only on offer when the original has failed, and it goes to the
+// beneficiary on file. Any other escalation has no payment a person could approve yet.
 function escalate(
   ledger: Ledger,
   obligation: Obligation,
@@ -132,11 +180,7 @@ function escalate(
     return;
   }
 
-  const terms: ApprovalTerms = termsFor(
-    obligation,
-    assessment.original,
-    assessment.decision,
-  );
+  const terms: ApprovalTerms = termsOf(obligation, assessment);
   const binding: string = bindingOf(terms);
   const latest: Approval | undefined = ledger.latestApproval(obligation.invoiceId);
   if (latest?.state !== "requested" || latest.binding !== binding) {
@@ -152,7 +196,7 @@ async function continueEscalated(
   obligation: Obligation,
   originalId: string,
 ): Promise<void> {
-  const assessment: Assessment = await assess(client, obligation, originalId);
+  const assessment: Assessment = await assess(client, ledger, obligation, originalId);
   if (assessment.decision.action === "replace") {
     log("  the policy now allows a replacement");
     await replaceAndSettle(client, ledger, obligation, originalId);
@@ -165,11 +209,7 @@ async function continueEscalated(
     return;
   }
 
-  const current: ApprovalTerms = termsFor(
-    obligation,
-    assessment.original,
-    assessment.decision,
-  );
+  const current: ApprovalTerms = termsOf(obligation, assessment);
   if (bindingOf(current) !== approval.binding) {
     const approved: ApprovalTerms = JSON.parse(approval.terms) as ApprovalTerms;
     ledger.setApprovalState(approval.id, "void");
@@ -224,8 +264,10 @@ async function resume(
 async function main(): Promise<void> {
   const failureType: string = process.argv[2] ?? DEFAULT_FAILURE_TYPE;
   const invoiceId: string = process.argv[3] ?? newInvoiceId();
+  const emailsName: string = process.argv[4] ?? DEFAULT_EMAILS;
   const client: AirwallexClient = AirwallexClient.fromEnv();
   const ledger: Ledger = new Ledger(LEDGER_PATH);
+  const reader: EmailReader = new KeywordReader();
   const beneficiary: Beneficiary = await findOrCreateDemoBeneficiary(client);
   const obligation: Obligation = ledger.openObligation({
     invoiceId,
@@ -240,16 +282,22 @@ async function main(): Promise<void> {
     return;
   }
 
+  // The first email arrives while the transfer is in flight, the rest of the
+  // thread with the bank outcome.
+  const thread: SupplierEmail[] = loadEmails(emailsName);
+
   log(`1. Pay ${invoiceId}: ${toMajor(AMOUNT_MINOR)} ${CURRENCY} to ${SUPPLIER}`);
   const original: Transfer = await pay(client, ledger, obligation, "original");
 
-  log("2. Supplier reports nothing arrived");
-  await assess(client, obligation, original.id);
+  log("2. Supplier writes in");
+  await receive(ledger, reader, invoiceId, thread.slice(0, 1));
+  await assess(client, ledger, obligation, original.id);
 
   log(`3. Bank outcome arrives: ${failureType}`);
   await simulateTransfer(client, original.id, "FAILED", failureType);
   await syncTransfer(client, ledger, original.id);
-  const assessment: Assessment = await assess(client, obligation, original.id);
+  await receive(ledger, reader, invoiceId, thread.slice(1));
+  const assessment: Assessment = await assess(client, ledger, obligation, original.id);
 
   if (assessment.decision.action !== "replace") {
     log("4. No replacement sent");

@@ -24,10 +24,11 @@ function main(): void {
     terms.evidence.failureCode === null ? "" : ` (${terms.evidence.failureCode})`;
   console.log(`Replacement payment for ${terms.invoiceId}`);
   console.log(`  pay      ${toMajor(terms.amountMinor)} ${terms.currency}`);
-  console.log(`  to       ${terms.payTo}`);
+  console.log(`  to       ${terms.payTo} (the account on file)`);
   console.log(
     `  because  original ${terms.evidence.originalReference} ${terms.evidence.originalState}${failure}: ${terms.evidence.reason}`,
   );
+  console.log(`  emails   ${terms.evidence.emails}`);
 
   ledger.setApprovalState(approval.id, "approved", approver);
   console.log(`Approved by ${approver}. The approval covers these terms only`);
