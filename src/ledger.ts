@@ -77,6 +77,8 @@ export interface LedgerEvent {
   at: string;
   kind: EventKind;
   message: string;
+  // Set on a line that says how things stand. Null on one that records an event.
+  topic: string | null;
 }
 
 export type TransferMethod = "LOCAL" | "SWIFT";
@@ -166,6 +168,9 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
   },
   attempts: {
     reference: "TEXT",
+  },
+  events: {
+    topic: "TEXT",
   },
 };
 
@@ -295,18 +300,23 @@ export class Ledger {
     return rows.map(toObligation);
   }
 
-  addEvent(invoiceId: string, kind: EventKind, message: string): void {
+  addEvent(
+    invoiceId: string,
+    kind: EventKind,
+    message: string,
+    topic: string | null = null,
+  ): void {
     this.db
       .prepare(
-        "INSERT INTO events (invoice_id, at, kind, message) VALUES (?, ?, ?, ?)",
+        "INSERT INTO events (invoice_id, at, kind, message, topic) VALUES (?, ?, ?, ?, ?)",
       )
-      .run(invoiceId, new Date().toISOString(), kind, message);
+      .run(invoiceId, new Date().toISOString(), kind, message, topic);
   }
 
   events(invoiceId: string): LedgerEvent[] {
     return this.db
       .prepare(
-        "SELECT id, at, kind, message FROM events WHERE invoice_id = ? ORDER BY id",
+        "SELECT id, at, kind, message, topic FROM events WHERE invoice_id = ? ORDER BY id",
       )
       .all(invoiceId) as unknown as LedgerEvent[];
   }

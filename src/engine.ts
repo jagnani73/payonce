@@ -39,6 +39,7 @@ import {
   type AttemptKind,
   type EventKind,
   type Ledger,
+  type LedgerEvent,
   type Obligation,
   type TransferMethod,
 } from "./ledger.js";
@@ -152,35 +153,44 @@ export function newInvoiceId(ledger: Ledger): string {
   }
 }
 
-// Kinds that record something new happening. The other kinds are what PayOnce
-// made of it.
-const FACT_KINDS: ReadonlySet<EventKind> = new Set<EventKind>([
-  "payment",
-  "email",
-  "bank",
-  "lock",
-  "closed",
-  "error",
-]);
+// What a standing line is about. A standing line says how things are now and is
+// written again on every check. A line with no topic records something that
+// happened.
+type Topic = "decision" | "waiting" | "cost";
 
-// Adds a line to the incident's timeline and prints it. A line already written
-// since the last new fact is skipped, so checking an invoice again when nothing
-// has changed does not repeat its decision.
+// True when the timeline's last word on a topic is this message and nothing has
+// happened since.
+function stillSays(events: LedgerEvent[], topic: Topic, message: string): boolean {
+  for (const event of [...events].reverse()) {
+    if (event.topic === topic) {
+      return event.message === message;
+    }
+    if (event.topic === null) {
+      return false;
+    }
+  }
+  return false;
+}
+
+// Adds a line to the incident's timeline and prints it. A line identical to the
+// previous one is skipped. So is a standing line the timeline still says, which
+// keeps a check that finds nothing new from repeating the decision.
 function note(
   ledger: Ledger,
   invoiceId: string,
   kind: EventKind,
   message: string,
+  topic: Topic | null = null,
 ): void {
-  for (const event of ledger.events(invoiceId).reverse()) {
-    if (event.kind === kind && event.message === message) {
-      return;
-    }
-    if (FACT_KINDS.has(event.kind)) {
-      break;
-    }
+  const events: LedgerEvent[] = ledger.events(invoiceId);
+  const last: LedgerEvent | undefined = events.at(-1);
+  if (last?.kind === kind && last.message === message) {
+    return;
   }
-  ledger.addEvent(invoiceId, kind, message);
+  if (topic !== null && stillSays(events, topic, message)) {
+    return;
+  }
+  ledger.addEvent(invoiceId, kind, message, topic);
   console.log(`  ${kind.padEnd(8)} ${message}`);
 }
 
@@ -329,15 +339,26 @@ async function assess(
       obligation.invoiceId,
       afterMinor < obligation.reserveFloorMinor ? "warning" : "payment",
       `A replacement costs ${formatMoney(costMinor, currency)} with a second ${formatMoney(feeMinor, currency)} transfer fee. Cash after it: ${formatMoney(afterMinor, currency)}, reserve floor ${formatMoney(obligation.reserveFloorMinor, currency)}`,
+      "cost",
     );
   }
 
   const decision: Decision = decide(incident);
+  // Once an invoice has gone to a person, the policy no longer acts for itself.
+  const held: string =
+    obligation.state !== "escalated"
+      ? ""
+      : decision.action === "replace"
+        ? ". This invoice was escalated, so it still needs a person's approval"
+        : decision.action === "close"
+          ? ". This invoice was escalated, so a person closes it"
+          : "";
   note(
     engine.ledger,
     obligation.invoiceId,
     "decision",
-    `${capitalise(decision.action)}: ${decision.reason}`,
+    `${capitalise(decision.action)}: ${decision.reason}${held}`,
+    "decision",
   );
   return { original, findings, unverified, bankDetails, decision };
 }
@@ -482,6 +503,7 @@ function escalate(
       originalState === "paid"
         ? "Waiting on a person to check with the supplier and close the incident. PayOnce will not send a second payment"
         : "Waiting on a person",
+      "waiting",
     );
     return;
   }
@@ -503,6 +525,7 @@ function escalate(
     obligation.invoiceId,
     "approval",
     `Waiting on a person to approve ${money(obligation)} to ${terms.payTo} (the account on file)`,
+    "waiting",
   );
 }
 
@@ -514,22 +537,6 @@ async function continueEscalated(
   // Once an invoice has gone to a person, only an approval releases a payment and
   // only a person closes it, even if the policy would now do either unprompted.
   const assessment: Assessment = await assess(engine, obligation, originalId);
-  if (assessment.decision.action === "replace") {
-    note(
-      engine.ledger,
-      obligation.invoiceId,
-      "approval",
-      "This invoice was escalated, so it still needs a person's approval",
-    );
-  }
-  if (assessment.decision.action === "close") {
-    note(
-      engine.ledger,
-      obligation.invoiceId,
-      "approval",
-      "This invoice was escalated, so a person closes it",
-    );
-  }
   const approval: Approval | undefined = engine.ledger.latestApproval(
     obligation.invoiceId,
   );
