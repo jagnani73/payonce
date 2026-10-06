@@ -8,6 +8,12 @@ export interface TransferFailure {
   message?: string;
 }
 
+export interface TransferBankDetails {
+  account_name?: string;
+  account_number?: string;
+  bank_name?: string;
+}
+
 export interface Transfer {
   id: string;
   request_id: string;
@@ -18,6 +24,7 @@ export interface Transfer {
   transfer_currency: string;
   fee_amount: number;
   failure?: TransferFailure;
+  beneficiary?: { bank_details?: TransferBankDetails };
 }
 
 export interface NewTransfer {

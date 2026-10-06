@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
+export const LEDGER_PATH: string = "payonce.db";
+
 const SQLITE_CONSTRAINT_UNIQUE: number = 2067;
 
 // The partial unique index is the duplicate lock: an invoice can hold one attempt
@@ -24,11 +26,20 @@ const SCHEMA: string = `
   );
   CREATE UNIQUE INDEX IF NOT EXISTS one_live_attempt_per_invoice
     ON attempts(invoice_id) WHERE state <> 'failed';
+  CREATE TABLE IF NOT EXISTS approvals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    invoice_id TEXT NOT NULL REFERENCES obligations(invoice_id),
+    binding TEXT NOT NULL,
+    terms TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'requested',
+    approver TEXT
+  );
 `;
 
 export type ObligationState = "open" | "settled" | "escalated";
 export type AttemptKind = "original" | "replacement";
 export type AttemptState = "pending" | "in_flight" | "paid" | "failed";
+export type ApprovalState = "requested" | "approved" | "used" | "void";
 
 export interface NewObligation {
   invoiceId: string;
@@ -49,6 +60,25 @@ export interface Attempt {
   transferId: string | null;
   state: AttemptState;
   failureCode: string | null;
+}
+
+// terms is the JSON shown to the approver, binding is its hash.
+export interface Approval {
+  id: number;
+  invoiceId: string;
+  binding: string;
+  terms: string;
+  state: ApprovalState;
+  approver: string | null;
+}
+
+interface ApprovalRow {
+  id: number;
+  invoice_id: string;
+  binding: string;
+  terms: string;
+  state: ApprovalState;
+  approver: string | null;
 }
 
 interface ObligationRow {
@@ -107,6 +137,17 @@ function toAttempt(row: AttemptRow): Attempt {
     transferId: row.transfer_id,
     state: row.state,
     failureCode: row.failure_code,
+  };
+}
+
+function toApproval(row: ApprovalRow): Approval {
+  return {
+    id: row.id,
+    invoiceId: row.invoice_id,
+    binding: row.binding,
+    terms: row.terms,
+    state: row.state,
+    approver: row.approver,
   };
 }
 
@@ -190,6 +231,40 @@ export class Ledger {
     this.db
       .prepare("UPDATE obligations SET state = 'escalated' WHERE invoice_id = ?")
       .run(invoiceId);
+  }
+
+  // A new request voids any earlier one for the invoice that is still open.
+  requestApproval(invoiceId: string, binding: string, terms: string): void {
+    this.db
+      .prepare(
+        `UPDATE approvals SET state = 'void'
+          WHERE invoice_id = ? AND state IN ('requested', 'approved')`,
+      )
+      .run(invoiceId);
+    this.db
+      .prepare("INSERT INTO approvals (invoice_id, binding, terms) VALUES (?, ?, ?)")
+      .run(invoiceId, binding, terms);
+  }
+
+  latestApproval(invoiceId: string): Approval | undefined {
+    const row: ApprovalRow | undefined = this.db
+      .prepare(
+        "SELECT * FROM approvals WHERE invoice_id = ? ORDER BY id DESC LIMIT 1",
+      )
+      .get(invoiceId) as unknown as ApprovalRow | undefined;
+    return row === undefined ? undefined : toApproval(row);
+  }
+
+  setApprovalState(
+    id: number,
+    state: ApprovalState,
+    approver: string | null = null,
+  ): void {
+    this.db
+      .prepare(
+        "UPDATE approvals SET state = ?, approver = COALESCE(?, approver) WHERE id = ?",
+      )
+      .run(state, approver, id);
   }
 
   // Settles only when one attempt is paid and every other attempt has failed.

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "recover": "tsx --env-file=.env src/recover.ts",
+    "approve": "tsx src/approve.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
