@@ -1,44 +1,55 @@
 import { decide } from "./decide.js";
-import type { Decision, Incident } from "./incident.js";
+import { loadEmails, type EmailFindings, type EmailReader } from "./emails.js";
+import type { Decision, Incident, OriginalTransferState } from "./incident.js";
+import { KeywordReader } from "./keyword-reader.js";
 
 interface Sample {
   label: string;
-  incident: Incident;
+  emails: string;
+  originalState: OriginalTransferState;
+  resendCanFix: boolean;
 }
 
-const base: Incident = {
-  invoiceId: "INV-1042",
-  supplier: "Example Supplier GmbH",
-  currency: "EUR",
-  amountMinor: 400000,
-  transferFeeMinor: 1285,
-  originalState: "in_flight",
-  resendCanFix: false,
-  supplierAsksForNewBankDetails: false,
-  evidenceConflicts: false,
-  availableBalanceMinor: 2500000,
-  reserveFloorMinor: 1000000,
-};
-
 const samples: Sample[] = [
-  { label: "original still in flight", incident: base },
+  {
+    label: "original still in flight",
+    emails: "nothing-arrived",
+    originalState: "in_flight",
+    resendCanFix: false,
+  },
   {
     label: "original timed out on the sending side",
-    incident: { ...base, originalState: "failed", resendCanFix: true },
+    emails: "nothing-arrived",
+    originalState: "failed",
+    resendCanFix: true,
   },
   {
     label: "supplier asks for a new account",
-    incident: {
-      ...base,
-      invoiceId: "INV-1043",
-      originalState: "failed",
-      resendCanFix: true,
-      supplierAsksForNewBankDetails: true,
-    },
+    emails: "new-account",
+    originalState: "failed",
+    resendCanFix: true,
   },
 ];
 
+const reader: EmailReader = new KeywordReader();
+
 for (const sample of samples) {
-  const decision: Decision = decide(sample.incident);
-  console.log(`${sample.label}: ${decision.action} (${decision.reason})`);
+  const findings: EmailFindings = await reader.read(loadEmails(sample.emails));
+  const incident: Incident = {
+    invoiceId: "INV-1042",
+    supplier: "Example Supplier LLC",
+    currency: "USD",
+    amountMinor: 400_000,
+    transferFeeMinor: 0,
+    originalState: sample.originalState,
+    resendCanFix: sample.resendCanFix,
+    supplierAsksForNewBankDetails: findings.asksForNewBankDetails,
+    evidenceConflicts: false,
+    availableBalanceMinor: 2_500_000,
+    reserveFloorMinor: 1_000_000,
+  };
+  const decision: Decision = decide(incident);
+  console.log(sample.label);
+  console.log(`  emails: ${findings.summary}`);
+  console.log(`  decision: ${decision.action} (${decision.reason})`);
 }
