@@ -8,6 +8,7 @@ export interface Incident {
   transferFeeMinor: number;
   originalState: OriginalTransferState;
   resendCanFix: boolean;
+  replacementFailed: boolean;
   supplierReportsNonReceipt: boolean;
   supplierAsksForNewBankDetails: boolean;
   beneficiaryChanged: boolean;

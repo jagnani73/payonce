@@ -54,6 +54,11 @@ const SCHEMA: string = `
     kind TEXT NOT NULL,
     message TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS webhook_events (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    received_at TEXT NOT NULL
+  );
 `;
 
 export type ObligationState = "open" | "settled" | "escalated";
@@ -352,6 +357,26 @@ export class Ledger {
       .prepare("SELECT * FROM attempts WHERE invoice_id = ? ORDER BY rowid")
       .all(invoiceId) as unknown as AttemptRow[];
     return rows.map(toAttempt);
+  }
+
+  // The attempt a transfer belongs to. The request_id is PayOnce's own, so it
+  // finds the attempt even before the transfer id has been recorded.
+  attemptOf(requestId: string, transferId: string): Attempt | undefined {
+    const row: AttemptRow | undefined = this.db
+      .prepare("SELECT * FROM attempts WHERE request_id = ? OR transfer_id = ? LIMIT 1")
+      .get(requestId, transferId) as unknown as AttemptRow | undefined;
+    return row === undefined ? undefined : toAttempt(row);
+  }
+
+  // Records a webhook event by its id. False when it has been seen before, since
+  // Airwallex may deliver an event more than once.
+  firstDelivery(eventId: string, name: string): boolean {
+    const result: { changes: number | bigint } = this.db
+      .prepare(
+        "INSERT OR IGNORE INTO webhook_events (id, name, received_at) VALUES (?, ?, ?)",
+      )
+      .run(eventId, name, new Date().toISOString());
+    return Number(result.changes) === 1;
   }
 
   // A null state leaves the stored state as it is.

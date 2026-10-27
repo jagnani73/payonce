@@ -60,6 +60,7 @@ for (const sample of samples) {
     transferFeeMinor: 0,
     originalState: sample.originalState,
     resendCanFix: sample.resendCanFix,
+    replacementFailed: false,
     supplierReportsNonReceipt: findings.claimsNonReceipt,
     supplierAsksForNewBankDetails: findings.asksForNewBankDetails,
     beneficiaryChanged: false,

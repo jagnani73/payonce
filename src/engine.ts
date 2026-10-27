@@ -1,18 +1,8 @@
-import { randomInt } from "node:crypto";
 import { getAvailableMinor } from "./airwallex/balances.js";
-import {
-  DE_SWIFT_SUPPLIER,
-  US_LOCAL_SUPPLIER,
-  findOrCreateBeneficiary,
-  getBankDetails,
-  type Beneficiary,
-  type BeneficiarySpec,
-} from "./airwallex/beneficiaries.js";
+import { getBankDetails } from "./airwallex/beneficiaries.js";
 import type { AirwallexClient } from "./airwallex/client.js";
-import { simulateTransfer } from "./airwallex/simulation.js";
 import {
   getTransfer,
-  waitForTransfer,
   type Transfer,
   type TransferBankDetails,
 } from "./airwallex/transfers.js";
@@ -22,10 +12,14 @@ import {
   termsFor,
   type ApprovalTerms,
 } from "./approval.js";
-import { originalStateOf, resendCanFix, sameBankDetails } from "./assess.js";
+import {
+  attemptStateOf,
+  originalStateOf,
+  resendCanFix,
+  sameBankDetails,
+} from "./assess.js";
 import { decide } from "./decide.js";
 import {
-  loadEmails,
   unverifiedSenders,
   type EmailFindings,
   type EmailReader,
@@ -37,73 +31,22 @@ import {
   type Approval,
   type Attempt,
   type AttemptKind,
+  type AttemptState,
   type EventKind,
   type Ledger,
   type LedgerEvent,
   type Obligation,
-  type TransferMethod,
 } from "./ledger.js";
 import { formatMoney, toMinor } from "./money.js";
 import { sendAttempt, syncTransfer, wasRejected } from "./payments.js";
 
-const AMPLE_RESERVE_MINOR: number = 100_000_000;
-const SUPPLIER_DOMAIN: string = "example-supplier.test";
-
-export interface ScenarioDef {
-  id: string;
-  label: string;
-  supplier: string;
-  beneficiary: BeneficiarySpec;
-  currency: string;
-  amountMinor: number;
-  transferMethod: TransferMethod;
-  // The transfer fee the scenario expects. When set, the reserve floor is placed
-  // so that one payment fits and a second fee is what breaches it.
-  tightReserveFeeMinor: number | null;
-}
-
-export const SCENARIOS: ScenarioDef[] = [
-  {
-    id: "usd-local",
-    label: "USD, local transfer",
-    supplier: "Example Supplier LLC",
-    beneficiary: US_LOCAL_SUPPLIER,
-    currency: "USD",
-    amountMinor: 400_000,
-    transferMethod: "LOCAL",
-    tightReserveFeeMinor: null,
-  },
-  {
-    id: "eur-swift",
-    label: "EUR, SWIFT transfer",
-    supplier: "Example Supplier GmbH",
-    beneficiary: DE_SWIFT_SUPPLIER,
-    currency: "EUR",
-    amountMinor: 400_000,
-    transferMethod: "SWIFT",
-    tightReserveFeeMinor: null,
-  },
-  {
-    id: "eur-swift-low-reserve",
-    label: "EUR, SWIFT, low cash reserve",
-    supplier: "Example Supplier GmbH",
-    beneficiary: DE_SWIFT_SUPPLIER,
-    currency: "EUR",
-    amountMinor: 400_000,
-    transferMethod: "SWIFT",
-    tightReserveFeeMinor: 1_391,
-  },
-];
-
-export const DEFAULT_SCENARIO: string = "usd-local";
-export const DEFAULT_EMAILS: string = "nothing-arrived";
-
 // What the reader found. unverifiedSenders is kept for display; the policy works
 // the sender check out again from the stored emails. unread marks a thread the
-// reader failed on.
+// reader failed on. emailsRead is how many emails of the thread were read.
 interface StoredFindings extends EmailFindings {
   unverifiedSenders?: string[];
   unread?: boolean;
+  emailsRead?: number;
 }
 
 const NO_FINDINGS: StoredFindings = {
@@ -118,19 +61,17 @@ const UNREAD_FINDINGS: EmailFindings = {
   summary: "the emails could not be read",
 };
 
+// Told about each payment PayOnce sends. In the sandbox it plays the bank, so the
+// payment moves on. In production there is none, because the bank moves it.
+export interface Bank {
+  sent(invoiceId: string, kind: AttemptKind, transferId: string): void;
+}
+
 export interface Engine {
   client: AirwallexClient;
   ledger: Ledger;
   reader: EmailReader;
-}
-
-// The bank outcome that settles the original. Any other outcome is the failure
-// type the simulator fails it with.
-export const PAID_OUTCOME: string = "PAID";
-
-export interface Scenario {
-  bankOutcome: string;
-  emailsName: string;
+  bank?: Bank;
 }
 
 interface Assessment {
@@ -145,19 +86,10 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function newInvoiceId(ledger: Ledger): string {
-  for (;;) {
-    const invoiceId: string = `INV-${randomInt(100_000, 1_000_000)}`;
-    if (ledger.obligation(invoiceId) === undefined) {
-      return invoiceId;
-    }
-  }
-}
-
 // What a standing line is about. A standing line says how things are now and is
 // written again on every check. A line with no topic records something that
 // happened.
-type Topic = "decision" | "waiting" | "approval" | "cost" | "bank-details";
+export type Topic = "decision" | "waiting" | "approval" | "cost" | "bank-details";
 
 // True when the timeline's last word on a topic is this message and nothing has
 // happened since.
@@ -176,7 +108,7 @@ function stillSays(events: LedgerEvent[], topic: Topic, message: string): boolea
 // Adds a line to the incident's timeline and prints it. A line identical to the
 // previous one is skipped. So is a standing line the timeline still says, which
 // keeps a check that finds nothing new from repeating the decision.
-function note(
+export function note(
   ledger: Ledger,
   invoiceId: string,
   kind: EventKind,
@@ -230,34 +162,46 @@ function money(obligation: Obligation): string {
   return formatMoney(obligation.amountMinor, obligation.currency);
 }
 
-// Stores new supplier emails, checks their senders against the domain on file,
-// then reads the whole thread once and keeps the findings so later runs see the
-// same result.
-async function receive(
-  engine: Engine,
+// The inbox: stores emails that arrived for an invoice, puts them on its timeline
+// and checks their senders against the domain on file. The agent reads them the
+// next time it looks at the invoice.
+export function deliver(
+  ledger: Ledger,
   obligation: Obligation,
   emails: SupplierEmail[],
-): Promise<void> {
-  if (emails.length === 0) {
-    return;
-  }
+): void {
   const invoiceId: string = obligation.invoiceId;
-  engine.ledger.addEmails(invoiceId, emails);
+  ledger.addEmails(invoiceId, emails);
   for (const email of emails) {
-    note(engine.ledger, invoiceId, "email", `Email from ${email.from}: ${email.subject}`);
+    note(ledger, invoiceId, "email", `Email from ${email.from}: ${email.subject}`);
   }
   for (const sender of sendersNotOnFile(obligation, emails)) {
     note(
-      engine.ledger,
+      ledger,
       invoiceId,
       "warning",
       `Sender ${sender} does not match the supplier's domain on file (${obligation.supplierDomain})`,
     );
   }
+}
 
-  // If the reader fails, the thread is marked unread so the policy escalates
-  // and does not act on findings from before these emails arrived.
+// Reads the whole thread once emails have arrived since it was last read, and
+// keeps the findings so later looks see the same result. If the reader fails,
+// the thread is marked unread so the policy escalates and does not act on
+// findings from before these emails arrived. It is read again on the next look.
+async function readNewEmails(engine: Engine, obligation: Obligation): Promise<void> {
+  const invoiceId: string = obligation.invoiceId;
   const thread: SupplierEmail[] = engine.ledger.emails(invoiceId);
+  const stored: string | undefined = engine.ledger.findings(invoiceId);
+  const previous: StoredFindings | undefined =
+    stored === undefined ? undefined : (JSON.parse(stored) as StoredFindings);
+  // Findings saved before the count was kept cover the whole thread.
+  const readCount: number =
+    previous === undefined ? 0 : (previous.emailsRead ?? thread.length);
+  if (readCount >= thread.length) {
+    return;
+  }
+
   let read: EmailFindings = UNREAD_FINDINGS;
   let unread: boolean = false;
   try {
@@ -275,6 +219,7 @@ async function receive(
     ...read,
     unverifiedSenders: sendersNotOnFile(obligation, thread),
     unread,
+    emailsRead: unread ? 0 : thread.length,
     ...(unread ? {} : { readBy: read.readBy ?? engine.reader.name }),
   };
   engine.ledger.saveFindings(invoiceId, JSON.stringify(findings));
@@ -318,6 +263,12 @@ async function assess(
     transferFeeMinor: feeMinor,
     originalState: originalStateOf(original),
     resendCanFix: resendCanFix(original),
+    replacementFailed: engine.ledger
+      .attempts(obligation.invoiceId)
+      .some(
+        (attempt: Attempt): boolean =>
+          attempt.kind === "replacement" && attempt.state === "failed",
+      ),
     supplierReportsNonReceipt: findings.claimsNonReceipt === true,
     supplierAsksForNewBankDetails: findings.asksForNewBankDetails === true,
     beneficiaryChanged: !sameBankDetails(
@@ -407,15 +358,12 @@ async function pay(
     "payment",
     `${capitalise(kind)} ${created.short_reference_id} sent: ${money(obligation)} to ${obligation.supplier}${fee}`,
   );
+  engine.bank?.sent(obligation.invoiceId, kind, created.id);
+  return created;
+}
 
-  // The simulator rejects a transition until the transfer has left SCHEDULED.
-  await waitForTransfer(
-    engine.client,
-    created.id,
-    (transfer: Transfer): boolean => transfer.status !== "SCHEDULED",
-  );
-  await simulateTransfer(engine.client, created.id, "SENT");
-  return syncTransfer(engine.client, engine.ledger, created.id);
+export function payOriginal(engine: Engine, obligation: Obligation): Promise<Transfer> {
+  return pay(engine, obligation, "original");
 }
 
 function close(engine: Engine, invoiceId: string): boolean {
@@ -436,49 +384,21 @@ function close(engine: Engine, invoiceId: string): boolean {
   return true;
 }
 
-// Sandbox scaffolding: the scripted bank pays the replacement.
-async function settleReplacement(
-  engine: Engine,
-  obligation: Obligation,
-  originalId: string,
-  replacementId: string,
-): Promise<void> {
-  const current: Transfer = await waitForTransfer(
-    engine.client,
-    replacementId,
-    (transfer: Transfer): boolean => transfer.status !== "SCHEDULED",
-  );
-  if (current.status !== "PAID") {
-    if (current.status !== "SENT") {
-      await simulateTransfer(engine.client, replacementId, "SENT");
-    }
-    await simulateTransfer(engine.client, replacementId, "PAID");
-  }
-
-  await syncTransfer(engine.client, engine.ledger, originalId);
-  const paid: Transfer = await syncTransfer(
-    engine.client,
+function waitForReplacement(engine: Engine, invoiceId: string, reference: string): void {
+  note(
     engine.ledger,
-    replacementId,
+    invoiceId,
+    "payment",
+    `Waiting for the bank to pay replacement ${reference}`,
+    "waiting",
   );
-  note(engine.ledger, obligation.invoiceId, "bank", `Replacement ${describe(paid)}`);
-  if (!close(engine, obligation.invoiceId)) {
-    note(
-      engine.ledger,
-      obligation.invoiceId,
-      "error",
-      `Replacement ${paid.short_reference_id} did not read back as paid, so the incident stays open`,
-    );
-  }
 }
 
-async function replaceAndSettle(
-  engine: Engine,
-  obligation: Obligation,
-  originalId: string,
-): Promise<void> {
+// The bank pays the replacement later. The agent hears about it the way it heard
+// about the original, and closes the incident then.
+async function replace(engine: Engine, obligation: Obligation): Promise<void> {
   const replacement: Transfer = await pay(engine, obligation, "replacement");
-  await settleReplacement(engine, obligation, originalId, replacement.id);
+  waitForReplacement(engine, obligation.invoiceId, replacement.short_reference_id);
 }
 
 function termsOf(obligation: Obligation, assessment: Assessment): ApprovalTerms {
@@ -580,19 +500,19 @@ async function continueEscalated(
     "approval",
     `Approval by ${approval.approver} matches the current terms`,
   );
-  await replaceAndSettle(engine, obligation, originalId);
+  await replace(engine, obligation);
 }
 
 // Carries out a decision: replace, close, hand over to a person, or leave it
-// waiting. Returns true when a replacement was sent.
+// waiting.
 async function act(
   engine: Engine,
   obligation: Obligation,
   assessment: Assessment,
-): Promise<boolean> {
+): Promise<void> {
   if (assessment.decision.action === "replace") {
-    await replaceAndSettle(engine, obligation, assessment.original.id);
-    return true;
+    await replace(engine, obligation);
+    return;
   }
   if (assessment.decision.action === "escalate") {
     escalate(engine, obligation, assessment);
@@ -605,13 +525,14 @@ async function act(
       "The ledger does not show this invoice as paid once, so the incident stays open",
     );
   }
-  return false;
 }
 
-// Picks up an invoice that already has payments. It retries an attempt that has
-// no transfer yet under its original request_id and syncs the rest. A replacement
-// already out is finished. An escalated invoice pays only on a matching approval.
-// An open one that stopped before its decision was carried out gets that decision.
+// Looks at an invoice again, after a webhook, a status check, new emails or a
+// person's action. It syncs each payment with Airwallex, retrying an attempt that
+// has no transfer yet under its original request_id, and notes any payment the
+// bank has paid or failed since the last look. Then it reads new emails, decides
+// and acts. A replacement already out is waited on, never approved a second time.
+// An escalated invoice pays only on a matching approval.
 export async function resumeIncident(
   engine: Engine,
   invoiceId: string,
@@ -622,21 +543,28 @@ export async function resumeIncident(
   }
 
   let originalId: string | null = null;
-  let liveReplacementId: string | null = null;
+  let liveReplacement: Transfer | null = null;
   for (const attempt of engine.ledger.attempts(invoiceId)) {
     // An attempt Airwallex refused never became a transfer. Only one still
     // pending is retried.
     if (attempt.transferId === null && attempt.state !== "pending") {
       continue;
     }
-    const transfer: Transfer =
-      attempt.transferId === null
-        ? await sendAttempt(engine.client, engine.ledger, obligation, attempt)
-        : await syncTransfer(engine.client, engine.ledger, attempt.transferId);
+    let transfer: Transfer;
+    if (attempt.transferId === null) {
+      transfer = await sendAttempt(engine.client, engine.ledger, obligation, attempt);
+      engine.bank?.sent(invoiceId, attempt.kind, transfer.id);
+    } else {
+      transfer = await syncTransfer(engine.client, engine.ledger, attempt.transferId);
+    }
+    const state: AttemptState | null = attemptStateOf(transfer);
+    if (state !== attempt.state && (state === "paid" || state === "failed")) {
+      note(engine.ledger, invoiceId, "bank", `${capitalise(attempt.kind)} ${describe(transfer)}`);
+    }
     if (attempt.kind === "original") {
       originalId = transfer.id;
     } else if (originalStateOf(transfer) === "in_flight") {
-      liveReplacementId = transfer.id;
+      liveReplacement = transfer;
     }
     console.log(`  ${attempt.kind} ${describe(transfer)}`);
   }
@@ -644,6 +572,7 @@ export async function resumeIncident(
   if (originalId === null) {
     return;
   }
+  await readNewEmails(engine, obligation);
   if (engine.ledger.paidOnce(invoiceId)) {
     // Closed already, by the policy or by a person.
     if (obligation.state === "settled") {
@@ -656,15 +585,8 @@ export async function resumeIncident(
       return;
     }
   }
-  // A replacement that is already out is finished, never approved a second time.
-  if (liveReplacementId !== null) {
-    note(
-      engine.ledger,
-      invoiceId,
-      "payment",
-      "Picking up a replacement that was already sent",
-    );
-    await settleReplacement(engine, obligation, originalId, liveReplacementId);
+  if (liveReplacement !== null) {
+    waitForReplacement(engine, invoiceId, liveReplacement.short_reference_id);
     return;
   }
   if (obligation.state === "escalated") {
@@ -672,6 +594,21 @@ export async function resumeIncident(
     return;
   }
   await act(engine, obligation, await assess(engine, obligation, originalId));
+}
+
+// Shows the lock holding: a second payment for a settled invoice is refused.
+export function proveLock(ledger: Ledger, invoiceId: string): void {
+  try {
+    const extra: Attempt = ledger.openAttempt(invoiceId, "replacement");
+    // Not expected. Fail the stray attempt so a later run cannot send it.
+    ledger.failAttempt(extra.requestId, null);
+    note(ledger, invoiceId, "error", "The lock let a second payment through");
+  } catch (error: unknown) {
+    if (!(error instanceof DuplicatePaymentError)) {
+      throw error;
+    }
+    note(ledger, invoiceId, "lock", `Second payment refused: ${error.message}`);
+  }
 }
 
 // The original, when it is the one payment the invoice has been paid with.
@@ -758,90 +695,4 @@ export function approveReplacement(
     "approval",
   );
   return terms;
-}
-
-// Records the demo invoice as an obligation to the scenario's supplier.
-export async function openScenario(
-  engine: Engine,
-  invoiceId: string,
-  scenarioId: string,
-): Promise<Obligation> {
-  const def: ScenarioDef | undefined = SCENARIOS.find(
-    (scenario: ScenarioDef): boolean => scenario.id === scenarioId,
-  );
-  if (def === undefined) {
-    throw new Error(`Unknown scenario ${scenarioId}`);
-  }
-  // openObligation leaves an existing row as it is, so a reused invoice number
-  // would run this scenario against someone else's invoice.
-  if (engine.ledger.obligation(invoiceId) !== undefined) {
-    throw new Error(`${invoiceId} is already in the ledger`);
-  }
-  const beneficiary: Beneficiary = await findOrCreateBeneficiary(
-    engine.client,
-    def.beneficiary,
-  );
-  const reserveFloorMinor: number =
-    def.tightReserveFeeMinor === null
-      ? AMPLE_RESERVE_MINOR
-      : (await getAvailableMinor(engine.client, def.currency)) -
-        def.amountMinor -
-        Math.round(def.tightReserveFeeMinor * 1.5);
-  return engine.ledger.openObligation({
-    invoiceId,
-    supplier: def.supplier,
-    supplierDomain: SUPPLIER_DOMAIN,
-    beneficiaryId: beneficiary.id,
-    currency: def.currency,
-    amountMinor: def.amountMinor,
-    transferMethod: def.transferMethod,
-    reserveFloorMinor,
-  });
-}
-
-// The scripted sandbox incident: pay an invoice, let the supplier write in while
-// the transfer is in flight, apply the bank outcome, then act on the decision. The
-// first email of the thread arrives before the bank outcome, the rest with it.
-export async function runScenario(
-  engine: Engine,
-  obligation: Obligation,
-  scenario: Scenario,
-): Promise<void> {
-  const invoiceId: string = obligation.invoiceId;
-  const thread: SupplierEmail[] = loadEmails(scenario.emailsName, invoiceId);
-
-  const original: Transfer = await pay(engine, obligation, "original");
-
-  await receive(engine, obligation, thread.slice(0, 1));
-  await assess(engine, obligation, original.id);
-
-  if (scenario.bankOutcome === PAID_OUTCOME) {
-    await simulateTransfer(engine.client, original.id, "PAID");
-  } else {
-    await simulateTransfer(engine.client, original.id, "FAILED", scenario.bankOutcome);
-  }
-  const outcome: Transfer = await syncTransfer(
-    engine.client,
-    engine.ledger,
-    original.id,
-  );
-  note(engine.ledger, invoiceId, "bank", `Original ${describe(outcome)}`);
-  await receive(engine, obligation, thread.slice(1));
-  const assessment: Assessment = await assess(engine, obligation, original.id);
-  if (!(await act(engine, obligation, assessment))) {
-    return;
-  }
-
-  // Shows the lock holding: a second payment for a settled invoice is refused.
-  try {
-    const extra: Attempt = engine.ledger.openAttempt(invoiceId, "replacement");
-    // Not expected. Fail the stray attempt so a later run cannot send it.
-    engine.ledger.failAttempt(extra.requestId, null);
-    note(engine.ledger, invoiceId, "error", "The lock let a second payment through");
-  } catch (error: unknown) {
-    if (!(error instanceof DuplicatePaymentError)) {
-      throw error;
-    }
-    note(engine.ledger, invoiceId, "lock", `Second payment refused: ${error.message}`);
-  }
 }

@@ -57,6 +57,15 @@ export function decide(incident: Incident): Decision {
     };
   }
 
+  // A second failure says the route itself is broken, so sending a third payment
+  // would only pay another fee.
+  if (incident.replacementFailed) {
+    return {
+      action: "escalate",
+      reason: "a replacement payment failed as well",
+    };
+  }
+
   if (!incident.resendCanFix) {
     return {
       action: "escalate",

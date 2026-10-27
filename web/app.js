@@ -362,10 +362,13 @@ function expectsWork() {
   if (detail === null && state.selectedId !== null && isStarting(state.selectedId)) {
     return true;
   }
-  if (detail?.busy === true) {
+  if (detail?.busy === true || detail?.watching === true) {
     return true;
   }
-  return (state.incidents ?? []).some((incident) => incident.busy === true);
+  // A payment with the bank can change at any moment, by webhook or status check.
+  return (state.incidents ?? []).some(
+    (incident) => incident.busy === true || incident.watching === true,
+  );
 }
 
 let pollTimer = 0;
