@@ -8,8 +8,8 @@ Payment incident agent for the Airwallex Agentic Banking Hackathon 2026, built o
 pnpm install
 pnpm typecheck                                      # tsc --noEmit
 pnpm dev                                            # policy on three sample incidents, no credentials
-pnpm ui                                             # web page and JSON API at http://127.0.0.1:4310
-pnpm recover [OUTCOME] [INVOICE] [EMAILS] [SCENARIO] # one incident against the sandbox, or continue an existing invoice
+pnpm ui                                             # web page and JSON API at http://127.0.0.1:4310, webhook receiver on 4311
+pnpm recover [OUTCOME] [INVOICE] [EMAILS] [SCENARIO] # one incident against the sandbox, or continue an existing invoice (status checks, no webhooks)
 pnpm approve <INVOICE> [NAME]                       # show the waiting approval; with NAME, approve it
 pnpm close <INVOICE> [NAME] [NOTE]                  # show a paid incident waiting on a person; with NAME and NOTE, close it
 pnpm reset                                          # move payonce.db aside so the next run starts an empty ledger
@@ -21,7 +21,13 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 
 - `src/decide.ts`: pure decision policy (wait / replace / escalate / close). Rules stay in code; the model never decides amounts or moves money.
 - `src/incident.ts`: `Incident` and `Decision` types. Amounts are minor units.
-- `src/engine.ts`: the incident flow shared by the CLI and the server. `runScenario` is the scripted sandbox incident, `resumeIncident` continues an invoice, `approveReplacement` records an approval, `closeIncident` records a person closing a paid incident, `note` writes the timeline. `SCENARIOS` defines the demo payments.
+- `src/engine.ts`: the agent, shared by the CLI and the server. `resumeIncident` looks at an invoice: it syncs the payments, reads new emails, decides and acts. `deliver` is the inbox. `approveReplacement` records an approval, `closeIncident` records a person closing a paid incident, `note` writes the timeline. `Bank` is the hook told about each payment sent. The engine never simulates a bank outcome.
+- `src/dispatcher.ts`: `Dispatcher` runs steps one invoice at a time. `wake` queues a look at an invoice, and a wake that arrives before a queued look has started is dropped.
+- `src/watcher.ts`: the fallback for webhooks. `Watcher` reads every transfer the ledger shows in flight and wakes the invoice when the bank has paid or failed it. It also wakes an invoice with an approval nobody has acted on.
+- `src/sandbox-bank.ts`: `SandboxBank` plays the bank in the sandbox. It sends a new transfer to `SENT`, pays or fails it when the scenario says so, and pays every replacement. `PAID_OUTCOME` lives here.
+- `src/scenario.ts`: the demo payments (`SCENARIOS`), `openScenario`, `runScenario` (the scripted incident) and `untilAtRest`.
+- `src/webhooks.ts`: `WebhookReceiver` and `verifySignature`.
+- `src/tunnel.ts`: `openTunnel` starts a cloudflared quick tunnel and reads its address from cloudflared's output.
 - `src/assess.ts`: maps an Airwallex transfer to `originalState` and `resendCanFix`, and compares bank details.
 - `src/ledger.ts`: SQLite tables for obligations, attempts, approvals, emails, findings and events.
 - `src/payments.ts`: idempotent send and status sync between Airwallex and the ledger.
@@ -30,20 +36,24 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 - `src/model-reader.ts`: `ModelReader` reads the thread with one chat completion over plain `fetch`, with no SDK.
 - `src/reader.ts`: `readerFromEnv` picks `ModelReader` when `READER_API_KEY` is set and the keyword placeholder otherwise.
 - `src/keyword-reader.ts`: the fallback reader. It matches a handful of phrases.
-- `src/server.ts`: `node:http` server for `web/` and the JSON API. It runs incidents in the background and tracks them in an in-memory `busy` set.
+- `src/server.ts`: `node:http` server for `web/` and the JSON API. It runs scenarios in the background, starts the watcher and connects webhooks.
 - `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/reset.ts`, `src/index.ts`: the CLI commands.
-- `docs/demo.md`: the recording script for the four demo incidents, with measured sandbox times.
-- `src/airwallex/`: `client.ts` (login, token refresh, 30 s timeout, refuses non-sandbox hosts), `transfers.ts`, `beneficiaries.ts`, `balances.ts`, `simulation.ts` (every sandbox-only call).
+- `docs/demo.md`: the recording script for the four demo incidents, with sandbox times measured on 2026-10-06, before the agent waited for webhooks and status checks.
+- `src/airwallex/`: `client.ts` (login, token refresh, 30 s timeout, refuses non-sandbox hosts), `transfers.ts`, `beneficiaries.ts`, `balances.ts`, `webhooks.ts` (`subscribe`), `simulation.ts` (every sandbox-only call).
 - `web/`: static page (`index.html`, `styles.css`, `app.js`) with no build step and no external requests.
 - `fixtures/emails/`: sample supplier threads. `{{invoice}}` is replaced with the invoice number. `new-account.json` uses a look-alike sender domain on purpose.
 
 ## Rules the engine keeps
 
-- The engine writes an attempt row, with its `request_id`, before the Airwallex call. A 4xx marks the attempt failed. Any other error leaves it pending, because the transfer may exist, and a later run retries it under the same `request_id`.
+- The agent learns what the bank did only by reading Airwallex. A webhook or the watcher wakes it, and it reads the transfer itself. Nothing in a webhook's body feeds a decision.
+- Every step on an invoice goes through the `Dispatcher`, including a person's approve and close, so two steps never run on one invoice at once.
+- The engine writes an attempt row, with its `request_id`, before the Airwallex call. A 4xx marks the attempt failed. Any other error leaves it pending, because the transfer may exist, and a later look retries it under the same `request_id`.
 - Once an invoice is escalated, only a matching approval releases a payment, even if the policy would now replace.
-- A replacement that is already out is finished on resume. It is never approved a second time.
+- After sending a replacement the agent waits for the bank. It closes the incident on the look that reads the replacement as paid. A replacement already out is never approved a second time.
+- If a replacement has failed, the policy escalates instead of sending a third payment.
+- A look writes a `bank` line when it finds a payment the ledger had in flight now paid or failed.
 - Approval terms take the pay-to account from the beneficiary record as it is now, and the policy escalates if that differs from the account on the original transfer. The timeline carries a warning whenever they differ, whatever reason the policy escalates for.
-- A reader failure marks the thread unread, which escalates.
+- A reader failure marks the thread unread, which escalates. The next look reads the thread again.
 - A non-finite amount throws in `toMinor`, and the policy escalates if the cash position is not a number.
 - On resume, a paid replacement closes the incident. A paid original goes to the policy, which closes it only if no supplier email reports the payment missing.
 - An escalated invoice whose original is paid is closed by a person through `closeIncident`, never by a resume. `pendingClose` says when that applies. Closing sends nothing and is not bound to terms.
@@ -59,7 +69,8 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 - Approvals live in the `approvals` table with states `requested`, `approved`, `used` and `void`. The binding is the hash of the terms JSON, so build terms only through `termsFor` to keep the key order stable.
 - A new request voids any earlier request or approval for the invoice that is still open. An approval is marked `used` before the payment is tried, so it covers one attempt.
 - An approval request is created only when the original has failed. The duplicate lock still applies to an approved replacement.
-- Supplier emails and the reader's findings are stored per invoice in `emails` and `email_findings`. The thread is read once when new emails arrive and the findings are reused, so a reader that words its summary differently on a second call cannot void an approval.
+- Supplier emails and the reader's findings are stored per invoice in `emails` and `email_findings`. The findings record how many emails they cover (`emailsRead`). The thread is read once when new emails arrive and the findings are reused, so a reader that words its summary differently on a second call cannot void an approval.
+- `webhook_events` holds the id of every webhook event taken, so a redelivered event is ignored. `attemptOf` finds the attempt a transfer belongs to by `request_id` or transfer id.
 - Approval evidence includes the email summary, so new emails that change the findings void an approval.
 - `events` holds the timeline. A line with a `topic` says how things stand: the decision, what the invoice is waiting on, an approval, the cost of a replacement, or a bank-details mismatch. `note` skips one when the timeline's last line on that topic says the same and nothing has happened since, so checking an invoice again when nothing has changed adds nothing. A line with no topic records an event and is skipped only when it repeats the line before it.
 - On an escalated invoice the decision line says when the policy would now replace or close and why it does not.
@@ -89,10 +100,30 @@ Found by running it on 2026-10-06:
 
 - It binds to loopback and has no login. `guard` checks the Host header and, for writes, the Origin header and a JSON content type.
 - Routes: `GET /api/options`, `GET /api/incidents`, `GET /api/incidents/:id`, `POST /api/incidents` (takes `bankOutcome`, `emails` and `scenario`), `POST /api/incidents/:id/approve` (needs `approver` and `approvalId`), `POST /api/incidents/:id/close` (needs `closedBy` and `finding`), `POST /api/incidents/:id/resume`.
-- An incident's detail carries `review` when a person can close it, and the page shows the close card from that.
+- An incident's detail carries `review` when a person can close it, and the page shows the close card from that. `busy` is true while the agent or the sandbox bank is working on it, and `watching` while a payment is with the bank. The page polls every 1.5 seconds while either is true.
+- Approve and close wait for any step already running on the invoice, then run. Resume queues a look.
 - The page scrolls to keep the newest timeline line on screen when that line was already visible, and for 15 seconds after an action.
-- On start it resumes every invoice that still has a pending or in-flight attempt.
+- On start it wakes every invoice that still has a pending or in-flight attempt, and the sandbox bank goes back to paying any replacement still in flight.
 - `GET /api/options` lists the default email thread first, so the form opens on the incident that is replaced without a person.
+
+## Webhooks
+
+- `pnpm ui` starts `WebhookReceiver` on `WEBHOOK_PORT` (4311, loopback). It answers `POST /airwallex/webhooks` and nothing else, so the tunnel exposes no other route. It answers 503 until it has the secret, so Airwallex retries.
+- Without `WEBHOOK_URL`, `openTunnel` runs `cloudflared tunnel --no-autoupdate --url http://127.0.0.1:4311` (`CLOUDFLARED` sets the path) and takes the `trycloudflare.com` address from its output. The address changes on every start.
+- `subscribe` finds PayOnce's subscription by the `request_id` prefix `payonce-transfers-` and moves it to the new address, or creates it with all nine `payout.transfer.*` events. The secret comes back from Airwallex and is held in memory only.
+- `verifySignature`: HMAC-SHA256 hex of the `x-timestamp` header followed by the raw body, keyed with the secret, compared in constant time. A timestamp more than 5 minutes off is refused.
+- The receiver takes the transfer from `data`, or from `data.object` when Airwallex nests it there.
+- Paid, failed, cancelled and overdue events for PayOnce's own transfers wake the agent. They put a `bank` line on the timeline unless the ledger already shows the payment paid or failed. Other events are only logged.
+- With webhooks connected the watcher checks every 15 seconds. Without them it checks every 3, and the CLI every 2. `WEBHOOKS=off` skips the receiver, the tunnel and the subscription.
+- `WEBHOOK_API_VERSION` defaults to `2025-06-30`. No response header says which version the account uses.
+
+Found by running it on 2026-10-28:
+
+- A webhook `request_id` is limited to 50 characters.
+- The list call returns each subscription's secret. The update call moved PayOnce's subscription to a new tunnel address and kept its id.
+- In three incidents, with about ten transfer status changes, Airwallex delivered no event within 12 minutes. The tunnel answered a request from outside, and the subscription listed the right address and events. The watcher caught every change. Delivery status per event is under Settings > Developer > Events in the web app, which needs the account owner's login.
+- The scripted incidents with the watcher on: a replaced payment from start to close in 11 seconds through `pnpm recover`, and about 50 seconds for each escalation on the page while the watcher checked every 60 seconds.
+- `winget install Cloudflare.cloudflared` waits on a UAC prompt. The standalone `cloudflared-windows-amd64.exe` from the GitHub release runs without admin rights.
 
 ## Sandbox behaviour found by running it
 

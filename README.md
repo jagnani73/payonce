@@ -12,7 +12,7 @@ A supplier says a payment never arrived and their deadline has passed. The trans
 
 ## What it does
 
-PayOnce follows one supplier payment through an incident. It sends the transfer, reads the supplier's emails, watches the bank outcome, and then waits, replaces the payment, closes the incident, or hands the decision to a person. A web page shows each incident as a timeline, with the emails, the payments and whatever a person is asked to approve or close.
+PayOnce follows each supplier payment through an incident. It sends the transfer and then reacts to what happens: the bank pays or fails it, the supplier writes in, or a person approves something. An Airwallex webhook or a status check tells it the bank has moved, and it reads the transfer from Airwallex itself before it decides. Each time, it waits, replaces the payment, closes the incident, or hands the decision to a person. A web page shows each incident as a timeline, with the emails, the payments and whatever a person is asked to approve or close.
 
 ## What the agent decides
 
@@ -26,6 +26,7 @@ PayOnce follows one supplier payment through an incident. It sends the transfer,
 | The original settled but the supplier reports non-receipt | Escalate to a person |
 | The original settled and no supplier email reports it missing | Close |
 | The original transfer is still in flight | Wait |
+| A replacement has already failed | Escalate to a person |
 | The original failed for a reason a resend cannot fix | Escalate to a person |
 | The cash position could not be read | Escalate to a person |
 | The original failed and a replacement with its transfer fee would push cash below the reserve floor | Escalate to a person |
@@ -61,6 +62,16 @@ The page shows the paid transfer and the reason, and takes a name and a note of 
 
 A failed SWIFT transfer gets its amount back but not its fee, so a replacement pays the fee again. PayOnce adds that fee to the cost of a replacement before it checks the cash reserve. In the `eur-swift-low-reserve` scenario the reserve floor is set so that the second fee is what breaches it, and the incident goes to a person.
 
+## Webhooks
+
+`pnpm ui` listens for Airwallex payout webhooks on a second port, 4311, that answers one path. To give Airwallex an address it can reach, PayOnce opens a Cloudflare quick tunnel, which needs no Cloudflare account. It then points its Airwallex webhook subscription at the tunnel. The first run creates the subscription, and later runs move it, because a quick tunnel gets a new address each time it starts. The page and its API stay on this machine and are not behind the tunnel.
+
+An event counts only if its signature checks out with the subscription's secret, and an event already seen is ignored. A paid or failed event only tells PayOnce to look again. PayOnce reads the transfer from Airwallex and decides on what it reads.
+
+A status check runs every 15 seconds in case an event is late or lost, and every 3 seconds when webhooks are off. In runs on 28 October 2026 the sandbox delivered no events to the receiver, so the status check found every change.
+
+Install cloudflared with `winget install --id Cloudflare.cloudflared`, or set `CLOUDFLARED` to the path of `cloudflared.exe`. Set `WEBHOOK_URL` to use a public address you already have, or `WEBHOOKS=off` to skip webhooks.
+
 ## Run it
 
 ```bash
@@ -80,7 +91,7 @@ For a model to read the emails, create a Gemini API key in Google AI Studio and 
 pnpm ui
 ```
 
-Open `http://127.0.0.1:4310`. `docs/demo.md` walks through four incidents in under five minutes. Choose a payment, a bank outcome and a supplier email thread, then start an incident. The page follows it step by step, which takes 10 to 20 seconds in the sandbox. When an incident is waiting on a person, the approval card shows the terms and takes a name. If the bank has paid the original, a close card takes a name and a note instead. "Check again" continues an incident that stopped part-way.
+Open `http://127.0.0.1:4310`. `docs/demo.md` walks through four incidents in under five minutes. Choose a payment, a bank outcome and a supplier email thread, then start an incident. The page follows it step by step. The agent waits for a webhook or a status check after each bank outcome, so an incident takes up to a minute in the sandbox. When an incident is waiting on a person, the approval card shows the terms and takes a name. If the bank has paid the original, a close card takes a name and a note instead. "Check again" continues an incident that stopped part-way.
 
 The server has no login. It listens on this machine only and accepts changes only from its own page.
 
@@ -114,6 +125,8 @@ pnpm close INV-5002
 pnpm close INV-5002 Yash supplier found the payment
 ```
 
+The terminal has no webhook receiver, so `pnpm recover` checks the bank every 2 seconds and returns once the incident is closed or waiting on a person.
+
 The first replaces the payment and shows the lock refusing a second one. The second ends in an escalation. In the third, the supplier asks for payment to a new account from a look-alike address, so it escalates although a channel timeout on its own would be replaced. `pnpm approve` with no name shows the terms and with a name approves them. `pnpm recover - INV-5001` then sends the replacement to the account on file. The outcome is ignored for an invoice that already exists, so `-` works as a placeholder.
 
 In the fourth, the bank pays the original while the supplier says it never arrived, so the incident goes to a person. `pnpm close` with no name shows what is waiting, and with a name and a note it closes the incident.
@@ -124,7 +137,12 @@ In the fourth, the bank pays the original while the supplier says it never arriv
 | --- | --- |
 | `src/decide.ts` | The decision policy, a pure function |
 | `src/incident.ts` | Types for an incident and a decision |
-| `src/engine.ts` | The incident flow: pay, read emails, assess, replace or escalate, and the timeline |
+| `src/engine.ts` | The agent: look at an invoice, read new emails, decide, replace or escalate, and the timeline |
+| `src/dispatcher.ts` | Runs the agent's steps one invoice at a time |
+| `src/watcher.ts` | Status checks on payments in flight, the fallback for webhooks |
+| `src/webhooks.ts`, `src/tunnel.ts` | The webhook receiver and its signature check, and the cloudflared tunnel |
+| `src/sandbox-bank.ts` | Plays the bank in the sandbox: sends, pays and fails transfers |
+| `src/scenario.ts` | The sample payments and the scripted incident |
 | `src/assess.ts` | Maps an Airwallex transfer to the facts the policy reads |
 | `src/ledger.ts` | Obligations, payment attempts, approvals, emails and the timeline in SQLite |
 | `src/payments.ts` | Sends an attempt under its `request_id` and syncs transfer state into the ledger |
@@ -135,7 +153,7 @@ In the fourth, the bank pays the original while the supplier says it never arriv
 | `src/keyword-reader.ts` | Keyword placeholder that reads the emails when no key is set |
 | `src/server.ts` | Local web server and JSON API |
 | `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/reset.ts`, `src/index.ts` | The commands |
-| `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, balances and the simulation calls |
+| `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, balances, the webhook subscription and the simulation calls |
 | `web/` | The page: plain HTML, CSS and JavaScript with no build step |
 | `fixtures/emails/` | Sample supplier emails |
 
@@ -146,5 +164,5 @@ The code holds amounts in minor units and converts at the Airwallex boundary. Th
 - A model's explanation of each decision. The reasons on the timeline come from the policy.
 - Approving payment to new bank details. An approval covers a replacement to the account on file.
 - Closing an incident without a payment. A person can close one only when the bank reports the original as paid.
-- Payout webhooks. Airwallex needs a public URL to deliver them, so a local run polls for status.
+- A webhook delivered by the sandbox. The receiver, the tunnel and the subscription work, but no event from Airwallex has reached them yet.
 - Real bank outcomes. The run uses the sandbox simulator to send, fail and pay transfers.
