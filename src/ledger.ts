@@ -1441,16 +1441,31 @@ export class Ledger {
     return toApproval(row, this.signoffs(approvalId));
   }
 
-  // Spends an approval on one payment. False when it is no longer approved, for
-  // example because another process voided it in the meantime, or when it has
-  // expired since the look checked it.
-  useApproval(id: number): boolean {
-    const result: { changes: number | bigint } = this.db
-      .prepare(
-        "UPDATE approvals SET state = 'used' WHERE id = ? AND state = 'approved' AND expires_at > ?",
-      )
-      .run(id, new Date().toISOString());
-    return Number(result.changes) === 1;
+  // Spends an approval on one replacement and opens its attempt, in one
+  // transaction, so the money is counted as approved or as being sent at every
+  // moment and never as neither. Undefined, with nothing changed, when it is no
+  // longer approved, for example because another process voided it in the
+  // meantime, or when it has expired since the look checked it.
+  useApproval(invoiceId: string, approvalId: number): Attempt | undefined {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const result: { changes: number | bigint } = this.db
+        .prepare(
+          `UPDATE approvals SET state = 'used'
+            WHERE id = ? AND invoice_id = ? AND state = 'approved' AND expires_at > ?`,
+        )
+        .run(approvalId, invoiceId, new Date().toISOString());
+      if (Number(result.changes) !== 1) {
+        this.db.exec("ROLLBACK");
+        return undefined;
+      }
+      const attempt: Attempt = this.openAttempt(invoiceId, "replacement");
+      this.db.exec("COMMIT");
+      return attempt;
+    } catch (error: unknown) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   setApprovalState(

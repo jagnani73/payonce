@@ -419,9 +419,11 @@ async function assess(
   const feeMinor: number = toMinor(original.fee_amount);
   // Read fresh on every look. The cash panel's cached balance never feeds a decision.
   const wallet: string = debitCurrency(obligation);
+  // Counted before the balance is read, so a payment that gets its transfer in
+  // between is counted twice, as committed and as debited, and never not at all.
+  const committed: number = committedMinor(engine.ledger, wallet, obligation.invoiceId);
   const availableMinor: number = await getAvailableMinor(engine.client, wallet);
   const floorMinor: number | null = floorFor(engine.reserve, obligation);
-  const committed: number = committedMinor(engine.ledger, wallet, obligation.invoiceId);
   const originalState: OriginalTransferState = originalStateOf(original);
   const incident: Incident = {
     invoiceId: obligation.invoiceId,
@@ -996,9 +998,12 @@ async function continueEscalated(
   ) {
     return Date.now();
   }
-  // One approval covers one attempt, so it is spent before the payment is tried.
+  // Checked before the approval is spent, so a failed check leaves it unspent.
+  await requireAccount(engine, obligation, current.accountKey, "replacement was approved");
+  // One approval covers one attempt, so it is spent as the attempt is opened.
   // Another process may have voided it since it was read.
-  if (!engine.ledger.useApproval(approval.id)) {
+  const attempt: Attempt | undefined = engine.ledger.useApproval(obligation.invoiceId, approval.id);
+  if (attempt === undefined) {
     return Date.now();
   }
   note(
@@ -1007,7 +1012,8 @@ async function continueEscalated(
     "approval",
     `Approval by ${approval.approver} matches the current terms`,
   );
-  return replace(engine, obligation, current.accountKey);
+  const replacement: Transfer = await send(engine, obligation, attempt, current.accountKey);
+  return waitForBank(engine, obligation.invoiceId, "replacement", replacement);
 }
 
 // The invoices a held one looks like a second bill for, as they stand now, and
