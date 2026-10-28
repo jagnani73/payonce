@@ -162,7 +162,7 @@ export async function openScenario(
   const invoiceFloorMinor: number =
     def.tightReserveFeeMinor === null
       ? 0
-      : (await getAvailableMinor(engine.client, def.currency)) -
+      : (await getAvailableMinor(engine.client, def.sourceCurrency ?? def.currency)) -
         def.amountMinor -
         Math.round(def.tightReserveFeeMinor * 1.5);
   if (engine.ledger.obligation(invoiceId) !== undefined) {

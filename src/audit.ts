@@ -132,6 +132,11 @@ function auditRuns(snapshot: RunAuditSnapshot): boolean {
 
 // Checks one pay run's timeline, or prints its audit trail as JSON or CSV.
 function mainRun(ledger: Ledger, raw: string | undefined, format: string | undefined): void {
+  if (!ledger.hasRunTable()) {
+    console.log("This ledger has no pay runs");
+    process.exitCode = 1;
+    return;
+  }
   const run: Run | undefined =
     raw !== undefined && /^[1-9][0-9]{0,9}$/.test(raw) ? ledger.run(Number(raw)) : undefined;
   if (run === undefined) {

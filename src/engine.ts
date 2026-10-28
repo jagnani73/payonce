@@ -177,6 +177,9 @@ interface Assessment {
   decision: Decision;
   // The floor reason added to the decision's reason, or null when none was.
   floor: string | null;
+  // A paid invoice this one looks like a second bill for, once the original has
+  // failed. Null when there is none.
+  paidDuplicate: string | null;
 }
 
 // An approval request ends this long before its quote does, after the time an
@@ -191,7 +194,14 @@ function messageOf(error: unknown): string {
 // What a standing line is about. A standing line says how things are now and is
 // written again on every check. A line with no topic records something that
 // happened.
-export type Topic = "decision" | "waiting" | "approval" | "cost" | "bank-details" | "floor";
+export type Topic =
+  | "decision"
+  | "waiting"
+  | "approval"
+  | "cost"
+  | "bank-details"
+  | "floor"
+  | "second-bill";
 
 // True when the timeline's last word on a topic is this message and nothing has
 // happened since. A pay run's timeline uses it too.
@@ -690,19 +700,11 @@ async function assess(
     );
   }
 
-  const decided: Decision = decide(incident);
-  // A replacement for what looks like a second bill of a paid invoice goes to a
-  // person. Decided here so every look, and so every request, gives this reason.
-  const paid: Obligation | undefined =
-    decided.action === "replace"
-      ? likelyDuplicates(engine.ledger, obligation).find(
-          (other: Obligation): boolean => isPaid(engine.ledger, other.invoiceId),
-        )
-      : undefined;
-  const decision: Decision =
-    paid === undefined
-      ? decided
-      : { action: "escalate", reason: `it looks like a second bill for ${paid.invoiceId}, which is paid` };
+  // Looked for whenever a replacement could be asked for, so every look, and so
+  // every request, names it (namingPaidDuplicate).
+  const paid: string | null =
+    originalState === "failed" ? paidDuplicate(engine.ledger, obligation) : null;
+  const decision: Decision = secondBill(decide(incident), paid);
   // Once an invoice has gone to a person, the policy no longer acts for itself.
   const held: string =
     obligation.state !== "escalated"
@@ -728,6 +730,7 @@ async function assess(
     arrival,
     decision,
     floor: null,
+    paidDuplicate: paid,
   };
   // The arrival is advice for people. The policy decided without it.
   note(
@@ -738,6 +741,28 @@ async function assess(
     "decision",
   );
   return assessment;
+}
+
+// The first invoice this one looks like a second bill for that is paid, by
+// PayOnce or by a payout sent outside it. Null when there is none.
+function paidDuplicate(ledger: Ledger, obligation: Obligation): string | null {
+  return (
+    likelyDuplicates(ledger, obligation).find((other: Obligation): boolean =>
+      isPaid(ledger, other.invoiceId),
+    )?.invoiceId ?? null
+  );
+}
+
+function secondBillReason(invoiceId: string): string {
+  return `it looks like a second bill for ${invoiceId}, which is paid`;
+}
+
+// A replacement for what looks like a second bill of a paid invoice goes to a
+// person.
+function secondBill(decision: Decision, paid: string | null): Decision {
+  return paid !== null && decision.action === "replace"
+    ? { action: "escalate", reason: secondBillReason(paid) }
+    : decision;
 }
 
 // The beneficiary record no longer holds the account a payment was decided or
@@ -1282,6 +1307,7 @@ function escalate(
       "waiting",
     );
     noteFloor(engine, obligation, assessment, false);
+    noteSecondBill(engine, obligation, assessment, false);
     return null;
   }
 
@@ -1296,12 +1322,10 @@ function escalate(
   // No request is open when nobody on the approver list could approve it, or when
   // a request on an old quote was withdrawn so the next look takes a fresh one.
   const latest: Approval | undefined = engine.ledger.latestApproval(obligation.invoiceId);
-  noteFloor(
-    engine,
-    obligation,
-    assessment,
-    latest?.state === "requested" && latest.binding === bindingOf(terms) && !isExpired(latest),
-  );
+  const requested: boolean =
+    latest?.state === "requested" && latest.binding === bindingOf(terms) && !isExpired(latest);
+  noteFloor(engine, obligation, assessment, requested);
+  noteSecondBill(engine, obligation, assessment, requested);
   return next;
 }
 
@@ -1324,6 +1348,30 @@ function noteFloor(
       ? `Also, ${assessment.floor}. The approval request says this too, and only an approval of that request releases a replacement`
       : `Also, ${assessment.floor}`,
     "floor",
+  );
+}
+
+// Says that the invoice also looks like a second bill for a paid one when the
+// policy sent it to a person for another reason, so the decision line did not
+// say so.
+function noteSecondBill(
+  engine: Engine,
+  obligation: Obligation,
+  assessment: Assessment,
+  requested: boolean,
+): void {
+  const paid: string | null = assessment.paidDuplicate;
+  if (paid === null || decide(assessment.incident).action === "replace") {
+    return;
+  }
+  note(
+    engine.ledger,
+    obligation.invoiceId,
+    "warning",
+    requested
+      ? `Also, ${secondBillReason(paid)}. The approval request says this too`
+      : `Also, ${secondBillReason(paid)}`,
+    "second-bill",
   );
 }
 
@@ -1354,9 +1402,32 @@ function namingFloor(assessment: Assessment): Assessment {
   };
 }
 
-// namingFloor, and a line on the timeline once the floor stops applying after a
-// line said it applied. The line says an approval still counts only when an open
-// request or approval named the floor.
+// A replacement request names a paid invoice this one looks like a second bill
+// for, whatever else sent it to a person, so the binding carries it and an
+// approval given without it is void. It comes after the floor, so the policy's
+// reason and the floor read as they do without one.
+function namingPaidDuplicate(assessment: Assessment): Assessment {
+  const decision: Decision = assessment.decision;
+  const incident: Incident = assessment.incident;
+  const paid: string | null = assessment.paidDuplicate;
+  if (
+    paid === null ||
+    decision.action !== "escalate" ||
+    incident.originalState !== "failed" ||
+    incident.outsidePayoutLive ||
+    decision.reason === secondBillReason(paid)
+  ) {
+    return assessment;
+  }
+  return {
+    ...assessment,
+    decision: { action: "escalate", reason: `${decision.reason}, and ${secondBillReason(paid)}` },
+  };
+}
+
+// namingFloor and namingPaidDuplicate, and a line on the timeline once the floor
+// stops applying after a line said it applied. The line says an approval still
+// counts only when an open request or approval named the floor.
 function withFloorReason(
   engine: Engine,
   obligation: Obligation,
@@ -1379,7 +1450,7 @@ function withFloorReason(
       "floor",
     );
   }
-  return namingFloor(assessment);
+  return namingPaidDuplicate(namingFloor(assessment));
 }
 
 // The decision an open request or approval was made under, when the floor applied
@@ -1401,7 +1472,9 @@ function requestedDecision(
   }
   for (const floorMinor of [Number.MAX_SAFE_INTEGER, Number.NaN, null]) {
     const incident: Incident = { ...assessment.incident, reserveFloorMinor: floorMinor };
-    const requested: Assessment = namingFloor({ ...assessment, incident, decision: decide(incident) });
+    const requested: Assessment = namingPaidDuplicate(
+      namingFloor({ ...assessment, incident, decision: secondBill(decide(incident), assessment.paidDuplicate) }),
+    );
     if (bindingOf(termsOf(obligation, requested)) === approval.binding) {
       return requested.decision;
     }
@@ -1468,8 +1541,15 @@ async function continueEscalated(
     // Checked before the approval is spent, so a failed check leaves it unspent.
     await requireAccount(engine, obligation, current.accountKey, "replacement was approved");
     // One approval covers one attempt, so it is spent as the attempt is opened.
-    // Another process may have voided it since it was read.
-    const attempt: Attempt | undefined = engine.ledger.useApproval(obligation.invoiceId, approval.id, lease);
+    // Another process may have voided it since it was read, or recorded paid an
+    // invoice this one looks like a second bill for since assess looked. Then
+    // nothing is spent, and the next look names that invoice in a new request.
+    const attempt: Attempt | undefined = engine.ledger.useApproval(
+      obligation.invoiceId,
+      approval.id,
+      lease,
+      (): boolean => paidDuplicate(engine.ledger, obligation) === assessment.paidDuplicate,
+    );
     if (attempt === undefined) {
       return Date.now();
     }
@@ -1482,6 +1562,28 @@ async function continueEscalated(
     const replacement: Transfer = await send(engine, obligation, attempt, current.accountKey);
     return waitForBank(engine, obligation.invoiceId, "replacement", replacement);
   });
+}
+
+// What the ledger shows of the invoices a held one looks like a second bill for,
+// listed or found now: each one's state and the payments for it that reached the
+// bank. duplicateEvidence reads its terms from these, so a release compares this
+// under the lease with what it was when the terms were taken.
+function duplicatesOnFile(ledger: Ledger, held: Obligation): string {
+  const found: string[] = likelyDuplicates(ledger, held).map(
+    (other: Obligation): string => other.invoiceId,
+  );
+  return JSON.stringify(
+    [...new Set([...held.duplicateOf, ...found])].map((invoiceId: string): unknown[] => [
+      invoiceId,
+      ledger.obligation(invoiceId)?.state ?? null,
+      [...ledger.attempts(invoiceId), ...ledger.outsidePayouts(invoiceId)]
+        .filter((payment: { transferId: string | null }): boolean => payment.transferId !== null)
+        .map((payment: { transferId: string | null; state: string }): string[] => [
+          payment.transferId ?? "",
+          payment.state,
+        ]),
+    ]),
+  );
 }
 
 // The invoices a held one looks like a second bill for, as they stand now, and
@@ -1847,6 +1949,7 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
       "Waiting on a person. The bank details on file are not the ones the pay run approved, so PayOnce does not pay this invoice. Close it without paying, or restore the approved details in Airwallex and check again",
     );
   }
+  const onFile: string = duplicatesOnFile(engine.ledger, held);
   const duplicates: DuplicateEvidence[] = await duplicateEvidence(engine, held, accountKey);
   // Paid from another currency's wallet, it is approved at a quote. Nothing has
   // been sent, so no fee is known yet.
@@ -1896,8 +1999,20 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
     // with its approval unspent.
     await requireAccount(engine, obligation, terms.accountKey, "payment was approved");
     // Another process may have voided the approval, closed the invoice or tied a
-    // payout to it since it was read. The next look sees which.
-    const attempt: Attempt | undefined = engine.ledger.releaseFor(invoiceId, approval.id, lease);
+    // payout to it since it was read, or changed what the terms say of the
+    // invoices it looks like a second bill for. A match the terms do not list,
+    // even one found before onFile was taken, refuses it too. The next look sees
+    // which, and adds a new match to the terms.
+    const attempt: Attempt | undefined = engine.ledger.releaseFor(
+      invoiceId,
+      approval.id,
+      lease,
+      (): boolean =>
+        duplicatesOnFile(engine.ledger, held) === onFile &&
+        likelyDuplicates(engine.ledger, held).every((other: Obligation): boolean =>
+          held.duplicateOf.includes(other.invoiceId),
+        ),
+    );
     if (attempt === undefined) {
       return Date.now();
     }
@@ -1976,6 +2091,7 @@ async function replaceUnderLock(
   const availableMinor: number = await getAvailableMinor(engine.client, wallet);
 
   let incident: Incident = assessment.incident;
+  let paid: string | null = assessment.paidDuplicate;
   const next: Attempt | Decision = engine.ledger.transaction((): Attempt | Decision => {
     incident = {
       ...assessment.incident,
@@ -1986,13 +2102,8 @@ async function replaceUnderLock(
       ),
     };
     // assess makes this check too. Made again here for an invoice paid since.
-    const paid: Obligation | undefined = likelyDuplicates(engine.ledger, obligation).find(
-      (other: Obligation): boolean => isPaid(engine.ledger, other.invoiceId),
-    );
-    if (paid !== undefined) {
-      return { action: "escalate", reason: `it looks like a second bill for ${paid.invoiceId}, which is paid` };
-    }
-    const decision: Decision = decide(incident);
+    paid = paidDuplicate(engine.ledger, obligation);
+    const decision: Decision = secondBill(decide(incident), paid);
     // Opening the attempt takes the duplicate lock, so this throws if the invoice
     // already has a live payment.
     return decision.action === "replace"
@@ -2005,7 +2116,7 @@ async function replaceUnderLock(
     return escalate(
       engine,
       obligation,
-      withFloorReason(engine, obligation, { ...assessment, incident, decision: next }),
+      withFloorReason(engine, obligation, { ...assessment, incident, decision: next, paidDuplicate: paid }),
     );
   }
   const replacement: Transfer = await send(engine, obligation, next, accountKey);
