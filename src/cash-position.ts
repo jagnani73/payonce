@@ -165,18 +165,21 @@ export function cashLines(ledger: Ledger, now: number = Date.now()): CashLine[] 
       } else if (attempt.state === "pending" || attempt.state === "in_flight") {
         // A found invoice's original is a payout someone sent outside PayOnce. The
         // money is booked where the transfer took it, which for a payout paid from
-        // another currency is not the invoice's.
+        // another currency is not the invoice's. PayOnce pays the invoice's amount,
+        // so its own payment from the invoice's currency is exact even when it was
+        // sent before amounts were stored.
+        const found: boolean = obligation.origin === "outside" && attempt.kind === "original";
         lines.push(
           ...sentLines(
             {
-              kind: obligation.origin === "outside" && attempt.kind === "original" ? "outside" : "with-bank",
+              kind: found ? "outside" : "with-bank",
               invoiceId,
               currency: attempt.currency ?? wallet,
               amountMinor: attempt.amountMinor ?? obligation.amountMinor,
               feeMinor: 0,
               feeKnown: false,
               reference: attempt.reference,
-              estimated: attempt.amountMinor === null,
+              estimated: attempt.amountMinor === null && (found || wallet !== obligation.currency),
             },
             attempt.feeMinor,
             attempt.feeCurrency,
