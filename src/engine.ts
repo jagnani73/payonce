@@ -468,9 +468,12 @@ async function rateFor(
   return { fx, fresh: true, endsAt };
 }
 
-// The quote an attempt is sent with, from the terms it was approved on.
-function quoteOf(terms: ApprovalTerms): AttemptQuote | null {
-  return terms.fx === undefined ? null : { quoteId: terms.fx.quoteId, validTo: terms.fx.validTo };
+// The quote an attempt is sent with, from the terms the approval approvalId
+// approved.
+function quoteOf(terms: ApprovalTerms, approvalId: number): AttemptQuote | null {
+  return terms.fx === undefined
+    ? null
+    : { quoteId: terms.fx.quoteId, validTo: terms.fx.validTo, approvalId };
 }
 
 // The email evidence a person sees and approves against.
@@ -671,9 +674,14 @@ function checkRate(
   if (attempt.quoteId === null) {
     return;
   }
-  const latest: Approval | undefined = engine.ledger.latestApproval(obligation.invoiceId);
+  // The approval the attempt was opened on, so a request another process opened
+  // since does not count. An attempt from before that was kept has the latest.
+  const approval: Approval | undefined =
+    attempt.approvalId === null
+      ? engine.ledger.latestApproval(obligation.invoiceId)
+      : engine.ledger.approval(attempt.approvalId);
   const approved: FxTerms | undefined =
-    latest?.state === "used" ? (JSON.parse(latest.terms) as ApprovalTerms).fx : undefined;
+    approval?.state === "used" ? (JSON.parse(approval.terms) as ApprovalTerms).fx : undefined;
   const problem: string | null = rateMismatch(
     approved?.quoteId === attempt.quoteId ? approved : undefined,
     transfer,
@@ -1210,7 +1218,7 @@ async function continueEscalated(
     "approval",
     `Approval by ${approval.approver} matches the current terms`,
   );
-  return replace(engine, obligation, current.accountKey, quoteOf(current));
+  return replace(engine, obligation, current.accountKey, quoteOf(current, approval.id));
 }
 
 // The invoices a held one looks like a second bill for, as they stand now, and
@@ -1422,7 +1430,11 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
   await requireAccount(engine, obligation, terms.accountKey, "payment was approved");
   // Another process may have voided the approval, closed the invoice or tied a
   // payout to it since it was read. The next look sees which.
-  const attempt: Attempt | undefined = engine.ledger.releaseFor(invoiceId, approval.id, quoteOf(terms));
+  const attempt: Attempt | undefined = engine.ledger.releaseFor(
+    invoiceId,
+    approval.id,
+    quoteOf(terms, approval.id),
+  );
   if (attempt === undefined) {
     return Date.now();
   }

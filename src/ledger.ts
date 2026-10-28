@@ -206,13 +206,17 @@ export interface Attempt {
   // What the transfer took from the wallet it is paid from, before the fee, as
   // last read from it. Null until a transfer has been read.
   sourceAmountMinor: number | null;
+  // The approval the quote was approved on. Null on any other payment.
+  approvalId: number | null;
 }
 
-// The quote an attempt is sent with. Written with the attempt, before Airwallex
-// is called, so a retry sends the same one.
+// The quote an attempt is sent with, and the approval it was approved on.
+// Written with the attempt, before Airwallex is called, so a retry sends the
+// same one.
 export interface AttemptQuote {
   quoteId: string;
   validTo: string;
+  approvalId: number;
 }
 
 // What the bank last did with a payout sent outside PayOnce. unknown is a status
@@ -490,6 +494,7 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     quote_id: "TEXT",
     quote_valid_to: "TEXT",
     source_amount_minor: "INTEGER",
+    approval_id: "INTEGER",
   },
   events: {
     topic: "TEXT",
@@ -520,6 +525,7 @@ interface AttemptRow {
   quote_id: string | null;
   quote_valid_to: string | null;
   source_amount_minor: number | null;
+  approval_id: number | null;
 }
 
 export class DuplicatePaymentError extends Error {
@@ -590,6 +596,7 @@ function toAttempt(row: AttemptRow): Attempt {
     quoteId: row.quote_id,
     quoteValidTo: row.quote_valid_to,
     sourceAmountMinor: row.source_amount_minor,
+    approvalId: row.approval_id,
   };
 }
 
@@ -897,10 +904,18 @@ export class Ledger {
     try {
       this.db
         .prepare(
-          `INSERT INTO attempts (request_id, invoice_id, kind, state, quote_id, quote_valid_to)
-           VALUES (?, ?, ?, 'pending', ?, ?)`,
+          `INSERT INTO attempts
+             (request_id, invoice_id, kind, state, quote_id, quote_valid_to, approval_id)
+           VALUES (?, ?, ?, 'pending', ?, ?, ?)`,
         )
-        .run(requestId, invoiceId, kind, quote?.quoteId ?? null, quote?.validTo ?? null);
+        .run(
+          requestId,
+          invoiceId,
+          kind,
+          quote?.quoteId ?? null,
+          quote?.validTo ?? null,
+          quote?.approvalId ?? null,
+        );
     } catch (error: unknown) {
       if (isUniqueViolation(error)) {
         throw new DuplicatePaymentError(invoiceId);
@@ -927,6 +942,7 @@ export class Ledger {
       quoteId: quote?.quoteId ?? null,
       quoteValidTo: quote?.validTo ?? null,
       sourceAmountMinor: null,
+      approvalId: quote?.approvalId ?? null,
     };
   }
 
@@ -1431,6 +1447,13 @@ export class Ledger {
         "SELECT * FROM approvals WHERE invoice_id = ? ORDER BY id DESC LIMIT 1",
       )
       .get(invoiceId) as unknown as ApprovalRow | undefined;
+    return row === undefined ? undefined : toApproval(row, this.signoffs(row.id));
+  }
+
+  approval(id: number): Approval | undefined {
+    const row: ApprovalRow | undefined = this.db
+      .prepare("SELECT * FROM approvals WHERE id = ?")
+      .get(id) as unknown as ApprovalRow | undefined;
     return row === undefined ? undefined : toApproval(row, this.signoffs(row.id));
   }
 
