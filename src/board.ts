@@ -21,6 +21,11 @@ import { formatMoney } from "./money.js";
 const USAGE: string = `Usage: pnpm board [FILTER...]
 Filters, in any order: a group (${BOARD_GROUPS.join(", ")}), a currency such as USD, and an origin (${BOARD_ORIGINS.join(", ")})`;
 
+// A three-letter word is a currency only if it is a code Node knows, or a wallet
+// already on the board, such as CNH, which Node does not list. Any other word,
+// such as "pay", prints the usage.
+const KNOWN_CURRENCIES: ReadonlySet<string> = new Set<string>(Intl.supportedValuesOf("currency"));
+
 const ID_WIDTH: number = 16;
 const SUPPLIER_WIDTH: number = 28;
 const AMOUNT_WIDTH: number = 24;
@@ -199,7 +204,13 @@ function main(): void {
     return;
   }
   loadEnv();
-  print(boardReport(new Ledger(LEDGER_PATH), filters));
+  const report: BoardReport = boardReport(new Ledger(LEDGER_PATH), filters);
+  const currency: string | null = filters.currency;
+  if (currency !== null && !KNOWN_CURRENCIES.has(currency) && !report.currencies.includes(currency)) {
+    fail(USAGE);
+    return;
+  }
+  print(report);
 }
 
 main();
