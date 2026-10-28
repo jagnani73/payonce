@@ -541,9 +541,19 @@ function viewOf(context: Context, draft: Draft): DraftView {
   };
 }
 
+// True when the last draft of this template marked sent was made from these very
+// facts, so offering it again would only repeat it.
+function sentAlready(drafts: Draft[], name: DraftTemplate, facts: Facts): boolean {
+  const sent: Draft | undefined = [...drafts]
+    .reverse()
+    .find((draft: Draft): boolean => draft.template === name && draft.state === "sent");
+  return sent !== undefined && sent.facts === JSON.stringify(facts);
+}
+
 // The drafts on file and the templates that fit the invoice now, suggested ones
-// first. A pure read: nothing is drafted until a person asks. While the
-// supplier's ask to hold, cancel or not pay is on file, no message to the
+// first. A pure read: nothing is drafted until a person asks. A template with an
+// open draft, or whose last sent draft had the same facts, is not offered. While
+// the supplier's ask to hold, cancel or not pay is on file, no message to the
 // supplier is offered: each one that fits is withheld, and the trace request to
 // the bank is still offered.
 export function outboxOf(ledger: Ledger, obligation: Obligation, now: number = Date.now()): Outbox {
@@ -558,7 +568,7 @@ export function outboxOf(ledger: Ledger, obligation: Obligation, now: number = D
   for (const name of DRAFT_TEMPLATES) {
     const template: Template = TEMPLATES[name];
     const facts: Facts | string = template.facts(context);
-    if (typeof facts === "string" || open.has(name)) {
+    if (typeof facts === "string" || open.has(name) || sentAlready(drafts, name, facts)) {
       continue;
     }
     const why: string | null = template.suggest(context, facts);
