@@ -3204,6 +3204,15 @@ export class Ledger {
     clearAfterMs: number,
     unknownPrefixes: string[],
   ): RecordedConditions {
+    // The first condition found for each key, so a key found twice cannot fail
+    // the insert and roll the whole check back.
+    const byKey: Map<string, FoundCondition> = new Map();
+    for (const condition of found) {
+      if (!byKey.has(condition.key)) {
+        byKey.set(condition.key, condition);
+      }
+    }
+    const conditions: FoundCondition[] = [...byKey.values()];
     return this.transaction((): RecordedConditions => {
       const at: string = new Date(now).toISOString();
       const due: string = new Date(now + settleMs).toISOString();
@@ -3246,11 +3255,11 @@ export class Ledger {
         this.db.prepare("SELECT 1 FROM alert_conditions LIMIT 1").get() === undefined &&
         this.db.prepare("SELECT 1 FROM alerts LIMIT 1").get() === undefined;
       if (empty) {
-        found.forEach(insert);
+        conditions.forEach(insert);
         this.db
           .prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('alerts_started_at', ?)")
           .run(at);
-        return { first: true, queued: queue(summary, 1), standing: found.length };
+        return { first: true, queued: queue(summary, 1), standing: conditions.length };
       }
       const stored: Map<string, ConditionRow> = new Map(
         (this.db.prepare("SELECT * FROM alert_conditions").all() as unknown as ConditionRow[]).map(
@@ -3258,7 +3267,7 @@ export class Ledger {
         ),
       );
       let queued: number = 0;
-      for (const condition of found) {
+      for (const condition of conditions) {
         const row: ConditionRow | undefined = stored.get(condition.key);
         stored.delete(condition.key);
         if (row === undefined) {
@@ -3294,7 +3303,7 @@ export class Ledger {
             .run(at, row.alert_key);
         }
       }
-      return { first: false, queued, standing: found.length };
+      return { first: false, queued, standing: conditions.length };
     });
   }
 
