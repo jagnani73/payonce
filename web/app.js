@@ -1378,6 +1378,11 @@ function buildEmail(email, unverified) {
             h("span", { class: "flag" }, icon("warning"), "Does not match the supplier on file"),
           ),
       ),
+      typeof email.fromName === "string" &&
+        email.fromName !== "" && [
+          h("dt", null, "Name in the email"),
+          h("dd", { class: "email__muted" }, `${email.fromName} (not checked)`),
+        ],
       h("dt", null, "Subject"),
       h("dd", { class: "email__subject" }, email.subject),
       Number.isInteger(email.uploadId) && [

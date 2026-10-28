@@ -75,6 +75,7 @@ export function asEmail(upload: Upload): SupplierEmail {
     subject: upload.subject,
     body: upload.body,
     uploadId: upload.id,
+    fromName: upload.senderName,
     replyTo: upload.replyTo,
     styleText: upload.styleText,
     attachments: upload.attachments,

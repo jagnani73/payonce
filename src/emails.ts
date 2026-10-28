@@ -14,6 +14,9 @@ export interface SupplierEmail {
   body: string;
   // Set on an email a person uploaded, never on a fixture thread's.
   uploadId?: number;
+  // The display name in From. Never compared, but a mail client shows it, so the
+  // reader reads it.
+  fromName?: string;
   replyTo?: string[];
   // Text found inside the email's styles and scripts, which a mail client could
   // draw. Read and shown apart from the body.

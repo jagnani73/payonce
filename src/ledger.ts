@@ -437,6 +437,8 @@ interface EmailRow {
   subject: string;
   body: string;
   inbox_id: number | null;
+  // From the upload, null for a fixture thread's email.
+  sender_name: string | null;
   style_text: string;
   reply_to: string;
   attachments: string;
@@ -2191,12 +2193,15 @@ export class Ledger {
   }
 
   // A fixture thread's emails have the three fields they were written with. An
-  // uploaded one has the rest of what PayOnce read from it.
+  // uploaded one has the rest of what PayOnce read from it, and the display name
+  // its upload keeps.
   emails(invoiceId: string): SupplierEmail[] {
     const rows: EmailRow[] = this.db
       .prepare(
-        `SELECT sender, subject, body, inbox_id, reply_to, style_text, attachments, notes, partial
-           FROM emails WHERE invoice_id = ? ORDER BY id`,
+        `SELECT e.sender, e.subject, e.body, e.inbox_id, i.sender_name, e.reply_to, e.style_text,
+                e.attachments, e.notes, e.partial
+           FROM emails e LEFT JOIN inbox i ON i.id = e.inbox_id
+          WHERE e.invoice_id = ? ORDER BY e.id`,
       )
       .all(invoiceId) as unknown as EmailRow[];
     return rows.map(
@@ -2208,6 +2213,7 @@ export class Ledger {
               subject: row.subject,
               body: row.body,
               uploadId: row.inbox_id,
+              fromName: row.sender_name ?? "",
               replyTo: JSON.parse(row.reply_to) as string[],
               styleText: row.style_text,
               attachments: JSON.parse(row.attachments) as EmailAttachment[],

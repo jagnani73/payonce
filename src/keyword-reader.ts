@@ -61,11 +61,12 @@ function matchesAny(text: string, patterns: RegExp[]): boolean {
   return patterns.some((pattern: RegExp): boolean => pattern.test(text));
 }
 
-// The subject, the text, the text found inside its styles and the names of the
-// attachments, which a person sees too, so a file named "new bank details.pdf"
-// counts.
+// The sender's display name, the subject, the text, the text found inside its
+// styles and the names of the attachments, which a person sees too, so a file
+// named "new bank details.pdf" counts.
 function readable(email: SupplierEmail): string {
   return [
+    email.fromName ?? "",
     email.subject,
     email.body,
     email.styleText ?? "",
