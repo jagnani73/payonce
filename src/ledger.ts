@@ -2400,6 +2400,19 @@ export class Ledger {
     return rows.map(toUpload);
   }
 
+  // How many uploads wait for a person, and the newest upload's id in any state,
+  // which changes only when an email is uploaded. Counts only: no sender, name,
+  // subject or text, so alerts can read it.
+  inboxWaiting(): InboxWaiting {
+    const row: { waiting: number; newest: number | null } = this.db
+      .prepare(
+        `SELECT (SELECT COUNT(*) FROM inbox WHERE state = 'waiting') AS waiting,
+                (SELECT MAX(id) FROM inbox) AS newest`,
+      )
+      .get() as unknown as { waiting: number; newest: number | null };
+    return { waiting: Number(row.waiting), newest: row.newest === null ? null : Number(row.newest) };
+  }
+
   // Other uploads with the same Message-ID, which say something different, since
   // the same email twice is refused.
   sameMessageId(upload: Upload): number[] {
@@ -3950,6 +3963,12 @@ export interface RecordedConditions {
   first: boolean;
   queued: number;
   standing: number;
+}
+
+// The inbox as alerts see it. newest is null while nothing was ever uploaded.
+export interface InboxWaiting {
+  waiting: number;
+  newest: number | null;
 }
 
 export type AlertState = "queued" | "sending" | "sent" | "failed" | "skipped";

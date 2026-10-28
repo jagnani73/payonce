@@ -1,7 +1,8 @@
 // What an alert says, and how it is posted to a Slack or Discord incoming webhook.
 // Every message is built from an alert's stored facts: invoice numbers, supplier
 // names, formatted amounts, dates, counts and reasons PayOnce wrote. They never
-// hold email text, model output, account details or anything secret.
+// hold email text, model output, account details or anything secret. The inbox
+// alert is a count: no sender, name, subject or text of an uploaded email.
 
 export type AlertFormat = "slack" | "discord";
 
@@ -73,12 +74,20 @@ export interface CashAlertFacts {
   readAt: string | null;
 }
 
+// Supplier emails uploaded and waiting for a person to pick their invoice.
+export interface InboxAlertFacts {
+  kind: "inbox";
+  waiting: number;
+}
+
 export interface SummaryAlertFacts {
   kind: "summary";
   invoices: number;
   runs: number;
   audit: number;
   cash: number;
+  // Emails waiting in the inbox. Absent in a summary queued before inbox alerts.
+  inbox?: number;
 }
 
 export type AlertFacts =
@@ -87,6 +96,7 @@ export type AlertFacts =
   | RunAlertFacts
   | AuditAlertFacts
   | CashAlertFacts
+  | InboxAlertFacts
   | SummaryAlertFacts;
 
 // Text in a message. outside is text PayOnce did not write itself, such as a
@@ -370,10 +380,23 @@ function cashMessage(facts: CashAlertFacts, base: string): AlertMessage {
   };
 }
 
+function inboxMessage(facts: InboxAlertFacts, base: string): AlertMessage {
+  return {
+    title: `${plural(facts.waiting, "supplier email waits", "supplier emails wait")} in the inbox`,
+    line: [ours("A person picks the invoice each one is for, or dismisses it. PayOnce delivers none by itself")],
+    fields: [field("Waiting", ours(String(facts.waiting)))],
+    link: `${base}/`,
+    linkText: "Open the inbox in PayOnce",
+    urgent: false,
+  };
+}
+
 function summaryMessage(facts: SummaryAlertFacts, base: string): AlertMessage {
+  const inbox: number = facts.inbox ?? 0;
   const parts: string[] = [
     `${plural(facts.invoices, "invoice is", "invoices are")} waiting on a person`,
     `${plural(facts.runs, "pay run waits", "pay runs wait")} for approval`,
+    ...(inbox === 0 ? [] : [`${plural(inbox, "supplier email waits", "supplier emails wait")} in the inbox`]),
     ...(facts.audit === 0 ? [] : [`${plural(facts.audit, "audit trail does", "audit trails do")} not verify`]),
     ...(facts.cash === 0 ? [] : [`${plural(facts.cash, "currency is", "currencies are")} below 0 headroom`]),
   ];
@@ -383,6 +406,7 @@ function summaryMessage(facts: SummaryAlertFacts, base: string): AlertMessage {
     fields: [
       field("Invoices waiting on a person", ours(String(facts.invoices))),
       field("Pay runs waiting for approval", ours(String(facts.runs))),
+      ...(inbox === 0 ? [] : [field("Emails waiting in the inbox", ours(String(inbox)))]),
     ],
     link: `${base}/`,
     linkText: "Open PayOnce",
@@ -403,6 +427,8 @@ export function alertMessage(facts: AlertFacts, base: string): AlertMessage {
       return auditMessage(facts, base);
     case "cash":
       return cashMessage(facts, base);
+    case "inbox":
+      return inboxMessage(facts, base);
     case "summary":
       return summaryMessage(facts, base);
   }

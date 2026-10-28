@@ -6,6 +6,7 @@ import {
   type AlertFormat,
   type AuditAlertFacts,
   type CashAlertFacts,
+  type InboxAlertFacts,
   type InvoiceAlertFacts,
   type InvoiceNeed,
   type PayoutAlertFacts,
@@ -50,6 +51,7 @@ import {
   type Approval,
   type Attempt,
   type FoundCondition,
+  type InboxWaiting,
   type Ledger,
   type Obligation,
   type OutsidePayout,
@@ -78,6 +80,7 @@ const POSTS_PER_FLUSH: number = 4;
 const POST_GAP_MS: number = 1_100;
 
 const SUMMARY_KEY: string = "summary";
+const INBOX_KEY: string = "inbox";
 const SLACK_HOSTS: readonly string[] = ["hooks.slack.com"];
 const DISCORD_HOSTS: readonly string[] = ["discord.com", "discordapp.com"];
 const LOOPBACK_HOSTS: readonly string[] = ["127.0.0.1", "localhost", "[::1]"];
@@ -405,7 +408,18 @@ function cashConditions(report: CashReport): FoundCondition[] {
     });
 }
 
-function summaryOf(found: FoundCondition[]): FoundCondition {
+// Emails waiting in the inbox, by count only. The fingerprint is the newest
+// upload in any state, so a new upload alerts again and a delivery or a dismissal
+// does not.
+function inboxCondition(inbox: InboxWaiting): FoundCondition | null {
+  if (inbox.waiting === 0) {
+    return null;
+  }
+  const facts: InboxAlertFacts = { kind: "inbox", waiting: inbox.waiting };
+  return condition(INBOX_KEY, { newest: inbox.newest }, facts);
+}
+
+function summaryOf(found: FoundCondition[], inbox: InboxWaiting): FoundCondition {
   const count = (kind: string): number => found.filter((item: FoundCondition): boolean => item.kind === kind).length;
   const facts: SummaryAlertFacts = {
     kind: "summary",
@@ -413,6 +427,7 @@ function summaryOf(found: FoundCondition[]): FoundCondition {
     runs: count("run"),
     audit: count("audit"),
     cash: count("cash"),
+    inbox: inbox.waiting,
   };
   return condition(SUMMARY_KEY, "first", facts);
 }
@@ -598,6 +613,11 @@ export class Alerts {
         found.push(waiting);
       }
     }
+    const inbox: InboxWaiting = this.ledger.inboxWaiting();
+    const emails: FoundCondition | null = inboxCondition(inbox);
+    if (emails !== null) {
+      found.push(emails);
+    }
     found.push(...this.audit);
     // Before the first balance read the cash is not known, so a standing cash
     // condition is neither found nor cleared.
@@ -609,7 +629,7 @@ export class Alerts {
     }
     const recorded: RecordedConditions = this.ledger.recordConditions(
       found,
-      summaryOf(found),
+      summaryOf(found, inbox),
       now,
       SETTLE_MS,
       CLEAR_AFTER_MS,
