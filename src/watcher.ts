@@ -26,9 +26,10 @@ export class Watcher {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private lastSweep: number = 0;
   private sweepRequested: boolean = false;
-  // When a check last went through the payments with the bank. A state the ledger
-  // still shows then is at most one interval old, because a change wakes the
-  // invoice. Null before the first check.
+  // When the last check that read every payment with the bank without an error
+  // started. A state the ledger still shows is then at most that old, because a
+  // change wakes the invoice. A check where any read failed leaves it as it was,
+  // so it stays old while Airwallex cannot be reached. Null until such a check.
   lastCheckedAt: number | null = null;
 
   constructor(
@@ -82,6 +83,7 @@ export class Watcher {
 
   async check(): Promise<void> {
     const now: number = Date.now();
+    let readFailed: boolean = false;
     const due: ReadonlySet<string> = new Set<string>(this.engine.ledger.dueLooks(now));
     for (const obligation of this.engine.ledger.obligations()) {
       const invoiceId: string = obligation.invoiceId;
@@ -125,13 +127,16 @@ export class Watcher {
             break;
           }
         } catch (error: unknown) {
+          readFailed = true;
           console.warn(
             `  watcher  ${transferId}: ${error instanceof Error ? error.message : String(error)}`,
           );
         }
       }
     }
-    this.lastCheckedAt = Date.now();
+    if (!readFailed) {
+      this.lastCheckedAt = now;
+    }
     if (
       this.sweepEveryMs !== null &&
       (this.sweepRequested || Date.now() - this.lastSweep >= this.sweepEveryMs)
