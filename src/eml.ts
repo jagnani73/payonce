@@ -36,6 +36,8 @@ const SIGNATURE_TYPES: ReadonlySet<string> = new Set<string>([
   "application/pkcs7-signature",
   "application/x-pkcs7-signature",
 ]);
+// Outlook's TNEF part (winmail.dat), which can carry the text Outlook shows.
+const TNEF_TYPES: ReadonlySet<string> = new Set<string>(["application/ms-tnef", "application/vnd.ms-tnef"]);
 
 // PayOnce's notes about an email. They are codes, shown in PayOnce's words and
 // kept apart from the text a sender wrote, so an email cannot forge one.
@@ -1069,9 +1071,10 @@ function walkPart(
   }
   const readable: boolean = type.type === "text/plain" || type.type === "text/html";
   if (!readable || attached) {
-    // Text a client may show inline, such as a .txt attachment or a calendar
-    // invite, is text PayOnce did not read.
-    if (type.type.startsWith("text/")) {
+    // Text a client may show inline, such as a .txt attachment, a calendar
+    // invite, a delivery report or another message/* part, or Outlook's TNEF,
+    // is text PayOnce did not read.
+    if (type.type.startsWith("text/") || type.type.startsWith("message/") || TNEF_TYPES.has(type.type)) {
       walk.notes.add("text-attachment");
     }
     listPart(raw, headers, start, end, type, encoding, walk);

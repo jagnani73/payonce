@@ -12,9 +12,11 @@ import { scanCss, type CssScan } from "./css-text.js";
 // instead. A comment ends where a browser ends it, at --> or --!>, or at the end
 // of the input. Nothing inside it opens or closes an element, and its text is
 // kept with any markup taken out. Text a client hides with CSS, a title and a
-// template are kept too. The reader and the page then see the same text, and
-// reading more only adds caution. Every loop moves forward, so the work is
-// linear in the input.
+// template are kept too, as are a form field's value and placeholder, an
+// image's alt text and CDATA inside <svg> or <math>. The reader and the page
+// then see the same text, and reading more only adds caution. Every loop moves
+// forward, and a nested style is not read again, so the work is linear in the
+// input.
 
 const DROPPED: ReadonlySet<string> = new Set<string>(["script", "style"]);
 const BREAKS: ReadonlySet<string> = new Set<string>([
@@ -336,9 +338,17 @@ export function htmlToText(html: string): HtmlText {
       index = comment.end;
       continue;
     }
+    // Inside <svg> or <math>, CDATA is text a client draws, up to its ]]> or
+    // the end of the input.
+    if (foreign > 0 && html.startsWith("<![CDATA[", index)) {
+      const close: number = html.indexOf("]]>", index + 9);
+      text(html.slice(index + 9, close < 0 ? html.length : close));
+      index = close < 0 ? html.length : close + 3;
+      continue;
+    }
     const next: number = html.charCodeAt(index + 1);
-    // <!DOCTYPE>, <![CDATA[, <!x> and <?x> are bogus comments, which end at the
-    // first >, quotes or not.
+    // Elsewhere <![CDATA[ is a bogus comment, as are <!DOCTYPE>, <!x> and <?x>.
+    // Each ends at the first >, quotes or not.
     const bogus: boolean = next === 33 || next === 63;
     const end: number = tagEnd(html, index + 1, !bogus);
     if (end < 0) {
@@ -433,6 +443,14 @@ export function htmlToText(html: string): HtmlText {
       const alt: string = (attributeOf(tag, "alt") ?? "").trim();
       if (alt !== "") {
         out.push(` [image: ${alt}] `);
+      }
+    } else if (name === "input" || name === "textarea") {
+      // A form field shows its value, and its placeholder while it is empty.
+      const shown: string[] = [name === "input" ? attributeOf(tag, "value") : null, attributeOf(tag, "placeholder")]
+        .map((value: string | null): string => (value ?? "").replace(/\s+/g, " ").trim())
+        .filter((value: string): boolean => value !== "");
+      for (const value of shown) {
+        out.push(` [form field: ${value}] `);
       }
     }
   }
