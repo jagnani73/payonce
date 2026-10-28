@@ -11,6 +11,18 @@ import { subscribe } from "./airwallex/webhooks.js";
 import type { ApprovalTerms } from "./approval.js";
 import { describePolicy, policyFromEnv, type Approver, type Barred } from "./approvers.js";
 import {
+  auditCsv,
+  auditExport,
+  chainReport,
+  describeBreaks,
+  describeLedger,
+  ledgerReport,
+  type AuditExport,
+  type AuditSnapshot,
+  type ChainReport,
+  type LedgerReport,
+} from "./audit-trail.js";
+import {
   bankChangeForm,
   recordBankChange,
   type BankChangeForm,
@@ -363,6 +375,48 @@ function listIncidents(): unknown {
   };
 }
 
+// Whether the invoice's timeline still chains together, for the line under it on
+// the page. problem is the first break, or a running hash that is missing or does
+// not match.
+interface AuditSummary {
+  lines: number;
+  problem: string | null;
+}
+
+function auditSummary(invoiceId: string): AuditSummary {
+  const snapshot: AuditSnapshot = engine.ledger.auditSnapshot(invoiceId);
+  const report: ChainReport = chainReport(invoiceId, snapshot.events);
+  const ledger: LedgerReport = ledgerReport(snapshot);
+  const problem: string | null =
+    describeBreaks(report.breaks) ?? (ledger.intact ? null : describeLedger(ledger));
+  return {
+    lines: report.lines,
+    problem: problem === null ? null : problem.charAt(0).toUpperCase() + problem.slice(1),
+  };
+}
+
+// The invoice's timeline with every line's hashes and the result of checking
+// them. CSV gives the lines alone, as a file for a spreadsheet, with the result
+// in a header.
+function sendAudit(response: ServerResponse, invoiceId: string, format: string): void {
+  const obligation: Obligation = requireObligation(invoiceId);
+  if (format !== "json" && format !== "csv") {
+    throw new HttpError(400, "The format is json or csv");
+  }
+  const audit: AuditExport = auditExport(obligation, engine.ledger.auditSnapshot(invoiceId));
+  if (format === "json") {
+    sendJson(response, 200, audit);
+    return;
+  }
+  // The invoice number is letters, digits and dashes, so it is safe in a header.
+  response.writeHead(200, {
+    "Content-Type": "text/csv; charset=utf-8",
+    "Content-Disposition": `attachment; filename="${invoiceId}-audit.csv"`,
+    "X-Audit-Chain": audit.intact ? "intact" : "broken",
+  });
+  response.end(auditCsv(audit));
+}
+
 function incidentDetail(invoiceId: string): unknown {
   const obligation: Obligation = requireObligation(invoiceId);
   const findings: string | undefined = engine.ledger.findings(invoiceId);
@@ -394,6 +448,7 @@ function incidentDetail(invoiceId: string): unknown {
           },
     review: pendingClose(engine.ledger, invoiceId) ?? null,
     events: engine.ledger.events(invoiceId),
+    audit: auditSummary(invoiceId),
     busy: isBusy(invoiceId),
     watching: isWatching(invoiceId),
   };
@@ -578,7 +633,8 @@ async function route(
   response: ServerResponse,
 ): Promise<void> {
   const method: string = request.method ?? "GET";
-  const pathname: string = new URL(request.url ?? "/", `http://${HOST}`).pathname;
+  const url: URL = new URL(request.url ?? "/", `http://${HOST}`);
+  const pathname: string = url.pathname;
   const parts: string[] = pathname.split("/").filter(Boolean);
   guard(request, method);
 
@@ -620,6 +676,14 @@ async function route(
     parts.length === 3
   ) {
     sendJson(response, 200, incidentDetail(invoiceId));
+  } else if (
+    method === "GET" &&
+    parts[1] === "incidents" &&
+    invoiceId !== undefined &&
+    parts[3] === "audit" &&
+    parts.length === 4
+  ) {
+    sendAudit(response, invoiceId, url.searchParams.get("format") ?? "json");
   } else if (
     method === "POST" &&
     parts[1] === "incidents" &&

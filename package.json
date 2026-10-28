@@ -8,6 +8,7 @@
     "recover": "tsx --env-file=.env src/recover.ts",
     "approve": "tsx --env-file=.env src/approve.ts",
     "close": "tsx src/close.ts",
+    "audit": "tsx src/audit.ts",
     "reset": "tsx src/reset.ts",
     "ui": "tsx --env-file=.env src/server.ts",
     "typecheck": "tsc --noEmit"

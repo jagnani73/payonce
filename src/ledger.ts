@@ -1,5 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
+import {
+  eventHash,
+  GENESIS,
+  nextLedgerHead,
+  storable,
+  type AuditSnapshot,
+  type ChainedEvent,
+  type EventFields,
+} from "./audit-trail.js";
 import type { SupplierEmail } from "./emails.js";
 
 export const LEDGER_PATH: string = "payonce.db";
@@ -67,6 +76,7 @@ const SCHEMA: string = `
     kind TEXT NOT NULL,
     message TEXT NOT NULL
   );
+  CREATE INDEX IF NOT EXISTS events_by_invoice ON events(invoice_id, id);
   CREATE TABLE IF NOT EXISTS webhook_events (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -351,6 +361,44 @@ interface MetaRow {
   value: string;
 }
 
+interface HashRow {
+  hash: string | null;
+}
+
+interface LedgerRow extends HashRow {
+  invoice_id: string;
+}
+
+interface EventRow {
+  id: number;
+  invoice_id: string;
+  at: string;
+  kind: string;
+  message: string;
+  topic: string | null;
+  prev_hash: string | null;
+  hash: string | null;
+}
+
+function toChainedEvent(row: EventRow): ChainedEvent {
+  return {
+    id: row.id,
+    invoiceId: row.invoice_id,
+    at: row.at,
+    kind: row.kind,
+    message: row.message,
+    topic: row.topic,
+    prevHash: row.prev_hash,
+    hash: row.hash,
+  };
+}
+
+// The running hash of every line's hash, so lines removed from the end of a
+// timeline, or a whole invoice's lines, are caught.
+const LEDGER_HEAD_KEY: string = "events_head";
+const CHAIN_STARTED_KEY: string = "chain_started_at";
+const BACKFILLED_THROUGH_KEY: string = "chain_backfilled_through";
+
 interface OutsideRow {
   transfer_id: string;
   reference: string;
@@ -387,6 +435,9 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
   },
   events: {
     topic: "TEXT",
+    // The hash of the invoice's line before this one, and this line's own.
+    prev_hash: "TEXT",
+    hash: "TEXT",
   },
   outside_payouts: {
     reference: "TEXT NOT NULL DEFAULT ''",
@@ -483,24 +534,105 @@ export function signersOf(signoffs: Signoff[]): string {
 export class Ledger {
   private readonly db: DatabaseSync;
 
-  constructor(path: string) {
+  // readOnly opens an existing file as it is, without creating or upgrading it,
+  // so a check cannot change what it checks.
+  constructor(path: string, readOnly: boolean = false) {
     // The CLI and the web server can have the file open at once, so a write
     // waits for the other instead of failing on the first lock.
-    this.db = new DatabaseSync(path, { timeout: BUSY_TIMEOUT_MS });
-    this.db.exec(SCHEMA);
-    for (const [table, columns] of Object.entries(ADDED_COLUMNS)) {
-      const existing: string[] = (
-        this.db.prepare(`PRAGMA table_info(${table})`).all() as unknown as ColumnRow[]
-      ).map((column: ColumnRow): string => column.name);
-      for (const [name, definition] of Object.entries(columns)) {
-        if (!existing.includes(name)) {
-          this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
-        }
-      }
+    this.db = new DatabaseSync(path, { timeout: BUSY_TIMEOUT_MS, readOnly });
+    if (readOnly) {
+      return;
     }
+    this.db.exec(SCHEMA);
+    this.addColumns();
     this.db
       .prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('started_at', ?)")
       .run(new Date().toISOString());
+    this.startChain();
+  }
+
+  // Under the write lock, so two processes opening an older file at once do not
+  // both add a column.
+  private addColumns(): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      for (const [table, columns] of Object.entries(ADDED_COLUMNS)) {
+        const existing: string[] = (
+          this.db.prepare(`PRAGMA table_info(${table})`).all() as unknown as ColumnRow[]
+        ).map((column: ColumnRow): string => column.name);
+        for (const [name, definition] of Object.entries(columns)) {
+          if (!existing.includes(name)) {
+            this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+          }
+        }
+      }
+      this.db.exec("COMMIT");
+    } catch (error: unknown) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  // True once the timeline is a hash chain: any record of the chain in meta, or
+  // any line with a hash, counts. A file opened read-only from before the chain
+  // has no hash column.
+  chainStarted(): boolean {
+    const hashColumn: boolean = (
+      this.db.prepare("PRAGMA table_info(events)").all() as unknown as ColumnRow[]
+    ).some((column: ColumnRow): boolean => column.name === "hash");
+    return (
+      this.metaValue(CHAIN_STARTED_KEY) !== null ||
+      this.metaValue(BACKFILLED_THROUGH_KEY) !== null ||
+      this.metaValue(LEDGER_HEAD_KEY) !== null ||
+      (hashColumn &&
+        this.db.prepare("SELECT 1 FROM events WHERE hash IS NOT NULL LIMIT 1").get() !==
+          undefined)
+    );
+  }
+
+  // The first time the ledger is opened with the chain, hashes the lines already
+  // there in id order and starts the running hash. A ledger whose chain has
+  // started is never hashed again, even if part of its record has gone missing,
+  // because hashing again would vouch for whatever the lines now say.
+  private startChain(): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      if (!this.chainStarted()) {
+        const rows: EventRow[] = this.db
+          .prepare("SELECT * FROM events ORDER BY id")
+          .all() as unknown as EventRow[];
+        const update: StatementSync = this.db.prepare(
+          "UPDATE events SET prev_hash = ?, hash = ? WHERE id = ?",
+        );
+        const heads: Map<string, string> = new Map();
+        let ledgerHead: string = GENESIS;
+        for (const row of rows) {
+          const event: ChainedEvent = toChainedEvent(row);
+          const prevHash: string = heads.get(event.invoiceId) ?? GENESIS;
+          const hash: string = eventHash(prevHash, event);
+          update.run(prevHash, hash, event.id);
+          heads.set(event.invoiceId, hash);
+          ledgerHead = nextLedgerHead(ledgerHead, hash);
+        }
+        const insert: StatementSync = this.db.prepare(
+          "INSERT INTO meta (key, value) VALUES (?, ?)",
+        );
+        insert.run(LEDGER_HEAD_KEY, ledgerHead);
+        insert.run(CHAIN_STARTED_KEY, new Date().toISOString());
+        insert.run(BACKFILLED_THROUGH_KEY, String(rows.at(-1)?.id ?? 0));
+      }
+      this.db.exec("COMMIT");
+    } catch (error: unknown) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  private metaValue(key: string): string | null {
+    const row: MetaRow | undefined = this.db
+      .prepare("SELECT value FROM meta WHERE key = ?")
+      .get(key) as unknown as MetaRow | undefined;
+    return row?.value ?? null;
   }
 
   // When this ledger was first opened, as an ISO time. The sweep only looks at
@@ -555,17 +687,87 @@ export class Ledger {
     return rows.map(toObligation);
   }
 
+  // Chains the line to the invoice's last line and adds it to the running hash in
+  // one write transaction. The CLI and the server write the same file, and a step
+  // on one invoice can write on another's timeline, so the last hash is read
+  // under the write lock.
   addEvent(
     invoiceId: string,
     kind: EventKind,
     message: string,
     topic: string | null = null,
   ): void {
-    this.db
-      .prepare(
-        "INSERT INTO events (invoice_id, at, kind, message, topic) VALUES (?, ?, ?, ?, ?)",
-      )
-      .run(invoiceId, new Date().toISOString(), kind, message, topic);
+    // Hashed as it will read back from the file.
+    const invoice: string = storable(invoiceId);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const last: HashRow | undefined = this.db
+        .prepare(
+          `SELECT hash FROM events WHERE invoice_id = ? AND hash IS NOT NULL
+            ORDER BY id DESC LIMIT 1`,
+        )
+        .get(invoice) as unknown as HashRow | undefined;
+      const prevHash: string = last?.hash ?? GENESIS;
+      const line: EventFields = {
+        invoiceId: invoice,
+        at: new Date().toISOString(),
+        kind,
+        message: storable(message),
+        topic: topic === null ? null : storable(topic),
+      };
+      const hash: string = eventHash(prevHash, line);
+      this.db
+        .prepare(
+          `INSERT INTO events (invoice_id, at, kind, message, topic, prev_hash, hash)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(line.invoiceId, line.at, line.kind, line.message, line.topic, prevHash, hash);
+      // A missing running hash starts again from the genesis, and the audit then
+      // reports it as not matching.
+      this.db
+        .prepare(
+          `INSERT INTO meta (key, value) VALUES (?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+        )
+        .run(
+          LEDGER_HEAD_KEY,
+          nextLedgerHead(this.metaValue(LEDGER_HEAD_KEY) ?? GENESIS, hash),
+        );
+      this.db.exec("COMMIT");
+    } catch (error: unknown) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  // What an audit checks, read in one transaction so a line another process adds
+  // meanwhile cannot make the running hash look wrong. invoiceId null reads every
+  // invoice's lines.
+  auditSnapshot(invoiceId: string | null): AuditSnapshot {
+    this.db.exec("BEGIN");
+    try {
+      const rows: EventRow[] = (
+        invoiceId === null
+          ? this.db.prepare("SELECT * FROM events ORDER BY id").all()
+          : this.db.prepare("SELECT * FROM events WHERE invoice_id = ? ORDER BY id").all(invoiceId)
+      ) as unknown as EventRow[];
+      const all: LedgerRow[] = this.db
+        .prepare("SELECT invoice_id, hash FROM events ORDER BY id")
+        .all() as unknown as LedgerRow[];
+      const snapshot: AuditSnapshot = {
+        events: rows.map(toChainedEvent),
+        hashes: all.map((row: LedgerRow): string | null => row.hash),
+        invoices: new Set(all.map((row: LedgerRow): string => row.invoice_id)).size,
+        ledgerHead: this.metaValue(LEDGER_HEAD_KEY),
+        chainStartedAt: this.metaValue(CHAIN_STARTED_KEY),
+        backfilledThrough: Number(this.metaValue(BACKFILLED_THROUGH_KEY) ?? 0),
+      };
+      this.db.exec("COMMIT");
+      return snapshot;
+    } catch (error: unknown) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   events(invoiceId: string): LedgerEvent[] {

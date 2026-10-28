@@ -123,6 +123,16 @@ A paid original holds the duplicate lock, so PayOnce cannot send anything more f
 
 The page shows the paid transfer and the reason, and takes a name and a note of what the person confirmed. `pnpm close` does the same in the terminal. Both the name and the note go on the timeline. Closing moves no money, so it is not bound to terms the way an approval is. "Check again" never closes an incident that is waiting on a person.
 
+## Audit trail
+
+Each incident's timeline is a hash chain. Every line stores the hash of the line before it on the same invoice, and a SHA-256 hash of its own content plus that previous hash. Editing, removing or inserting a line breaks the chain at that point. The ledger also keeps a running hash over every line in the order they were written. It catches two things one invoice's chain misses: lines removed from the end of a timeline, and every line of an invoice removed.
+
+PayOnce writes each line, its hashes and the running hash in one database transaction. The terminal commands and the web server can write to the ledger at the same time, and the transaction stops two of them chaining from the same line.
+
+`pnpm run audit` checks every timeline and the running hash, and says where a chain breaks. `pnpm run audit INV-5001` checks one invoice and lists each break. Add `json` or `csv` to print the invoice's audit trail instead. (`pnpm audit` on its own runs pnpm's dependency audit.) The page shows the result under the timeline, with links to download the same audit trail as JSON or CSV. The JSON describes how each hash is made, so the trail can be checked without PayOnce. The CSV is for reading in a spreadsheet. A cell that starts with `=`, `+`, `-` or `@` gets a leading apostrophe there, so a supplier's email subject cannot run as a formula. Check hashes against the JSON.
+
+Lines written before the chain existed were hashed the first time the ledger was opened with it, and the export marks them. The chain catches a quiet edit to the file. It cannot stop someone who can write the file from rewriting a timeline and recomputing every hash after it. To show later that a timeline changed after a given day, keep that day's export, or just its last hash, somewhere else.
+
 ## The cost of a second transfer
 
 A failed SWIFT transfer gets its amount back but not its fee, so a replacement pays the fee again. PayOnce adds that fee to the cost of a replacement before it checks the cash reserve. In the `eur-swift-low-reserve` scenario the reserve floor is set so that the second fee is what breaches it, and the incident goes to a person.
@@ -166,6 +176,7 @@ The server has no login. It listens on this machine only and accepts changes onl
 pnpm recover [OUTCOME] [INVOICE] [EMAILS] [SCENARIO] [NAME]
 pnpm approve <INVOICE> [REQUEST NAME]
 pnpm close <INVOICE> [NAME] [NOTE]
+pnpm run audit [INVOICE] [json|csv]
 pnpm reset
 ```
 
@@ -218,6 +229,7 @@ In the fifth, `inv-05002` has the same supplier, amount and number as INV-5002, 
 | `src/scenario.ts` | The sample payments and the scripted incident |
 | `src/assess.ts` | Maps an Airwallex transfer to the facts the policy reads |
 | `src/ledger.ts` | Obligations, payment attempts, approvals, emails and the timeline in SQLite |
+| `src/audit-trail.ts` | How timeline lines are hashed and checked, and the JSON and CSV export |
 | `src/payments.ts` | Sends an attempt under its `request_id` and syncs transfer state into the ledger |
 | `src/approval.ts` | Approval terms and the hash that binds an approval to them |
 | `src/approvers.ts` | The approval policy: who may approve, how many are needed, and when a request expires |
@@ -227,7 +239,7 @@ In the fifth, `inv-05002` has the same supplier, amount and number as INV-5002, 
 | `src/reader.ts` | Picks the model reader, or the keyword placeholder when no key is set |
 | `src/keyword-reader.ts` | Keyword placeholder that reads the emails when no key is set |
 | `src/server.ts` | Local web server and JSON API |
-| `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/reset.ts`, `src/index.ts` | The commands |
+| `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/audit.ts`, `src/reset.ts`, `src/index.ts` | The commands |
 | `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, balances, the webhook subscription and the simulation calls |
 | `web/` | The page: plain HTML, CSS and JavaScript with no build step |
 | `fixtures/emails/` | Sample supplier emails |

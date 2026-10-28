@@ -646,6 +646,14 @@ input:read-only {
   border-top: 1px solid var(--line);
 }
 
+.audit a {
+  color: var(--accent);
+}
+
+.audit__broken {
+  color: var(--amber);
+}
+
 /* Timeline */
 
 .event {

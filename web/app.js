@@ -92,6 +92,7 @@ const els = {
   timeline: byId("timeline"),
   timelineEmpty: byId("timeline-empty"),
   working: byId("working"),
+  audit: byId("audit"),
   review: byId("review"),
   bankChange: byId("bank-change"),
   approval: byId("approval"),
@@ -957,6 +958,31 @@ function renderTimeline(detail) {
   if (follow && els.timeline.childElementCount > linesBefore) {
     timelineTail().scrollIntoView({ block: "nearest" });
   }
+}
+
+// Under the timeline: whether its hash chain still holds, and the export links.
+function renderAudit(detail) {
+  const invoiceId = detail.obligation.invoiceId;
+  const audit = detail.audit ?? null;
+  if (!changed("audit", [invoiceId, audit])) {
+    return;
+  }
+  if (audit === null) {
+    els.audit.hidden = true;
+    return;
+  }
+  const base = `/api/incidents/${encodeURIComponent(invoiceId)}/audit`;
+  els.audit.replaceChildren(
+    audit.problem === null
+      ? `Hash chain intact over ${audit.lines} ${audit.lines === 1 ? "line" : "lines"}. `
+      : h("strong", { class: "audit__broken" }, `Hash chain broken. ${audit.problem}. `),
+    "Download the audit trail as ",
+    h("a", { href: base, download: `${invoiceId}-audit.json` }, "JSON"),
+    " or ",
+    h("a", { href: `${base}?format=csv`, download: `${invoiceId}-audit.csv` }, "CSV"),
+    ".",
+  );
+  els.audit.hidden = false;
 }
 
 function buildAttempt(attempt) {
@@ -2220,6 +2246,7 @@ function renderMain() {
   );
   renderHeader(detail);
   renderTimeline(detail);
+  renderAudit(detail);
   renderReview(detail);
   renderBankChange(detail);
   renderApproval(detail);

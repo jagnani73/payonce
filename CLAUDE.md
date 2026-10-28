@@ -12,10 +12,11 @@ pnpm ui                                             # web page and JSON API at h
 pnpm recover [OUTCOME] [INVOICE] [EMAILS] [SCENARIO] [NAME] # one incident against the sandbox, or continue an existing invoice (status checks, no webhooks)
 pnpm approve <INVOICE> [REQUEST NAME]               # show the waiting approval (a replacement, or paying a held invoice), its request number and the policy; with both, record that person's approval of that request
 pnpm close <INVOICE> [NAME] [NOTE]                  # show a paid incident or a held invoice waiting on a person; with NAME and NOTE, close it (a held invoice without paying)
+pnpm run audit [INVOICE] [json|csv]                 # check every timeline's hash chain and the running hash, or one invoice's; with a format, print its audit trail
 pnpm reset                                          # move payonce.db aside so the next run starts an empty ledger
 ```
 
-Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-local`, NAME the OS login name (who started the incident). OUTCOME is a simulator failure type, `PAID`, or `STAYS_IN_FLIGHT`, which leaves the original in `SENT`. There is no lint script and there are no tests.
+Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-local`, NAME the OS login name (who started the incident). OUTCOME is a simulator failure type, `PAID`, or `STAYS_IN_FLIGHT`, which leaves the original in `SENT`. `pnpm audit` is pnpm's own dependency audit, so the audit command needs `run`. There is no lint script and there are no tests.
 
 ## Structure
 
@@ -42,7 +43,8 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 - `src/reader.ts`: `readerFromEnv` picks `ModelReader` when `READER_API_KEY` is set and the keyword placeholder otherwise.
 - `src/keyword-reader.ts`: the fallback reader. It matches a handful of phrases.
 - `src/server.ts`: `node:http` server for `web/` and the JSON API. It runs scenarios in the background, starts the watcher and connects webhooks.
-- `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/reset.ts`, `src/index.ts`: the CLI commands.
+- `src/audit-trail.ts`: how a timeline line is hashed (`canonicalEvent`, `eventHash`, `nextLedgerHead`), `chainBreaks` and `ledgerReport` to check them, and `auditExport` and `auditCsv` for the export.
+- `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/audit.ts`, `src/reset.ts`, `src/index.ts`: the CLI commands.
 - `docs/demo.md`: the recording script for the four demo incidents, with sandbox times measured on 2026-10-06, before the agent waited for webhooks and status checks.
 - `src/airwallex/`: `client.ts` (login, token refresh, 30 s timeout, refuses non-sandbox hosts), `transfers.ts`, `beneficiaries.ts` (`getBeneficiary`, `updateBankDetails`), `balances.ts`, `webhooks.ts` (`subscribe`), `simulation.ts` (every sandbox-only call).
 - `web/`: static page (`index.html`, `styles.css`, `app.js`) with no build step and no external requests.
@@ -105,6 +107,12 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 - Approval evidence includes the email summary, so new emails that change the findings void an approval.
 - `events` holds the timeline. A line with a `topic` says how things stand: the decision, what the invoice is waiting on, an approval, the cost of a replacement, or a bank-details mismatch. `note` skips one when the timeline's last line on that topic says the same and nothing has happened since, so checking an invoice again when nothing has changed adds nothing. A line with no topic records an event and is skipped only when it repeats the line before it.
 - On an escalated invoice the decision line says when the policy would now replace or close and why it does not.
+- Each timeline line has `prev_hash`, the hash of the invoice's line before it (64 zeros for the first), and `hash`, SHA-256 of `prev_hash` followed by `canonicalEvent`: the JSON `{at, invoice_id, kind, message, topic}` with the keys in that order. `meta.events_head` is the running hash, `sha256(events_head + hash)` for each line in id order, so lines removed from the end of a timeline, or a whole invoice's lines, are caught.
+- `addEvent` reads the invoice's last hash, inserts the line and updates the running hash in one `BEGIN IMMEDIATE` transaction, because the CLI and the server write the same file and a step on one invoice writes on others' timelines. `note` runs its dedupe before calling it, outside the lock.
+- `addEvent` hashes the line as it will read back: `storable` turns half of a surrogate pair, such as an emoji cut by `.slice`, into U+FFFD, as SQLite's UTF-8 would.
+- The first open with the chain hashes the lines already there in id order and sets `meta.chain_started_at` and `meta.chain_backfilled_through`, the last line it hashed. A ledger whose chain has started (`chainStarted`: any of the three meta keys, or a line with a hash) is never hashed again. A line with no hash, written by older code, is reported as written outside the chain, and the next line chains from the last line with a hash. There is no way to take such a line into the chain, because the same step would launder a forged one.
+- `pnpm run audit` opens the file with `new Ledger(path, true)`, read-only, which skips the schema, the upgrade and the backfill. It refuses a missing file and a ledger whose chain has not started.
+- `auditSnapshot` reads what a check needs in one transaction. The check compares each line with the stored hash of the line before it and with its own content, so an edit shows up once. When the running hash does not match but every timeline verifies, it cannot say which invoice lost lines.
 - `meta` holds `started_at`, when the ledger was first opened. The sweep lists transfers from then, so payouts from an earlier ledger are not taken for outside ones.
 - `obligations.supplier_phone` is the phone number on the supplier record, set from the scenario. Only `usd-local-bank-change` has one, so only it offers a callback. Found payouts have none.
 - `bank_changes` holds each callback: who called, the number, when, who they spoke to, what was confirmed, the old record and the typed fields, and `state` `pending`, `applied` or `failed`. The row is written before the Airwallex update.
@@ -113,7 +121,7 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 - `obligations.origin` is `payonce` or `outside`. `payout_reference` keeps a found payout's reference when it could not be the invoice number, and `obligationForReference` matches either.
 - `adoptPayout` writes a found payout's invoice and attempt in one transaction. Its INSERT is plain, so an invoice written by another process in between makes it fail instead of gaining a second original.
 - `outside_payouts` ties outside payouts to invoices, with the bank's short reference and the last state a look read. `settle(invoiceId, true)` also accepts an invoice whose attempts all failed and whose outside payout is paid. Only `closeIncident` passes it.
-- Columns added after the first version are listed in `ADDED_COLUMNS` and added when the database is opened.
+- Columns added after the first version are listed in `ADDED_COLUMNS` and added when the database is opened, under the write lock, so two processes opening an older file at once do not both add one.
 
 ## Email reader
 
@@ -138,8 +146,8 @@ Found by running it on 2026-10-06:
 ## Web server
 
 - It binds to loopback and has no login. `guard` checks the Host header and, for writes, the Origin header and a JSON content type.
-- Routes: `GET /api/options`, `GET /api/incidents`, `GET /api/incidents/:id`, `POST /api/incidents` (takes `bankOutcome`, `emails`, `scenario`, `startedBy` and an optional `invoiceId`, refused with 409 when it is already in the ledger), `POST /api/incidents/:id/approve` (needs `approver` and `approvalId`), `POST /api/incidents/:id/close` (needs `closedBy` and `finding`), `POST /api/incidents/:id/resume`, `POST /api/incidents/:id/pay-again`, `GET /api/incidents/:id/bank-details`, `POST /api/incidents/:id/bank-change` (takes `calledBy`, `numberCalled`, `calledAt`, `spokeTo`, `confirmed` and `details`).
-- An incident's detail carries `review` when a person can close it, and the page shows the close card from that. `busy` is true while the agent or the sandbox bank is working on it, and `watching` while a payment is with the bank, including an outside payout tied to it. The page polls every 1.5 seconds while either is true.
+- Routes: `GET /api/options`, `GET /api/incidents`, `GET /api/incidents/:id`, `GET /api/incidents/:id/audit` (JSON, or CSV with `?format=csv`), `POST /api/incidents` (takes `bankOutcome`, `emails`, `scenario`, `startedBy` and an optional `invoiceId`, refused with 409 when it is already in the ledger), `POST /api/incidents/:id/approve` (needs `approver` and `approvalId`), `POST /api/incidents/:id/close` (needs `closedBy` and `finding`), `POST /api/incidents/:id/resume`, `POST /api/incidents/:id/pay-again`, `GET /api/incidents/:id/bank-details`, `POST /api/incidents/:id/bank-change` (takes `calledBy`, `numberCalled`, `calledAt`, `spokeTo`, `confirmed` and `details`).
+- An incident's detail carries `audit`: the number of lines, and `problem`, the first break in the chain or a running hash that is missing or does not match, null when there is none. The page shows it under the timeline with links to the export. It carries `review` when a person can close it, and the page shows the close card from that. `busy` is true while the agent or the sandbox bank is working on it, and `watching` while a payment is with the bank, including an outside payout tied to it. The page polls every 1.5 seconds while either is true.
 - Approve and close wait for any step already running on the invoice, then run. Resume queues a look.
 - The page scrolls to keep the newest timeline line on screen when that line was already visible, and for 15 seconds after an action.
 - On start it wakes every invoice that still has a pending or in-flight attempt, and the sandbox bank goes back to paying any replacement still in flight, and an original in flight that was paid on an approval after a hold.
