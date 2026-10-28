@@ -1020,7 +1020,12 @@ function awaitApproval(
       eligible.length === 0
         ? "nobody on the approver list can"
         : `only ${eligible.map((approver: Approver): string => approver.name).join(" and ")} can`;
-    const fx: string = terms.fx === undefined ? "" : `${paidWith(terms.fx)},`;
+    // No request opens, so no rate is named: only about what the payment takes
+    // from its wallet, which the limits are compared with.
+    const fx: string =
+      terms.fx === undefined
+        ? ""
+        : `, about ${formatMoney(terms.fx.sellAmountMinor, terms.fx.sellCurrency)},`;
     const payment: string =
       terms.action === "replace"
         ? `A replacement of ${money(obligation)}${fx}`
