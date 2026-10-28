@@ -11,6 +11,10 @@ import { htmlToText, type HtmlText } from "./html-text.js";
 // fetched, opened or written, so a crafted file cannot hang or crash it.
 
 export const MAX_EMAIL_BYTES: number = 2 * 1024 * 1024;
+// The refusal for an email over MAX_EMAIL_BYTES, which the upload route also gives
+// for a request too large to hold one.
+export const TOO_LARGE_TEXT: string =
+  "The email is larger than 2 MB. Paste its source without the attachment parts. Use the supplier's own email, not a forward";
 export const MAX_BODY_CHARS: number = 32_000;
 // The text found inside styles and scripts, read and shown apart from the body.
 export const MAX_STYLE_CHARS: number = 8_000;
@@ -1170,7 +1174,7 @@ function messageIdOf(fields: Map<string, string[]>, walk: Walk): string | null {
 // Reads an uploaded email, or says why it cannot.
 export function parseEmail(raw: Buffer, source: UploadSource): ParsedUpload {
   if (raw.length > MAX_EMAIL_BYTES) {
-    return refused("The email is larger than 2 MB. Paste its source without the attachment parts. Use the supplier's own email, not a forward", true);
+    return refused(TOO_LARGE_TEXT, true);
   }
   if (raw.length >= 4 && raw[0] === 0xd0 && raw[1] === 0xcf && raw[2] === 0x11 && raw[3] === 0xe0) {
     return refused("This is an Outlook .msg file. Save the email as .eml, or paste its source");

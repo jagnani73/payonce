@@ -59,7 +59,7 @@ import {
   type DraftTemplate,
   type DraftView,
 } from "./drafts.js";
-import { MAX_EMAIL_BYTES, noteTexts, type ParsedEmail } from "./eml.js";
+import { MAX_EMAIL_BYTES, noteTexts, TOO_LARGE_TEXT, type ParsedEmail } from "./eml.js";
 import type { EmailFindings, SupplierEmail } from "./emails.js";
 import { describeQuotes } from "./fx.js";
 import {
@@ -318,6 +318,7 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
 async function readJson(
   request: IncomingMessage,
   maxBytes: number = MAX_BODY_BYTES,
+  tooLarge: string = "Request body is too large",
 ): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let size: number = 0;
@@ -325,7 +326,7 @@ async function readJson(
     const buffer: Buffer = chunk as Buffer;
     size += buffer.length;
     if (size > maxBytes) {
-      throw new HttpError(413, "Request body is too large");
+      throw new HttpError(413, tooLarge);
     }
     chunks.push(buffer);
   }
@@ -1229,7 +1230,9 @@ function uploadDetail(raw: string): unknown {
 // JSON, so the guard's Origin and content type checks cover an upload and
 // nothing parses multipart.
 async function addUpload(request: IncomingMessage): Promise<unknown> {
-  const body: Record<string, unknown> = await readJson(request, MAX_INBOX_BODY_BYTES);
+  // A body too large to hold a 2 MB email gets the parser's wording, not a
+  // generic one.
+  const body: Record<string, unknown> = await readJson(request, MAX_INBOX_BODY_BYTES, TOO_LARGE_TEXT);
   const uploadedBy: string = name(body, "uploadedBy", "Enter your name");
   const source: unknown = body["source"];
   if (source !== "file" && source !== "paste") {
