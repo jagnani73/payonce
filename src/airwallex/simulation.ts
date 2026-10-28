@@ -16,7 +16,7 @@ const REACHED: Record<SimulatedStatus, ReadonlySet<string>> = {
   FAILED: new Set<string>(["FAILED", "CANCELLED"]),
 };
 
-function isAmbiguous(error: unknown): boolean {
+export function isAmbiguous(error: unknown): boolean {
   return (
     error instanceof AirwallexUnreachableError ||
     (error instanceof AirwallexError && error.status >= 500)

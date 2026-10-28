@@ -1,6 +1,7 @@
 import type { AirwallexClient } from "./airwallex/client.js";
-import { simulateTransfer } from "./airwallex/simulation.js";
+import { isAmbiguous, simulateTransfer } from "./airwallex/simulation.js";
 import { getTransfer, waitForTransfer, type Transfer } from "./airwallex/transfers.js";
+import { isOverdue } from "./deadlines.js";
 import type { Bank } from "./engine.js";
 import type { AttemptKind } from "./ledger.js";
 
@@ -29,6 +30,9 @@ const SETTLED_STATUSES: ReadonlySet<string> = new Set<string>([
   "CANCELLED",
 ]);
 
+const READ_TRIES: number = 4;
+const READ_RETRY_MS: number = 1_500;
+
 // Sandbox-only. Nothing moves a sandbox transfer on by itself, so this plays the
 // bank: it sends a new transfer, and pays or fails it when told to. It pays every
 // replacement PayOnce sends. The agent never asks it what happened. It hears from
@@ -48,6 +52,8 @@ export class SandboxBank implements Bank {
   // The outcome the ledger keeps for an invoice's original, such as a pay run
   // row's sandbox_outcome, or null. It survives a restart and works in any process.
   private readonly outcomeOf: (invoiceId: string) => string | null;
+  // Transfers that convert, which the simulator will not move, already reported.
+  private readonly converting: Set<string> = new Set<string>();
 
   constructor(
     client: AirwallexClient,
@@ -74,6 +80,21 @@ export class SandboxBank implements Bank {
         this.running.delete(invoiceId);
       } else {
         this.running.set(invoiceId, left);
+      }
+    }
+  }
+
+  // Reads a transfer, trying again on a server error or a lost connection, as
+  // the simulation calls do.
+  private async read(transferId: string): Promise<Transfer> {
+    for (let attempt: number = 1; ; attempt += 1) {
+      try {
+        return await getTransfer(this.client, transferId);
+      } catch (error: unknown) {
+        if (!isAmbiguous(error) || attempt >= READ_TRIES) {
+          throw error;
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, READ_RETRY_MS));
       }
     }
   }
@@ -132,7 +153,9 @@ export class SandboxBank implements Bank {
   // PayOnce sent a payment. The scripted run decides what happens to the original
   // it sends. The bank pays a replacement. It gives any other original the outcome
   // expectOriginal recorded, else the one the ledger keeps for it, such as a pay
-  // run row's, else pays it.
+  // run row's, else pays it. The simulator refuses every transition of a transfer
+  // that converts, so the bank says so once and leaves it in PROCESSING, where the
+  // agent's deadline for it runs out.
   sent(invoiceId: string, kind: AttemptKind, transferId: string): void {
     if (kind === "original" && this.scripted.has(invoiceId)) {
       return;
@@ -143,6 +166,17 @@ export class SandboxBank implements Bank {
         : (this.held.get(invoiceId) ?? this.outcomeOf(invoiceId) ?? PAID_OUTCOME);
     this.held.delete(invoiceId);
     this.run(invoiceId, async (): Promise<void> => {
+      const transfer: Transfer = await this.read(transferId);
+      if (transfer.source_currency !== undefined && transfer.source_currency !== transfer.transfer_currency) {
+        // Past its deadline the agent has said so already.
+        if (!this.converting.has(transferId) && !isOverdue(transfer)) {
+          this.converting.add(transferId);
+          throw new Error(
+            `The sandbox simulator does not move a transfer that converts currency, so nothing here pays or fails ${transfer.short_reference_id}, and it stays in PROCESSING`,
+          );
+        }
+        return;
+      }
       await this.send(transferId);
       await this.settle(transferId, outcome);
     }).catch((error: unknown): void => {

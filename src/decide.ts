@@ -19,9 +19,10 @@ export function floorReason(incident: Incident): string | null {
   }
 
   // Money already promised to other payments is still in the available balance,
-  // so it is taken off before the floor is checked.
+  // so it is taken off before the floor is checked. It is all in the wallet the
+  // payment leaves.
   const replacementCostMinor: number =
-    incident.amountMinor + incident.transferFeeMinor;
+    incident.sourceAmountMinor + incident.transferFeeMinor;
   const balanceAfterMinor: number =
     incident.availableBalanceMinor - incident.committedMinor - replacementCostMinor;
 
@@ -138,10 +139,19 @@ export function decide(incident: Incident): Decision {
 
   // The approval policy asks two people to approve a payment this size, so the
   // agent does not replace it by itself either.
-  if (incident.amountMinor > incident.twoApproversAboveMinor) {
+  if (incident.sourceAmountMinor > incident.twoApproversAboveMinor) {
     return {
       action: "escalate",
       reason: "a replacement this large needs two approvers",
+    };
+  }
+
+  // The agent never pays at a rate nobody has seen, and a replacement needs a new
+  // quote.
+  if (incident.crossCurrency) {
+    return {
+      action: "escalate",
+      reason: `a replacement paid from ${incident.sourceCurrency} takes a new exchange rate, so a person approves it`,
     };
   }
 

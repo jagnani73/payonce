@@ -1,5 +1,7 @@
 import type { Balance, BalanceState } from "./airwallex/balances.js";
+import type { ApprovalTerms, FxTerms, LastQuote } from "./approval.js";
 import {
+  crossCurrency,
   isExpired,
   type Approval,
   type Attempt,
@@ -59,15 +61,62 @@ export interface CashLine {
   feeKnown: boolean;
   // The bank's short reference, when the money is a transfer.
   reference: string | null;
-  // The amount is the invoice's, because the transfer's was never read.
+  // The amount is not exact: the invoice's, because the transfer's was never
+  // read, or for a payment from another currency's wallet, one from a quote no
+  // request or attempt is on, or none at all.
   estimated: boolean;
   // The pay run a pay-run line belongs to. Null on every other line.
   runId: number | null;
+  // The amount is an exchange rate quote's sell amount, not yet a transfer's.
+  fromQuote?: boolean;
 }
 
 interface FeeEstimate {
   feeMinor: number;
   feeKnown: boolean;
+}
+
+interface LineAmount {
+  amountMinor: number;
+  estimated: boolean;
+  fromQuote: boolean;
+}
+
+// What a payment takes from its wallet, before the fee. Once its transfer has
+// been read it is what debitOf read from it, kept on the attempt. Before then a
+// found payout is about the invoice amount, and a payment from the invoice's own
+// currency takes that amount exactly. One from another currency's wallet takes
+// what its quote sells, so until its transfer has been read only a quote knows
+// it: exactly the quote an attempt was sent with or a request still open is on,
+// and otherwise about the invoice's last quote, which may be on no request, as
+// when nobody on the list can approve it. Before any quote it is 0, estimated.
+// attempt is null for a payment not opened yet.
+function lineAmount(ledger: Ledger, obligation: Obligation, attempt: Attempt | null, now: number): LineAmount {
+  if (attempt !== null && attempt.amountMinor !== null) {
+    return { amountMinor: attempt.amountMinor, estimated: false, fromQuote: false };
+  }
+  if (attempt !== null && obligation.origin === "outside" && attempt.kind === "original") {
+    return { amountMinor: obligation.amountMinor, estimated: true, fromQuote: false };
+  }
+  if (!crossCurrency(obligation)) {
+    return { amountMinor: obligation.amountMinor, estimated: false, fromQuote: false };
+  }
+  const approval: Approval | undefined =
+    attempt === null ? ledger.latestApproval(obligation.invoiceId) : ledger.approvalOf(attempt);
+  const fx: FxTerms | undefined =
+    approval === undefined ? undefined : (JSON.parse(approval.terms) as ApprovalTerms).fx;
+  const open: boolean =
+    approval !== undefined &&
+    (approval.state === "requested" || approval.state === "approved") &&
+    !isExpired(approval, now);
+  if (fx !== undefined && (attempt !== null ? attempt.quoteId === fx.quoteId : open)) {
+    return { amountMinor: fx.sellAmountMinor, estimated: false, fromQuote: true };
+  }
+  const kept: string | undefined = ledger.lastQuote(obligation.invoiceId);
+  const last: FxTerms | undefined = kept === undefined ? fx : (JSON.parse(kept) as LastQuote).fx;
+  return last === undefined
+    ? { amountMinor: 0, estimated: true, fromQuote: false }
+    : { amountMinor: last.sellAmountMinor, estimated: true, fromQuote: true };
 }
 
 // The fee a payment not sent yet should cost: the invoice's latest fee recorded in
@@ -126,7 +175,7 @@ function sentLines(line: CashLine, feeMinor: number | null, feeCurrency: string 
   }
   return [
     { ...line, feeMinor: 0, feeKnown: true },
-    { ...line, currency: feeCurrency, amountMinor: 0, feeMinor, feeKnown: true, estimated: false },
+    { ...line, currency: feeCurrency, amountMinor: 0, feeMinor, feeKnown: true, estimated: false, fromQuote: false },
   ];
 }
 
@@ -157,34 +206,35 @@ export function cashLines(ledger: Ledger, now: number = Date.now()): CashLine[] 
 
     for (const attempt of attempts) {
       if (attempt.state === "pending" && attempt.transferId === null) {
+        const amount: LineAmount = lineAmount(ledger, obligation, attempt, now);
         lines.push({
           kind: "sending",
           invoiceId,
           currency: wallet,
-          amountMinor: obligation.amountMinor,
+          amountMinor: amount.amountMinor,
           ...feeEstimate(ledger, obligation, attempts),
           reference: null,
-          estimated: false,
+          estimated: amount.estimated,
+          fromQuote: amount.fromQuote,
           runId: null,
         });
       } else if (attempt.state === "pending" || attempt.state === "in_flight") {
         // A found invoice's original is a payout someone sent outside PayOnce. The
         // money is booked where the transfer took it, which for a payout paid from
-        // another currency is not the invoice's. PayOnce pays the invoice's amount,
-        // so its own payment from the invoice's currency is exact even when it was
-        // sent before amounts were stored.
-        const found: boolean = obligation.origin === "outside" && attempt.kind === "original";
+        // another currency is not the invoice's.
+        const amount: LineAmount = lineAmount(ledger, obligation, attempt, now);
         lines.push(
           ...sentLines(
             {
-              kind: found ? "outside" : "with-bank",
+              kind: obligation.origin === "outside" && attempt.kind === "original" ? "outside" : "with-bank",
               invoiceId,
               currency: attempt.currency ?? wallet,
-              amountMinor: attempt.amountMinor ?? obligation.amountMinor,
+              amountMinor: amount.amountMinor,
               feeMinor: 0,
               feeKnown: false,
               reference: attempt.reference,
-              estimated: attempt.amountMinor === null && (found || wallet !== obligation.currency),
+              estimated: amount.estimated,
+              fromQuote: amount.fromQuote,
               runId: null,
             },
             attempt.feeMinor,
@@ -218,6 +268,7 @@ export function cashLines(ledger: Ledger, now: number = Date.now()): CashLine[] 
     if (couldStillPay(obligation, attempts, payouts)) {
       const approval: Approval | undefined = ledger.latestApproval(invoiceId);
       const open: boolean = approval !== undefined && !isExpired(approval, now);
+      const amount: LineAmount = lineAmount(ledger, obligation, null, now);
       lines.push({
         kind:
           open && approval?.state === "approved"
@@ -227,10 +278,11 @@ export function cashLines(ledger: Ledger, now: number = Date.now()): CashLine[] 
               : "awaiting-person",
         invoiceId,
         currency: wallet,
-        amountMinor: obligation.amountMinor,
+        amountMinor: amount.amountMinor,
         ...feeEstimate(ledger, obligation, attempts),
         reference: null,
-        estimated: false,
+        estimated: amount.estimated,
+        fromQuote: amount.fromQuote,
         runId: null,
       });
     }

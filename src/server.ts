@@ -41,6 +41,7 @@ import { cashReport, payRunLines, type CashReport } from "./cash-position.js";
 import { CurrencyBusyError } from "./currency-lock.js";
 import { Dispatcher } from "./dispatcher.js";
 import type { EmailFindings } from "./emails.js";
+import { describeQuotes } from "./fx.js";
 import {
   approvePayment,
   closeIncident,
@@ -848,7 +849,7 @@ function runDetail(raw: string): unknown {
             expiresAt: approval.expiresAt,
             expired: isExpired(approval),
             barred: runBarred(engine.ledger, terms),
-            largest: largestTotal(terms.totals),
+            largest: largestTotal(terms),
           },
     events: engine.ledger.runEvents(run.id),
     audit: runAuditSummary(run.id),
@@ -1136,6 +1137,7 @@ server.listen(PORT, HOST, (): void => {
   console.log(`Supplier emails are read by: ${engine.reader.name}`);
   console.log(describePolicy(engine.approvals));
   console.log(describeFloors(engine.reserve));
+  console.log(describeQuotes());
   // The first page load then has balances to show.
   balances.refreshIfOld();
   pickUpInterrupted();

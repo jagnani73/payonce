@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
+import type { Quote } from "./airwallex/fx.js";
 import type { Transfer, TransferBankDetails } from "./airwallex/transfers.js";
 import { bankDetailsKey, originalStateOf } from "./assess.js";
 import type { Decision, OriginalTransferState } from "./incident.js";
 import type { BankChange, Obligation, ObligationState, TransferMethod } from "./ledger.js";
+import { formatMoney, readMinor, toMinor } from "./money.js";
 
 // The callback that verified the bank details the payment goes to, when they are
 // not the ones the original went to.
@@ -41,6 +43,31 @@ export interface HeldEvidence {
   duplicates: DuplicateEvidence[];
 }
 
+// The locked exchange rate a payment from another currency's wallet is sent
+// with. clientRate is for currencyPair as Airwallex quotes it: EURUSD 1.119541 is
+// 1 EUR = 1.119541 USD, whichever way the money goes. validTo is the quote's
+// valid_to_at as Airwallex wrote it. feeEstimateMinor is in sellCurrency: the
+// failed original's fee, or null before anything was sent.
+export interface FxTerms {
+  quoteId: string;
+  currencyPair: string;
+  clientRate: number;
+  midRate: number;
+  sellCurrency: string;
+  sellAmountMinor: number;
+  buyCurrency: string;
+  buyAmountMinor: number;
+  validTo: string;
+  feeEstimateMinor: number | null;
+}
+
+// The latest quote taken for an invoice, as obligations.last_quote keeps it.
+// endsAt is when it runs out by PayOnce's clock.
+export interface LastQuote {
+  fx: FxTerms;
+  endsAt: number;
+}
+
 interface PaymentTerms {
   invoiceId: string;
   amountMinor: number;
@@ -50,6 +77,9 @@ interface PaymentTerms {
   // A hash of every bank detail the payment goes to. payTo shows only part of the
   // account, so this is what pins it.
   accountKey: string;
+  // Only on a payment from another currency's wallet, so every other payment's
+  // terms, and their binding, are as they were before FX.
+  fx?: FxTerms;
 }
 
 // A second payment for an invoice whose original failed.
@@ -162,7 +192,8 @@ export function payTo(supplier: string, details: TransferBankDetails): string {
 
 // bankDetails is what the beneficiary record holds now, which is where a new
 // transfer would go. It is not taken from the original transfer. bankChange is
-// the callback that verified those details, if they changed.
+// the callback that verified those details, if they changed. fx is the quote a
+// payment from another currency's wallet is approved at.
 export function termsFor(
   obligation: Obligation,
   original: Transfer,
@@ -170,6 +201,7 @@ export function termsFor(
   emailSummary: string,
   bankDetails: TransferBankDetails,
   bankChange: BankChange | null,
+  fx: FxTerms | null,
 ): ReplacementTerms {
   return {
     action: "replace",
@@ -179,6 +211,7 @@ export function termsFor(
     beneficiaryId: obligation.beneficiaryId,
     payTo: payTo(obligation.supplier, bankDetails),
     accountKey: accountKeyOf(bankDetails),
+    ...(fx === null ? {} : { fx }),
     evidence: {
       originalReference: original.short_reference_id,
       originalState: originalStateOf(original),
@@ -202,11 +235,13 @@ export function termsFor(
 }
 
 // bankDetails is what the beneficiary record holds now, which is where the payment
-// would go.
+// would go. fx is the quote a payment from another currency's wallet is approved
+// at.
 export function heldTermsFor(
   obligation: Obligation,
   bankDetails: TransferBankDetails,
   duplicates: DuplicateEvidence[],
+  fx: FxTerms | null,
 ): HeldPaymentTerms {
   return {
     action: "pay",
@@ -216,6 +251,7 @@ export function heldTermsFor(
     beneficiaryId: obligation.beneficiaryId,
     payTo: payTo(obligation.supplier, bankDetails),
     accountKey: accountKeyOf(bankDetails),
+    ...(fx === null ? {} : { fx }),
     evidence: {
       reason: obligation.escalationReason,
       duplicates,
@@ -257,8 +293,167 @@ export function changedFields(
   ) {
     changed.push("beneficiary");
   }
+  if (JSON.stringify(approved.fx ?? null) !== JSON.stringify(current.fx ?? null)) {
+    changed.push("exchange rate");
+  }
   if (JSON.stringify(approved.evidence) !== JSON.stringify(current.evidence)) {
     changed.push("evidence");
   }
   return changed;
+}
+
+// Builds the fx block in one key order, so a quote taken again from stored terms
+// gives the same binding.
+function fxBlock(fx: FxTerms): FxTerms {
+  return {
+    quoteId: fx.quoteId,
+    currencyPair: fx.currencyPair,
+    clientRate: fx.clientRate,
+    midRate: fx.midRate,
+    sellCurrency: fx.sellCurrency,
+    sellAmountMinor: fx.sellAmountMinor,
+    buyCurrency: fx.buyCurrency,
+    buyAmountMinor: fx.buyAmountMinor,
+    validTo: fx.validTo,
+    feeEstimateMinor: fx.feeEstimateMinor,
+  };
+}
+
+// A quote as terms a person approves. Throws, so nothing is offered on it, when
+// it is not for this invoice's payment from its wallet or cannot be read.
+export function fxTermsOf(
+  quote: Quote,
+  obligation: Obligation,
+  feeEstimateMinor: number | null,
+): FxTerms {
+  const sell: string = obligation.sourceCurrency;
+  const buy: string = obligation.currency;
+  if (
+    quote.sell_currency !== sell ||
+    quote.buy_currency !== buy ||
+    toMinor(quote.buy_amount) !== obligation.amountMinor
+  ) {
+    throw new Error(
+      `Airwallex quoted ${quote.sell_currency} for ${String(quote.buy_amount)} ${quote.buy_currency}, not ${sell} for ${formatMoney(obligation.amountMinor, buy)}, so PayOnce offers nothing on it`,
+    );
+  }
+  if (
+    typeof quote.quote_id !== "string" ||
+    quote.quote_id === "" ||
+    (quote.currency_pair !== `${sell}${buy}` && quote.currency_pair !== `${buy}${sell}`) ||
+    !(quote.client_rate > 0) ||
+    !(quote.mid_rate > 0) ||
+    !Number.isFinite(Date.parse(quote.valid_from_at)) ||
+    !Number.isFinite(Date.parse(quote.valid_to_at))
+  ) {
+    throw new Error("Airwallex sent an exchange rate quote PayOnce cannot read, so it offers nothing on it");
+  }
+  return fxBlock({
+    quoteId: quote.quote_id,
+    currencyPair: quote.currency_pair,
+    clientRate: quote.client_rate,
+    midRate: quote.mid_rate,
+    sellCurrency: quote.sell_currency,
+    sellAmountMinor: toMinor(quote.sell_amount),
+    buyCurrency: quote.buy_currency,
+    buyAmountMinor: toMinor(quote.buy_amount),
+    validTo: quote.valid_to_at,
+    feeEstimateMinor,
+  });
+}
+
+// The same quote with the fee estimate as it is now.
+export function withFeeEstimate(fx: FxTerms, feeEstimateMinor: number | null): FxTerms {
+  return fxBlock({ ...fx, feeEstimateMinor });
+}
+
+// "1 EUR = 1.119541 USD" for the pair EURUSD.
+export function rateText(currencyPair: string, rate: number): string {
+  return `1 ${currencyPair.slice(0, 3)} = ${String(rate)} ${currencyPair.slice(3)}`;
+}
+
+export function describeRate(fx: FxTerms): string {
+  return rateText(fx.currencyPair, fx.clientRate);
+}
+
+// How far the quoted rate is from the mid-market rate, such as "0.54%".
+export function markupOf(fx: FxTerms): string {
+  return `${((Math.abs(fx.clientRate - fx.midRate) / fx.midRate) * 100).toFixed(2)}%`;
+}
+
+// ", paid with 4,478.04 USD at 1 EUR = 1.119509 USD", or nothing for a payment
+// from the invoice's own currency.
+export function paidWith(fx: FxTerms | undefined): string {
+  return fx === undefined
+    ? ""
+    : `, paid with ${formatMoney(fx.sellAmountMinor, fx.sellCurrency)} at ${describeRate(fx)}`;
+}
+
+// What went out of the wallet on a transfer that converts, as the timeline says
+// it. Empty when the transfer does not convert or cannot be read.
+export function conversionText(transfer: Transfer): string {
+  const source: number | null = readMinor(transfer.source_amount);
+  if (transfer.conversion === undefined || source === null || transfer.source_currency === undefined) {
+    return "";
+  }
+  return `, paid with ${formatMoney(source, transfer.source_currency)} at ${rateText(transfer.conversion.currency_pair, transfer.conversion.rate)}`;
+}
+
+// Why a transfer did not go out on its approved quote, or null when it did. fx is
+// undefined when no approval covers the quote it was sent with. Rates are
+// compared as Airwallex gives them, never inverted, and a transfer with no
+// conversion on it does not match.
+export function rateMismatch(fx: FxTerms | undefined, transfer: Transfer): string | null {
+  const source: number | null = readMinor(transfer.source_amount);
+  if (
+    fx !== undefined &&
+    transfer.conversion?.currency_pair === fx.currencyPair &&
+    transfer.conversion.rate === fx.clientRate &&
+    source === fx.sellAmountMinor &&
+    transfer.source_currency === fx.sellCurrency
+  ) {
+    return null;
+  }
+  const actual: string =
+    transfer.conversion === undefined
+      ? "with no exchange rate on it"
+      : `at ${rateText(transfer.conversion.currency_pair, transfer.conversion.rate)} (${source === null ? "amount not readable" : formatMoney(source, transfer.source_currency ?? "")})`;
+  return fx === undefined
+    ? `went out ${actual}, and no approval covers the quote it was sent with`
+    : `went out ${actual}, not the approved ${describeRate(fx)} (${formatMoney(fx.sellAmountMinor, fx.sellCurrency)})`;
+}
+
+declare const fromTerms: unique symbol;
+
+// What a payment takes from the company's wallet, which approval limits and the
+// two-approver threshold are compared with: the quote's sell amount for a payment
+// from another currency's wallet, the invoice amount otherwise. Only
+// paymentAmount and runAmount build one, each from approved terms, and
+// signoffsNeeded, eligibleApprovers, checkSigner and signoffProblem take nothing
+// else, so the compiler refuses a bare amount passed to them. decide.ts is not
+// covered: its two-approver check compares incident.sourceAmountMinor, which
+// assess takes from the same quote.
+export interface PaymentAmount {
+  readonly minor: number;
+  readonly currency: string;
+  readonly [fromTerms]: true;
+}
+
+export function paymentAmount(terms: ApprovalTerms): PaymentAmount {
+  return {
+    minor: terms.fx?.sellAmountMinor ?? terms.amountMinor,
+    currency: terms.fx?.sellCurrency ?? terms.currency,
+  } as PaymentAmount;
+}
+
+// A pay run's largest currency total. A run's rows never pay across currencies,
+// so each total is what leaves that currency's wallet. Approver limits are bare
+// numbers, so a limit that covers the largest total covers every total.
+export function runAmount(terms: RunTerms): PaymentAmount {
+  const largest: RunTotal | undefined = terms.totals.reduce(
+    (found: RunTotal | undefined, total: RunTotal): RunTotal | undefined =>
+      found === undefined || total.amountMinor > found.amountMinor ? total : found,
+    undefined,
+  );
+  return { minor: largest?.amountMinor ?? 0, currency: largest?.currency ?? "" } as PaymentAmount;
 }

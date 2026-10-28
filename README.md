@@ -36,6 +36,7 @@ If the bank sits on a payment past its deadline, a person hears about it. PayOnc
 | The cash position could not be read | Escalate to a person |
 | The original failed and a replacement with its transfer fee, on top of money already committed to other payments, would push cash below the reserve floor | Escalate to a person |
 | The replacement is above `TWO_APPROVERS_ABOVE` | Escalate to a person |
+| The invoice is paid from another currency's wallet, so the replacement needs a new exchange rate | Escalate to a person |
 | No reserve floor is set for the payment's currency | Escalate to a person |
 | The original failed, a resend can fix it and the beneficiary details are unchanged | Replace |
 
@@ -92,7 +93,7 @@ Before paying, PayOnce rebuilds the terms from current data and compares them wi
 
 ### Who can approve
 
-Approvers are listed in `.env` as names with limits, for example `APPROVERS=Yash:50000,Alex:10000,Sam:5000`. Without the list nobody can approve. A limit is compared with the amount in the payment's own currency, because PayOnce has no exchange rates yet.
+Approvers are listed in `.env` as names with limits, for example `APPROVERS=Yash:50000,Alex:10000,Sam:5000`. Without the list nobody can approve. A limit is compared with what the payment takes from the company's wallet, in that wallet's currency. For an invoice paid from its own currency, that is the invoice amount. For one paid from another wallet, it is the amount on the exchange rate quote (see [Payments across currencies](#payments-across-currencies)).
 
 - Two different approvers are needed above `TWO_APPROVERS_ABOVE` (5,000 by default). Two are also needed whatever the amount when the payment would go to an account the original did not go to, and when PayOnce does not know who started the incident, as with a payout found in Airwallex.
 - The person who started an incident cannot approve a payment for it. The page asks for a name when an incident starts. `pnpm recover` takes one as its fifth argument and uses the computer's login name without it.
@@ -103,6 +104,23 @@ Approvers are listed in `.env` as names with limits, for example `APPROVERS=Yash
 - The agent does not replace a payment above `TWO_APPROVERS_ABOVE` by itself either. It escalates, and the replacement needs two approvers.
 
 The page has no login, so a name is whatever the person types or picks. The rules stop someone approving their own incident under their own name, and the timeline records who said what. They do not prove who was at the keyboard. That needs a login tied to each name.
+
+## Payments across currencies
+
+An invoice can be owed in one currency and paid from another wallet. The `eur-from-usd` scenario pays a 4,000 EUR invoice from USD. Each payment is one Airwallex transfer that converts on a quote. PayOnce asks Airwallex for a quote that buys exactly the invoice amount and sends the transfer with that quote's id, so the supplier gets the invoice amount and the rate decides what leaves the USD wallet.
+
+PayOnce never pays at a rate nobody has seen, so every payment from another wallet waits for a person, the first one included:
+
+- A new invoice is held before paying. The approval card shows the amount, what it takes from the USD wallet, the rate as Airwallex quotes it (1 EUR = 1.1191 USD), how far that is from the mid-market rate, the quote id and when the quote runs out. `pnpm approve` prints the same.
+- If the original fails, its replacement goes to a person too, at a new quote, paid from the same wallet.
+- The quote is part of the terms the approval is bound to. A new request never opens on a quote an earlier request showed, and the timeline shows the new rate next to the last one. While nobody on the approver list can approve the payment, PayOnce keeps the last quote it took and takes no new one until that one runs low, and the timeline names no rate. A payment from the invoice's own currency has no quote in its terms.
+- A request ends at `APPROVAL_TTL_MINUTES`, or 12 minutes before its quote runs out if that comes first. An approval given at the last moment still has its 10 minutes to be used, with 2 to spare. `FX_QUOTE_VALIDITY` sets how long a quote holds: `MIN_30`, `HR_1` (the default), `HR_4`, `HR_8` or `HR_24`. A longer quote gives people longer to approve, at a slightly worse rate.
+- Approval limits and `TWO_APPROVERS_ABOVE` are compared with what leaves the wallet, in its currency. With a limit of 4,200, Sam can approve 4,000 EUR paid from the EUR wallet but not 4,000 EUR paid with 4,476 USD.
+- A payment that may not have reached Airwallex is retried with its own request id and quote, never a new quote. While the quote could still pay, a refused retry leaves the payment open and the duplicate lock held. When a bank deadline has passed since the quote ran out, PayOnce tries once more under the same request id. If Airwallex reports a transfer, PayOnce follows it. If Airwallex refuses the quote and lists no transfer with that request id, nothing was ever sent: PayOnce marks the payment failed, which releases the lock, and the invoice goes back to a person for a new approval on a new quote. Any other error, such as Airwallex throttling the call, leaves the payment open, and PayOnce tries again a minute later.
+- Whenever a payment becomes a transfer, PayOnce checks the transfer's rate, currency pair and amount against the approved quote. A transfer at any other rate goes to a person with a warning. If it is the payment that pays the invoice, only a person can close the incident, whether it was the first payment or a replacement. If it fails and a later payment is paid at its approved rate, the incident closes as usual.
+- The reserve floor and the cash panel count the payment in the wallet it leaves, at the quote's amount, with the fee in that currency. Nothing is counted in EUR.
+
+In the sandbox, Airwallex creates the converting transfer on the approved quote and takes the USD and a 15.60 USD SWIFT fee out of available at once. Its simulator does not move such a transfer past `PROCESSING`, so this demo ends at the bank deadline, where the incident goes to a person. A failed converting payment and its replacement cannot be shown in this sandbox.
 
 ## Changed bank details
 
@@ -152,7 +170,7 @@ A single incident's first payment is not checked against the floor. A pay run's 
 
 The page opens with a cash panel, one row per currency. A row shows the available balance from Airwallex, the reserve floor and the headroom: how much can still leave the wallet before cash drops below the floor. Open a row to see how the headroom is worked out, with each figure tagged by where it comes from.
 
-The balance comes from Airwallex, with the age of the read. Money held for outgoing payments and money still arriving from currency conversions are shown next to it, but neither is part of available. The floor comes from `RESERVE_FLOORS`, and any invoice held to a stricter floor of its own is listed under it. The rest comes from PayOnce's ledger. Payments being sent that have no transfer yet, and approvals given but not used yet, are taken off to give the headroom. A second figure also takes off every payment waiting on a person, as if each one were approved.
+The balance comes from Airwallex, with the age of the read. Money held for outgoing payments and money still arriving from currency conversions are shown next to it, but neither is part of available. A payment from another currency's wallet is listed under the wallet it leaves, at the amount on its transfer, or on its quote before the transfer exists. When no request is open on a quote, for example because nobody on the list can approve it, the panel shows the latest quote's amount and marks it as estimated from a quote. Before any quote is taken it shows 0, estimated. The floor comes from `RESERVE_FLOORS`, and any invoice held to a stricter floor of its own is listed under it. The rest comes from PayOnce's ledger. Payments being sent that have no transfer yet, and approvals given but not used yet, are taken off to give the headroom. A second figure also takes off every payment waiting on a person, as if each one were approved.
 
 Below that the panel lists payments already with the bank, payouts sent outside PayOnce and the fees kept on failed transfers. Airwallex takes a transfer out of available as soon as it is created, so the panel does not take these off again. Each is listed under the wallet the money left. A payout paid from another currency counts in the currency it was paid from, and a fee counts in the currency it was charged in.
 
@@ -225,7 +243,7 @@ pnpm install
 pnpm dev
 ```
 
-`pnpm dev` needs no credentials. It reads the sample supplier emails in `fixtures/emails/` and prints the findings and the decision for six incidents.
+`pnpm dev` needs no credentials. It reads the sample supplier emails in `fixtures/emails/` and prints the findings and the decision for seven incidents.
 
 Everything else talks to the Airwallex sandbox. Copy `.env.example` to `.env` and fill in a sandbox Client ID and API key. Set `RESERVE_FLOORS=USD:1000000,EUR:1000000` as well. Without it no currency has a floor, and every failed payment goes to a person instead of being replaced.
 
@@ -265,7 +283,7 @@ pnpm reset
 | `OUTCOME` | A simulated bank outcome: `PAID`, `STAYS_IN_FLIGHT`, or a failure type such as `CHANNEL_TIMEOUT`, `SYSTEM_ERROR`, `BENEFICIARY_BANK_RETURNED` or `ACCOUNT_CLOSED` | `CHANNEL_TIMEOUT` |
 | `INVOICE` | Any invoice number. A new one starts an incident and an existing one continues it | A random number |
 | `EMAILS` | `nothing-arrived`, `new-account` or `moved-banks` | `nothing-arrived` |
-| `SCENARIO` | `usd-local`, `eur-swift`, `eur-swift-low-reserve` or `usd-local-bank-change` | `usd-local` |
+| `SCENARIO` | `usd-local`, `eur-swift`, `eur-swift-low-reserve`, `usd-local-bank-change` or `eur-from-usd` | `usd-local` |
 | `NAME` | Who is starting the incident. That person cannot approve a payment for it | Your login name |
 
 Five runs to try:
@@ -311,12 +329,13 @@ In the fifth, `inv-05002` has the same supplier, amount and number as INV-5002, 
 | `src/ledger.ts` | Obligations, payment attempts, approvals, emails and the timeline in SQLite |
 | `src/audit-trail.ts` | How timeline lines are hashed and checked, and the JSON and CSV export |
 | `src/payments.ts` | Sends an attempt under its `request_id`, syncs transfer state and fees into the ledger, and fills in fees missing from older failed transfers |
-| `src/reserve.ts` | The reserve floors from `RESERVE_FLOORS`, and the floor one invoice's replacement is held to |
+| `src/reserve.ts` | The reserve floors from `RESERVE_FLOORS`, the floor one invoice's replacement is held to, and the wallet a payment leaves |
 | `src/cash-position.ts` | The cash panel's figures, and the committed money the policy also takes off, pay runs included |
 | `src/run-file.ts` | Reads a pay run CSV file and the cells of each row |
 | `src/runs.ts` | Pay runs: the checks, the terms and the request, approving, releasing and cancelling a run |
 | `src/currency-lock.ts` | The lease that lets one payment at a time be sent in each currency |
-| `src/approval.ts` | Approval terms and the hash that binds an approval to them |
+| `src/fx.ts` | How long an exchange rate quote holds, from `FX_QUOTE_VALIDITY` |
+| `src/approval.ts` | Approval terms, the exchange rate quote in them, the hash that binds an approval to them, and the amount limits are compared with |
 | `src/approvers.ts` | The approval policy: who may approve, how many are needed, and when a request expires |
 | `src/bank-change.ts` | Records a callback about new bank details and updates the supplier's record in Airwallex |
 | `src/emails.ts` | The email reader interface, the findings a reader returns, and the sender check |
@@ -325,7 +344,7 @@ In the fifth, `inv-05002` has the same supplier, amount and number as INV-5002, 
 | `src/keyword-reader.ts` | Keyword placeholder that reads the emails when no key is set |
 | `src/server.ts` | Local web server and JSON API |
 | `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/audit.ts`, `src/cash.ts`, `src/payrun.ts`, `src/reset.ts`, `src/index.ts` | The commands |
-| `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, balances and their cache for the cash panel, the webhook subscription and the simulation calls |
+| `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, exchange rate quotes, balances and their cache for the cash panel, the webhook subscription and the simulation calls |
 | `web/` | The page: plain HTML, CSS and JavaScript with no build step |
 | `fixtures/emails/` | Sample supplier emails |
 | `fixtures/pay-run-example.csv` | A sample pay run file |
@@ -341,5 +360,8 @@ The code holds amounts in minor units and converts at the Airwallex boundary. Th
 - Totals across currencies. They need exchange rates. A run's approver limits are compared with each currency's total on its own.
 - Editing a run, approving part of one, or scheduling one for a later date. Cancel it and upload a corrected file.
 - Recording a callback for a supplier outside an incident, so a run can pay a supplier who changed banks.
+- Pay run rows paid from another currency's wallet. Each row pays in its own currency from that currency's wallet.
+- Paying a replacement from the currency a failed converting payment is refunded in. By Airwallex's docs that refund lands in the transfer currency by default, so a replacement from that wallet would need no new rate. The sandbox simulator cannot fail a converting payment, so the refund cannot be seen and the replacement pays from the original's wallet again, on a new quote.
+- A fee estimate for the first payment of an invoice paid from another wallet. The card says the fee is charged when it is sent.
 - A webhook delivered by the sandbox. The receiver, the tunnel and the subscription work, and Airwallex records the events, but the sandbox has not sent one.
 - Real bank outcomes. The run uses the sandbox simulator to send, fail and pay transfers.

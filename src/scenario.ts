@@ -45,6 +45,9 @@ export interface ScenarioDef {
   // Gives each run a beneficiary of its own, so a bank change recorded in one run
   // reaches no other incident.
   beneficiaryPerRun: boolean;
+  // The wallet the invoice is paid from, when not its own currency's. Such an
+  // invoice is held before paying, so a person approves the exchange rate.
+  sourceCurrency?: string;
 }
 
 export const SCENARIOS: ScenarioDef[] = [
@@ -95,6 +98,19 @@ export const SCENARIOS: ScenarioDef[] = [
     tightReserveFeeMinor: null,
     supplierPhone: "+1 212 555 0147",
     beneficiaryPerRun: true,
+  },
+  {
+    id: "eur-from-usd",
+    label: "EUR invoice paid from USD, SWIFT",
+    supplier: "Example Supplier GmbH",
+    beneficiary: DE_SWIFT_SUPPLIER,
+    currency: "EUR",
+    amountMinor: 400_000,
+    transferMethod: "SWIFT",
+    tightReserveFeeMinor: null,
+    supplierPhone: null,
+    beneficiaryPerRun: false,
+    sourceCurrency: "USD",
   },
 ];
 
@@ -162,6 +178,7 @@ export async function openScenario(
     invoiceFloorMinor,
     startedBy,
     supplierPhone: def.supplierPhone,
+    sourceCurrency: def.sourceCurrency ?? def.currency,
   });
 }
 

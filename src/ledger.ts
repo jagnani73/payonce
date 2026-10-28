@@ -13,6 +13,7 @@ import {
   type RunAuditSnapshot,
   type RunEventFields,
 } from "./audit-trail.js";
+import type { ApprovalTerms, FxTerms } from "./approval.js";
 import type { SupplierEmail } from "./emails.js";
 
 export const LEDGER_PATH: string = "payonce.db";
@@ -253,9 +254,13 @@ export interface NewObligation {
   // The supplier's phone number from the supplier record, for calling back about
   // a change of bank details. Null when none is on file.
   supplierPhone: string | null;
+  // The wallet the invoice is paid from, when not its own currency's.
+  sourceCurrency?: string;
 }
 
 export interface Obligation extends NewObligation {
+  // The invoice's own currency when it is not paid from another wallet.
+  sourceCurrency: string;
   origin: ObligationOrigin;
   state: ObligationState;
   // Why the invoice last went to a person. Empty if it never has.
@@ -284,10 +289,30 @@ export interface Attempt {
   // until a transfer has been read.
   feeMinor: number | null;
   feeCurrency: string | null;
-  // What the transfer took from the wallet, before the fee, as last read from it.
-  // Null until a transfer has been read since PayOnce started keeping it.
+  // What the transfer took from the wallet, before the fee, as last read from it:
+  // the source amount in the source currency for a payment from another
+  // currency's wallet. Null until a transfer has been read since PayOnce started
+  // keeping it.
   amountMinor: number | null;
   currency: string | null;
+  // The quote a payment from another currency's wallet is sent with, and when it
+  // runs out as Airwallex wrote it. Null on any other payment.
+  quoteId: string | null;
+  quoteValidTo: string | null;
+  // The approval the attempt was opened on. Null on a payment no approval
+  // released, and on one from before the column.
+  approvalId: number | null;
+  // Why the transfer did not go out on its approved quote. Null when it did, or
+  // has not been checked. Only a person closes an invoice with one.
+  rateMismatch: string | null;
+}
+
+// The quote an attempt is sent with, from the terms of the approval it was opened
+// on. Written with the attempt, before Airwallex is called, so a retry sends the
+// same one.
+export interface AttemptQuote {
+  quoteId: string;
+  validTo: string;
 }
 
 // What the bank last did with a payout sent outside PayOnce. unknown is a status
@@ -403,6 +428,7 @@ interface ObligationRow {
   duplicate_of: string | null;
   rejected_by: string | null;
   run_row_id: number | null;
+  source_currency: string | null;
 }
 
 // A person's callback to the supplier on the number on file, and the bank
@@ -592,6 +618,10 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     duplicate_of: "TEXT",
     rejected_by: "TEXT",
     run_row_id: "INTEGER",
+    // The wallet the invoice is paid from. Null is its own currency's.
+    source_currency: "TEXT",
+    // The latest exchange rate quote taken for it, as JSON.
+    last_quote: "TEXT",
   },
   approvals: {
     requested_at: "TEXT",
@@ -611,6 +641,10 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     // What the transfer took from the wallet, before the fee, as on outside_payouts.
     amount_minor: "INTEGER",
     currency: "TEXT",
+    quote_id: "TEXT",
+    quote_valid_to: "TEXT",
+    approval_id: "INTEGER",
+    rate_mismatch: "TEXT",
   },
   events: {
     topic: "TEXT",
@@ -646,6 +680,10 @@ interface AttemptRow {
   fee_currency: string | null;
   amount_minor: number | null;
   currency: string | null;
+  quote_id: string | null;
+  quote_valid_to: string | null;
+  approval_id: number | null;
+  rate_mismatch: string | null;
 }
 
 export class DuplicatePaymentError extends Error {
@@ -685,6 +723,7 @@ function toObligation(row: ObligationRow): Obligation {
     supplierDomain: row.supplier_domain,
     beneficiaryId: row.beneficiary_id,
     currency: row.currency,
+    sourceCurrency: row.source_currency ?? row.currency,
     amountMinor: row.amount_minor,
     transferMethod: row.transfer_method,
     invoiceFloorMinor: row.invoice_floor_minor,
@@ -700,6 +739,19 @@ function toObligation(row: ObligationRow): Obligation {
   };
 }
 
+// True when the invoice is paid from another currency's wallet, so each payment
+// converts on a quote a person approved.
+export function crossCurrency(obligation: Obligation): boolean {
+  return obligation.sourceCurrency !== obligation.currency;
+}
+
+// Null when the invoice is paid from its own currency, as the column keeps it.
+function sourceColumn(input: NewObligation): string | null {
+  return input.sourceCurrency === undefined || input.sourceCurrency === input.currency
+    ? null
+    : input.sourceCurrency;
+}
+
 function toAttempt(row: AttemptRow): Attempt {
   return {
     requestId: row.request_id,
@@ -713,6 +765,10 @@ function toAttempt(row: AttemptRow): Attempt {
     feeCurrency: row.fee_currency,
     amountMinor: row.amount_minor,
     currency: row.currency,
+    quoteId: row.quote_id,
+    quoteValidTo: row.quote_valid_to,
+    approvalId: row.approval_id,
+    rateMismatch: row.rate_mismatch,
   };
 }
 
@@ -1233,8 +1289,8 @@ export class Ledger {
         `INSERT OR IGNORE INTO obligations
            (invoice_id, supplier, supplier_domain, beneficiary_id, currency,
             amount_minor, transfer_method, invoice_floor_minor, started_by,
-            supplier_phone)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            supplier_phone, source_currency)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.invoiceId,
@@ -1247,6 +1303,7 @@ export class Ledger {
         input.invoiceFloorMinor,
         input.startedBy,
         input.supplierPhone,
+        sourceColumn(input),
       );
     const row: ObligationRow = this.db
       .prepare("SELECT * FROM obligations WHERE invoice_id = ?")
@@ -1384,14 +1441,28 @@ export class Ledger {
       .all(invoiceId) as unknown as LedgerEvent[];
   }
 
-  private insertAttempt(requestId: string, invoiceId: string, kind: AttemptKind): void {
+  private insertAttempt(
+    requestId: string,
+    invoiceId: string,
+    kind: AttemptKind,
+    approvalId: number | null,
+    quote: AttemptQuote | null,
+  ): void {
     try {
       this.db
         .prepare(
-          `INSERT INTO attempts (request_id, invoice_id, kind, state)
-           VALUES (?, ?, ?, 'pending')`,
+          `INSERT INTO attempts
+             (request_id, invoice_id, kind, state, quote_id, quote_valid_to, approval_id)
+           VALUES (?, ?, ?, 'pending', ?, ?, ?)`,
         )
-        .run(requestId, invoiceId, kind);
+        .run(
+          requestId,
+          invoiceId,
+          kind,
+          quote?.quoteId ?? null,
+          quote?.validTo ?? null,
+          approvalId,
+        );
     } catch (error: unknown) {
       if (isUniqueViolation(error)) {
         throw new DuplicatePaymentError(invoiceId);
@@ -1415,15 +1486,36 @@ export class Ledger {
   }
 
   // Opens a payment's attempt, which counts its money as committed. Only inside a
-  // write transaction, and only while lease holds the lock of the currency the
-  // payment leaves, so a holder that lost its lease opens nothing.
-  openAttempt(invoiceId: string, kind: AttemptKind, lease: Lease): Attempt {
+  // write transaction, and only while lease holds the lock of the wallet the
+  // payment leaves, so a holder that lost its lease, or holds another wallet's
+  // lock, opens nothing. approvalId is the approval that released the payment:
+  // the attempt keeps it, and a payment from another currency's wallet keeps the
+  // quote in its terms, so a retry sends the same one. Such a payment is opened
+  // only on an approval with a quote.
+  openAttempt(
+    invoiceId: string,
+    kind: AttemptKind,
+    lease: Lease,
+    approvalId: number | null = null,
+  ): Attempt {
     if (!this.db.isTransaction) {
       throw new Error("An attempt is opened only inside a ledger transaction");
     }
     this.requireLease(lease);
+    const obligation: Obligation | undefined = this.obligation(invoiceId);
+    if (obligation !== undefined && lease.currency !== obligation.sourceCurrency) {
+      throw new Error(
+        `${invoiceId} is paid from ${obligation.sourceCurrency}, and its payment was about to be opened under the ${lease.currency} lock`,
+      );
+    }
+    const quote: AttemptQuote | null = approvalId === null ? null : this.approvedQuote(approvalId);
+    if (obligation !== undefined && crossCurrency(obligation) && quote === null) {
+      throw new Error(
+        `${invoiceId} is paid from ${obligation.sourceCurrency}, so PayOnce pays it only on an approved exchange rate quote. Nothing was sent`,
+      );
+    }
     const requestId: string = randomUUID();
-    this.insertAttempt(requestId, invoiceId, kind);
+    this.insertAttempt(requestId, invoiceId, kind, approvalId, quote);
     return {
       requestId,
       invoiceId,
@@ -1436,7 +1528,22 @@ export class Ledger {
       feeCurrency: null,
       amountMinor: null,
       currency: null,
+      quoteId: quote?.quoteId ?? null,
+      quoteValidTo: quote?.validTo ?? null,
+      approvalId,
+      rateMismatch: null,
     };
+  }
+
+  // The quote in an approval's terms, for a payment from another currency's
+  // wallet. Null when its terms carry none.
+  private approvedQuote(approvalId: number): AttemptQuote | null {
+    const row: { terms: string } | undefined = this.db
+      .prepare("SELECT terms FROM approvals WHERE id = ?")
+      .get(approvalId) as unknown as { terms: string } | undefined;
+    const fx: FxTerms | undefined =
+      row === undefined ? undefined : (JSON.parse(row.terms) as ApprovalTerms).fx;
+    return fx === undefined ? null : { quoteId: fx.quoteId, validTo: fx.validTo };
   }
 
   // Opens a replacement attempt the way openAttempt does and always rolls it back,
@@ -1445,7 +1552,7 @@ export class Ledger {
   tryLock(invoiceId: string): void {
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      this.insertAttempt(randomUUID(), invoiceId, "replacement");
+      this.insertAttempt(randomUUID(), invoiceId, "replacement", null, null);
     } finally {
       this.db.exec("ROLLBACK");
     }
@@ -1486,8 +1593,8 @@ export class Ledger {
           `INSERT INTO obligations
              (invoice_id, supplier, supplier_domain, beneficiary_id, currency,
               amount_minor, transfer_method, invoice_floor_minor, origin,
-              payout_reference, started_by, supplier_phone)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'outside', ?, ?, ?)`,
+              payout_reference, started_by, supplier_phone, source_currency)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'outside', ?, ?, ?, ?)`,
         )
         .run(
           input.invoiceId,
@@ -1501,6 +1608,7 @@ export class Ledger {
           payoutReference,
           input.startedBy,
           input.supplierPhone,
+          sourceColumn(input),
         );
       this.db
         .prepare(
@@ -1770,12 +1878,20 @@ export class Ledger {
     return row?.fee_minor ?? null;
   }
 
+  // For a transfer that did not go out on its approved quote.
+  markRateMismatch(requestId: string, reason: string): void {
+    this.db
+      .prepare("UPDATE attempts SET rate_mismatch = ? WHERE request_id = ?")
+      .run(reason, requestId);
+  }
+
   // For an attempt Airwallex refused to create. It never became a transfer, so
-  // it releases the lock.
+  // it releases the lock. One a look has since found a transfer for is kept.
   failAttempt(requestId: string, failureCode: string | null): void {
     this.db
       .prepare(
-        "UPDATE attempts SET state = 'failed', failure_code = ? WHERE request_id = ?",
+        `UPDATE attempts SET state = 'failed', failure_code = ?
+          WHERE request_id = ? AND state = 'pending' AND transfer_id IS NULL`,
       )
       .run(failureCode, requestId);
   }
@@ -1806,7 +1922,8 @@ export class Ledger {
   // failed write cannot leave it open with nothing sent. Undefined, with nothing
   // changed, when the approval is no longer approved or has expired, or the
   // invoice is no longer held: a person closed it, it has sent something, or a
-  // payout for it sent outside PayOnce is live.
+  // payout for it sent outside PayOnce is live. The attempt keeps the approval,
+  // and the quote in its terms for a payment from another currency's wallet.
   releaseFor(invoiceId: string, approvalId: number, lease: Lease): Attempt | undefined {
     this.db.exec("BEGIN IMMEDIATE");
     try {
@@ -1827,7 +1944,7 @@ export class Ledger {
         this.db.exec("ROLLBACK");
         return undefined;
       }
-      const attempt: Attempt = this.openAttempt(invoiceId, "original", lease);
+      const attempt: Attempt = this.openAttempt(invoiceId, "original", lease, approvalId);
       this.db.exec("COMMIT");
       return attempt;
     } catch (error: unknown) {
@@ -1841,6 +1958,21 @@ export class Ledger {
     this.db
       .prepare("UPDATE obligations SET duplicate_of = ? WHERE invoice_id = ?")
       .run(JSON.stringify(duplicateOf), invoiceId);
+  }
+
+  // The latest exchange rate quote taken for an invoice paid from another
+  // currency's wallet, as JSON, whether or not a request opened on it.
+  saveQuote(invoiceId: string, quote: string): void {
+    this.db
+      .prepare("UPDATE obligations SET last_quote = ? WHERE invoice_id = ?")
+      .run(quote, invoiceId);
+  }
+
+  lastQuote(invoiceId: string): string | undefined {
+    const row: { last_quote: string | null } | undefined = this.db
+      .prepare("SELECT last_quote FROM obligations WHERE invoice_id = ?")
+      .get(invoiceId) as unknown as { last_quote: string | null } | undefined;
+    return row?.last_quote ?? undefined;
   }
 
   // Closes a held invoice without paying it, recording who did. False when it is
@@ -1957,6 +2089,21 @@ export class Ledger {
     return row === undefined ? undefined : toApproval(row, this.signoffs(row.id));
   }
 
+  approval(id: number): Approval | undefined {
+    const row: ApprovalRow | undefined = this.db
+      .prepare("SELECT * FROM approvals WHERE id = ?")
+      .get(id) as unknown as ApprovalRow | undefined;
+    return row === undefined ? undefined : toApproval(row, this.signoffs(row.id));
+  }
+
+  // The approval an attempt was opened on. An attempt no approval released, or one
+  // from before the column, has the latest.
+  approvalOf(attempt: Attempt): Approval | undefined {
+    return attempt.approvalId === null
+      ? this.latestApproval(attempt.invoiceId)
+      : this.approval(attempt.approvalId);
+  }
+
   private signoffs(approvalId: number): Signoff[] {
     return this.db
       .prepare(
@@ -2035,7 +2182,8 @@ export class Ledger {
   // longer approved, for example because another process voided it in the
   // meantime, or when it has expired since the look checked it. Also when the
   // invoice is no longer escalated, as when a person closed it, or a payout for
-  // it sent outside PayOnce is live.
+  // it sent outside PayOnce is live. The attempt keeps the approval, and the quote
+  // in its terms for a payment from another currency's wallet.
   useApproval(invoiceId: string, approvalId: number, lease: Lease): Attempt | undefined {
     this.db.exec("BEGIN IMMEDIATE");
     try {
@@ -2051,7 +2199,7 @@ export class Ledger {
         this.db.exec("ROLLBACK");
         return undefined;
       }
-      const attempt: Attempt = this.openAttempt(invoiceId, "replacement", lease);
+      const attempt: Attempt = this.openAttempt(invoiceId, "replacement", lease, approvalId);
       this.db.exec("COMMIT");
       return attempt;
     } catch (error: unknown) {
@@ -2168,9 +2316,19 @@ export class Ledger {
   }
 
   // Settles only when the invoice has been paid once by PayOnce or, when a
-  // person closes it, by a payout sent outside PayOnce.
+  // person closes it, by a payout sent outside PayOnce. A payment that went out
+  // at a rate nobody approved leaves the invoice for a person to close, unless it
+  // failed.
   settle(invoiceId: string, byPerson: boolean = false): boolean {
     if (!this.paidOnce(invoiceId) && !(byPerson && this.paidOutside(invoiceId))) {
+      return false;
+    }
+    if (
+      !byPerson &&
+      this.attempts(invoiceId).some(
+        (attempt: Attempt): boolean => attempt.rateMismatch !== null && attempt.state !== "failed",
+      )
+    ) {
       return false;
     }
     this.db

@@ -5,7 +5,9 @@ import {
   accountKeyOf,
   bindingOf,
   payTo,
+  runAmount,
   runTermsFor,
+  type PaymentAmount,
   type RunRowTerms,
   type RunTerms,
   type RunTotal,
@@ -166,6 +168,8 @@ function asObligation(row: RunFileRow, payee: string, method: TransferMethod): O
     supplierDomain: "",
     beneficiaryId: row.beneficiaryId ?? "",
     currency: row.currency ?? "",
+    // A run's row is paid from its own currency's wallet.
+    sourceCurrency: row.currency ?? "",
     amountMinor: row.amountMinor ?? 0,
     transferMethod: method,
     invoiceFloorMinor: 0,
@@ -503,22 +507,17 @@ export function termsOf(run: Run, rows: CheckedRow[], cash: RunCash[]): RunTerms
   return runTermsFor(run.id, run.fileHash, run.uploadedBy, payRows(rows), totalsOf(rows, cash));
 }
 
-// The largest currency total. Approver limits are bare numbers compared in the
-// payment's own currency, so a limit that covers it covers every total.
-export function largestTotal(totals: RunTotal[]): { amountMinor: number; currency: string } {
-  return totals.reduce(
-    (largest: { amountMinor: number; currency: string }, total: RunTotal) =>
-      total.amountMinor > largest.amountMinor
-        ? { amountMinor: total.amountMinor, currency: total.currency }
-        : largest,
-    { amountMinor: 0, currency: totals[0]?.currency ?? "" },
-  );
+// The largest currency total, which approver limits are checked against, as the
+// page and pnpm payrun show it.
+export function largestTotal(terms: RunTerms): { amountMinor: number; currency: string } {
+  const amount: PaymentAmount = runAmount(terms);
+  return { amountMinor: amount.minor, currency: amount.currency };
 }
 
 // How many approvers a run needs, and why: two for a payee PayOnce has never
 // paid, for an account a callback verified, and when any currency's total is
 // above TWO_APPROVERS_ABOVE.
-export function runRule(policy: ApprovalPolicy, rows: CheckedRow[], totals: RunTotal[]): SignoffRule {
+export function runRule(policy: ApprovalPolicy, rows: CheckedRow[], amount: PaymentAmount): SignoffRule {
   const pay: PayRow[] = payRows(rows);
   const fresh: PayRow | undefined = pay.find((row: PayRow): boolean => row.newPayee);
   if (fresh !== undefined) {
@@ -531,11 +530,10 @@ export function runRule(policy: ApprovalPolicy, rows: CheckedRow[], totals: RunT
       why: `row ${changed.line} pays an account a callback verified, not the one PayOnce last paid ${changed.payee}`,
     };
   }
-  const largest: { amountMinor: number; currency: string } = largestTotal(totals);
-  if (largest.amountMinor > policy.twoApproversAboveMinor) {
+  if (amount.minor > policy.twoApproversAboveMinor) {
     return {
       needed: 2,
-      why: `the ${largest.currency} total is above ${formatMoney(policy.twoApproversAboveMinor, largest.currency)}`,
+      why: `the ${amount.currency} total is above ${formatMoney(policy.twoApproversAboveMinor, amount.currency)}`,
     };
   }
   return { needed: 1, why: "" };
@@ -704,9 +702,9 @@ function settleRunRequest(
     return lines;
   }
   const binding: string = bindingOf(terms);
-  const rule: SignoffRule = runRule(policy, rows, terms.totals);
-  const largest: { amountMinor: number; currency: string } = largestTotal(terms.totals);
-  const eligible: Approver[] = eligibleApprovers(policy, largest.amountMinor, runBarred(ledger, terms));
+  const amount: PaymentAmount = runAmount(terms);
+  const rule: SignoffRule = runRule(policy, rows, amount);
+  const eligible: Approver[] = eligibleApprovers(policy, amount, runBarred(ledger, terms));
   if (policy.problem !== null || eligible.length < rule.needed) {
     if (ledger.voidOpenRunApprovals(run.id)) {
       say("approval", "Approval request withdrawn: nobody on the approver list can approve it");
@@ -875,7 +873,7 @@ export function pendingRunApproval(ledger: Ledger, runId: number): PendingRunApp
     terms,
     barred: runBarred(ledger, terms),
     expired: isExpired(approval),
-    largest: largestTotal(terms.totals),
+    largest: largestTotal(terms),
   };
 }
 
@@ -904,8 +902,7 @@ export function approveRun(
   const signer: Approver = checkSigner(
     policy,
     approver,
-    pending.largest.amountMinor,
-    pending.largest.currency,
+    runAmount(pending.terms),
     pending.barred,
     pending.approval.signoffs.map((signoff: Signoff): string => signoff.approver),
   );
@@ -956,7 +953,7 @@ export async function releaseRun(engine: Engine, agent: Dispatcher, runId: numbe
   }
   const check: RunCheck = await checkRows(engine, fileRowsOf(ledger, run), runId);
   const terms: RunTerms = termsOf(run, check.rows, check.cash);
-  const largest: { amountMinor: number; currency: string } = largestTotal(terms.totals);
+  const amount: PaymentAmount = runAmount(terms);
   let why: string | null = null;
   if (isExpired(approval)) {
     why = "expired before it was used";
@@ -965,10 +962,9 @@ export async function releaseRun(engine: Engine, agent: Dispatcher, runId: numbe
   } else {
     const problem: string | null = signoffProblem(
       engine.approvals,
-      runRule(engine.approvals, check.rows, terms.totals),
+      runRule(engine.approvals, check.rows, amount),
       approval,
-      largest.amountMinor,
-      largest.currency,
+      amount,
       runBarred(ledger, terms),
     );
     why = problem === null ? null : `is void: ${problem}`;

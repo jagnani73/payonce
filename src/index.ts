@@ -23,6 +23,8 @@ interface Sample {
   reserveFloorMinor: number | null;
   // Approved payments on other invoices that have not been sent yet.
   committedMinor: number;
+  // A USD invoice paid from another wallet, and what the quote sells from it.
+  paidFrom?: { currency: string; amountMinor: number };
 }
 
 const samples: Sample[] = [
@@ -74,6 +76,15 @@ const samples: Sample[] = [
     reserveFloorMinor: RESERVE_FLOOR_MINOR,
     committedMinor: 1_200_000,
   },
+  {
+    label: "original timed out, the invoice is paid from the EUR wallet",
+    emails: "nothing-arrived",
+    originalState: "failed",
+    resendCanFix: true,
+    reserveFloorMinor: RESERVE_FLOOR_MINOR,
+    committedMinor: 0,
+    paidFrom: { currency: "EUR", amountMinor: 357_430 },
+  },
 ];
 
 const reader: EmailReader = new KeywordReader();
@@ -87,6 +98,9 @@ for (const sample of samples) {
     supplier: "Example Supplier LLC",
     currency: "USD",
     amountMinor: 400_000,
+    crossCurrency: sample.paidFrom !== undefined,
+    sourceCurrency: sample.paidFrom?.currency ?? "USD",
+    sourceAmountMinor: sample.paidFrom?.amountMinor ?? 400_000,
     transferFeeMinor: 0,
     originalState: sample.originalState,
     bankOverdue: false,
