@@ -49,7 +49,13 @@ import {
 import { committedAcross, committedByInvoice, committedMinor } from "./cash-position.js";
 import { withCurrencyLock } from "./currency-lock.js";
 import { deadlineOf, describeDeadline, isOverdue } from "./deadlines.js";
-import { decide, floorReason, OUTSIDE_PAYOUT_REASON } from "./decide.js";
+import {
+  decide,
+  floorReason,
+  NO_FLOOR_CLAUSE,
+  NO_FLOOR_REASON,
+  OUTSIDE_PAYOUT_REASON,
+} from "./decide.js";
 import { likelyDuplicates, nearlyPays, sameNumberForSupplier } from "./duplicates.js";
 import {
   unverifiedSenders,
@@ -130,6 +136,8 @@ interface Assessment {
   // ones the original went to. Null when none matches them.
   bankChange: BankChange | null;
   decision: Decision;
+  // The floor reason added to the decision's reason, or null when none was.
+  floor: string | null;
 }
 
 function messageOf(error: unknown): string {
@@ -504,7 +512,19 @@ async function assess(
     );
   }
 
-  const decision: Decision = decide(incident);
+  const decided: Decision = decide(incident);
+  // A replacement for what looks like a second bill of a paid invoice goes to a
+  // person. Decided here so every look, and so every request, gives this reason.
+  const paid: Obligation | undefined =
+    decided.action === "replace"
+      ? likelyDuplicates(engine.ledger, obligation).find(
+          (other: Obligation): boolean => isPaid(engine.ledger, other.invoiceId),
+        )
+      : undefined;
+  const decision: Decision =
+    paid === undefined
+      ? decided
+      : { action: "escalate", reason: `it looks like a second bill for ${paid.invoiceId}, which is paid` };
   // Once an invoice has gone to a person, the policy no longer acts for itself.
   const held: string =
     obligation.state !== "escalated"
@@ -525,7 +545,7 @@ async function assess(
     ? (engine.ledger.verifiedBankChange(obligation.beneficiaryId, bankDetailsKey(bankDetails)) ??
       null)
     : null;
-  return { original, incident, findings, unverified, bankDetails, bankChange, decision };
+  return { original, incident, findings, unverified, bankDetails, bankChange, decision, floor: null };
 }
 
 // The beneficiary record no longer holds the account a payment was decided or
@@ -830,7 +850,13 @@ function awaitApproval(
   let latest: Approval | undefined = engine.ledger.latestApproval(invoiceId);
   const sameRequest: boolean =
     latest?.state === "requested" && latest.binding === binding && latest.needed >= rule.needed;
-  if (sameRequest && latest !== undefined && isExpired(latest)) {
+  // A partly signed request that expired is reported as expired, even when the
+  // terms have changed since.
+  if (
+    latest?.state === "requested" &&
+    isExpired(latest) &&
+    (sameRequest || latest.signoffs.length > 0)
+  ) {
     note(
       engine.ledger,
       invoiceId,
@@ -947,14 +973,40 @@ function escalate(
         : `Waiting on a person to call the supplier on ${obligation.supplierPhone}, the number on file, and record the callback. PayOnce pays an account the original did not go to only after that`,
       "waiting",
     );
+    noteFloor(engine, obligation, assessment, false);
     return null;
   }
 
-  return awaitApproval(
+  const next: NextLook = awaitApproval(
     engine,
     obligation,
     termsOf(obligation, assessment),
     ruleFor(engine, obligation, assessment),
+  );
+  // No request is open when nobody on the approver list could approve it.
+  noteFloor(engine, obligation, assessment, next !== null);
+  return next;
+}
+
+// Says that the floor reason was added to the policy's, and that the approval
+// request says so too only when one is open.
+function noteFloor(
+  engine: Engine,
+  obligation: Obligation,
+  assessment: Assessment,
+  requested: boolean,
+): void {
+  if (assessment.floor === null) {
+    return;
+  }
+  note(
+    engine.ledger,
+    obligation.invoiceId,
+    "warning",
+    requested
+      ? `Also, ${assessment.floor}. The approval request says this too, and only an approval of that request releases a replacement`
+      : `Also, ${assessment.floor}`,
+    "floor",
   );
 }
 
@@ -963,11 +1015,7 @@ function escalate(
 // reasons before the cash, such as a payment sent outside PayOnce, so when one of
 // those sent the invoice to a person the floor reason is added to it. The request
 // then names both, and an approval of terms that did not is void.
-function withFloorReason(
-  engine: Engine,
-  obligation: Obligation,
-  assessment: Assessment,
-): Assessment {
+function namingFloor(assessment: Assessment): Assessment {
   const decision: Decision = assessment.decision;
   const incident: Incident = assessment.incident;
   if (
@@ -981,14 +1029,79 @@ function withFloorReason(
   if (floor === null || floor === decision.reason) {
     return assessment;
   }
-  note(
-    engine.ledger,
-    obligation.invoiceId,
-    "warning",
-    `Also, ${floor}. The approval request says this too, and only an approval of that request releases a replacement`,
-    "floor",
-  );
-  return { ...assessment, decision: { action: "escalate", reason: `${decision.reason}, and ${floor}` } };
+  const clause: string = floor === NO_FLOOR_REASON ? NO_FLOOR_CLAUSE : floor;
+  return {
+    ...assessment,
+    decision: { action: "escalate", reason: `${decision.reason}, and ${clause}` },
+    floor: clause,
+  };
+}
+
+// namingFloor, and a line on the timeline once the floor stops applying after a
+// line said it applied. The line says an approval still counts only when an open
+// request or approval named the floor.
+function withFloorReason(
+  engine: Engine,
+  obligation: Obligation,
+  assessment: Assessment,
+): Assessment {
+  const lastFloorLine: LedgerEvent | undefined = [...engine.ledger.events(obligation.invoiceId)]
+    .reverse()
+    .find((event: LedgerEvent): boolean => event.topic === "floor");
+  if (floorReason(assessment.incident) === null && lastFloorLine?.kind === "warning") {
+    const approval: Approval | undefined = engine.ledger.latestApproval(obligation.invoiceId);
+    const above: string =
+      "A replacement and its transfer fee would now leave cash above the reserve floor";
+    note(
+      engine.ledger,
+      obligation.invoiceId,
+      "payment",
+      requestedDecision(obligation, assessment, approval) === undefined
+        ? above
+        : `${above}. An approval of a request that named the floor still counts`,
+      "floor",
+    );
+  }
+  return namingFloor(assessment);
+}
+
+// The decision an open request or approval was made under, when the floor applied
+// then and does not now: cash was below it, could not be read, or no floor was
+// set. Only the floor is changed, so the policy gives the reason it gave then.
+// Undefined when no open request or approval named the floor.
+function requestedDecision(
+  obligation: Obligation,
+  assessment: Assessment,
+  approval: Approval | undefined,
+): Decision | undefined {
+  if (
+    approval === undefined ||
+    (approval.state !== "requested" && approval.state !== "approved") ||
+    isExpired(approval) ||
+    floorReason(assessment.incident) !== null
+  ) {
+    return undefined;
+  }
+  for (const floorMinor of [Number.MAX_SAFE_INTEGER, Number.NaN, null]) {
+    const incident: Incident = { ...assessment.incident, reserveFloorMinor: floorMinor };
+    const requested: Assessment = namingFloor({ ...assessment, incident, decision: decide(incident) });
+    if (bindingOf(termsOf(obligation, requested)) === approval.binding) {
+      return requested.decision;
+    }
+  }
+  return undefined;
+}
+
+// The assessment as an open request or approval that named the floor saw it, so
+// an approval given with less cash than there is now still covers the
+// replacement. Otherwise the assessment as it is.
+function asRequested(
+  obligation: Obligation,
+  assessment: Assessment,
+  approval: Approval | undefined,
+): Assessment {
+  const decision: Decision | undefined = requestedDecision(obligation, assessment, approval);
+  return decision === undefined ? assessment : { ...assessment, decision };
 }
 
 async function continueEscalated(
@@ -998,7 +1111,7 @@ async function continueEscalated(
 ): Promise<NextLook> {
   // Once an invoice has gone to a person, only an approval releases a payment and
   // only a person closes it, even if the policy would now do either unprompted.
-  const assessment: Assessment = withFloorReason(
+  const assessed: Assessment = withFloorReason(
     engine,
     obligation,
     await assess(engine, obligation, originalId),
@@ -1006,12 +1119,20 @@ async function continueEscalated(
   const approval: Approval | undefined = engine.ledger.latestApproval(
     obligation.invoiceId,
   );
+  const assessment: Assessment = asRequested(obligation, assessed, approval);
   const current: ReplacementTerms = termsOf(obligation, assessment);
-  if (
-    approval?.state !== "approved" ||
-    voidIfStale(engine, obligation, approval, current, ruleFor(engine, obligation, assessment))
-  ) {
-    return escalate(engine, obligation, assessment);
+  const rule: SignoffRule = ruleFor(engine, obligation, assessment);
+  // A request that stays open keeps the terms it was opened with. A new one, after
+  // a void or because more approvers are needed, gives the terms as they are now.
+  if (approval?.state !== "approved") {
+    return escalate(
+      engine,
+      obligation,
+      approval?.state === "requested" && approval.needed >= rule.needed ? assessment : assessed,
+    );
+  }
+  if (voidIfStale(engine, obligation, approval, current, rule)) {
+    return escalate(engine, obligation, assessed);
   }
 
   // A payout tied to the invoice now is looked at before anything is sent, and the
@@ -1518,23 +1639,24 @@ async function replaceUnderLock(
   const before: Map<string, number> = committedByInvoice(engine.ledger, wallet, { invoiceId });
   const availableMinor: number = await getAvailableMinor(engine.client, wallet);
 
+  let incident: Incident = assessment.incident;
   const next: Attempt | Decision = engine.ledger.transaction((): Attempt | Decision => {
-    // A replacement for what looks like a second bill of a paid invoice goes to a
-    // person, for example when the invoice was paid after this one was released.
-    const paid: Obligation | undefined = likelyDuplicates(engine.ledger, obligation).find(
-      (other: Obligation): boolean => isPaid(engine.ledger, other.invoiceId),
-    );
-    if (paid !== undefined) {
-      return { action: "escalate", reason: `it looks like a second bill for ${paid.invoiceId}, which is paid` };
-    }
-    const decision: Decision = decide({
+    incident = {
       ...assessment.incident,
       availableBalanceMinor: availableMinor,
       committedMinor: committedAcross(
         before,
         committedByInvoice(engine.ledger, wallet, { invoiceId }),
       ),
-    });
+    };
+    // assess makes this check too. Made again here for an invoice paid since.
+    const paid: Obligation | undefined = likelyDuplicates(engine.ledger, obligation).find(
+      (other: Obligation): boolean => isPaid(engine.ledger, other.invoiceId),
+    );
+    if (paid !== undefined) {
+      return { action: "escalate", reason: `it looks like a second bill for ${paid.invoiceId}, which is paid` };
+    }
+    const decision: Decision = decide(incident);
     // Opening the attempt takes the duplicate lock, so this throws if the invoice
     // already has a live payment.
     return decision.action === "replace"
@@ -1543,7 +1665,12 @@ async function replaceUnderLock(
   });
   if ("action" in next) {
     note(engine.ledger, invoiceId, "decision", `Escalate: ${next.reason}`, "decision");
-    return escalate(engine, obligation, { ...assessment, decision: next });
+    // The first request names the floor as well, as every later one does.
+    return escalate(
+      engine,
+      obligation,
+      withFloorReason(engine, obligation, { ...assessment, incident, decision: next }),
+    );
   }
   const replacement: Transfer = await send(engine, obligation, next, accountKey);
   return waitForBank(engine, invoiceId, "replacement", replacement);
@@ -1566,7 +1693,8 @@ async function act(
     case "wait":
       return waitForBank(engine, obligation.invoiceId, "original", assessment.original);
     case "escalate":
-      return escalate(engine, obligation, assessment);
+      // The first request names the floor as well, as every later one does.
+      return escalate(engine, obligation, withFloorReason(engine, obligation, assessment));
     case "close":
       if (!close(engine, obligation.invoiceId)) {
         note(

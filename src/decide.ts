@@ -3,8 +3,11 @@ import type { Decision, Incident } from "./incident.js";
 export const OUTSIDE_PAYOUT_REASON: string =
   "a payout for this invoice was sent outside PayOnce";
 
-export const NO_FLOOR_REASON: string =
-  "no reserve floor is set for this currency, so a person approves any replacement";
+// How the no-floor reason reads when it is added to another reason, which already
+// says why a person approves.
+export const NO_FLOOR_CLAUSE: string = "no reserve floor is set for this currency";
+
+export const NO_FLOOR_REASON: string = `${NO_FLOOR_CLAUSE}, so a person approves any replacement`;
 
 // Why the cash keeps a replacement from being sent unprompted, or null when it
 // and its fee leave the wallet above its floor. The policy and the check before
