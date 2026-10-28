@@ -1,9 +1,25 @@
 import { readFileSync } from "node:fs";
 
+// An attachment listed by name, type and size. PayOnce never decodes, stores or
+// opens one.
+export interface EmailAttachment {
+  name: string;
+  type: string;
+  bytes: number;
+}
+
 export interface SupplierEmail {
   from: string;
   subject: string;
   body: string;
+  // Set on an email a person uploaded, never on a fixture thread's.
+  uploadId?: number;
+  replyTo?: string[];
+  attachments?: EmailAttachment[];
+  // PayOnce's notes about the email, in its own words and never in the body.
+  notes?: string[];
+  // Part of its text was not read, so it counts as unread.
+  partial?: boolean;
 }
 
 // The only thing a reader hands to the policy. It carries no amounts and no bank
