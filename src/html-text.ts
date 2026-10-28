@@ -1,8 +1,9 @@
 // Turns an email's HTML into the text a person reads. It is one pass with no DOM,
 // and it errs on reading more than a mail client shows. Only the content of
-// script and style is dropped, and when that content reads like words for a
-// person, such as a CSS content string, the result says so and the email counts
-// as partly unread. A comment ends where a browser ends it, at --> or --!>, or at
+// script and style is dropped, outside <svg> and <math>, and when that content
+// could hold text a person is shown, such as a CSS content string, the result
+// says so and the email counts as partly unread. A comment ends where a browser
+// ends it, at --> or --!>, or at
 // the end of the input. Nothing inside it opens or closes an element, and its
 // text is kept with any markup taken out. Text a client hides with CSS, a title
 // and a template are kept too. The reader and the page then see the same text,
@@ -225,78 +226,129 @@ function commentText(content: string): string {
   return parts.join("");
 }
 
-// Script and style with CSS and script comments taken out. Each kind of comment
-// is searched for once from where the last one was found, so this stays linear.
-function withoutCodeComments(code: string): string {
-  const parts: string[] = [];
-  let index: number = 0;
-  let block: number = code.indexOf("/*");
-  let line: number = code.indexOf("//");
-  while (index < code.length) {
-    if (block >= 0 && block < index) {
-      block = code.indexOf("/*", index);
-    }
-    if (line >= 0 && line < index) {
-      line = code.indexOf("//", index);
-    }
-    if (block < 0 && line < 0) {
-      parts.push(code.slice(index));
-      break;
-    }
-    const start: number = block < 0 ? line : line < 0 ? block : Math.min(block, line);
-    parts.push(code.slice(index, start), " ");
-    const close: number = start === block ? code.indexOf("*/", start + 2) : code.indexOf("\n", start + 2);
-    index = close < 0 ? code.length : close + (start === block ? 2 : 1);
-  }
-  return parts.join("");
+// CSS properties whose strings a client draws as text.
+const DRAWN: ReadonlySet<string> = new Set<string>([
+  "content",
+  "quotes",
+  "list-style",
+  "list-style-type",
+  "symbols",
+  "additive-symbols",
+  "prefix",
+  "suffix",
+  "pad",
+  "negative",
+]);
+// A property name written with an escape, such as c\6fntent, which could be
+// any of them.
+const ESCAPED_PROPERTY: string = "\\";
+
+function isNameChar(code: number): boolean {
+  return isLetter(code) || (code >= 48 && code <= 57) || code === 45 || code === 95 || code === 92;
 }
 
-// Four or more words of letters in a row, which reads as something meant for a
-// person. CSS such as "@media only screen and" stops short of it.
-function wordRun(text: string): boolean {
-  let run: number = 0;
-  for (const token of text.split(/\s+/)) {
-    const word: string = /[.,;:!?]$/.test(token) ? token.slice(0, -1) : token;
-    run = word.length >= 2 && /^\p{L}+$/u.test(word) ? run + 1 : 0;
-    if (run >= 4) {
+// The property name before a colon, lowercased: letters, digits, hyphens,
+// underscores and escapes, at most 64 characters back. One with an escape in it
+// is ESCAPED_PROPERTY.
+function propertyBefore(css: string, colon: number): string {
+  let end: number = colon;
+  while (end > 0 && isSpace(css.charCodeAt(end - 1)) && colon - end < 64) {
+    end -= 1;
+  }
+  let start: number = end;
+  while (start > 0 && isNameChar(css.charCodeAt(start - 1)) && end - start < 64) {
+    start -= 1;
+  }
+  const name: string = css.slice(start, end).toLowerCase();
+  return name.includes("\\") ? ESCAPED_PROPERTY : name;
+}
+
+// Where a quoted string that opens at start ends: after its closing quote, or at
+// a line break (CSS and a quoted script string end there unclosed), or at the
+// end. A backslash escapes the next character.
+function stringEnd(code: string, start: number, lines: boolean): number {
+  const quote: number = code.charCodeAt(start);
+  let index: number = start + 1;
+  while (index < code.length) {
+    const char: number = code.charCodeAt(index);
+    if (char === 92) {
+      index += 2;
+      continue;
+    }
+    if (char === quote) {
+      return index + 1;
+    }
+    if (lines && (char === 10 || char === 12 || char === 13)) {
+      return index;
+    }
+    index += 1;
+  }
+  return code.length;
+}
+
+// True when a style block can draw text: a declaration of a DRAWN property, or
+// of one whose name is escaped, that holds a string with anything but spaces in
+// it, any CSS escape, or attr(), which draws an attribute PayOnce never reads.
+// It tokenizes as CSS does, so a comment is /* */ only, and a comment marker
+// inside a string or an unquoted url() is not a comment. One pass, linear.
+function cssDrawsText(css: string): boolean {
+  let property: string = "";
+  let index: number = 0;
+  while (index < css.length) {
+    const char: number = css.charCodeAt(index);
+    const drawn: boolean = property === ESCAPED_PROPERTY || DRAWN.has(property);
+    if (char === 47 && css.charCodeAt(index + 1) === 42) {
+      const end: number = css.indexOf("*/", index + 2);
+      index = end < 0 ? css.length : end + 2;
+    } else if (char === 34 || char === 39) {
+      const end: number = stringEnd(css, index, true);
+      const inner: string = css.slice(index + 1, end);
+      if (drawn && (inner.includes("\\") || /[^\s"']/.test(inner))) {
+        return true;
+      }
+      index = end;
+    } else if (
+      (char === 85 || char === 117) &&
+      css.slice(index, index + 4).toLowerCase() === "url(" &&
+      !isNameChar(css.charCodeAt(index - 1))
+    ) {
+      // An unquoted url() runs to its ), and nothing in it is a comment.
+      let next: number = index + 4;
+      while (next < css.length && isSpace(css.charCodeAt(next))) {
+        next += 1;
+      }
+      const quoted: boolean = css.charCodeAt(next) === 34 || css.charCodeAt(next) === 39;
+      const close: number = quoted ? next : css.indexOf(")", next);
+      index = close < 0 ? css.length : quoted ? close : close + 1;
+    } else if (char === 58) {
+      property = propertyBefore(css, index);
+      index += 1;
+    } else if (char === 59 || char === 123 || char === 125) {
+      property = "";
+      index += 1;
+    } else if (char === 40 && drawn && css.slice(Math.max(0, index - 4), index).toLowerCase() === "attr") {
       return true;
+    } else if (char === 92 && drawn) {
+      return true;
+    } else {
+      index += 1;
     }
   }
   return false;
 }
 
-// True when dropped script or style content holds words for a person: a run of
-// them, or one inside a quoted string, such as content:"Pay our new account".
-function looksVisible(content: string): boolean {
-  const code: string = withoutCodeComments(content);
-  if (wordRun(code)) {
+// True when dropped script or style content could hold text a person is shown,
+// so the email counts as partly unread. Any tag in it could be one a client
+// draws, as inside <svg>. A script is flagged for any digit or quote, since an
+// amount, an account number or a string is enough. A style block is flagged when
+// it can draw text.
+function holdsText(name: string, content: string): boolean {
+  if (/<[A-Za-z]/.test(content)) {
     return true;
   }
-  let index: number = 0;
-  let double: number = code.indexOf("\"");
-  let single: number = code.indexOf("'");
-  while (index < code.length) {
-    if (double >= 0 && double < index) {
-      double = code.indexOf("\"", index);
-    }
-    if (single >= 0 && single < index) {
-      single = code.indexOf("'", index);
-    }
-    const open: number = double < 0 ? single : single < 0 ? double : Math.min(double, single);
-    if (open < 0) {
-      return false;
-    }
-    const close: number = code.indexOf(code.charAt(open), open + 1);
-    if (close < 0) {
-      return false;
-    }
-    if (wordRun(code.slice(open + 1, close))) {
-      return true;
-    }
-    index = close + 1;
-  }
-  return false;
+  return name === "script" ? /[0-9"'`]/.test(content) : cssDrawsText(content);
 }
+
 
 function altOf(tag: string): string {
   const match: RegExpExecArray | null = /(?:^|\s)alt\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/i.exec(tag);
@@ -304,7 +356,7 @@ function altOf(tag: string): string {
 }
 
 // The text of an HTML part. hiddenText is true when script or style content
-// PayOnce dropped reads like words a person could be shown.
+// PayOnce dropped could hold text a person is shown (holdsText).
 export interface HtmlText {
   text: string;
   hiddenText: boolean;
@@ -314,6 +366,8 @@ export function htmlToText(html: string): HtmlText {
   const out: string[] = [];
   const missing: Map<string, number> = new Map<string, number>();
   let preDepth: number = 0;
+  // How deep in <svg> or <math> the scan is.
+  let foreign: number = 0;
   let hiddenText: boolean = false;
   const text = (chunk: string): void => {
     if (chunk === "") {
@@ -365,11 +419,16 @@ export function htmlToText(html: string): HtmlText {
     }
     const closing: boolean = next === 47;
     const name: string = tagName(closing ? tag.slice(1) : tag);
-    if (!closing && DROPPED.has(name)) {
+    if (name === "svg" || name === "math") {
+      foreign = closing ? Math.max(0, foreign - 1) : tag.endsWith("/") ? foreign : foreign + 1;
+    }
+    // Inside <svg> or <math>, style and script are not raw text, so their
+    // content is read like any other.
+    if (!closing && DROPPED.has(name) && foreign === 0) {
       // With no closing tag the content is read as text, which shows more.
       const close: Span | null = closeOf(html, index, name, missing);
       if (close !== null) {
-        hiddenText = hiddenText || looksVisible(html.slice(index, close.start));
+        hiddenText = hiddenText || holdsText(name, html.slice(index, close.start));
         index = close.end;
       }
       continue;
