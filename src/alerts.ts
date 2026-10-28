@@ -57,6 +57,7 @@ import {
   type Ledger,
   type Obligation,
   type Outage,
+  type OutageHold,
   type OutsidePayout,
   type RecordedConditions,
   type Run,
@@ -447,7 +448,9 @@ function outageConditions(ledger: Ledger, now: number): FoundCondition[] {
           .slice(0, OUTAGE_REFERENCES_SHOWN),
         declaredAt: outage.declaredAt,
         endedAt: outage.endedAt,
-        held: ledger.outageHolds(outage.id).length,
+        // As the Outages card counts them: an invoice whose failure was only
+        // counted is not held.
+        held: ledger.outageHolds(outage.id).filter((hold: OutageHold): boolean => hold.what !== "counted").length,
       };
       return condition(`outage:${outage.id}`, { state: outage.state }, facts);
     });
