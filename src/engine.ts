@@ -1,6 +1,7 @@
 import { getAvailableMinor } from "./airwallex/balances.js";
 import { getBankDetails } from "./airwallex/beneficiaries.js";
 import type { AirwallexClient } from "./airwallex/client.js";
+import { createQuote, type Quote } from "./airwallex/fx.js";
 import {
   findTransferByRequestId,
   getTransfer,
@@ -12,11 +13,20 @@ import {
   accountKeyOf,
   bindingOf,
   changedFields,
+  conversionText,
+  describeRate,
+  fxTermsOf,
   heldTermsFor,
   keyHash,
+  markupOf,
+  paidWith,
+  paymentAmount,
+  rateMismatch,
   termsFor,
+  withFeeEstimate,
   type ApprovalTerms,
   type DuplicateEvidence,
+  type FxTerms,
   type HeldPaymentTerms,
   type ReplacementTerms,
 } from "./approval.js";
@@ -40,7 +50,7 @@ import {
   type Fee,
 } from "./assess.js";
 import { committedMinor } from "./cash-position.js";
-import { deadlineOf, describeDeadline, isOverdue } from "./deadlines.js";
+import { deadlineMinutes, deadlineOf, describeDeadline, isOverdue } from "./deadlines.js";
 import { decide, OUTSIDE_PAYOUT_REASON } from "./decide.js";
 import { likelyDuplicates, nearlyPays } from "./duplicates.js";
 import {
@@ -49,8 +59,10 @@ import {
   type EmailReader,
   type SupplierEmail,
 } from "./emails.js";
+import { quoteValidity } from "./fx.js";
 import type { Decision, Incident, OriginalTransferState } from "./incident.js";
 import {
+  crossCurrency,
   DuplicatePaymentError,
   expiryOf,
   isExpired,
@@ -58,6 +70,7 @@ import {
   type Approval,
   type Attempt,
   type AttemptKind,
+  type AttemptQuote,
   type BankChange,
   type AttemptState,
   type EventKind,
@@ -70,7 +83,7 @@ import {
   type PayoutState,
   type Signoff,
 } from "./ledger.js";
-import { formatMoney, readMinor, toMinor } from "./money.js";
+import { formatMoney, readMinor, toMajor, toMinor } from "./money.js";
 import { sendAttempt, syncTransfer, wasRejected } from "./payments.js";
 import { debitCurrency, floorFor, type ReservePolicy } from "./reserve.js";
 
@@ -110,6 +123,15 @@ export interface Engine {
   bank?: Bank;
 }
 
+// The quote a payment from another currency's wallet is approved at. fresh is
+// true for one this look took. endsAt is when it runs out by this machine's
+// clock, and NaN for one taken from an open request.
+interface Rate {
+  fx: FxTerms;
+  fresh: boolean;
+  endsAt: number;
+}
+
 interface Assessment {
   original: Transfer;
   incident: Incident;
@@ -119,8 +141,16 @@ interface Assessment {
   // The callback that verified the bank details on file, when they are not the
   // ones the original went to. Null when none matches them.
   bankChange: BankChange | null;
+  // The quote a replacement from another currency's wallet would be paid at.
+  // Null for any other invoice, and before the original has failed.
+  rate: Rate | null;
   decision: Decision;
 }
+
+// An approval request ends this long before its quote does, after the time an
+// approval given at the last moment has to be used, so a slow look or a clock
+// that differs from Airwallex's never sends on a quote that has run out.
+const QUOTE_MARGIN_MS: number = 2 * 60_000;
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -211,13 +241,13 @@ export function payoutSummary(transfer: Transfer): string {
   return `${formatMoney(toMinor(transfer.transfer_amount), transfer.transfer_currency)} to ${payee}, ${transfer.status}${failure}`;
 }
 
-// A payout's amount and fee for the ledger. One that cannot be read is null, so
-// tying the payout never fails on it.
+// A payout's amount and fee for the ledger, as they left the wallet it was paid
+// from. One that cannot be read is null, so tying the payout never fails on it.
 function payoutMoney(transfer: Transfer): PayoutMoney {
   const fee: Fee | null = feeOf(transfer);
   return {
-    amountMinor: readMinor(transfer.transfer_amount),
-    currency: transfer.transfer_currency ?? null,
+    amountMinor: readMinor(transfer.source_amount ?? transfer.transfer_amount),
+    currency: transfer.source_currency ?? transfer.transfer_currency ?? null,
     feeMinor: fee?.minor ?? null,
     feeCurrency: fee?.currency ?? null,
   };
@@ -392,6 +422,57 @@ function floorText(floorMinor: number | null, currency: string): string {
     : "the reserve floor setting could not be read";
 }
 
+// The quote a payment of this invoice from another currency's wallet is offered
+// at. While an approval request is open, every look builds its terms on that
+// request's own quote, so its binding holds still. Any other time it takes a
+// fresh quote, so a new request never opens on a quote an earlier one showed.
+// feeEstimateMinor is the fee the payment should cost, in the sell currency.
+async function rateFor(
+  engine: Engine,
+  obligation: Obligation,
+  feeEstimateMinor: number | null,
+): Promise<Rate> {
+  const latest: Approval | undefined = engine.ledger.latestApproval(obligation.invoiceId);
+  const open: FxTerms | undefined =
+    latest !== undefined &&
+    (latest.state === "requested" || latest.state === "approved") &&
+    !isExpired(latest)
+      ? (JSON.parse(latest.terms) as ApprovalTerms).fx
+      : undefined;
+  if (
+    open !== undefined &&
+    open.sellCurrency === obligation.sourceCurrency &&
+    open.buyCurrency === obligation.currency &&
+    open.buyAmountMinor === obligation.amountMinor
+  ) {
+    return { fx: withFeeEstimate(open, feeEstimateMinor), fresh: false, endsAt: Number.NaN };
+  }
+  const quote: Quote = await createQuote(
+    engine.client,
+    obligation.sourceCurrency,
+    obligation.currency,
+    toMajor(obligation.amountMinor),
+    quoteValidity(),
+  );
+  const receivedAt: number = Date.now();
+  const fx: FxTerms = fxTermsOf(quote, obligation, feeEstimateMinor);
+  // This clock and Airwallex's may differ, so the quote is taken to hold no
+  // longer than its validity counted from when it arrived.
+  const validTo: number = Date.parse(quote.valid_to_at);
+  const endsAt: number = Math.min(validTo, receivedAt + (validTo - Date.parse(quote.valid_from_at)));
+  if (!(endsAt - receivedAt > APPROVED_USE_WITHIN_MS + QUOTE_MARGIN_MS)) {
+    throw new Error(
+      `The exchange rate quote Airwallex sent holds until ${quote.valid_to_at}, too briefly for an approval request, so PayOnce offers nothing on it`,
+    );
+  }
+  return { fx, fresh: true, endsAt };
+}
+
+// The quote an attempt is sent with, from the terms it was approved on.
+function quoteOf(terms: ApprovalTerms): AttemptQuote | null {
+  return terms.fx === undefined ? null : { quoteId: terms.fx.quoteId, validTo: terms.fx.validTo };
+}
+
 // The email evidence a person sees and approves against.
 function evidenceSummary(assessment: Assessment): string {
   return assessment.unverified.length === 0
@@ -416,18 +497,33 @@ async function assess(
     engine.client,
     obligation.beneficiaryId,
   );
-  const feeMinor: number = toMinor(original.fee_amount);
   // Read fresh on every look. The cash panel's cached balance never feeds a decision.
   const wallet: string = debitCurrency(obligation);
+  // The original was paid from the same wallet, so its fee is in that currency. A
+  // fee in any other is not added to it, and the policy then cannot read the cash.
+  const feeMinor: number =
+    original.fee_currency === undefined || original.fee_currency === wallet
+      ? toMinor(original.fee_amount)
+      : Number.NaN;
   const availableMinor: number = await getAvailableMinor(engine.client, wallet);
   const floorMinor: number | null = floorFor(engine.reserve, obligation);
   const committed: number = committedMinor(engine.ledger, wallet, obligation.invoiceId);
   const originalState: OriginalTransferState = originalStateOf(original);
+  const converts: boolean = crossCurrency(obligation);
+  // A replacement from another wallet is priced on a quote, which the cash check
+  // and the approval both go by. Only a failed original leaves one to price.
+  const rate: Rate | null =
+    converts && originalState === "failed"
+      ? await rateFor(engine, obligation, Number.isFinite(feeMinor) ? feeMinor : null)
+      : null;
   const incident: Incident = {
     invoiceId: obligation.invoiceId,
     supplier: obligation.supplier,
     currency: obligation.currency,
     amountMinor: obligation.amountMinor,
+    crossCurrency: converts,
+    sourceCurrency: wallet,
+    sourceAmountMinor: converts ? (rate?.fx.sellAmountMinor ?? Number.NaN) : obligation.amountMinor,
     transferFeeMinor: feeMinor,
     originalState,
     bankOverdue: originalState === "in_flight" && isOverdue(original),
@@ -470,21 +566,26 @@ async function assess(
   // A failed transfer keeps its fee, so a replacement pays the fee a second time.
   // Money committed to other payments is taken off as well, so the numbers behind
   // a floor decision are on the timeline.
-  if (incident.originalState === "failed" && (feeMinor > 0 || committed > 0)) {
-    const costMinor: number = obligation.amountMinor + feeMinor;
+  if (
+    incident.originalState === "failed" &&
+    Number.isFinite(feeMinor) &&
+    Number.isFinite(incident.sourceAmountMinor) &&
+    (feeMinor > 0 || committed > 0)
+  ) {
+    const costMinor: number = incident.sourceAmountMinor + feeMinor;
     const afterMinor: number = availableMinor - committed - costMinor;
-    const currency: string = obligation.currency;
     const fee: string =
-      feeMinor > 0 ? ` with a second ${formatMoney(feeMinor, currency)} transfer fee` : "";
+      feeMinor > 0 ? ` with a second ${formatMoney(feeMinor, wallet)} transfer fee` : "";
     const others: string =
       committed > 0
         ? `, and ${formatMoney(committed, wallet)} is committed to other payments not sent yet`
         : "";
+    const replacement: string = converts ? `A replacement of ${money(obligation)}` : "A replacement";
     note(
       engine.ledger,
       obligation.invoiceId,
       floorMinor !== null && afterMinor >= floorMinor ? "payment" : "warning",
-      `A replacement costs ${formatMoney(costMinor, currency)}${fee}${others}. Cash after it: ${formatMoney(afterMinor, wallet)}, ${floorText(floorMinor, wallet)}`,
+      `${replacement} costs ${formatMoney(costMinor, wallet)}${fee}${others}. Cash after it: ${formatMoney(afterMinor, wallet)}, ${floorText(floorMinor, wallet)}`,
       "cost",
     );
   }
@@ -510,7 +611,7 @@ async function assess(
     ? (engine.ledger.verifiedBankChange(obligation.beneficiaryId, bankDetailsKey(bankDetails)) ??
       null)
     : null;
-  return { original, incident, findings, unverified, bankDetails, bankChange, decision };
+  return { original, incident, findings, unverified, bankDetails, bankChange, rate, decision };
 }
 
 // A transfer is paid to the beneficiary record as it is when it is created, so a
@@ -530,19 +631,59 @@ async function requireAccount(
   }
 }
 
-// accountKey is the account a payment was decided or approved for.
+// accountKey is the account a payment was decided or approved for. quote is the
+// approved quote a payment from another currency's wallet goes out on.
 async function pay(
   engine: Engine,
   obligation: Obligation,
   kind: AttemptKind,
   accountKey: string | null = null,
+  quote: AttemptQuote | null = null,
 ): Promise<Transfer> {
+  if (crossCurrency(obligation) && quote === null) {
+    throw new Error(
+      `${obligation.invoiceId} is paid from ${obligation.sourceCurrency}, so PayOnce pays it only on an approved exchange rate quote. Nothing was sent`,
+    );
+  }
   if (accountKey !== null) {
     await requireAccount(engine, obligation, accountKey, "decision");
   }
   // Opening the attempt takes the duplicate lock, so this throws if the invoice
   // already has a live payment.
-  return send(engine, obligation, engine.ledger.openAttempt(obligation.invoiceId, kind), accountKey);
+  return send(
+    engine,
+    obligation,
+    engine.ledger.openAttempt(obligation.invoiceId, kind, quote),
+    accountKey,
+  );
+}
+
+// A payment from another currency's wallet must go out on the quote a person
+// approved. Checked wherever an attempt first becomes a transfer: when it is
+// sent, when a retry creates it, and when it is found by its request_id. The
+// money has moved by then, so a transfer at any other rate goes to a person.
+function checkRate(
+  engine: Engine,
+  obligation: Obligation,
+  attempt: Attempt,
+  transfer: Transfer,
+): void {
+  if (attempt.quoteId === null) {
+    return;
+  }
+  const latest: Approval | undefined = engine.ledger.latestApproval(obligation.invoiceId);
+  const approved: FxTerms | undefined =
+    latest?.state === "used" ? (JSON.parse(latest.terms) as ApprovalTerms).fx : undefined;
+  const problem: string | null = rateMismatch(
+    approved?.quoteId === attempt.quoteId ? approved : undefined,
+    transfer,
+  );
+  if (problem === null) {
+    return;
+  }
+  const reason: string = `${attempt.kind} ${transfer.short_reference_id} ${problem}`;
+  engine.ledger.escalate(obligation.invoiceId, reason);
+  note(engine.ledger, obligation.invoiceId, "warning", capitalise(reason));
 }
 
 // Sends an attempt already written to the ledger.
@@ -565,17 +706,19 @@ async function send(
     );
   }
 
-  // Noted as soon as the transfer exists, so a later failure cannot hide it.
+  // Noted as soon as the transfer exists, so a later failure cannot hide it. The
+  // fee is charged in the wallet the payment left.
   const fee: string =
     created.fee_amount > 0
-      ? `, plus a ${formatMoney(toMinor(created.fee_amount), obligation.currency)} transfer fee`
+      ? `, plus a ${formatMoney(toMinor(created.fee_amount), created.fee_currency ?? obligation.sourceCurrency)} transfer fee`
       : "";
   note(
     engine.ledger,
     obligation.invoiceId,
     "payment",
-    `${capitalise(kind)} ${created.short_reference_id} sent: ${money(obligation)} to ${obligation.supplier}${fee}`,
+    `${capitalise(kind)} ${created.short_reference_id} sent: ${money(obligation)} to ${obligation.supplier}${conversionText(created)}${fee}`,
   );
+  checkRate(engine, obligation, attempt, created);
   // The record could still change between the check and the transfer.
   const sentTo: TransferBankDetails | undefined = created.beneficiary?.bank_details;
   if (accountKey !== null && sentTo !== undefined && accountKeyOf(sentTo) !== accountKey) {
@@ -660,8 +803,9 @@ async function replace(
   engine: Engine,
   obligation: Obligation,
   accountKey: string,
+  quote: AttemptQuote | null,
 ): Promise<NextLook> {
-  const replacement: Transfer = await pay(engine, obligation, "replacement", accountKey);
+  const replacement: Transfer = await pay(engine, obligation, "replacement", accountKey, quote);
   return waitForBank(engine, obligation.invoiceId, "replacement", replacement);
 }
 
@@ -673,6 +817,7 @@ function termsOf(obligation: Obligation, assessment: Assessment): ReplacementTer
     evidenceSummary(assessment),
     assessment.bankDetails,
     assessment.bankChange,
+    assessment.rate?.fx ?? null,
   );
 }
 
@@ -695,14 +840,13 @@ function barredFrom(ledger: Ledger, obligation: Obligation, accountKey: string |
   return barred;
 }
 
-function ruleFor(engine: Engine, obligation: Obligation, assessment: Assessment): SignoffRule {
-  return signoffsNeeded(
-    engine.approvals,
-    obligation.amountMinor,
-    obligation.currency,
-    assessment.incident.beneficiaryChanged,
-    obligation.startedBy,
-  );
+function ruleFor(
+  engine: Engine,
+  obligation: Obligation,
+  terms: ApprovalTerms,
+  newAccount: boolean,
+): SignoffRule {
+  return signoffsNeeded(engine.approvals, paymentAmount(terms), newAccount, obligation.startedBy);
 }
 
 // Why an approval no longer covers the payment under the approval policy as it
@@ -722,14 +866,14 @@ function approvalProblem(
   if (approval.signoffs.length < needed) {
     return `it now needs ${needed} approvers, because ${rule.why}`;
   }
+  const approved: ApprovalTerms = JSON.parse(approval.terms) as ApprovalTerms;
   for (const signoff of approval.signoffs) {
     try {
       checkSigner(
         engine.approvals,
         signoff.approver,
-        obligation.amountMinor,
-        obligation.currency,
-        barredFrom(engine.ledger, obligation, (JSON.parse(approval.terms) as ApprovalTerms).accountKey),
+        paymentAmount(approved),
+        barredFrom(engine.ledger, obligation, approved.accountKey),
         approval.signoffs
           .filter((other: Signoff): boolean => other !== signoff)
           .map((other: Signoff): string => other.approver),
@@ -789,14 +933,36 @@ function holdForOutsidePayout(engine: Engine, invoiceId: string): NextLook {
   return null;
 }
 
+// When a request opened now on this quote stops covering a payment: its TTL, or
+// earlier, so that an approval given at the last moment is used, or void, before
+// the quote runs out.
+function requestExpiry(engine: Engine, rate: Rate | null, now: number): number {
+  const ttl: number = now + engine.approvals.expiresAfterMs;
+  return rate === null ? ttl : Math.min(ttl, rate.endsAt - APPROVED_USE_WITHIN_MS - QUOTE_MARGIN_MS);
+}
+
+// "Quote for 4,000.00 EUR: 4,478.04 USD at 1 EUR = 1.119509 USD, ..." with the
+// last request's rate when it was another.
+function quoteLine(obligation: Obligation, fx: FxTerms, previous: FxTerms | undefined): string {
+  const until: string = new Date(Date.parse(fx.validTo)).toISOString().slice(11, 16);
+  const was: string =
+    previous === undefined || previous.quoteId === fx.quoteId
+      ? ""
+      : `. The last request's quote was ${describeRate(previous)} (${formatMoney(previous.sellAmountMinor, previous.sellCurrency)})`;
+  return `Quote for ${money(obligation)}: ${formatMoney(fx.sellAmountMinor, fx.sellCurrency)} at ${describeRate(fx)}, ${markupOf(fx)} from mid-market, held until ${until} UTC${was}`;
+}
+
 // Asks the approvers to approve a payment under the approval policy, and says
 // what the invoice is waiting on. A request still open for the same terms is kept.
-// Returns when the request expires, so the look then can open a new one.
+// Returns when the request expires, so the look then can open a new one. rate is
+// the quote a payment from another currency's wallet is offered at, and a new
+// request opens only on a quote this look took for it.
 function awaitApproval(
   engine: Engine,
   obligation: Obligation,
   terms: ApprovalTerms,
   rule: SignoffRule,
+  rate: Rate | null,
 ): NextLook {
   const invoiceId: string = obligation.invoiceId;
   const binding: string = bindingOf(terms);
@@ -805,7 +971,7 @@ function awaitApproval(
   // again, so none is opened until the approver list changes.
   const eligible: Approver[] = eligibleApprovers(
     engine.approvals,
-    obligation.amountMinor,
+    paymentAmount(terms),
     barredFrom(engine.ledger, obligation, terms.accountKey),
   );
   if (engine.approvals.problem !== null || eligible.length < rule.needed) {
@@ -821,10 +987,11 @@ function awaitApproval(
       eligible.length === 0
         ? "nobody on the approver list can"
         : `only ${eligible.map((approver: Approver): string => approver.name).join(" and ")} can`;
+    const fx: string = terms.fx === undefined ? "" : `${paidWith(terms.fx)},`;
     const payment: string =
       terms.action === "replace"
-        ? `A replacement of ${money(obligation)}`
-        : `Paying ${money(obligation)} for this invoice`;
+        ? `A replacement of ${money(obligation)}${fx}`
+        : `Paying ${money(obligation)} for this invoice${fx}`;
     note(
       engine.ledger,
       invoiceId,
@@ -840,7 +1007,30 @@ function awaitApproval(
   let latest: Approval | undefined = engine.ledger.latestApproval(invoiceId);
   const sameRequest: boolean =
     latest?.state === "requested" && latest.binding === binding && latest.needed >= rule.needed;
-  if (sameRequest && latest !== undefined && isExpired(latest)) {
+  const opening: boolean = !sameRequest || latest === undefined || isExpired(latest);
+  // Terms built on an open request's quote that now need a new request: that one
+  // is withdrawn, and the next look, at once, takes a fresh quote for its own.
+  if (opening && terms.fx !== undefined && rate?.fresh !== true) {
+    const signed: Signoff[] = latest?.state === "requested" ? latest.signoffs : [];
+    if (engine.ledger.voidOpenApprovals(invoiceId)) {
+      note(
+        engine.ledger,
+        invoiceId,
+        "approval",
+        signed.length > 0
+          ? `Approval by ${signersOf(signed)} no longer counts: the terms changed, so PayOnce takes a new exchange rate quote and opens a new request`
+          : "Approval request withdrawn: the terms changed, so PayOnce takes a new exchange rate quote and opens a new request",
+      );
+    }
+    return Date.now();
+  }
+  const previous: FxTerms | undefined =
+    latest === undefined ? undefined : (JSON.parse(latest.terms) as ApprovalTerms).fx;
+  // A request on a quote is replaced on a fresh quote once it expires, so its
+  // terms differ even when nothing else changed.
+  const expiredRequest: boolean =
+    latest?.state === "requested" && isExpired(latest) && (sameRequest || terms.fx !== undefined);
+  if (expiredRequest && latest !== undefined) {
     note(
       engine.ledger,
       invoiceId,
@@ -855,17 +1045,22 @@ function awaitApproval(
       `Approval by ${signersOf(latest.signoffs)} no longer counts: the terms changed, so PayOnce opened a new request`,
     );
   }
-  if (!sameRequest || latest === undefined || isExpired(latest)) {
+  if (opening) {
     const opened: boolean = engine.ledger.requestApproval(invoiceId, {
       binding,
       terms: JSON.stringify(terms),
       needed: rule.needed,
       neededWhy: rule.why,
-      expiresAt: Date.now() + engine.approvals.expiresAfterMs,
+      expiresAt: requestExpiry(engine, terms.fx === undefined ? null : rate, Date.now()),
     });
     // Another process closed the invoice meanwhile.
     if (!opened) {
       return null;
+    }
+    // Written only for a quote a request opens on, so the timeline names no rate
+    // nothing could be paid at.
+    if (terms.fx !== undefined) {
+      note(engine.ledger, invoiceId, "payment", quoteLine(obligation, terms.fx, previous));
     }
     latest = engine.ledger.latestApproval(invoiceId);
   }
@@ -873,7 +1068,7 @@ function awaitApproval(
     return null;
   }
   // A held invoice can be closed without paying instead.
-  const payment: string = `${money(obligation)} to ${terms.payTo} (the account on file)`;
+  const payment: string = `${money(obligation)} to ${terms.payTo} (the account on file)${paidWith(terms.fx)}`;
   note(
     engine.ledger,
     invoiceId,
@@ -960,11 +1155,13 @@ function escalate(
     return null;
   }
 
+  const terms: ReplacementTerms = termsOf(obligation, assessment);
   return awaitApproval(
     engine,
     obligation,
-    termsOf(obligation, assessment),
-    ruleFor(engine, obligation, assessment),
+    terms,
+    ruleFor(engine, obligation, terms, assessment.incident.beneficiaryChanged),
+    assessment.rate,
   );
 }
 
@@ -982,7 +1179,13 @@ async function continueEscalated(
   const current: ReplacementTerms = termsOf(obligation, assessment);
   if (
     approval?.state !== "approved" ||
-    voidIfStale(engine, obligation, approval, current, ruleFor(engine, obligation, assessment))
+    voidIfStale(
+      engine,
+      obligation,
+      approval,
+      current,
+      ruleFor(engine, obligation, current, assessment.incident.beneficiaryChanged),
+    )
   ) {
     return escalate(engine, obligation, assessment);
   }
@@ -1007,7 +1210,7 @@ async function continueEscalated(
     "approval",
     `Approval by ${approval.approver} matches the current terms`,
   );
-  return replace(engine, obligation, current.accountKey);
+  return replace(engine, obligation, current.accountKey, quoteOf(current));
 }
 
 // The invoices a held one looks like a second bill for, as they stand now, and
@@ -1071,8 +1274,9 @@ function listOf(invoiceIds: string[]): string {
 }
 
 // Sends a new invoice's original, unless it looks like a second bill for an
-// invoice the ledger already has, or a payout for it sent outside PayOnce may
-// already pay it. Then it holds the invoice for a person, sends nothing and
+// invoice the ledger already has, a payout for it sent outside PayOnce may
+// already pay it, or it is paid from another currency's wallet, so a person
+// approves the rate. Then it holds the invoice for a person, sends nothing and
 // returns null. Call it in the invoice's turn.
 export async function startPayment(
   engine: Engine,
@@ -1092,7 +1296,8 @@ export async function startPayment(
   }
   const duplicates: Obligation[] = likelyDuplicates(engine.ledger, now);
   const outsideLive: boolean = anyLive(engine.ledger.outsidePayouts(invoiceId));
-  if (duplicates.length === 0 && !outsideLive) {
+  const converts: boolean = crossCurrency(now);
+  if (duplicates.length === 0 && !outsideLive && !converts) {
     try {
       return await pay(engine, now, "original");
     } catch (error: unknown) {
@@ -1107,10 +1312,13 @@ export async function startPayment(
   }
 
   const duplicateOf: string[] = duplicates.map((other: Obligation): string => other.invoiceId);
+  // The more serious reason is the one given.
   const reason: string =
-    duplicates.length === 0
-      ? OUTSIDE_PAYOUT_REASON
-      : `it looks like a second bill for ${listOf(duplicateOf)}: the same supplier and amount, and the same invoice number apart from case, spacing, leading zeros or letters added at the end`;
+    duplicates.length > 0
+      ? `it looks like a second bill for ${listOf(duplicateOf)}: the same supplier and amount, and the same invoice number apart from case, spacing, leading zeros or letters added at the end`
+      : outsideLive
+        ? OUTSIDE_PAYOUT_REASON
+        : `it is paid from ${now.sourceCurrency}, so a person approves the exchange rate before PayOnce pays it`;
   engine.ledger.holdBeforePaying(invoiceId, duplicateOf, reason);
   note(engine.ledger, invoiceId, "decision", `Escalate: ${reason}`, "decision");
   for (const other of duplicateOf) {
@@ -1176,7 +1384,10 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
   );
   const accountKey: string = accountKeyOf(bankDetails);
   const duplicates: DuplicateEvidence[] = await duplicateEvidence(engine, held, accountKey);
-  const terms: HeldPaymentTerms = heldTermsFor(held, bankDetails, duplicates);
+  // Paid from another currency's wallet, it is approved at a quote. Nothing has
+  // been sent, so no fee is known yet.
+  const rate: Rate | null = crossCurrency(obligation) ? await rateFor(engine, obligation, null) : null;
+  const terms: HeldPaymentTerms = heldTermsFor(held, bankDetails, duplicates, rate?.fx ?? null);
   // A second bill paid to a different account from the first is the pattern of an
   // invoice resent with new bank details, so it needs two approvers.
   const elsewhere: DuplicateEvidence | undefined = duplicates.find(
@@ -1193,17 +1404,11 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
   }
   const rule: SignoffRule =
     elsewhere === undefined
-      ? signoffsNeeded(
-          engine.approvals,
-          obligation.amountMinor,
-          obligation.currency,
-          false,
-          obligation.startedBy,
-        )
+      ? signoffsNeeded(engine.approvals, paymentAmount(terms), false, obligation.startedBy)
       : { needed: 2, why: `it pays a different account from the one ${elsewhere.invoiceId} was sent to` };
   const approval: Approval | undefined = engine.ledger.latestApproval(invoiceId);
   if (approval?.state !== "approved" || voidIfStale(engine, held, approval, terms, rule)) {
-    return awaitApproval(engine, held, terms, rule);
+    return awaitApproval(engine, held, terms, rule, rate);
   }
 
   if (
@@ -1217,7 +1422,7 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
   await requireAccount(engine, obligation, terms.accountKey, "payment was approved");
   // Another process may have voided the approval, closed the invoice or tied a
   // payout to it since it was read. The next look sees which.
-  const attempt: Attempt | undefined = engine.ledger.releaseFor(invoiceId, approval.id);
+  const attempt: Attempt | undefined = engine.ledger.releaseFor(invoiceId, approval.id, quoteOf(terms));
   if (attempt === undefined) {
     return Date.now();
   }
@@ -1262,7 +1467,9 @@ async function act(
           decision: { action: "escalate", reason },
         });
       }
-      return replace(engine, obligation, accountKeyOf(assessment.bankDetails));
+      // The policy never replaces a payment from another currency's wallet by
+      // itself, and pay refuses one with no approved quote.
+      return replace(engine, obligation, accountKeyOf(assessment.bankDetails), null);
     }
     case "wait":
       return waitForBank(engine, obligation.invoiceId, "original", assessment.original);
@@ -1279,6 +1486,36 @@ async function act(
       }
       return null;
   }
+}
+
+// True for an attempt sent on a quote that ran out a bank deadline ago. Airwallex
+// refuses to create a transfer on a quote that has run out, and a transfer
+// created before then has had that long to show.
+function quoteLapsed(obligation: Obligation, attempt: Attempt): boolean {
+  if (attempt.quoteValidTo === null) {
+    return false;
+  }
+  const deadline: number =
+    Date.parse(attempt.quoteValidTo) + deadlineMinutes(obligation.transferMethod) * 60_000;
+  return !(Date.now() < deadline);
+}
+
+// A payment sent on a quote that has run out, with no transfer in Airwallex to
+// show for it. PayOnce cannot prove it was never created, so the attempt stays
+// pending and keeps the duplicate lock, and a person checks Airwallex.
+function unsentOnQuote(engine: Engine, obligation: Obligation, attempt: Attempt): NextLook {
+  const invoiceId: string = obligation.invoiceId;
+  const reason: string = `the exchange rate quote of the ${attempt.kind} payment ran out and Airwallex shows no transfer for it`;
+  engine.ledger.escalate(invoiceId, reason);
+  note(engine.ledger, invoiceId, "decision", `Escalate: ${reason}`, "decision");
+  note(
+    engine.ledger,
+    invoiceId,
+    "approval",
+    `Waiting on a person to look in Airwallex for a transfer with request id ${attempt.requestId}. PayOnce keeps that payment open, so the duplicate lock holds and nothing more is sent for this invoice`,
+    "waiting",
+  );
+  return null;
 }
 
 // Looks at an invoice again, after a webhook, a status check, new emails, a
@@ -1314,6 +1551,7 @@ async function look(engine: Engine, invoiceId: string): Promise<NextLook> {
   let originalId: string | null = null;
   let original: Transfer | null = null;
   let liveReplacement: Transfer | null = null;
+  let unsent: Attempt | null = null;
   for (const attempt of engine.ledger.attempts(invoiceId)) {
     // An attempt Airwallex refused never became a transfer. Only one still
     // pending is retried.
@@ -1327,7 +1565,12 @@ async function look(engine: Engine, invoiceId: string): Promise<NextLook> {
         : undefined;
     if (existing !== undefined) {
       transfer = await syncTransfer(engine.client, engine.ledger, existing.id);
+      checkRate(engine, obligation, attempt, transfer);
       engine.bank?.sent(invoiceId, attempt.kind, transfer.id);
+    } else if (attempt.transferId === null && quoteLapsed(obligation, attempt)) {
+      // Airwallex can no longer create it, but nothing proves it never did.
+      unsent = attempt;
+      continue;
     } else if (attempt.transferId === null) {
       // A retry pays the record as it is now, so a replacement, or an original
       // paid on an approval after a hold, goes out only to the account it was
@@ -1347,7 +1590,8 @@ async function look(engine: Engine, invoiceId: string): Promise<NextLook> {
       } else if (approved?.action === "pay") {
         await requireAccount(engine, obligation, approved.accountKey, "payment was approved");
       }
-      transfer = await sendAttempt(engine.client, engine.ledger, obligation, attempt);
+      transfer = await sendAttempt(engine.client, engine.ledger, obligation, attempt, true);
+      checkRate(engine, obligation, attempt, transfer);
       engine.bank?.sent(invoiceId, attempt.kind, transfer.id);
     } else {
       transfer = await syncTransfer(engine.client, engine.ledger, attempt.transferId);
@@ -1365,6 +1609,9 @@ async function look(engine: Engine, invoiceId: string): Promise<NextLook> {
     console.log(`  ${attempt.kind} ${describe(transfer)}`);
   }
 
+  if (unsent !== null) {
+    return unsentOnQuote(engine, obligation, unsent);
+  }
   if (originalId === null) {
     const refused: Attempt | undefined = engine.ledger.attempts(invoiceId).at(-1);
     if (refused !== undefined && obligation.state === "open") {
@@ -1606,8 +1853,7 @@ export function approvePayment(
   const signer: Approver = checkSigner(
     policy,
     approver,
-    terms.amountMinor,
-    terms.currency,
+    paymentAmount(terms),
     pending.barred,
     approval.signoffs.map((signoff: Signoff): string => signoff.approver),
   );
@@ -1617,7 +1863,7 @@ export function approvePayment(
     approval.binding,
     APPROVED_USE_WITHIN_MS,
   );
-  const payment: string = `${formatMoney(terms.amountMinor, terms.currency)} to ${terms.payTo} (the account on file)`;
+  const payment: string = `${formatMoney(terms.amountMinor, terms.currency)} to ${terms.payTo} (the account on file)${paidWith(terms.fx)}`;
   const left: number = after.needed - after.signoffs.length;
   note(
     ledger,

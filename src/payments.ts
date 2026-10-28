@@ -6,8 +6,8 @@ import {
   type Transfer,
 } from "./airwallex/transfers.js";
 import { attemptStateOf, feeOf, type Fee } from "./assess.js";
-import type { Attempt, Ledger, Obligation } from "./ledger.js";
-import { toMajor } from "./money.js";
+import { crossCurrency, type Attempt, type Ledger, type Obligation } from "./ledger.js";
+import { readMinor, toMajor } from "./money.js";
 
 // Failed transfers whose fee is read from Airwallex in one go, when the ledger
 // has none for them.
@@ -23,6 +23,7 @@ function record(ledger: Ledger, transfer: Transfer): void {
     transfer.failure?.code ?? null,
     fee?.minor ?? null,
     fee?.currency ?? null,
+    readMinor(transfer.source_amount),
   );
 }
 
@@ -34,13 +35,24 @@ export function wasRejected(error: unknown): error is AirwallexError {
 // Safe to call again for the same attempt: the request_id is reused, so Airwallex
 // either creates the transfer once or reports the one it already has. A refused
 // request marks the attempt failed. Any other error leaves it pending, because
-// the transfer may exist.
+// the transfer may exist. retry is true when the attempt may have been sent
+// before. A payment from another currency's wallet goes out with the attempt's
+// own quote, and a retry of one that is refused stays pending: its quote may
+// have run out after the first try created the transfer, so the refusal does not
+// prove nothing was sent.
 export async function sendAttempt(
   client: AirwallexClient,
   ledger: Ledger,
   obligation: Obligation,
   attempt: Attempt,
+  retry: boolean = false,
 ): Promise<Transfer> {
+  // Without a quote Airwallex converts at its own rate, which nobody approved.
+  if (crossCurrency(obligation) && attempt.quoteId === null) {
+    throw new Error(
+      `${obligation.invoiceId} is paid from ${obligation.sourceCurrency} and its ${attempt.kind} payment has no approved exchange rate quote, so PayOnce sent nothing`,
+    );
+  }
   let transfer: Transfer;
   try {
     transfer = await createTransfer(client, {
@@ -50,13 +62,17 @@ export async function sendAttempt(
       amountMajor: toMajor(obligation.amountMinor),
       method: obligation.transferMethod,
       reference: obligation.invoiceId,
+      sourceCurrency: obligation.sourceCurrency,
+      ...(attempt.quoteId === null ? {} : { quoteId: attempt.quoteId }),
     });
   } catch (error: unknown) {
     if (!wasRejected(error)) {
       throw error;
     }
     if (error.code !== "duplicate_request_id") {
-      ledger.failAttempt(attempt.requestId, error.code ?? null);
+      if (!(retry && attempt.quoteId !== null)) {
+        ledger.failAttempt(attempt.requestId, error.code ?? null);
+      }
       throw error;
     }
     const existing: Transfer | undefined = await findTransferByRequestId(

@@ -5,6 +5,14 @@ export interface Incident {
   supplier: string;
   currency: string;
   amountMinor: number;
+  // The invoice is paid from another currency's wallet, so each payment converts
+  // on a quote a person approves.
+  crossCurrency: boolean;
+  // The wallet a payment leaves, and what a replacement takes from it before the
+  // fee: the quote's sell amount when it converts, else amountMinor. NaN when no
+  // quote was read. Limits, the floor and the fee are in this currency.
+  sourceCurrency: string;
+  sourceAmountMinor: number;
   transferFeeMinor: number;
   originalState: OriginalTransferState;
   // The original is still in flight past the deadline for its transfer method.

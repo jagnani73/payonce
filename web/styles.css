@@ -1353,6 +1353,11 @@ input:read-only {
   font-size: 14px;
 }
 
+.terms__amount .terms__sub {
+  font-weight: 400;
+  line-height: 1.4;
+}
+
 .terms__duplicate {
   display: block;
 }

@@ -166,9 +166,13 @@ export interface NewObligation {
   // The supplier's phone number from the supplier record, for calling back about
   // a change of bank details. Null when none is on file.
   supplierPhone: string | null;
+  // The wallet the invoice is paid from, when not its own currency's.
+  sourceCurrency?: string;
 }
 
 export interface Obligation extends NewObligation {
+  // The invoice's own currency when it is not paid from another wallet.
+  sourceCurrency: string;
   origin: ObligationOrigin;
   state: ObligationState;
   // Why the invoice last went to a person. Empty if it never has.
@@ -195,6 +199,20 @@ export interface Attempt {
   // until a transfer has been read.
   feeMinor: number | null;
   feeCurrency: string | null;
+  // The quote a payment from another currency's wallet is sent with, and when it
+  // runs out as Airwallex wrote it. Null on any other payment.
+  quoteId: string | null;
+  quoteValidTo: string | null;
+  // What the transfer took from the wallet it is paid from, before the fee, as
+  // last read from it. Null until a transfer has been read.
+  sourceAmountMinor: number | null;
+}
+
+// The quote an attempt is sent with. Written with the attempt, before Airwallex
+// is called, so a retry sends the same one.
+export interface AttemptQuote {
+  quoteId: string;
+  validTo: string;
 }
 
 // What the bank last did with a payout sent outside PayOnce. unknown is a status
@@ -305,6 +323,7 @@ interface ObligationRow {
   payout_reference: string | null;
   duplicate_of: string | null;
   rejected_by: string | null;
+  source_currency: string | null;
 }
 
 // A person's callback to the supplier on the number on file, and the bank
@@ -455,6 +474,8 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     // A JSON list of invoice numbers, set when the invoice is held as a duplicate.
     duplicate_of: "TEXT",
     rejected_by: "TEXT",
+    // The wallet the invoice is paid from. Null is its own currency's.
+    source_currency: "TEXT",
   },
   approvals: {
     requested_at: "TEXT",
@@ -466,6 +487,9 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     reference: "TEXT",
     fee_minor: "INTEGER",
     fee_currency: "TEXT",
+    quote_id: "TEXT",
+    quote_valid_to: "TEXT",
+    source_amount_minor: "INTEGER",
   },
   events: {
     topic: "TEXT",
@@ -493,6 +517,9 @@ interface AttemptRow {
   failure_code: string | null;
   fee_minor: number | null;
   fee_currency: string | null;
+  quote_id: string | null;
+  quote_valid_to: string | null;
+  source_amount_minor: number | null;
 }
 
 export class DuplicatePaymentError extends Error {
@@ -521,6 +548,7 @@ function toObligation(row: ObligationRow): Obligation {
     supplierDomain: row.supplier_domain,
     beneficiaryId: row.beneficiary_id,
     currency: row.currency,
+    sourceCurrency: row.source_currency ?? row.currency,
     amountMinor: row.amount_minor,
     transferMethod: row.transfer_method,
     invoiceFloorMinor: row.invoice_floor_minor,
@@ -535,6 +563,19 @@ function toObligation(row: ObligationRow): Obligation {
   };
 }
 
+// True when the invoice is paid from another currency's wallet, so each payment
+// converts on a quote a person approved.
+export function crossCurrency(obligation: Obligation): boolean {
+  return obligation.sourceCurrency !== obligation.currency;
+}
+
+// Null when the invoice is paid from its own currency, as the column keeps it.
+function sourceColumn(input: NewObligation): string | null {
+  return input.sourceCurrency === undefined || input.sourceCurrency === input.currency
+    ? null
+    : input.sourceCurrency;
+}
+
 function toAttempt(row: AttemptRow): Attempt {
   return {
     requestId: row.request_id,
@@ -546,6 +587,9 @@ function toAttempt(row: AttemptRow): Attempt {
     failureCode: row.failure_code,
     feeMinor: row.fee_minor,
     feeCurrency: row.fee_currency,
+    quoteId: row.quote_id,
+    quoteValidTo: row.quote_valid_to,
+    sourceAmountMinor: row.source_amount_minor,
   };
 }
 
@@ -716,8 +760,8 @@ export class Ledger {
         `INSERT OR IGNORE INTO obligations
            (invoice_id, supplier, supplier_domain, beneficiary_id, currency,
             amount_minor, transfer_method, invoice_floor_minor, started_by,
-            supplier_phone)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            supplier_phone, source_currency)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.invoiceId,
@@ -730,6 +774,7 @@ export class Ledger {
         input.invoiceFloorMinor,
         input.startedBy,
         input.supplierPhone,
+        sourceColumn(input),
       );
     const row: ObligationRow = this.db
       .prepare("SELECT * FROM obligations WHERE invoice_id = ?")
@@ -843,14 +888,19 @@ export class Ledger {
       .all(invoiceId) as unknown as LedgerEvent[];
   }
 
-  private insertAttempt(requestId: string, invoiceId: string, kind: AttemptKind): void {
+  private insertAttempt(
+    requestId: string,
+    invoiceId: string,
+    kind: AttemptKind,
+    quote: AttemptQuote | null,
+  ): void {
     try {
       this.db
         .prepare(
-          `INSERT INTO attempts (request_id, invoice_id, kind, state)
-           VALUES (?, ?, ?, 'pending')`,
+          `INSERT INTO attempts (request_id, invoice_id, kind, state, quote_id, quote_valid_to)
+           VALUES (?, ?, ?, 'pending', ?, ?)`,
         )
-        .run(requestId, invoiceId, kind);
+        .run(requestId, invoiceId, kind, quote?.quoteId ?? null, quote?.validTo ?? null);
     } catch (error: unknown) {
       if (isUniqueViolation(error)) {
         throw new DuplicatePaymentError(invoiceId);
@@ -859,9 +909,11 @@ export class Ledger {
     }
   }
 
-  openAttempt(invoiceId: string, kind: AttemptKind): Attempt {
+  // quote is the approved quote a payment from another currency's wallet is sent
+  // with.
+  openAttempt(invoiceId: string, kind: AttemptKind, quote: AttemptQuote | null = null): Attempt {
     const requestId: string = randomUUID();
-    this.insertAttempt(requestId, invoiceId, kind);
+    this.insertAttempt(requestId, invoiceId, kind, quote);
     return {
       requestId,
       invoiceId,
@@ -872,6 +924,9 @@ export class Ledger {
       failureCode: null,
       feeMinor: null,
       feeCurrency: null,
+      quoteId: quote?.quoteId ?? null,
+      quoteValidTo: quote?.validTo ?? null,
+      sourceAmountMinor: null,
     };
   }
 
@@ -881,7 +936,7 @@ export class Ledger {
   tryLock(invoiceId: string): void {
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      this.insertAttempt(randomUUID(), invoiceId, "replacement");
+      this.insertAttempt(randomUUID(), invoiceId, "replacement", null);
     } finally {
       this.db.exec("ROLLBACK");
     }
@@ -922,8 +977,8 @@ export class Ledger {
           `INSERT INTO obligations
              (invoice_id, supplier, supplier_domain, beneficiary_id, currency,
               amount_minor, transfer_method, invoice_floor_minor, origin,
-              payout_reference, started_by, supplier_phone)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'outside', ?, ?, ?)`,
+              payout_reference, started_by, supplier_phone, source_currency)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'outside', ?, ?, ?, ?)`,
         )
         .run(
           input.invoiceId,
@@ -937,6 +992,7 @@ export class Ledger {
           payoutReference,
           input.startedBy,
           input.supplierPhone,
+          sourceColumn(input),
         );
       this.db
         .prepare(
@@ -1105,7 +1161,8 @@ export class Ledger {
     return Number(result.changes) === 1;
   }
 
-  // A null state leaves the stored state as it is, and a null fee the stored fee.
+  // A null state leaves the stored state as it is, and a null fee or source amount
+  // the stored one.
   record(
     requestId: string,
     transferId: string,
@@ -1114,16 +1171,27 @@ export class Ledger {
     failureCode: string | null,
     feeMinor: number | null,
     feeCurrency: string | null,
+    sourceAmountMinor: number | null = null,
   ): void {
     const result: { changes: number | bigint } = this.db
       .prepare(
         `UPDATE attempts
             SET transfer_id = ?, reference = ?, state = COALESCE(?, state),
                 failure_code = ?, fee_minor = COALESCE(?, fee_minor),
-                fee_currency = COALESCE(?, fee_currency)
+                fee_currency = COALESCE(?, fee_currency),
+                source_amount_minor = COALESCE(?, source_amount_minor)
           WHERE request_id = ?`,
       )
-      .run(transferId, reference, state, failureCode, feeMinor, feeCurrency, requestId);
+      .run(
+        transferId,
+        reference,
+        state,
+        failureCode,
+        feeMinor,
+        feeCurrency,
+        sourceAmountMinor,
+        requestId,
+      );
     if (Number(result.changes) !== 1) {
       throw new Error(`No payment attempt has request_id ${requestId}`);
     }
@@ -1210,8 +1278,13 @@ export class Ledger {
   // failed write cannot leave it open with nothing sent. Undefined, with nothing
   // changed, when the approval is no longer approved or has expired, or the
   // invoice is no longer held: a person closed it, it has sent something, or a
-  // payout for it sent outside PayOnce is live.
-  releaseFor(invoiceId: string, approvalId: number): Attempt | undefined {
+  // payout for it sent outside PayOnce is live. quote is the approved quote a
+  // payment from another currency's wallet is sent with.
+  releaseFor(
+    invoiceId: string,
+    approvalId: number,
+    quote: AttemptQuote | null = null,
+  ): Attempt | undefined {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const used: { changes: number | bigint } = this.db
@@ -1231,7 +1304,7 @@ export class Ledger {
         this.db.exec("ROLLBACK");
         return undefined;
       }
-      const attempt: Attempt = this.openAttempt(invoiceId, "original");
+      const attempt: Attempt = this.openAttempt(invoiceId, "original", quote);
       this.db.exec("COMMIT");
       return attempt;
     } catch (error: unknown) {

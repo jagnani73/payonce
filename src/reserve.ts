@@ -19,10 +19,10 @@ export interface CurrencyFloor {
 
 const CURRENCY_PATTERN: RegExp = /^[A-Z]{3}$/;
 
-// The wallet a payment's money leaves. It is the invoice's own currency until
-// PayOnce can fund a payment from another wallet.
+// The wallet a payment's money leaves: the invoice's own currency, or the one it
+// is paid from across currencies.
 export function debitCurrency(obligation: Obligation): string {
-  return obligation.currency;
+  return obligation.sourceCurrency;
 }
 
 function parseFloors(raw: string): Map<string, number> {

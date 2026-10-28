@@ -828,12 +828,18 @@ function renderHeader(detail) {
     typeof obligation.startedBy === "string" && obligation.startedBy.trim() !== ""
       ? obligation.startedBy.trim()
       : null;
+  // Set when the invoice is paid from another currency's wallet.
+  const paidFrom =
+    typeof obligation.sourceCurrency === "string" && obligation.sourceCurrency !== obligation.currency
+      ? obligation.sourceCurrency
+      : null;
   if (
     changed("header", [
       invoiceId,
       obligation.supplier,
       obligation.currency,
       obligation.amountMinor,
+      paidFrom,
       obligation.state,
       obligation.origin,
       startedBy,
@@ -871,6 +877,7 @@ function renderHeader(detail) {
           { class: "detail__amount" },
           formatMoney(obligation.amountMinor, obligation.currency),
         ),
+        paidFrom !== null && h("p", { class: "hint" }, `Paid from ${paidFrom}`),
         h(
           "div",
           { class: "detail__state" },
@@ -1254,15 +1261,42 @@ function whyCannotApprove(approver, terms, barred, signoffs) {
   if (signoffs.some((signoff) => sameName(signoff.approver, approver.name))) {
     return "approved already";
   }
-  // Limits are in the payment's own currency.
+  // Limits apply to the amount paid, in the currency it is paid from, as on the server.
+  const fx = fxOf(terms);
+  const amountMinor = fx === null ? terms.amountMinor : fx.sellAmountMinor;
+  const currency = fx === null ? terms.currency : fx.sellCurrency;
   if (
     typeof approver.limitMinor === "number" &&
-    typeof terms.amountMinor === "number" &&
-    approver.limitMinor < terms.amountMinor
+    typeof amountMinor === "number" &&
+    approver.limitMinor < amountMinor
   ) {
-    return `can approve up to ${formatMoney(approver.limitMinor, terms.currency)}`;
+    return `can approve up to ${formatMoney(approver.limitMinor, currency)}`;
   }
   return null;
+}
+
+// The exchange rate block of a payment from another currency's wallet, or null.
+function fxOf(terms) {
+  const fx = terms?.fx;
+  return fx !== null &&
+    typeof fx === "object" &&
+    typeof fx.sellAmountMinor === "number" &&
+    typeof fx.currencyPair === "string" &&
+    typeof fx.clientRate === "number"
+    ? fx
+    : null;
+}
+
+// "1 EUR = 1.119541 USD" for EURUSD, the way Airwallex quotes the pair.
+function rateText(fx) {
+  return `1 ${fx.currencyPair.slice(0, 3)} = ${fx.clientRate} ${fx.currencyPair.slice(3)}`;
+}
+
+function markupText(fx) {
+  if (typeof fx.midRate !== "number" || fx.midRate <= 0) {
+    return null;
+  }
+  return `${((Math.abs(fx.clientRate - fx.midRate) / fx.midRate) * 100).toFixed(2)}% from mid-market ${fx.midRate}`;
 }
 
 // "Alex called +1 212 555 0147 (on file) on Oct 28 at 14:20 and spoke to Dana, who confirmed: ..."
@@ -1390,6 +1424,29 @@ function buildApproval(invoiceId, approval) {
       ? null
       : h("span", null, `${label} `, h("span", { class: "mono" }, value));
 
+  // Set on a payment from another currency's wallet. The approval covers this quote.
+  const fx = fxOf(terms);
+  const validTo = fx === null ? null : parseDate(fx.validTo);
+  const rateSub =
+    fx === null
+      ? []
+      : [
+          markupText(fx),
+          ["quote ", h("span", { class: "mono", title: String(fx.quoteId) }, shortId(fx.quoteId))],
+          validTo === null
+            ? null
+            : [
+                "holds until ",
+                h(
+                  "time",
+                  { datetime: validTo.toISOString(), title: dateTimeFormat.format(validTo) },
+                  minuteFormat.format(validTo),
+                ),
+              ],
+        ]
+          .filter((part) => part !== null)
+          .flatMap((part, index) => (index === 0 ? [part] : [" · ", part]));
+
   const children = [
     h(
       "div",
@@ -1402,7 +1459,25 @@ function buildApproval(invoiceId, approval) {
       "dl",
       { class: "terms" },
       h("dt", null, "Amount"),
-      h("dd", { class: "terms__amount" }, formatMoney(terms.amountMinor, terms.currency)),
+      h(
+        "dd",
+        { class: "terms__amount" },
+        formatMoney(terms.amountMinor, terms.currency),
+        fx !== null &&
+          h("span", { class: "terms__sub" }, `Paid with ${formatMoney(fx.sellAmountMinor, fx.sellCurrency)}`),
+      ),
+      fx !== null && [
+        h("dt", null, "Exchange rate"),
+        h("dd", null, rateText(fx), h("span", { class: "terms__sub" }, rateSub)),
+        h("dt", null, "Transfer fee"),
+        h(
+          "dd",
+          null,
+          typeof fx.feeEstimateMinor === "number"
+            ? `About ${formatMoney(fx.feeEstimateMinor, fx.sellCurrency)}`
+            : `Charged in ${fx.sellCurrency} when it is sent`,
+        ),
+      ],
       term(
         "Pay to",
         terms.payTo,
@@ -1567,7 +1642,9 @@ function buildApproveForm(invoiceId, approval, terms, error) {
     h(
       "p",
       { class: "hint" },
-      "Your approval covers these exact terms and one payment. If the terms change, it is void.",
+      fxOf(terms) === null
+        ? "Your approval covers these exact terms and one payment. If the terms change, it is void."
+        : "Your approval covers these exact terms, this exchange rate and one payment. If any of them change, it is void.",
     ),
   );
   form.addEventListener("submit", (event) => {
@@ -2412,7 +2489,7 @@ function moneyRow(currency, label, kinds, subtract) {
     notes.push(unknown === lines.length ? "fee not known" : `fee not known for ${unknown}`);
   }
   if (lines.some((line) => line.estimated === true)) {
-    notes.push("amount from the invoice");
+    notes.push("amount estimated");
   }
   const detail = [...invoiceLinks(lines), notes.length > 0 ? ` (${notes.join(", ")})` : null];
   return cashRow(

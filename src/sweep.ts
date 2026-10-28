@@ -63,6 +63,8 @@ function adopt(engine: Engine, transfer: Transfer, state: FoundState): string | 
       // Airwallex does not say who sent it.
       startedBy: null,
       supplierPhone: null,
+      // A replacement is paid from the wallet the payout came from.
+      sourceCurrency: transfer.source_currency ?? transfer.transfer_currency,
     },
     fits || reference === "" ? null : reference,
     {

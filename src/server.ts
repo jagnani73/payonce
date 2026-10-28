@@ -32,6 +32,7 @@ import {
 import { cashReport, payRunLines, type CashReport } from "./cash-position.js";
 import { Dispatcher } from "./dispatcher.js";
 import type { EmailFindings } from "./emails.js";
+import { describeQuotes } from "./fx.js";
 import {
   approvePayment,
   closeIncident,
@@ -805,6 +806,7 @@ server.listen(PORT, HOST, (): void => {
   console.log(`Supplier emails are read by: ${engine.reader.name}`);
   console.log(describePolicy(engine.approvals));
   console.log(describeFloors(engine.reserve));
+  console.log(describeQuotes());
   // The first page load then has balances to show.
   balances.refreshIfOld();
   pickUpInterrupted();

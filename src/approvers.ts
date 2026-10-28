@@ -1,12 +1,14 @@
+import type { PaymentAmount } from "./approval.js";
 import { formatMoney, toMinor } from "./money.js";
 
 const DEFAULT_TWO_APPROVERS_ABOVE: number = 5_000;
 const DEFAULT_APPROVAL_TTL_MINUTES: number = 60;
 const MINUTE_MS: number = 60_000;
 
-// A person who may approve a payment up to a limit. The limit is compared with
-// the amount in the payment's own currency, because PayOnce has no exchange
-// rates yet.
+// A person who may approve a payment up to a limit. The limit has no currency of
+// its own. It is compared with what the payment takes from the company's wallet,
+// in that wallet's currency, because the company chose the currencies it holds
+// and the supplier chose the invoice's.
 export interface Approver {
   name: string;
   limitMinor: number;
@@ -105,12 +107,12 @@ export function describePolicy(policy: ApprovalPolicy): string {
   if (policy.problem !== null) {
     return `Approvals are refused: ${policy.problem}`;
   }
-  // Limits apply in whatever currency the payment is in.
+  // Limits apply to the amount paid, in the currency it is paid from.
   const amount = (minor: number): string => formatMoney(minor, "").trim();
   const names: string = policy.approvers
     .map((approver: Approver): string => `${approver.name} (up to ${amount(approver.limitMinor)})`)
     .join(", ");
-  return `Approvers: ${names}. Two are needed above ${amount(policy.twoApproversAboveMinor)}, and an approval request expires after ${policy.expiresAfterMs / MINUTE_MS} minutes`;
+  return `Approvers: ${names}. Two are needed above ${amount(policy.twoApproversAboveMinor)}, and an approval request expires after ${policy.expiresAfterMs / MINUTE_MS} minutes. Limits apply to the amount paid, in the currency it is paid from`;
 }
 
 // Two approvers are needed for a payment to an account the original did not go
@@ -118,8 +120,7 @@ export function describePolicy(policy: ApprovalPolicy): string {
 // the requester rule cannot be checked then.
 export function signoffsNeeded(
   policy: ApprovalPolicy,
-  amountMinor: number,
-  currency: string,
+  amount: PaymentAmount,
   newAccount: boolean,
   startedBy: string | null,
 ): SignoffRule {
@@ -129,10 +130,10 @@ export function signoffsNeeded(
   if (startedBy === null) {
     return { needed: 2, why: "PayOnce does not know who started this payment" };
   }
-  if (amountMinor > policy.twoApproversAboveMinor) {
+  if (amount.minor > policy.twoApproversAboveMinor) {
     return {
       needed: 2,
-      why: `the amount is above ${formatMoney(policy.twoApproversAboveMinor, currency)}`,
+      why: `the amount is above ${formatMoney(policy.twoApproversAboveMinor, amount.currency)}`,
     };
   }
   return { needed: 1, why: "" };
@@ -142,12 +143,12 @@ export function signoffsNeeded(
 // limit. A request that needs more than this can never be approved.
 export function eligibleApprovers(
   policy: ApprovalPolicy,
-  amountMinor: number,
+  amount: PaymentAmount,
   barred: Barred[],
 ): Approver[] {
   return policy.approvers.filter(
     (approver: Approver): boolean =>
-      approver.limitMinor >= amountMinor &&
+      approver.limitMinor >= amount.minor &&
       !barred.some((entry: Barred): boolean => sameName(entry.name, approver.name)),
   );
 }
@@ -157,8 +158,7 @@ export function eligibleApprovers(
 export function checkSigner(
   policy: ApprovalPolicy,
   name: string,
-  amountMinor: number,
-  currency: string,
+  amount: PaymentAmount,
   barred: Barred[],
   signedBy: string[],
 ): Approver {
@@ -180,9 +180,9 @@ export function checkSigner(
   if (signedBy.some((signer: string): boolean => sameName(signer, name))) {
     throw new Error(`${approver.name} has approved this already. The next approval must come from someone else`);
   }
-  if (amountMinor > approver.limitMinor) {
+  if (amount.minor > approver.limitMinor) {
     throw new Error(
-      `${approver.name} can approve up to ${formatMoney(approver.limitMinor, currency)}, and this payment is ${formatMoney(amountMinor, currency)}`,
+      `${approver.name} can approve up to ${formatMoney(approver.limitMinor, amount.currency)}, and this payment is ${formatMoney(amount.minor, amount.currency)}`,
     );
   }
   return approver;

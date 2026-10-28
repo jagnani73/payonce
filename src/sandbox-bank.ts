@@ -1,6 +1,7 @@
 import type { AirwallexClient } from "./airwallex/client.js";
 import { simulateTransfer } from "./airwallex/simulation.js";
 import { getTransfer, waitForTransfer, type Transfer } from "./airwallex/transfers.js";
+import { isOverdue } from "./deadlines.js";
 import type { Bank } from "./engine.js";
 import type { AttemptKind } from "./ledger.js";
 
@@ -33,6 +34,8 @@ export class SandboxBank implements Bank {
   private readonly held: Map<string, string> = new Map<string, string>();
   // Invoices whose original the scripted run is sending and settles itself.
   private readonly scripted: Set<string> = new Set<string>();
+  // Transfers that convert, which the simulator will not move, already reported.
+  private readonly converting: Set<string> = new Set<string>();
 
   constructor(
     client: AirwallexClient,
@@ -114,7 +117,9 @@ export class SandboxBank implements Bank {
 
   // PayOnce sent a payment. The scripted run decides what happens to the original
   // it sends. The bank pays a replacement, and gives an original released after a
-  // hold the outcome expectOriginal recorded, or pays it.
+  // hold the outcome expectOriginal recorded, or pays it. The simulator refuses
+  // every transition of a transfer that converts, so the bank says so once and
+  // leaves it in PROCESSING, where the agent's deadline for it runs out.
   sent(invoiceId: string, kind: AttemptKind, transferId: string): void {
     if (kind === "original" && this.scripted.has(invoiceId)) {
       return;
@@ -123,6 +128,17 @@ export class SandboxBank implements Bank {
       kind === "replacement" ? PAID_OUTCOME : (this.held.get(invoiceId) ?? PAID_OUTCOME);
     this.held.delete(invoiceId);
     this.run(invoiceId, async (): Promise<void> => {
+      const transfer: Transfer = await getTransfer(this.client, transferId);
+      if (transfer.source_currency !== undefined && transfer.source_currency !== transfer.transfer_currency) {
+        // Past its deadline the agent has said so already.
+        if (!this.converting.has(transferId) && !isOverdue(transfer)) {
+          this.converting.add(transferId);
+          throw new Error(
+            `The sandbox simulator does not move a transfer that converts currency, so nothing here pays or fails ${transfer.short_reference_id}, and it stays in PROCESSING`,
+          );
+        }
+        return;
+      }
       await this.send(transferId);
       await this.settle(transferId, outcome);
     }).catch((error: unknown): void => {

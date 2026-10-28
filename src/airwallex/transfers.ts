@@ -36,6 +36,13 @@ export interface Transfer {
   failure?: TransferFailure;
   beneficiary_id?: string;
   beneficiary?: { bank_details?: TransferBankDetails };
+  // The wallet the transfer is paid from and what it took, before the fee. Equal
+  // to the transfer currency and amount when there is no conversion.
+  source_currency?: string;
+  source_amount?: number;
+  // Set when the transfer converts. The rate is the quote's client_rate, for
+  // currency_pair in the market's convention.
+  conversion?: { currency_pair: string; rate: number };
 }
 
 export interface NewTransfer {
@@ -45,6 +52,10 @@ export interface NewTransfer {
   amountMajor: number;
   method: "LOCAL" | "SWIFT";
   reference: string;
+  // The wallet it is paid from, when not currency's own.
+  sourceCurrency?: string;
+  // The approved quote a transfer from another currency's wallet converts at.
+  quoteId?: string;
 }
 
 export function createTransfer(
@@ -54,10 +65,12 @@ export function createTransfer(
   return client.post<Transfer>("/api/v1/transfers/create", {
     request_id: input.requestId,
     beneficiary_id: input.beneficiaryId,
-    source_currency: input.currency,
+    source_currency: input.sourceCurrency ?? input.currency,
     transfer_currency: input.currency,
     transfer_amount: input.amountMajor,
     transfer_method: input.method,
+    // Sent only with a quote, so a same-currency request body is unchanged.
+    ...(input.quoteId === undefined ? {} : { quote_id: input.quoteId }),
     reason: "professional_business_services",
     reference: input.reference,
   });

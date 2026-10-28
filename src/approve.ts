@@ -1,4 +1,4 @@
-import type { ApprovalTerms, DuplicateEvidence } from "./approval.js";
+import { describeRate, markupOf, type ApprovalTerms, type DuplicateEvidence } from "./approval.js";
 import { describePolicy, policyFromEnv, type ApprovalPolicy } from "./approvers.js";
 import { approvePayment, pendingApproval, type PendingApproval } from "./engine.js";
 import { Ledger, LEDGER_PATH, signersOf, type Approval } from "./ledger.js";
@@ -16,6 +16,14 @@ function show(pending: PendingApproval): void {
     `${terms.action === "replace" ? "Replacement payment for" : "Payment of held invoice"} ${terms.invoiceId}, request ${approval.id}`,
   );
   console.log(`  pay      ${formatMoney(terms.amountMinor, terms.currency)}`);
+  if (terms.fx !== undefined) {
+    console.log(
+      `  from     ${formatMoney(terms.fx.sellAmountMinor, terms.fx.sellCurrency)} at ${describeRate(terms.fx)} (${markupOf(terms.fx)} from mid-market ${String(terms.fx.midRate)})`,
+    );
+    console.log(
+      `  quote    ${terms.fx.quoteId}, holds until ${new Date(terms.fx.validTo).toLocaleString()}`,
+    );
+  }
   console.log(`  to       ${terms.payTo} (the account on file)`);
   if (terms.action === "replace") {
     const failure: string =
