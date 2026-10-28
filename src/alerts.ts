@@ -141,7 +141,7 @@ export function alertTargetFromEnv(env: NodeJS.ProcessEnv = process.env): AlertS
       url.password !== "" ||
       !LOOPBACK_HOSTS.includes(url.hostname)
     ) {
-      return off("ALERT_TEST_RECEIVER_URL takes only an http address on 127.0.0.1, localhost or [::1]");
+      return off("ALERT_TEST_RECEIVER_URL takes only an http or https address on 127.0.0.1, localhost or [::1]");
     }
     return { target: { format, url, host: url.host, test: true }, problem: null };
   }
