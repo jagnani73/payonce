@@ -301,6 +301,9 @@ export function htmlToText(html: string): HtmlText {
   // Where the last style or script read inside <svg> or <math> ends. One that
   // opens before it is nested in it.
   let covered: number = 0;
+  // A style with no closing tag runs to the end, so the first one's CSS covers
+  // every later one's.
+  let openStyleRead: boolean = false;
   const text = (chunk: string): void => {
     if (chunk === "") {
       return;
@@ -383,9 +386,19 @@ export function htmlToText(html: string): HtmlText {
         styles.unreadable = true;
         continue;
       }
-      // With no closing tag the content is read as text, which shows more.
+      // With no closing tag the content runs to the end. It is read as text,
+      // which shows more, and a style's CSS is read once, at the first style
+      // with no closing tag, so the rule for CSS covers it too.
       const close: Span | null = closeOf(html, index, name, missing);
-      if (close !== null) {
+      if (close === null) {
+        if (name === "style" && !openStyleRead) {
+          openStyleRead = true;
+          scanCss(html.slice(index), false, styles);
+        }
+        if (foreign > 0) {
+          covered = html.length;
+        }
+      } else {
         const content: string = html.slice(index, close.start);
         if (name === "style") {
           scanCss(content, false, styles);
