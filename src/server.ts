@@ -64,6 +64,15 @@ import { MAX_EMAIL_BYTES, noteTexts, TOO_LARGE_TEXT, type ParsedEmail } from "./
 import type { EmailFindings, SupplierEmail } from "./emails.js";
 import { describeQuotes } from "./fx.js";
 import {
+  boardGroups,
+  boardReport,
+  CURRENCY_PATTERN,
+  isBoardGroup,
+  isBoardOrigin,
+  type BoardGroupOf,
+  type BoardReport,
+} from "./incident-board.js";
+import {
   candidatesFor,
   deliverUpload,
   EmailRefusedError,
@@ -503,6 +512,8 @@ function requireObligation(invoiceId: string): Obligation {
 }
 
 function listIncidents(): unknown {
+  // The board's group of each open invoice, so the list can say it too.
+  const groups: Map<string, BoardGroupOf> = boardGroups(engine.ledger);
   return {
     incidents: engine.ledger.obligations().map((obligation: Obligation) => ({
       invoiceId: obligation.invoiceId,
@@ -519,6 +530,7 @@ function listIncidents(): unknown {
       busy: isBusy(obligation.invoiceId),
       watching: isWatching(obligation.invoiceId),
       runId: engine.ledger.runRowOf(obligation.invoiceId)?.runId ?? null,
+      board: groups.get(obligation.invoiceId) ?? null,
     })),
   };
 }
@@ -839,6 +851,28 @@ function cash(read: boolean = true): CashReport {
     balances: balances.latest(),
     statesCheckedAt: watcher.lastCheckedAt,
     payRunLines: payRunLines(engine.ledger),
+  });
+}
+
+// The incident board, from the ledger alone, with the filters the query names. An
+// empty value is no filter, and one the board does not know answers 400.
+function board(params: URLSearchParams): BoardReport {
+  const group: string = params.get("group") ?? "";
+  const currency: string = params.get("currency") ?? "";
+  const origin: string = params.get("origin") ?? "";
+  if (group !== "" && !isBoardGroup(group)) {
+    throw new HttpError(400, "The group is person, deadline, bank or open");
+  }
+  if (currency !== "" && !CURRENCY_PATTERN.test(currency)) {
+    throw new HttpError(400, "The currency is a three-letter code such as USD");
+  }
+  if (origin !== "" && !isBoardOrigin(origin)) {
+    throw new HttpError(400, "The origin is payonce, outside or pay-run");
+  }
+  return boardReport(engine.ledger, {
+    group: group === "" ? null : group,
+    currency: currency === "" ? null : currency,
+    origin: origin === "" ? null : origin,
   });
 }
 
@@ -1448,6 +1482,8 @@ async function route(
     sendJson(response, 200, await endOutageByPerson(request, parts[2]));
   } else if (method === "GET" && pathname === "/api/cash") {
     sendJson(response, 200, cash());
+  } else if (method === "GET" && pathname === "/api/board") {
+    sendJson(response, 200, board(url.searchParams));
   } else if (method === "GET" && pathname === "/api/inbox") {
     sendJson(response, 200, {
       uploads: engine.ledger.uploads(INBOX_OTHERS_SHOWN).map(uploadSummary),

@@ -276,12 +276,15 @@ function add(map: Map<string, Obligation[]>, key: string, obligation: Obligation
   map.set(key, list);
 }
 
-// The invoices in the ledger an upload names, worked out from the ledger as it
-// is now, so an invoice started after the upload is found too. Each number is
-// looked up by its keys, so the work grows with the numbers found, not with
-// numbers times invoices. Exact matches come first, then the subject before the
-// text before the attachment names.
-export function candidatesFor(ledger: Ledger, upload: Upload): Match {
+// Every invoice in the ledger by the keys of its numbers, for candidatesFor.
+export interface InvoiceIndex {
+  byFull: Map<string, Obligation[]>;
+  byBase: Map<string, Obligation[]>;
+}
+
+// The index of the ledger as it is now. A caller matching several uploads at
+// once builds it once and passes it to each.
+export function invoiceIndex(ledger: Ledger): InvoiceIndex {
   const byFull: Map<string, Obligation[]> = new Map<string, Obligation[]>();
   const byBase: Map<string, Obligation[]> = new Map<string, Obligation[]>();
   for (const obligation of ledger.obligations()) {
@@ -291,6 +294,16 @@ export function candidatesFor(ledger: Ledger, upload: Upload): Match {
       add(byBase, key.base, obligation);
     }
   }
+  return { byFull, byBase };
+}
+
+// The invoices in the ledger an upload names, worked out from the ledger as it
+// is now, so an invoice started after the upload is found too. Each number is
+// looked up by its keys, so the work grows with the numbers found, not with
+// numbers times invoices. Exact matches come first, then the subject before the
+// text before the attachment names.
+export function candidatesFor(ledger: Ledger, upload: Upload, index: InvoiceIndex = invoiceIndex(ledger)): Match {
+  const { byFull, byBase } = index;
   const found: Found[] = [];
   numbersIn(upload.subject, "subject", found);
   numbersIn(upload.body, "body", found);

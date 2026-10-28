@@ -185,6 +185,16 @@ const els = {
   inboxEmail: byId("inbox-email"),
   inboxMatch: byId("inbox-match"),
   inboxDismiss: byId("inbox-dismiss"),
+  boardButton: byId("board-button"),
+  board: byId("board"),
+  boardOutages: byId("board-outages"),
+  boardGroup: byId("board-group"),
+  boardCurrency: byId("board-currency"),
+  boardOrigin: byId("board-origin"),
+  boardEmpty: byId("board-empty"),
+  boardError: byId("board-error"),
+  boardTotals: byId("board-totals"),
+  boardGroups: byId("board-groups"),
 };
 
 const state = {
@@ -265,6 +275,10 @@ const state = {
   outboxNotes: new Map(),
   outboxBusy: null,
   outboxError: null,
+  // The incident board as /api/board last returned it, and the filters chosen, "" for all.
+  board: null,
+  boardError: null,
+  boardFilters: { group: "", currency: "", origin: "" },
 };
 
 // Signatures of what each section last drew, so an unchanged poll touches nothing.
@@ -583,6 +597,30 @@ async function loadOutages() {
   }
 }
 
+// The board is loaded only while it is on screen.
+async function loadBoard() {
+  if (state.selectedId !== null) {
+    return;
+  }
+  const params = new URLSearchParams();
+  for (const [name, value] of Object.entries(state.boardFilters)) {
+    if (value !== "") {
+      params.set(name, value);
+    }
+  }
+  const query = params.toString();
+  try {
+    const board = await api(query === "" ? "/api/board" : `/api/board?${query}`);
+    if (!Array.isArray(board.entries) || !Array.isArray(board.totals) || !Array.isArray(board.groups)) {
+      throw new Error("The server sent a board this page could not read.");
+    }
+    state.board = board;
+    state.boardError = null;
+  } catch (error) {
+    state.boardError = `Could not refresh the board. ${error.message}`;
+  }
+}
+
 async function loadRuns() {
   try {
     const data = await api("/api/runs");
@@ -756,11 +794,8 @@ function refresh() {
         loadDetail(),
         loadCash(),
         loadOutages(),
+        loadBoard(),
       ]);
-      if (state.selectedId === null && (state.incidents ?? []).length > 0) {
-        setSelected(state.incidents[0].invoiceId);
-        refreshAgain = true;
-      }
       render();
     } while (refreshAgain);
   })().finally(() => {
@@ -811,9 +846,18 @@ function select(id) {
   if (id === state.selectedId) {
     return;
   }
+  if (id === null) {
+    // The board is not loaded while it is off screen, so the one held is old.
+    state.board = null;
+    state.boardError = null;
+  }
   setSelected(id);
   render();
   window.setTimeout(render, LOADING_DELAY_MS + 20);
+  if (id === null && refreshing !== null) {
+    // The refresh under way skipped the board, so it is loaded now, not after it.
+    loadBoard().then(render);
+  }
   refresh();
 }
 
@@ -930,7 +974,7 @@ function createIncidentNode(invoiceId) {
       "span",
       { class: "incident__top" },
       h("span", { class: "incident__id" }),
-      h("span", { class: "badge" }),
+      h("span", { class: "incident__marks" }, h("span", { class: "badge" }), h("span", { class: "tag", hidden: true })),
     ),
     h(
       "span",
@@ -957,6 +1001,13 @@ function updateIncidentNode(node, incident) {
   setText(button.querySelector(".incident__id"), incident.invoiceId);
   setClass(badgeNode, badgeClass(stateEntry));
   setText(badgeNode, stateEntry?.label ?? humanize(incident.state));
+  // The board's group too, when it is not the catch-all and the badge does not say it already.
+  const group = incident.board !== null && typeof incident.board === "object" ? incident.board : null;
+  const groupNode = button.querySelector(".tag");
+  const groupText =
+    group !== null && group.group !== "open" && group.label !== (stateEntry?.label ?? null) ? String(group.label) : "";
+  setText(groupNode, groupText);
+  groupNode.hidden = groupText === "";
   setText(
     button.querySelector(".incident__amount"),
     formatMoney(incident.amountMinor, incident.currency),
@@ -2746,6 +2797,33 @@ async function submitBankChange(invoiceId) {
 
 function renderMain() {
   const id = state.selectedId;
+  if (id === null) {
+    els.boardButton.setAttribute("aria-current", "true");
+  } else {
+    els.boardButton.removeAttribute("aria-current");
+  }
+  if (id === null) {
+    // Coming back to the board, the view left stays a moment while a fresh board loads.
+    if (state.board === null && state.boardError === null && Date.now() - state.selectedAt < LOADING_DELAY_MS) {
+      return;
+    }
+    els.detail.hidden = true;
+    els.runDetail.hidden = true;
+    els.inboxDetail.hidden = true;
+    els.placeholder.hidden = true;
+    els.board.hidden = false;
+    showMessage(els.connection, null);
+    renderBoard();
+    return;
+  }
+  renderSelected(id);
+  // Leaving the board, it stays on screen until what was picked can be shown.
+  if (!els.detail.hidden || !els.runDetail.hidden || !els.inboxDetail.hidden || !els.placeholder.hidden) {
+    els.board.hidden = true;
+  }
+}
+
+function renderSelected(id) {
   if (inboxIdOf(id) !== null) {
     els.detail.hidden = true;
     els.runDetail.hidden = true;
@@ -2760,17 +2838,11 @@ function renderMain() {
   }
   els.runDetail.hidden = true;
   const detail = currentDetail();
-  if (
-    id !== null &&
-    detail === null &&
-    state.detailError === null &&
-    Date.now() - state.selectedAt < LOADING_DELAY_MS
-  ) {
-    // Leave the previous incident on screen for a moment so switching does not flash.
+  if (detail === null && state.detailError === null && Date.now() - state.selectedAt < LOADING_DELAY_MS) {
+    // Leave the previous incident, or the board, on screen for a moment so switching does not flash.
     return;
   }
-  const showDetail = id !== null && detail !== null;
-  if (!showDetail) {
+  if (detail === null) {
     renderPlaceholder();
     els.detail.hidden = true;
     els.placeholder.hidden = false;
@@ -4534,6 +4606,214 @@ function renderInboxMain() {
   els.inboxDetail.hidden = false;
 }
 
+// ---------- incident board ----------
+
+const BOARD_ALL = { group: "All groups", currency: "All wallets", origin: "All origins" };
+
+// The slot at the top of the board for active rail outages. Outage detection is
+// not built yet, so it stays empty and hidden.
+function renderBoardOutages() {
+  els.boardOutages.hidden = true;
+}
+
+function renderBoardFilters(board) {
+  const chosen = state.boardFilters;
+  const currencies = new Set(Array.isArray(board?.currencies) ? board.currencies : []);
+  if (chosen.currency !== "") {
+    currencies.add(chosen.currency);
+  }
+  const lists = {
+    group: (Array.isArray(board?.groups) ? board.groups : []).map((entry) => ({ value: entry.group, label: entry.label })),
+    currency: [...currencies].sort().map((code) => ({ value: code, label: code })),
+    origin: (Array.isArray(board?.origins) ? board.origins : []).map((entry) => ({ value: entry.origin, label: entry.label })),
+  };
+  const selects = { group: els.boardGroup, currency: els.boardCurrency, origin: els.boardOrigin };
+  if (changed("boardFilters", lists)) {
+    for (const [name, select] of Object.entries(selects)) {
+      fillSelect(select, [{ value: "", label: BOARD_ALL[name] }, ...lists[name]]);
+    }
+  }
+  for (const [name, select] of Object.entries(selects)) {
+    if (select.value !== chosen[name]) {
+      select.value = chosen[name];
+    }
+  }
+}
+
+function boardMoneyText(money) {
+  const notes = [];
+  if (money.estimated === true) {
+    notes.push("estimated");
+  }
+  if (money.feeUnknown > 0) {
+    notes.push("fee not known");
+  }
+  return `${formatMoney(money.minor, money.currency)}${notes.length === 0 ? "" : ` (${notes.join(", ")})`}`;
+}
+
+function buildBoardTotal(total) {
+  const parts = [
+    [total.promisedMinor, "approved or being sent"],
+    [total.waitingMinor, "waiting on a person"],
+    [total.runWaitingMinor, "pay run waiting for approval"],
+    [total.withBankMinor, "with the bank"],
+  ]
+    .filter(([minor]) => typeof minor === "number" && minor !== 0)
+    .map(([minor, what]) => `${what} ${cashAmount(minor)}`);
+  const notes = [];
+  if (total.estimated === true) {
+    notes.push("part estimated");
+  }
+  if (total.feeUnknown > 0) {
+    notes.push(total.feeUnknown === 1 ? "1 fee not known" : `${total.feeUnknown} fees not known`);
+  }
+  return h(
+    "div",
+    { class: "board-total" },
+    h("span", { class: "board-total__code" }, total.currency),
+    h("span", { class: "board-total__value" }, cashAmount(total.minor)),
+    h("span", { class: "board-total__parts" }, `${parts.join(", ")}${notes.length === 0 ? "" : ` (${notes.join(", ")})`}`),
+  );
+}
+
+function boardWhen(value) {
+  // new Date(null) is 1970, not an invalid date.
+  const date = typeof value === "string" && value !== "" ? parseDate(value) : null;
+  if (date === null) {
+    return null;
+  }
+  const sameDay = date.toDateString() === new Date().toDateString();
+  return sameDay ? minuteFormat.format(date) : `${dayFormat.format(date)}, ${minuteFormat.format(date)}`;
+}
+
+// How long since PayOnce took the invoice on, against when the server answered.
+function waitedText(since, now) {
+  const at = parseDate(since);
+  const reference = parseDate(now) ?? new Date();
+  if (at === null) {
+    return "Waiting since a time not on file";
+  }
+  const minutes = Math.max(0, Math.floor((reference.getTime() - at.getTime()) / 60000));
+  if (minutes < 1) {
+    return "Waiting under a minute";
+  }
+  if (minutes < 60) {
+    return `Waiting ${minutes} min`;
+  }
+  const hours = Math.floor(minutes / 60);
+  return hours < 48 ? `Waiting ${hours} h` : `Waiting ${Math.floor(hours / 24)} days`;
+}
+
+function buildBoardEntry(entry, now) {
+  const run = entry.kind === "run-row";
+  const href = run ? `#run/${entry.runId}` : `#${encodeURIComponent(entry.invoiceId)}`;
+  const amount =
+    entry.wallet === entry.currency
+      ? formatMoney(entry.amountMinor, entry.currency)
+      : `${formatMoney(entry.amountMinor, entry.currency)}, paid from ${entry.wallet}`;
+  const origin = run
+    ? `Pay run ${entry.runId}, not released`
+    : entry.origin === "pay-run"
+      ? `Pay run ${entry.runId}`
+      : entry.origin === "outside"
+        ? "Sent outside PayOnce"
+        : null;
+  const atRisk = Array.isArray(entry.atRisk) ? entry.atRisk : [];
+  const deadline = boardWhen(entry.deadlineAt);
+  const passed = deadline !== null && (parseDate(entry.deadlineAt)?.getTime() ?? 0) <= (parseDate(now)?.getTime() ?? Date.now());
+  const key = `${entry.kind}-${entry.runId ?? ""}-${entry.invoiceId}`.replace(/[^A-Za-z0-9-]/g, "_");
+  return h(
+    "li",
+    { class: "board-entry" },
+    h(
+      "a",
+      { class: "board-entry__link", href, id: `board-${key}` },
+      h(
+        "span",
+        { class: "board-entry__top" },
+        h("span", { class: "board-entry__id" }, entry.invoiceId),
+        origin !== null && h("span", { class: "tag" }, origin),
+        h(
+          "span",
+          { class: atRisk.length === 0 ? "board-entry__risk is-empty" : "board-entry__risk" },
+          atRisk.length === 0 ? "Nothing at risk" : `${atRisk.map(boardMoneyText).join(", ")} at risk`,
+        ),
+      ),
+      h(
+        "span",
+        { class: "board-entry__meta" },
+        h("span", { class: "board-entry__amount" }, amount),
+        h("span", { class: "board-entry__supplier" }, entry.supplier),
+        h("span", { class: "board-entry__age", "data-board-since": entry.waitingSince ?? "" }),
+      ),
+      h(
+        "span",
+        { class: "board-entry__why" },
+        withPeriod(entry.why),
+        deadline !== null && (passed ? ` The deadline was ${deadline}.` : ` Bank deadline ${deadline}.`),
+      ),
+      (Array.isArray(entry.also) ? entry.also : []).map((line) =>
+        h("span", { class: "board-entry__also" }, `Also: ${withPeriod(line)}`),
+      ),
+    ),
+  );
+}
+
+function buildBoardGroup(group, entries, now) {
+  return h(
+    "section",
+    { class: `card board-group board-group--${group.group}`, "aria-label": group.label },
+    h("h2", { class: "board-group__head" }, group.label, h("span", { class: "board-group__count" }, String(group.count))),
+    entries.length === 0
+      ? h("p", { class: "empty" }, "None")
+      : h("ol", { class: "board-list" }, entries.map((entry) => buildBoardEntry(entry, now))),
+  );
+}
+
+function renderBoard() {
+  const board = state.board;
+  renderBoardOutages();
+  renderBoardFilters(board);
+  showMessage(els.boardError, state.boardError);
+  // An empty ledger gets the hint the page showed before the board existed.
+  els.boardEmpty.hidden = board === null || board.invoices !== 0;
+  if (board === null) {
+    if (changed("board", null)) {
+      els.boardTotals.replaceChildren(h("p", { class: "empty" }, "Loading"));
+      els.boardGroups.replaceChildren();
+    }
+    return;
+  }
+  if (changed("board", [board.filters, board.totals, board.groups, board.entries, board.all, board.invoices])) {
+    const focus = focusedControl(els.boardGroups);
+    els.boardTotals.replaceChildren(
+      ...(board.totals.length > 0
+        ? board.totals.map(buildBoardTotal)
+        : [
+            h(
+              "p",
+              { class: "empty" },
+              board.invoices === 0
+                ? "None."
+                : board.all === 0
+                  ? "None. Every invoice in the ledger is closed."
+                  : "None in what is shown.",
+            ),
+          ]),
+    );
+    const only = board.filters?.group ?? null;
+    els.boardGroups.replaceChildren(
+      ...board.groups
+        .filter((group) => only === null || group.group === only)
+        .map((group) => buildBoardGroup(group, board.entries.filter((entry) => entry.group === group.group), board.generatedAt)),
+    );
+    restoreFocus(focus);
+  }
+  for (const node of els.boardGroups.querySelectorAll("[data-board-since]")) {
+    setText(node, waitedText(node.dataset.boardSince, board.generatedAt));
+  }
+}
+
 // ---------- cash panel ----------
 
 const WAITING_KINDS = ["awaiting-approval", "awaiting-person"];
@@ -5181,6 +5461,21 @@ els.runFile.addEventListener("change", () => {
     renderRunForm();
   }
 });
+
+els.boardButton.addEventListener("click", () => {
+  window.scrollTo(0, 0);
+  select(null);
+});
+for (const [name, select] of [
+  ["group", els.boardGroup],
+  ["currency", els.boardCurrency],
+  ["origin", els.boardOrigin],
+]) {
+  select.addEventListener("change", () => {
+    state.boardFilters[name] = select.value;
+    refresh();
+  });
+}
 
 window.addEventListener("hashchange", () => {
   select(idFromHash());
