@@ -1053,11 +1053,39 @@ function withFloorReason(
       engine.ledger,
       obligation.invoiceId,
       "payment",
-      "A replacement and its transfer fee would now leave cash above the reserve floor",
+      "A replacement and its transfer fee would now leave cash above the reserve floor. An approval of a request that named the floor still counts",
       "floor",
     );
   }
   return namingFloor(assessment);
+}
+
+// The assessment as an open request or approval saw it, when the floor applied
+// then and does not now: cash was below it, could not be read, or no floor was
+// set. Only the floor is changed, so the policy gives the reason it gave then. An
+// approval given with less cash than there is now still covers the replacement.
+// Otherwise the assessment as it is.
+function asRequested(
+  obligation: Obligation,
+  assessment: Assessment,
+  approval: Approval | undefined,
+): Assessment {
+  if (
+    approval === undefined ||
+    (approval.state !== "requested" && approval.state !== "approved") ||
+    isExpired(approval) ||
+    floorReason(assessment.incident) !== null
+  ) {
+    return assessment;
+  }
+  for (const floorMinor of [Number.MAX_SAFE_INTEGER, Number.NaN, null]) {
+    const incident: Incident = { ...assessment.incident, reserveFloorMinor: floorMinor };
+    const requested: Assessment = namingFloor({ ...assessment, incident, decision: decide(incident) });
+    if (bindingOf(termsOf(obligation, requested)) === approval.binding) {
+      return { ...assessment, decision: requested.decision };
+    }
+  }
+  return assessment;
 }
 
 async function continueEscalated(
@@ -1067,7 +1095,7 @@ async function continueEscalated(
 ): Promise<NextLook> {
   // Once an invoice has gone to a person, only an approval releases a payment and
   // only a person closes it, even if the policy would now do either unprompted.
-  const assessment: Assessment = withFloorReason(
+  const assessed: Assessment = withFloorReason(
     engine,
     obligation,
     await assess(engine, obligation, originalId),
@@ -1075,6 +1103,7 @@ async function continueEscalated(
   const approval: Approval | undefined = engine.ledger.latestApproval(
     obligation.invoiceId,
   );
+  const assessment: Assessment = asRequested(obligation, assessed, approval);
   const current: ReplacementTerms = termsOf(obligation, assessment);
   if (
     approval?.state !== "approved" ||
