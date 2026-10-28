@@ -128,6 +128,8 @@ interface Assessment {
   // ones the original went to. Null when none matches them.
   bankChange: BankChange | null;
   decision: Decision;
+  // The floor reason added to the decision's reason, or null when none was.
+  floor: string | null;
 }
 
 function messageOf(error: unknown): string {
@@ -521,7 +523,7 @@ async function assess(
     ? (engine.ledger.verifiedBankChange(obligation.beneficiaryId, bankDetailsKey(bankDetails)) ??
       null)
     : null;
-  return { original, incident, findings, unverified, bankDetails, bankChange, decision };
+  return { original, incident, findings, unverified, bankDetails, bankChange, decision, floor: null };
 }
 
 // A transfer is paid to the beneficiary record as it is when it is created, so a
@@ -972,14 +974,40 @@ function escalate(
         : `Waiting on a person to call the supplier on ${obligation.supplierPhone}, the number on file, and record the callback. PayOnce pays an account the original did not go to only after that`,
       "waiting",
     );
+    noteFloor(engine, obligation, assessment, false);
     return null;
   }
 
-  return awaitApproval(
+  const next: NextLook = awaitApproval(
     engine,
     obligation,
     termsOf(obligation, assessment),
     ruleFor(engine, obligation, assessment),
+  );
+  // No request is open when nobody on the approver list could approve it.
+  noteFloor(engine, obligation, assessment, next !== null);
+  return next;
+}
+
+// Says that the floor reason was added to the policy's, and that the approval
+// request says so too only when one is open.
+function noteFloor(
+  engine: Engine,
+  obligation: Obligation,
+  assessment: Assessment,
+  requested: boolean,
+): void {
+  if (assessment.floor === null) {
+    return;
+  }
+  note(
+    engine.ledger,
+    obligation.invoiceId,
+    "warning",
+    requested
+      ? `Also, ${assessment.floor}. The approval request says this too, and only an approval of that request releases a replacement`
+      : `Also, ${assessment.floor}`,
+    "floor",
   );
 }
 
@@ -988,11 +1016,7 @@ function escalate(
 // reasons before the cash, such as a payment sent outside PayOnce, so when one of
 // those sent the invoice to a person the floor reason is added to it. The request
 // then names both, and an approval of terms that did not is void.
-function withFloorReason(
-  engine: Engine,
-  obligation: Obligation,
-  assessment: Assessment,
-): Assessment {
+function namingFloor(assessment: Assessment): Assessment {
   const decision: Decision = assessment.decision;
   const incident: Incident = assessment.incident;
   if (
@@ -1007,14 +1031,33 @@ function withFloorReason(
     return assessment;
   }
   const clause: string = floor === NO_FLOOR_REASON ? NO_FLOOR_CLAUSE : floor;
-  note(
-    engine.ledger,
-    obligation.invoiceId,
-    "warning",
-    `Also, ${clause}. The approval request says this too, and only an approval of that request releases a replacement`,
-    "floor",
-  );
-  return { ...assessment, decision: { action: "escalate", reason: `${decision.reason}, and ${clause}` } };
+  return {
+    ...assessment,
+    decision: { action: "escalate", reason: `${decision.reason}, and ${clause}` },
+    floor: clause,
+  };
+}
+
+// namingFloor, and a line on the timeline once the floor stops applying after a
+// line said it applied.
+function withFloorReason(
+  engine: Engine,
+  obligation: Obligation,
+  assessment: Assessment,
+): Assessment {
+  const lastFloorLine: LedgerEvent | undefined = [...engine.ledger.events(obligation.invoiceId)]
+    .reverse()
+    .find((event: LedgerEvent): boolean => event.topic === "floor");
+  if (floorReason(assessment.incident) === null && lastFloorLine?.kind === "warning") {
+    note(
+      engine.ledger,
+      obligation.invoiceId,
+      "payment",
+      "A replacement and its transfer fee would now leave cash above the reserve floor",
+      "floor",
+    );
+  }
+  return namingFloor(assessment);
 }
 
 async function continueEscalated(
