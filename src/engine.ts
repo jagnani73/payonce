@@ -701,11 +701,8 @@ function checkRate(
     return;
   }
   // The approval the attempt was opened on, so a request another process opened
-  // since does not count. An attempt from before that was kept has the latest.
-  const approval: Approval | undefined =
-    attempt.approvalId === null
-      ? engine.ledger.latestApproval(obligation.invoiceId)
-      : engine.ledger.approval(attempt.approvalId);
+  // since does not count.
+  const approval: Approval | undefined = engine.ledger.approvalOf(attempt);
   const approved: FxTerms | undefined =
     approval?.state === "used" ? (JSON.parse(approval.terms) as ApprovalTerms).fx : undefined;
   const problem: string | null = rateMismatch(
@@ -1596,9 +1593,9 @@ async function look(engine: Engine, invoiceId: string): Promise<NextLook> {
       // A retry pays the record as it is now, so a replacement, or an original
       // paid on an approval after a hold, goes out only to the account it was
       // approved or decided for.
-      const latest: Approval | undefined = engine.ledger.latestApproval(invoiceId);
+      const approval: Approval | undefined = engine.ledger.approvalOf(attempt);
       const approved: ApprovalTerms | undefined =
-        latest?.state === "used" ? (JSON.parse(latest.terms) as ApprovalTerms) : undefined;
+        approval?.state === "used" ? (JSON.parse(approval.terms) as ApprovalTerms) : undefined;
       if (attempt.kind === "replacement") {
         await requireAccount(
           engine,

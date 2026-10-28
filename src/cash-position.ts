@@ -92,7 +92,8 @@ function debitOf(ledger: Ledger, obligation: Obligation, attempt: Attempt | null
   if (attempt !== null && attempt.sourceAmountMinor !== null) {
     return { amountMinor: attempt.sourceAmountMinor, estimated: false, fromQuote: false };
   }
-  const approval: Approval | undefined = ledger.latestApproval(obligation.invoiceId);
+  const approval: Approval | undefined =
+    attempt === null ? ledger.latestApproval(obligation.invoiceId) : ledger.approvalOf(attempt);
   const fx: FxTerms | undefined =
     approval === undefined ? undefined : (JSON.parse(approval.terms) as ApprovalTerms).fx;
   const open: boolean =

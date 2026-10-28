@@ -1489,6 +1489,14 @@ export class Ledger {
     return row === undefined ? undefined : toApproval(row, this.signoffs(row.id));
   }
 
+  // The approval an attempt was opened on. An attempt with no approval id, paid
+  // from the invoice's own currency or from before the column, has the latest.
+  approvalOf(attempt: Attempt): Approval | undefined {
+    return attempt.approvalId === null
+      ? this.latestApproval(attempt.invoiceId)
+      : this.approval(attempt.approvalId);
+  }
+
   private signoffs(approvalId: number): Signoff[] {
     return this.db
       .prepare(
