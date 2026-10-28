@@ -223,6 +223,8 @@ const state = {
   addError: null,
   delivering: false,
   deliverError: null,
+  // The match card's choices by upload, so a poll that rebuilds the card keeps them.
+  matchDrafts: new Map(),
   dismissing: false,
   dismissError: null,
 };
@@ -3853,21 +3855,32 @@ function renderInboxMatch(detail) {
     els.inboxMatch.replaceChildren();
     return;
   }
+  // The person's pick outlives a rebuild. One that is no longer offered is dropped,
+  // not swapped for the suggestion, so nobody delivers to an invoice they did not pick.
+  const draft = state.matchDrafts.get(upload.id) ?? {
+    picked: detail.suggested ?? "",
+    otherInvoice: "",
+    deliveredBy: readStoredName(),
+  };
+  const picked =
+    draft.picked === "" || candidates.some((candidate) => candidate.invoiceId === draft.picked) ? draft.picked : null;
+  const focused = document.activeElement?.id ?? "";
   const other = h("input", { type: "radio", name: "inbox-invoice", value: "" });
-  other.checked = detail.suggested === null;
+  other.checked = picked === "";
   const otherInvoice = h("input", { type: "text", id: "inbox-other-invoice", autocomplete: "off", spellcheck: "false", maxlength: "40" });
+  otherInvoice.value = draft.otherInvoice;
   otherInvoice.addEventListener("input", () => {
     other.checked = true;
   });
   const deliveredBy = h("input", { type: "text", id: "inbox-delivered-by", autocomplete: "name", maxlength: "80" });
-  deliveredBy.value = readStoredName();
+  deliveredBy.value = draft.deliveredBy;
   const button = h("button", { class: "button button--primary", type: "submit" }, "Deliver");
   const error = h("p", { class: "form-error", role: "alert", hidden: true });
   const form = h(
     "form",
     { class: "approve-form", novalidate: true },
     h("p", { class: "approval__lead" }, matchLead(candidates, detail.suggested)),
-    candidates.map((candidate) => candidateRow(candidate, candidate.invoiceId === detail.suggested)),
+    candidates.map((candidate) => candidateRow(candidate, candidate.invoiceId === picked)),
     h(
       "label",
       { class: "candidate" },
@@ -3883,10 +3896,31 @@ function renderInboxMatch(detail) {
     event.preventDefault();
     submitDeliver(upload.id);
   });
+  const remember = () => {
+    const radio = form.querySelector('input[name="inbox-invoice"]:checked');
+    state.matchDrafts.set(upload.id, {
+      picked: radio === null ? null : radio.value,
+      otherInvoice: otherInvoice.value,
+      deliveredBy: deliveredBy.value,
+    });
+    syncMatch();
+  };
+  form.addEventListener("change", remember);
+  form.addEventListener("input", remember);
   matchRefs = { form, otherInvoice, deliveredBy, button, error };
   els.inboxMatch.replaceChildren(h("h2", { id: "inbox-match-title" }, "Which invoice is it about?"), form);
   els.inboxMatch.hidden = false;
+  if (focused === "inbox-other-invoice" || focused === "inbox-delivered-by") {
+    (focused === "inbox-other-invoice" ? otherInvoice : deliveredBy).focus();
+  }
   syncMatch();
+}
+
+// The invoice the match card would deliver to: the picked one, or the number typed
+// for another invoice. Empty when there is neither.
+function matchChoice() {
+  const picked = matchRefs.form.querySelector('input[name="inbox-invoice"]:checked');
+  return picked === null ? "" : picked.value === "" ? matchRefs.otherInvoice.value.trim() : picked.value;
 }
 
 function syncMatch() {
@@ -3894,7 +3928,8 @@ function syncMatch() {
     return;
   }
   matchRefs.button.disabled = state.delivering;
-  setText(matchRefs.button, state.delivering ? "Delivering" : "Deliver");
+  const choice = matchChoice();
+  setText(matchRefs.button, state.delivering ? "Delivering" : choice === "" ? "Deliver" : `Deliver to ${choice}`);
   if (liveMessage("inboxMatch", state.deliverError) === null) {
     state.deliverError = null;
   }
@@ -3905,8 +3940,7 @@ async function submitDeliver(uploadId) {
   if (state.delivering || matchRefs === null) {
     return;
   }
-  const picked = matchRefs.form.querySelector('input[name="inbox-invoice"]:checked');
-  const invoiceId = picked === null ? "" : picked.value === "" ? matchRefs.otherInvoice.value.trim() : picked.value;
+  const invoiceId = matchChoice();
   const deliveredBy = matchRefs.deliveredBy.value.trim();
   const missing =
     invoiceId === ""
@@ -3925,6 +3959,7 @@ async function submitDeliver(uploadId) {
   syncMatch();
   try {
     await api(`/api/inbox/${uploadId}/deliver`, { method: "POST", body: { invoiceId, deliveredBy } });
+    state.matchDrafts.delete(uploadId);
     state.fastUntil = Date.now() + EXPECT_WORK_MS;
     select(invoiceId);
   } catch (error) {
