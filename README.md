@@ -222,18 +222,18 @@ PayOnce reads each transfer's fee and keeps it in the ledger, and fills in older
 
 The page opens on the incident board, under the cash panel. It lists every invoice that is not closed, and the rows of a pay run waiting for approval, in four groups, most urgent first:
 
-1. Waiting on a person, with money that could still leave a wallet: an approval request that is open, or approved and not used yet, an invoice held before paying, a failed payment with no request open, a pay run waiting for approval, or an invoice named by an email waiting in the inbox.
+1. Waiting on a person, with money that could still leave a wallet: an approval request that is open, or approved and not used yet, an invoice held before paying, a failed payment with no request open, a pay run waiting for approval, or an invoice that an email waiting in the inbox names on its own, so the inbox offers it first. An email that names the invoice beside others, only nearly, or inside other digits adds a note to it and leaves it in its group.
 2. Bank deadline passed: a payment still with the bank after its deadline.
 3. With the bank: a payment, or a payout sent outside PayOnce, that the bank still has.
-4. Everything else that is open, such as a paid invoice waiting for someone to close it, or a pay run row waiting for its turn.
+4. Everything else that is open, such as a paid invoice waiting for someone to close it, an approved pay run that PayOnce releases on its next check, or a pay run row waiting for its turn.
 
 Within a group, the invoice with the most money at risk comes first, then the oldest. Money at risk is what could still leave a wallet for the invoice, fee included, in the currency of the wallet it leaves: a payment being sent, approved or waiting on a person, a held invoice's amount, a pay run row, or a payment still with the bank. For an invoice paid from another wallet it is the quote's amount. The board takes these figures from the cash panel and never works them out another way.
 
 The totals at the top add them up per currency, in the cash panel's terms. "Approved or being sent" is the panel's payments being sent, approvals not used yet and approved pay runs not sent yet. "Waiting on a person" is the panel's line of that name. "With the bank" is the panel's "With the bank" and "Payouts sent outside PayOnce" together. A pay run waiting for approval gets a part of its own, because the cash panel counts a run only once it is approved. PayOnce has no exchange rates, so the board ranks amounts in different currencies as plain numbers. Filter by wallet to rank one currency on its own.
 
-Each row gives the invoice, the supplier, the amount and the wallet it is paid from, why it is in its group, how long since PayOnce took it on, and a link to the incident, or to the pay run for a row not released yet. The reasons are PayOnce's own fixed words, never an email's. The board has no buttons of its own: the cards on the incident do the work. You can filter by group, by wallet and by origin (PayOnce, sent outside PayOnce, pay run). The board reads only the ledger and refreshes with the incident list. The incident list stays in the sidebar, and the "Incident board" button in the top bar brings the board back.
+Each row gives the invoice, the supplier, the amount and the wallet it is paid from, why it is in its group, how long since PayOnce took it on, and a link to the incident, or to the pay run for a row not released yet. The reasons are PayOnce's own fixed words, never an email's. The board has no buttons of its own: the cards on the incident do the work. You can filter by group, by wallet and by origin (PayOnce, sent outside PayOnce, pay run). The board reads only the ledger and refreshes with the incident list. The incident list stays in the sidebar. Next to each invoice's state it names the board's group when that tells you more, such as "Bank deadline passed". The "Incident board" button in the top bar brings the board back. With nothing in the ledger yet, the board says how to start the first incident.
 
-`pnpm board` prints the same ranking in the terminal. It takes the same filters as words in any order, such as `pnpm board deadline USD outside`.
+`pnpm board` prints the same ranking in the terminal. It takes the same filters as words in any order, such as `pnpm board deadline USD outside`. A word that is not a group, an origin or a currency prints the usage.
 
 ## Pay runs
 
