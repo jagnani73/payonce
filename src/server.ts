@@ -64,6 +64,13 @@ import { MAX_EMAIL_BYTES, noteTexts, TOO_LARGE_TEXT, type ParsedEmail } from "./
 import type { EmailFindings, SupplierEmail } from "./emails.js";
 import { describeQuotes } from "./fx.js";
 import {
+  boardReport,
+  CURRENCY_PATTERN,
+  isBoardGroup,
+  isBoardOrigin,
+  type BoardReport,
+} from "./incident-board.js";
+import {
   candidatesFor,
   deliverUpload,
   EmailRefusedError,
@@ -828,6 +835,28 @@ function cash(read: boolean = true): CashReport {
   });
 }
 
+// The incident board, from the ledger alone, with the filters the query names. An
+// empty value is no filter, and one the board does not know answers 400.
+function board(params: URLSearchParams): BoardReport {
+  const group: string = params.get("group") ?? "";
+  const currency: string = params.get("currency") ?? "";
+  const origin: string = params.get("origin") ?? "";
+  if (group !== "" && !isBoardGroup(group)) {
+    throw new HttpError(400, "The group is person, deadline, bank or open");
+  }
+  if (currency !== "" && !CURRENCY_PATTERN.test(currency)) {
+    throw new HttpError(400, "The currency is a three-letter code such as USD");
+  }
+  if (origin !== "" && !isBoardOrigin(origin)) {
+    throw new HttpError(400, "The origin is payonce, outside or pay-run");
+  }
+  return boardReport(engine.ledger, {
+    group: group === "" ? null : group,
+    currency: currency === "" ? null : currency,
+    origin: origin === "" ? null : origin,
+  });
+}
+
 // While alerts are on, the balances are read every 5 minutes even with no page
 // open, so a headroom below 0 is noticed. Null until a balance has been read,
 // and "reading" while none has and a read is running.
@@ -1377,6 +1406,8 @@ async function route(
     sendJson(response, 200, recentAlerts());
   } else if (method === "GET" && pathname === "/api/cash") {
     sendJson(response, 200, cash());
+  } else if (method === "GET" && pathname === "/api/board") {
+    sendJson(response, 200, board(url.searchParams));
   } else if (method === "GET" && pathname === "/api/inbox") {
     sendJson(response, 200, {
       uploads: engine.ledger.uploads(INBOX_OTHERS_SHOWN).map(uploadSummary),
