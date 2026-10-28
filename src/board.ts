@@ -25,6 +25,12 @@ const ID_WIDTH: number = 16;
 const SUPPLIER_WIDTH: number = 28;
 const AMOUNT_WIDTH: number = 24;
 const INDENT: string = "    ";
+// Control characters, which could move the cursor or colour the terminal, and line
+// breaks become spaces. Format characters (bidi controls, zero-width characters
+// and the rest of Unicode's Cf), which could reverse or hide part of a line, and
+// the rest of the tag block are dropped.
+const CONTROL: RegExp = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
+const HIDDEN: RegExp = /[\p{Cf}\u{e0000}-\u{e007f}]/gu;
 
 function fail(message: string): void {
   console.log(message);
@@ -80,6 +86,12 @@ function waited(since: string | null, now: string): string {
   return hours < 48 ? `${hours} h` : `${Math.floor(hours / 24)} days`;
 }
 
+// A supplier or payee name, or an invoice number from a pay run file, as it is
+// safe to print.
+function printable(text: string): string {
+  return text.replace(HIDDEN, "").replace(CONTROL, " ").trim();
+}
+
 function cut(text: string, width: number): string {
   return text.length <= width ? text.padEnd(width) : `${text.slice(0, width - 3)}...`;
 }
@@ -132,7 +144,7 @@ function entryLines(entry: BoardEntry, now: string): string[] {
     entry.atRisk.length === 0 ? "nothing at risk" : `at risk ${entry.atRisk.map(moneyText).join(", ")}`;
   const deadline: string = entry.deadlineAt === null ? "" : `. Deadline ${utc(entry.deadlineAt)}`;
   return [
-    `  ${cut(entry.invoiceId, ID_WIDTH)} ${cut(entry.supplier, SUPPLIER_WIDTH)} ${amount.padStart(AMOUNT_WIDTH)}  ${risk}, waiting ${waited(entry.waitingSince, now)}${where}`,
+    `  ${cut(printable(entry.invoiceId), ID_WIDTH)} ${cut(printable(entry.supplier), SUPPLIER_WIDTH)}${amount.padStart(AMOUNT_WIDTH)}  ${risk}, waiting ${waited(entry.waitingSince, now)}${where}`,
     `${INDENT}${entry.why}${deadline}`,
     ...entry.also.map((line: string): string => `${INDENT}Also: ${line}`),
   ];
