@@ -1567,7 +1567,7 @@ export async function resumeIncident(
 }
 
 async function look(engine: Engine, invoiceId: string): Promise<NextLook> {
-  const obligation: Obligation | undefined = engine.ledger.obligation(invoiceId);
+  let obligation: Obligation | undefined = engine.ledger.obligation(invoiceId);
   if (obligation === undefined) {
     throw new Error(`${invoiceId} is not in the ledger`);
   }
@@ -1658,6 +1658,8 @@ async function look(engine: Engine, invoiceId: string): Promise<NextLook> {
     }
     console.log(`  ${attempt.kind} ${describe(transfer)}`);
   }
+  // A transfer found at a rate nobody approved may have escalated it above.
+  obligation = engine.ledger.obligation(invoiceId) ?? obligation;
 
   if (originalId === null) {
     const refused: Attempt | undefined = engine.ledger.attempts(invoiceId).at(-1);
