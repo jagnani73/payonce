@@ -383,6 +383,13 @@ export function fxTermsOf(
   });
 }
 
+// The same terms with another arrival estimate, in the place termsFor and
+// heldTermsFor give it, so the key order, and with it the binding, is the one
+// those would build. Only for terms that already carry one.
+export function withArrival<T extends ApprovalTerms>(terms: T, arrival: ArrivalTerms): T {
+  return { ...terms, arrival: arrivalBlock(arrival) };
+}
+
 // The same quote with the fee estimate as it is now.
 export function withFeeEstimate(fx: FxTerms, feeEstimateMinor: number | null): FxTerms {
   return fxBlock({ ...fx, feeEstimateMinor });

@@ -27,6 +27,7 @@ import {
   paymentAmount,
   rateMismatch,
   termsFor,
+  withArrival,
   withFeeEstimate,
   type ApprovalTerms,
   type DuplicateEvidence,
@@ -49,6 +50,7 @@ import {
 import {
   arrivalFor,
   atRisk,
+  ifSentOn,
   replacementArrivalText,
   sentArrivalText,
   today,
@@ -557,13 +559,14 @@ function arrivalOf(
 
 // What the decision line adds about when a replacement would arrive: only for an
 // invoice with a due date whose original failed and no payout sent outside
-// PayOnce may pay.
+// PayOnce may pay. It counts from today, also while an open request keeps the day
+// it opened on.
 function arrivalClause(assessment: Assessment): string {
   return assessment.arrival === null ||
     assessment.incident.originalState !== "failed" ||
     assessment.incident.outsidePayoutLive
     ? ""
-    : `. ${replacementArrivalText(assessment.arrival)}`;
+    : `. ${replacementArrivalText(ifSentOn(assessment.arrival, today()))}`;
 }
 
 // The email evidence a person sees and approves against.
@@ -838,14 +841,16 @@ async function send(
     engine.ledger.escalate(obligation.invoiceId, reason);
     note(engine.ledger, obligation.invoiceId, "warning", capitalise(reason));
   }
-  // When it usually arrives, counted from today, against the due date. Advice for
-  // people: nothing PayOnce decides reads it.
+  // When it usually arrives, counted from the day the transfer was created, which
+  // is earlier than today for a pending attempt found by its request_id, against
+  // the due date. Advice for people: nothing PayOnce decides reads it.
+  const createdAt: number = Date.parse(created.created_at);
   const arrival: ArrivalTerms = arrivalFor(
     obligation.transferMethod,
     obligation.currency,
     sentTo,
     obligation.dueDate,
-    today(),
+    Number.isNaN(createdAt) ? today() : today(new Date(createdAt)),
   );
   note(
     engine.ledger,
@@ -1065,12 +1070,13 @@ function quoteLine(obligation: Obligation, fx: FxTerms, previous: FxTerms | unde
 function awaitApproval(
   engine: Engine,
   obligation: Obligation,
-  terms: ApprovalTerms,
+  given: ApprovalTerms,
   rule: SignoffRule,
   rate: Rate | null,
 ): NextLook {
   const invoiceId: string = obligation.invoiceId;
-  const binding: string = bindingOf(terms);
+  let terms: ApprovalTerms = given;
+  let binding: string = bindingOf(terms);
 
   // A request nobody on the list could approve would only expire and be opened
   // again, so none is opened until the approver list changes.
@@ -1134,21 +1140,11 @@ function awaitApproval(
     }
     return Date.now();
   }
-  // The same for terms that kept an open request's arrival estimate, counted from
-  // a day that is not today: the next look counts from today.
+  // Terms that kept an open request's arrival estimate, counted from a day that is
+  // not today, count from today in a new request. Only the dates change.
   if (opening && terms.arrival !== undefined && terms.arrival.from !== today()) {
-    const signed: Signoff[] = latest?.state === "requested" ? latest.signoffs : [];
-    if (engine.ledger.voidOpenApprovals(invoiceId)) {
-      note(
-        engine.ledger,
-        invoiceId,
-        "approval",
-        signed.length > 0
-          ? `Approval by ${signersOf(signed)} no longer counts: the terms changed, so PayOnce opens a new request with today's arrival estimate`
-          : "Approval request withdrawn: the terms changed, so PayOnce opens a new request with today's arrival estimate",
-      );
-    }
-    return Date.now();
+    terms = withArrival(terms, ifSentOn(terms.arrival, today()));
+    binding = bindingOf(terms);
   }
   const previous: FxTerms | undefined =
     latest === undefined ? undefined : (JSON.parse(latest.terms) as ApprovalTerms).fx;
