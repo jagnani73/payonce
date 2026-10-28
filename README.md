@@ -32,11 +32,11 @@ If the bank sits on a payment past its deadline, a person hears about it. PayOnc
 | The original transfer is still in flight | Wait |
 | A replacement has already failed | Escalate to a person |
 | The original failed for a reason a resend cannot fix | Escalate to a person |
-| No reserve floor is set for the payment's currency | Escalate to a person |
+| The original was sent outside PayOnce and would otherwise be replaced | Escalate to a person |
 | The cash position could not be read | Escalate to a person |
 | The original failed and a replacement with its transfer fee, on top of money already committed to other payments, would push cash below the reserve floor | Escalate to a person |
-| The original was sent outside PayOnce and would otherwise be replaced | Escalate to a person |
 | The replacement is above `TWO_APPROVERS_ABOVE` | Escalate to a person |
+| No reserve floor is set for the payment's currency | Escalate to a person |
 | The original failed, a resend can fix it and the beneficiary details are unchanged | Replace |
 
 `src/decide.ts` checks the rules in that order. A resend can fix a failure only when it happened on the sending side: a system error or a channel timeout. Any other failure, including a return from the beneficiary's bank, goes to a person.

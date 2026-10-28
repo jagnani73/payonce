@@ -90,9 +90,13 @@ export function decide(incident: Incident): Decision {
     };
   }
 
-  // A currency with no floor set fails closed, as approvals do without APPROVERS.
-  if (incident.reserveFloorMinor === null) {
-    return { action: "escalate", reason: NO_FLOOR_REASON };
+  // Checked before the cash, so the reason, and with it the approval terms, does
+  // not change with the balance or the floor.
+  if (incident.sentOutsidePayOnce) {
+    return {
+      action: "escalate",
+      reason: "the original was sent outside PayOnce, so a person approves any replacement",
+    };
   }
 
   // Money already promised to other payments is still in the available balance,
@@ -103,10 +107,11 @@ export function decide(incident: Incident): Decision {
     incident.availableBalanceMinor - incident.committedMinor - replacementCostMinor;
 
   // A NaN compares false against everything, so an unreadable cash position must
-  // be caught here and not allowed to pass as "above the floor".
+  // be caught here and not allowed to pass as "above the floor". With no floor set
+  // there is nothing to check the cash against.
   if (
-    !Number.isFinite(balanceAfterMinor) ||
-    !Number.isFinite(incident.reserveFloorMinor)
+    incident.reserveFloorMinor !== null &&
+    (!Number.isFinite(balanceAfterMinor) || !Number.isFinite(incident.reserveFloorMinor))
   ) {
     return {
       action: "escalate",
@@ -114,17 +119,10 @@ export function decide(incident: Incident): Decision {
     };
   }
 
-  if (balanceAfterMinor < incident.reserveFloorMinor) {
+  if (incident.reserveFloorMinor !== null && balanceAfterMinor < incident.reserveFloorMinor) {
     return {
       action: "escalate",
       reason: "a replacement and its transfer fee would push cash below the reserve floor",
-    };
-  }
-
-  if (incident.sentOutsidePayOnce) {
-    return {
-      action: "escalate",
-      reason: "the original was sent outside PayOnce, so a person approves any replacement",
     };
   }
 
@@ -135,6 +133,12 @@ export function decide(incident: Incident): Decision {
       action: "escalate",
       reason: "a replacement this large needs two approvers",
     };
+  }
+
+  // A currency with no floor set fails closed, as approvals do without APPROVERS.
+  // It comes last, so it only stops a replacement the agent would otherwise send.
+  if (incident.reserveFloorMinor === null) {
+    return { action: "escalate", reason: NO_FLOOR_REASON };
   }
 
   return {
