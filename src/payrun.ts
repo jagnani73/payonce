@@ -24,6 +24,8 @@ import { parseRunFile, type FileProblem, type ParsedRunFile } from "./run-file.j
 import {
   approveRun,
   cancelRun,
+  domainChecks,
+  domainText,
   pendingRunApproval,
   recheckRun,
   runCounts,
@@ -131,7 +133,7 @@ function printCash(cash: RunCash[]): void {
   }
 }
 
-function printApproval(pending: PendingRunApproval): void {
+function printApproval(ledger: Ledger, pending: PendingRunApproval): void {
   const approval: RunApproval = pending.approval;
   const totals: RunTotal[] = pending.terms.totals;
   const payments: number = pending.terms.rows.length;
@@ -148,6 +150,11 @@ function printApproval(pending: PendingRunApproval): void {
     `  needs    ${approval.needed === 1 ? "one approver" : `${approval.needed} approvers, because ${approval.neededWhy}`}`,
   );
   console.log(`  limits   checked against ${formatMoney(pending.largest.amountMinor, pending.largest.currency)}, the largest total`);
+  // The sender check trusts these domains, so the approvers see each one.
+  for (const check of domainChecks(ledger, pending.terms)) {
+    const changed: boolean = check.onFile !== null && check.onFile !== check.domain;
+    console.log(`  ${changed ? "caution " : "domain  "} ${domainText(check)}`);
+  }
   if (approval.signoffs.length > 0) {
     console.log(`  so far   approved by ${signersOf(approval.signoffs)}`);
   }
@@ -172,7 +179,7 @@ function show(ledger: Ledger, run: Run): void {
   printCash(JSON.parse(run.cash) as RunCash[]);
   const pending: PendingRunApproval | undefined = pendingRunApproval(ledger, run.id);
   if (pending !== undefined) {
-    printApproval(pending);
+    printApproval(ledger, pending);
   }
   const events: LedgerEvent[] = ledger.runEvents(run.id).slice(-EVENTS_SHOWN);
   for (const event of events) {
@@ -240,7 +247,7 @@ function approve(ledger: Ledger, run: Run, requestRaw: string | undefined, appro
     fail(`No approval is waiting for run ${run.id}`);
     return;
   }
-  printApproval(pending);
+  printApproval(ledger, pending);
   console.log(describePolicy(policy));
   if (requestRaw === undefined || approver === "") {
     console.log(`To approve these terms: pnpm payrun approve ${run.id} ${pending.approval.id} <NAME>`);

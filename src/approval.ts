@@ -119,6 +119,9 @@ export interface RunRowTerms {
   // The callback that verified the account, when PayOnce last paid this supplier
   // another one.
   bankChange: number | null;
+  // The domain the supplier's emails come from, as the file gave it. Only on a
+  // row that gives one, so a run without the column keeps its binding.
+  supplierDomain?: string;
 }
 
 // A currency's pay rows. reserveFloorMinor is the floor the cash check used, null
@@ -166,6 +169,7 @@ export function runTermsFor(
         accountKey: row.accountKey,
         heldFor: row.heldFor,
         bankChange: row.bankChange,
+        ...(row.supplierDomain === undefined ? {} : { supplierDomain: row.supplierDomain }),
       }),
     ),
     totals: totals.map(

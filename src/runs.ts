@@ -503,8 +503,50 @@ function totalsOf(rows: CheckedRow[], cash: RunCash[]): RunTotal[] {
     .filter((total: RunTotal): boolean => total.payments > 0);
 }
 
+// Each pay row carries the supplier_domain its cells give, so the approvers
+// approve the domain the sender check will trust.
 export function termsOf(run: Run, rows: CheckedRow[], cash: RunCash[]): RunTerms {
-  return runTermsFor(run.id, run.fileHash, run.uploadedBy, payRows(rows), totalsOf(rows, cash));
+  const withDomains: PayRow[] = payRows(rows).map((row: PayRow): PayRow => {
+    const cells: CheckedRow | undefined = rows.find((entry: CheckedRow): boolean => entry.line === row.line);
+    const domain: string | null =
+      cells === undefined ? null : rowFromCells(cells.line, run.columns, cells.cells).supplierDomain;
+    return domain === null ? row : { ...row, supplierDomain: domain };
+  });
+  return runTermsFor(run.id, run.fileHash, run.uploadedBy, withDomains, totalsOf(rows, cash));
+}
+
+// A row's supplier_domain against the domain on file for its beneficiary: the
+// latest invoice to it that has one. onFile is null when the row's domain is the
+// first for that beneficiary.
+export interface DomainCheck {
+  line: number;
+  invoiceId: string;
+  domain: string;
+  onFile: string | null;
+}
+
+export function domainChecks(ledger: Ledger, terms: RunTerms): DomainCheck[] {
+  const obligations: Obligation[] = ledger.obligations();
+  return terms.rows.flatMap((row: RunRowTerms): DomainCheck[] => {
+    if (row.supplierDomain === undefined) {
+      return [];
+    }
+    const earlier: Obligation | undefined = obligations.find(
+      (obligation: Obligation): boolean =>
+        obligation.beneficiaryId === row.beneficiaryId && obligation.supplierDomain !== "",
+    );
+    return [{ line: row.line, invoiceId: row.invoiceId, domain: row.supplierDomain, onFile: earlier?.supplierDomain ?? null }];
+  });
+}
+
+// The words for a row's domain, as the approval card and pnpm payrun show them.
+export function domainText(check: DomainCheck): string {
+  if (check.onFile === null) {
+    return `Row ${check.line} gives ${check.domain} as the supplier's email domain, the first domain on file for this beneficiary`;
+  }
+  return check.onFile === check.domain
+    ? `Row ${check.line} gives ${check.domain} as the supplier's email domain, the one already on file`
+    : `Row ${check.line} gives ${check.domain} as the supplier's email domain, but ${check.onFile} is on file for this beneficiary`;
 }
 
 // The largest currency total, which approver limits are checked against, as the
@@ -517,7 +559,12 @@ export function largestTotal(terms: RunTerms): { amountMinor: number; currency: 
 // How many approvers a run needs, and why: two for a payee PayOnce has never
 // paid, for an account a callback verified, and when any currency's total is
 // above TWO_APPROVERS_ABOVE.
-export function runRule(policy: ApprovalPolicy, rows: CheckedRow[], amount: PaymentAmount): SignoffRule {
+export function runRule(
+  policy: ApprovalPolicy,
+  rows: CheckedRow[],
+  amount: PaymentAmount,
+  domains: DomainCheck[],
+): SignoffRule {
   const pay: PayRow[] = payRows(rows);
   const fresh: PayRow | undefined = pay.find((row: PayRow): boolean => row.newPayee);
   if (fresh !== undefined) {
@@ -528,6 +575,16 @@ export function runRule(policy: ApprovalPolicy, rows: CheckedRow[], amount: Paym
     return {
       needed: 2,
       why: `row ${changed.line} pays an account a callback verified, not the one PayOnce last paid ${changed.payee}`,
+    };
+  }
+  // The sender check trusts the domain, so changing it is reviewed by two.
+  const otherDomain: DomainCheck | undefined = domains.find(
+    (check: DomainCheck): boolean => check.onFile !== null && check.onFile !== check.domain,
+  );
+  if (otherDomain !== undefined) {
+    return {
+      needed: 2,
+      why: `row ${otherDomain.line} gives ${otherDomain.domain} as the supplier's email domain, and ${otherDomain.onFile ?? ""} is on file for that beneficiary`,
     };
   }
   if (amount.minor > policy.twoApproversAboveMinor) {
@@ -703,7 +760,7 @@ function settleRunRequest(
   }
   const binding: string = bindingOf(terms);
   const amount: PaymentAmount = runAmount(terms);
-  const rule: SignoffRule = runRule(policy, rows, amount);
+  const rule: SignoffRule = runRule(policy, rows, amount, domainChecks(ledger, terms));
   const eligible: Approver[] = eligibleApprovers(policy, amount, runBarred(ledger, terms));
   if (policy.problem !== null || eligible.length < rule.needed) {
     if (ledger.voidOpenRunApprovals(run.id)) {
@@ -771,12 +828,6 @@ function settleRunRequest(
     "waiting",
   );
   return lines;
-}
-
-// A row's supplier_domain, read again from its stored cells. Empty when the file
-// has none for it.
-function domainOf(run: Run, row: RunRow | undefined): string {
-  return row === undefined ? "" : (rowFromCells(row.line, run.columns, row.cells).supplierDomain ?? "");
 }
 
 // Reads a run's rows again from the cells the ledger stored.
@@ -968,7 +1019,7 @@ export async function releaseRun(engine: Engine, agent: Dispatcher, runId: numbe
   } else {
     const problem: string | null = signoffProblem(
       engine.approvals,
-      runRule(engine.approvals, check.rows, amount),
+      runRule(engine.approvals, check.rows, amount, domainChecks(ledger, terms)),
       approval,
       amount,
       runBarred(ledger, terms),
@@ -1000,8 +1051,8 @@ export async function releaseRun(engine: Engine, agent: Dispatcher, runId: numbe
   const stored: RunRow[] = ledger.runRows(runId);
   const releaseRows: ReleaseRow[] = approved.rows.map((row: RunRowTerms): ReleaseRow => ({
     rowId: stored.find((entry: RunRow): boolean => entry.line === row.line)?.id ?? 0,
-    // From the cells the file hash in the approved terms covers.
-    supplierDomain: domainOf(run, stored.find((entry: RunRow): boolean => entry.line === row.line)),
+    // The domain the approvers approved, none when the row gave none.
+    supplierDomain: row.supplierDomain ?? "",
     line: row.line,
     invoiceId: row.invoiceId,
     payee: payees.get(row.line) ?? row.payTo,

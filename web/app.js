@@ -3235,6 +3235,22 @@ function renderRunApproval(run) {
             h("dt", null, "Limits checked against"),
             h("dd", null, `${formatMoney(approval.largest.amountMinor, approval.largest.currency)}, the largest total`),
           ],
+        // The sender check trusts these domains, so each is approved with the run.
+        Array.isArray(approval.domains) &&
+          approval.domains.length > 0 && [
+            h("dt", null, "Email domains"),
+            h(
+              "dd",
+              null,
+              approval.domains.map((check) =>
+                h(
+                  "span",
+                  { class: check.changed === true ? "terms__sub terms__sub--caution" : "terms__sub" },
+                  withPeriod(check.text),
+                ),
+              ),
+            ),
+          ],
       ),
       h(
         "p",

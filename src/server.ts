@@ -97,6 +97,8 @@ import {
 import {
   approveRun,
   cancelRun,
+  domainChecks,
+  domainText,
   largestTotal,
   recheckRun,
   releaseRun,
@@ -106,6 +108,7 @@ import {
   runNoteError,
   runStatus,
   uploadRun,
+  type DomainCheck,
   type RunCash,
 } from "./runs.js";
 import { SANDBOX_OUTCOMES, SandboxBank } from "./sandbox-bank.js";
@@ -882,6 +885,11 @@ function runDetail(raw: string): unknown {
             expired: isExpired(approval),
             barred: runBarred(engine.ledger, terms),
             largest: largestTotal(terms),
+            domains: domainChecks(engine.ledger, terms).map((check: DomainCheck) => ({
+              ...check,
+              changed: check.onFile !== null && check.onFile !== check.domain,
+              text: domainText(check),
+            })),
           },
     events: engine.ledger.runEvents(run.id),
     audit: runAuditSummary(run.id),
