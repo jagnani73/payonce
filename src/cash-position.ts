@@ -1,5 +1,5 @@
 import type { Balance, BalanceState } from "./airwallex/balances.js";
-import type { ApprovalTerms, FxTerms } from "./approval.js";
+import type { ApprovalTerms, FxTerms, LastQuote } from "./approval.js";
 import {
   crossCurrency,
   isExpired,
@@ -61,9 +61,11 @@ export interface CashLine {
   // The bank's short reference, when the money is a transfer.
   reference: string | null;
   // The amount is not exact: the invoice's, because the transfer's was never
-  // read, or for a payment from another currency's wallet, one from an older
-  // exchange rate quote or none at all.
+  // read, or for a payment from another currency's wallet, one from a quote no
+  // request or attempt is on, or none at all.
   estimated: boolean;
+  // The amount is an exchange rate quote's sell amount, not yet a transfer's.
+  fromQuote?: boolean;
 }
 
 interface FeeEstimate {
@@ -74,32 +76,37 @@ interface FeeEstimate {
 interface Debit {
   amountMinor: number;
   estimated: boolean;
+  fromQuote: boolean;
 }
 
 // What a payment takes from its wallet, before the fee. One from another
 // currency's wallet takes what its quote sells, so until its transfer has been
-// read only the approval terms know it: exactly for the quote an attempt was sent
-// with or a request still open on, and estimated from the invoice's latest quote
-// otherwise. Before any quote it is 0, estimated. attempt is null for a payment
-// not opened yet.
+// read only a quote knows it: exactly the quote an attempt was sent with or a
+// request still open is on, and otherwise about the invoice's last quote, which
+// may be on no request, as when nobody on the list can approve it. Before any
+// quote it is 0, estimated. attempt is null for a payment not opened yet.
 function debitOf(ledger: Ledger, obligation: Obligation, attempt: Attempt | null, now: number): Debit {
   if (!crossCurrency(obligation)) {
-    return { amountMinor: obligation.amountMinor, estimated: false };
+    return { amountMinor: obligation.amountMinor, estimated: false, fromQuote: false };
   }
   if (attempt !== null && attempt.sourceAmountMinor !== null) {
-    return { amountMinor: attempt.sourceAmountMinor, estimated: false };
+    return { amountMinor: attempt.sourceAmountMinor, estimated: false, fromQuote: false };
   }
   const approval: Approval | undefined = ledger.latestApproval(obligation.invoiceId);
   const fx: FxTerms | undefined =
     approval === undefined ? undefined : (JSON.parse(approval.terms) as ApprovalTerms).fx;
-  if (approval === undefined || fx === undefined) {
-    return { amountMinor: 0, estimated: true };
+  const open: boolean =
+    approval !== undefined &&
+    (approval.state === "requested" || approval.state === "approved") &&
+    !isExpired(approval, now);
+  if (fx !== undefined && (attempt !== null ? attempt.quoteId === fx.quoteId : open)) {
+    return { amountMinor: fx.sellAmountMinor, estimated: false, fromQuote: true };
   }
-  const exact: boolean =
-    attempt !== null
-      ? attempt.quoteId === fx.quoteId
-      : (approval.state === "requested" || approval.state === "approved") && !isExpired(approval, now);
-  return { amountMinor: fx.sellAmountMinor, estimated: !exact };
+  const kept: string | undefined = ledger.lastQuote(obligation.invoiceId);
+  const last: FxTerms | undefined = kept === undefined ? fx : (JSON.parse(kept) as LastQuote).fx;
+  return last === undefined
+    ? { amountMinor: 0, estimated: true, fromQuote: false }
+    : { amountMinor: last.sellAmountMinor, estimated: true, fromQuote: true };
 }
 
 // The fee a payment not sent yet should cost: the invoice's latest recorded fee,
@@ -184,6 +191,7 @@ export function cashLines(ledger: Ledger, now: number = Date.now()): CashLine[] 
           ...feeEstimate(ledger, obligation, attempts),
           reference: null,
           estimated: debit.estimated,
+          fromQuote: debit.fromQuote,
         });
       } else if (attempt.state === "pending" || attempt.state === "in_flight") {
         const debit: Debit = debitOf(ledger, obligation, attempt, now);
@@ -197,6 +205,7 @@ export function cashLines(ledger: Ledger, now: number = Date.now()): CashLine[] 
           feeKnown: attempt.feeMinor !== null,
           reference: attempt.reference,
           estimated: debit.estimated,
+          fromQuote: debit.fromQuote,
         });
       }
     }
@@ -232,6 +241,7 @@ export function cashLines(ledger: Ledger, now: number = Date.now()): CashLine[] 
         ...feeEstimate(ledger, obligation, attempts),
         reference: null,
         estimated: debit.estimated,
+        fromQuote: debit.fromQuote,
       });
     }
   }

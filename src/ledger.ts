@@ -483,6 +483,8 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     rejected_by: "TEXT",
     // The wallet the invoice is paid from. Null is its own currency's.
     source_currency: "TEXT",
+    // The latest exchange rate quote taken for it, as JSON.
+    last_quote: "TEXT",
   },
   approvals: {
     requested_at: "TEXT",
@@ -1348,6 +1350,21 @@ export class Ledger {
     this.db
       .prepare("UPDATE obligations SET duplicate_of = ? WHERE invoice_id = ?")
       .run(JSON.stringify(duplicateOf), invoiceId);
+  }
+
+  // The latest exchange rate quote taken for an invoice paid from another
+  // currency's wallet, as JSON, whether or not a request opened on it.
+  saveQuote(invoiceId: string, quote: string): void {
+    this.db
+      .prepare("UPDATE obligations SET last_quote = ? WHERE invoice_id = ?")
+      .run(quote, invoiceId);
+  }
+
+  lastQuote(invoiceId: string): string | undefined {
+    const row: { last_quote: string | null } | undefined = this.db
+      .prepare("SELECT last_quote FROM obligations WHERE invoice_id = ?")
+      .get(invoiceId) as unknown as { last_quote: string | null } | undefined;
+    return row?.last_quote ?? undefined;
   }
 
   // Closes a held invoice without paying it, recording who did. False when it is

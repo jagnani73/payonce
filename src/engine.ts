@@ -28,6 +28,7 @@ import {
   type DuplicateEvidence,
   type FxTerms,
   type HeldPaymentTerms,
+  type LastQuote,
   type ReplacementTerms,
 } from "./approval.js";
 import {
@@ -124,8 +125,9 @@ export interface Engine {
 }
 
 // The quote a payment from another currency's wallet is approved at. fresh is
-// true for one this look took. endsAt is when it runs out by this machine's
-// clock, and NaN for one taken from an open request.
+// true for one no request has shown, which a new request may open on. endsAt is
+// when it runs out by this machine's clock, and NaN for one taken from an open
+// request.
 interface Rate {
   fx: FxTerms;
   fresh: boolean;
@@ -422,10 +424,20 @@ function floorText(floorMinor: number | null, currency: string): string {
     : "the reserve floor setting could not be read";
 }
 
+function quoteFits(fx: FxTerms, obligation: Obligation): boolean {
+  return (
+    fx.sellCurrency === obligation.sourceCurrency &&
+    fx.buyCurrency === obligation.currency &&
+    fx.buyAmountMinor === obligation.amountMinor
+  );
+}
+
 // The quote a payment of this invoice from another currency's wallet is offered
 // at. While an approval request is open, every look builds its terms on that
-// request's own quote, so its binding holds still. Any other time it takes a
-// fresh quote, so a new request never opens on a quote an earlier one showed.
+// request's own quote, so its binding holds still. Any other time it offers the
+// invoice's last quote if no request has shown it and it holds long enough for
+// one, so a look that opens no request takes no quote, and otherwise takes a
+// fresh one. A new request never opens on a quote an earlier one showed.
 // feeEstimateMinor is the fee the payment should cost, in the sell currency.
 async function rateFor(
   engine: Engine,
@@ -433,19 +445,28 @@ async function rateFor(
   feeEstimateMinor: number | null,
 ): Promise<Rate> {
   const latest: Approval | undefined = engine.ledger.latestApproval(obligation.invoiceId);
+  const shown: FxTerms | undefined =
+    latest === undefined ? undefined : (JSON.parse(latest.terms) as ApprovalTerms).fx;
   const open: FxTerms | undefined =
     latest !== undefined &&
     (latest.state === "requested" || latest.state === "approved") &&
     !isExpired(latest)
-      ? (JSON.parse(latest.terms) as ApprovalTerms).fx
+      ? shown
       : undefined;
-  if (
-    open !== undefined &&
-    open.sellCurrency === obligation.sourceCurrency &&
-    open.buyCurrency === obligation.currency &&
-    open.buyAmountMinor === obligation.amountMinor
-  ) {
+  if (open !== undefined && quoteFits(open, obligation)) {
     return { fx: withFeeEstimate(open, feeEstimateMinor), fresh: false, endsAt: Number.NaN };
+  }
+  // Every request opens on the last quote, so only the latest can have shown it.
+  const kept: string | undefined = engine.ledger.lastQuote(obligation.invoiceId);
+  const last: LastQuote | undefined =
+    kept === undefined ? undefined : (JSON.parse(kept) as LastQuote);
+  if (
+    last !== undefined &&
+    last.fx.quoteId !== shown?.quoteId &&
+    quoteFits(last.fx, obligation) &&
+    last.endsAt - Date.now() > APPROVED_USE_WITHIN_MS + QUOTE_MARGIN_MS
+  ) {
+    return { fx: withFeeEstimate(last.fx, feeEstimateMinor), fresh: true, endsAt: last.endsAt };
   }
   const quote: Quote = await createQuote(
     engine.client,
@@ -465,6 +486,8 @@ async function rateFor(
       `The exchange rate quote Airwallex sent holds until ${quote.valid_to_at}, too briefly for an approval request, so PayOnce offers nothing on it`,
     );
   }
+  const taken: LastQuote = { fx, endsAt };
+  engine.ledger.saveQuote(obligation.invoiceId, JSON.stringify(taken));
   return { fx, fresh: true, endsAt };
 }
 

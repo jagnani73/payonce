@@ -61,6 +61,13 @@ export interface FxTerms {
   feeEstimateMinor: number | null;
 }
 
+// The latest quote taken for an invoice, as obligations.last_quote keeps it.
+// endsAt is when it runs out by PayOnce's clock.
+export interface LastQuote {
+  fx: FxTerms;
+  endsAt: number;
+}
+
 interface PaymentTerms {
   invoiceId: string;
   amountMinor: number;

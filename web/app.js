@@ -2488,8 +2488,15 @@ function moneyRow(currency, label, kinds, subtract) {
   if (unknown > 0) {
     notes.push(unknown === lines.length ? "fee not known" : `fee not known for ${unknown}`);
   }
-  if (lines.some((line) => line.estimated === true)) {
+  if (lines.some((line) => line.estimated === true && line.fromQuote !== true)) {
     notes.push("amount estimated");
+  }
+  if (lines.some((line) => line.fromQuote === true)) {
+    notes.push(
+      lines.some((line) => line.fromQuote === true && line.estimated === true)
+        ? "estimated from an exchange rate quote"
+        : "amount from an exchange rate quote",
+    );
   }
   const detail = [...invoiceLinks(lines), notes.length > 0 ? ` (${notes.join(", ")})` : null];
   return cashRow(
