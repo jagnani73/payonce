@@ -413,8 +413,9 @@ export function htmlToText(html: string): HtmlText {
   return {
     text: out
       .join("")
-      .replace(/[ \t]+\n/g, "\n")
-      .replace(/\n[ \t]+/g, "\n")
+      .split("\n")
+      .map((line: string): string => line.trim())
+      .join("\n")
       .replace(/ {2,}/g, " ")
       .replace(/\n{3,}/g, "\n\n")
       .trim(),

@@ -17,6 +17,8 @@ import {
 // supplier's name, which are forgeable or vague.
 
 const MAX_TOKENS: number = 5_000;
+// Longer tokens are skipped before any check on them.
+const MAX_TOKEN_LENGTH: number = 128;
 const TOKEN: RegExp = /[A-Za-z0-9]+(?:[-_./#][A-Za-z0-9]+)*/g;
 
 // An upload PayOnce cannot read. tooLarge is the 2 MB limit.
@@ -126,6 +128,17 @@ function nextToDigits(text: string, start: number, end: number): boolean {
   return /[0-9]/.test(text.charAt(before)) || /[0-9]/.test(text.charAt(after));
 }
 
+// A token such as INV-5001.pdf without its extension: two to four letters after
+// the last dot, with a digit before it. Null for any other token.
+function withoutExtension(token: string): string | null {
+  const dot: number = token.lastIndexOf(".");
+  const extension: string = dot < 0 ? "" : token.slice(dot + 1);
+  const stem: string = dot < 0 ? "" : token.slice(0, dot);
+  return extension.length >= 2 && extension.length <= 4 && /^[A-Za-z]+$/.test(extension) && /[0-9]/.test(stem)
+    ? stem
+    : null;
+}
+
 // The numbers in a text that could be invoice numbers: tokens with a digit, a
 // token with a file extension without it, and a word followed by a number, so
 // "INV 5001" and "inv #5001" read as INV-5001.
@@ -139,12 +152,17 @@ function numbersIn(text: string, where: Where, found: Found[]): void {
     const token: string = match[0];
     const start: number = match.index;
     const end: number = start + token.length;
+    // An invoice number has at most 40 characters, so a longer token is none.
+    if (token.length > MAX_TOKEN_LENGTH) {
+      previous = null;
+      continue;
+    }
     if (/[0-9]/.test(token)) {
       const amongDigits: boolean = /^[0-9]+$/.test(token) && nextToDigits(text, start, end);
       found.push({ key: numberOf(token), where, amongDigits });
-      const stem: RegExpExecArray | null = /^(.*[0-9].*)\.[A-Za-z]{2,4}$/.exec(token);
+      const stem: string | null = withoutExtension(token);
       if (stem !== null) {
-        found.push({ key: numberOf(stem[1] ?? ""), where, amongDigits });
+        found.push({ key: numberOf(stem), where, amongDigits });
       }
       if (previous !== null && /^[A-Za-z]+$/.test(previous.text) && /^[0-9]/.test(token) && /^[ #:]{1,3}$/.test(text.slice(previous.end, start))) {
         found.push({ key: numberOf(`${previous.text} ${token}`), where, amongDigits: false });

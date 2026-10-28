@@ -218,6 +218,10 @@ const ALIASES: Record<string, string> = {
 // x-user-defined, which maps bytes into the private use area. A UTF-16 part that
 // starts with a big-endian byte order mark is read big-endian.
 function decoderFor(label: string, bytes: Buffer | null): TextDecoder | null {
+  // Every label is short, and a long one would only feed the quote trim below.
+  if (label.length > 40) {
+    return null;
+  }
   const lower: string = asciiLower(label.trim().replace(/^["']+|["']+$/g, ""));
   const name: string = ALIASES[lower] ?? lower;
   let decoder: TextDecoder;
@@ -1188,8 +1192,12 @@ export function parseEmail(raw: Buffer, source: UploadSource): ParsedUpload {
       subjects.map((value: string): string => decodeWords(value, walk)).join(" | "),
       300,
     );
+    // Line by line: a regex for spaces before a line break backtracks over a long
+    // run of spaces with none after it.
     const joined: string = cleanText(walk.texts.join("\n\n"))
-      .replace(/[ \t]+\n/g, "\n")
+      .split("\n")
+      .map((line: string): string => line.trimEnd())
+      .join("\n")
       .replace(/\n{3,}/g, "\n\n")
       .trim();
     let body: string = joined;
