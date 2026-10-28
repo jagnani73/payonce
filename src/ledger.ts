@@ -3191,10 +3191,11 @@ export class Ledger {
   // Compares the conditions an evaluation found with the ones on file, in one
   // write transaction, so two processes on the file queue each alert once. A new
   // condition, a changed one, or one back after more than clearAfterMs queues an
-  // alert. When both alert tables are empty, as when alerts are first turned on,
-  // the conditions standing are recorded without an alert each, and only the
-  // summary is queued. A stored condition whose key starts with one of
-  // unknownPrefixes is not cleared, because the evaluation could not look.
+  // alert. A change to a fingerprint whose alert was skipped in this episode
+  // queues that alert again. When both alert tables are empty, as when alerts are
+  // first turned on, the conditions standing are recorded without an alert each,
+  // and only the summary is queued. A stored condition whose key starts with one
+  // of unknownPrefixes is not cleared, because the evaluation could not look.
   recordConditions(
     found: FoundCondition[],
     summary: FoundCondition,
@@ -3206,8 +3207,23 @@ export class Ledger {
     return this.transaction((): RecordedConditions => {
       const at: string = new Date(now).toISOString();
       const due: string = new Date(now + settleMs).toISOString();
-      const queue = (condition: FoundCondition, episode: number): number =>
+      // An alert skipped for this key, episode and fingerprint is queued again
+      // with the facts as they are now. One queued, sending, sent or failed is
+      // left as it is.
+      const requeue = (condition: FoundCondition, episode: number): number =>
         Number(
+          this.db
+            .prepare(
+              `UPDATE alerts
+                  SET kind = ?, facts = ?, state = 'queued', tries = 0, next_try_at = ?,
+                      last_error = NULL, created_at = ?
+                WHERE alert_key = ? AND episode = ? AND fingerprint = ? AND state = 'skipped'`,
+            )
+            .run(condition.kind, condition.facts, due, at, condition.key, episode, condition.fingerprint)
+            .changes,
+        );
+      const queue = (condition: FoundCondition, episode: number): number => {
+        const inserted: number = Number(
           this.db
             .prepare(
               `INSERT OR IGNORE INTO alerts
@@ -3217,6 +3233,8 @@ export class Ledger {
             .run(condition.key, episode, condition.fingerprint, condition.kind, condition.facts, due, at)
             .changes,
         );
+        return inserted > 0 ? inserted : requeue(condition, episode);
+      };
       const insert = (condition: FoundCondition): void => {
         this.db
           .prepare(
@@ -3263,12 +3281,7 @@ export class Ledger {
         } else if (back) {
           // Back within the clear window as it was. An alert skipped while it was
           // gone is due again.
-          this.db
-            .prepare(
-              `UPDATE alerts SET state = 'queued', next_try_at = ?
-                WHERE alert_key = ? AND episode = ? AND fingerprint = ? AND state = 'skipped'`,
-            )
-            .run(due, condition.key, episode, condition.fingerprint);
+          queued += requeue(condition, episode);
         }
       }
       for (const row of stored.values()) {
