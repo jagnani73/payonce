@@ -6,6 +6,34 @@ export const OUTSIDE_PAYOUT_REASON: string =
 export const NO_FLOOR_REASON: string =
   "no reserve floor is set for this currency, so a person approves any replacement";
 
+// Why the cash keeps a replacement from being sent unprompted, or null when it
+// and its fee leave the wallet above its floor. The policy and the check before
+// an approved replacement is spent both use it, so they cannot disagree.
+export function floorReason(incident: Incident): string | null {
+  // With no floor set there is nothing to check the cash against.
+  if (incident.reserveFloorMinor === null) {
+    return NO_FLOOR_REASON;
+  }
+
+  // Money already promised to other payments is still in the available balance,
+  // so it is taken off before the floor is checked.
+  const replacementCostMinor: number =
+    incident.amountMinor + incident.transferFeeMinor;
+  const balanceAfterMinor: number =
+    incident.availableBalanceMinor - incident.committedMinor - replacementCostMinor;
+
+  // A NaN compares false against everything, so an unreadable cash position must
+  // be caught here and not allowed to pass as "above the floor".
+  if (!Number.isFinite(balanceAfterMinor) || !Number.isFinite(incident.reserveFloorMinor)) {
+    return "the cash position could not be read";
+  }
+
+  if (balanceAfterMinor < incident.reserveFloorMinor) {
+    return "a replacement and its transfer fee would push cash below the reserve floor";
+  }
+  return null;
+}
+
 export function decide(incident: Incident): Decision {
   // PayOnce's lock only covers its own payments, so one sent by someone else
   // stops it sending anything until a person has looked.
@@ -90,8 +118,9 @@ export function decide(incident: Incident): Decision {
     };
   }
 
-  // Checked before the cash, so the reason, and with it the approval terms, does
-  // not change with the balance or the floor.
+  // Checked before the cash, so the reason does not change with the balance or the
+  // floor. An approval request for the replacement names the floor as well when
+  // the cash is short.
   if (incident.sentOutsidePayOnce) {
     return {
       action: "escalate",
@@ -99,31 +128,9 @@ export function decide(incident: Incident): Decision {
     };
   }
 
-  // Money already promised to other payments is still in the available balance,
-  // so it is taken off before the floor is checked.
-  const replacementCostMinor: number =
-    incident.amountMinor + incident.transferFeeMinor;
-  const balanceAfterMinor: number =
-    incident.availableBalanceMinor - incident.committedMinor - replacementCostMinor;
-
-  // A NaN compares false against everything, so an unreadable cash position must
-  // be caught here and not allowed to pass as "above the floor". With no floor set
-  // there is nothing to check the cash against.
-  if (
-    incident.reserveFloorMinor !== null &&
-    (!Number.isFinite(balanceAfterMinor) || !Number.isFinite(incident.reserveFloorMinor))
-  ) {
-    return {
-      action: "escalate",
-      reason: "the cash position could not be read",
-    };
-  }
-
-  if (incident.reserveFloorMinor !== null && balanceAfterMinor < incident.reserveFloorMinor) {
-    return {
-      action: "escalate",
-      reason: "a replacement and its transfer fee would push cash below the reserve floor",
-    };
+  const cash: string | null = floorReason(incident);
+  if (cash !== null && cash !== NO_FLOOR_REASON) {
+    return { action: "escalate", reason: cash };
   }
 
   // The approval policy asks two people to approve a payment this size, so the
@@ -137,8 +144,8 @@ export function decide(incident: Incident): Decision {
 
   // A currency with no floor set fails closed, as approvals do without APPROVERS.
   // It comes last, so it only stops a replacement the agent would otherwise send.
-  if (incident.reserveFloorMinor === null) {
-    return { action: "escalate", reason: NO_FLOOR_REASON };
+  if (cash !== null) {
+    return { action: "escalate", reason: cash };
   }
 
   return {

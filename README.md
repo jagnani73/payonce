@@ -144,6 +144,8 @@ A failed SWIFT transfer gets its amount back but not its fee, so a replacement p
 
 A currency that is not listed has no floor, and PayOnce never replaces a payment in it by itself. The incident goes to a person, the same way approvals are refused when `APPROVERS` is missing. To say on purpose that a currency needs no floor, list it with 0, as in `EUR:0`. If the setting cannot be read, every automatic replacement goes to a person. Floors are read when PayOnce starts, so a change needs a restart.
 
+PayOnce checks the floor again before it sends a replacement a person approved. If the replacement would take cash below the floor, the currency has no floor or the setting cannot be read, the approval counts only if its request said so. Otherwise PayOnce voids it and opens a new request that gives both reasons: the one the incident went to a person for, and the floor.
+
 New payments are not checked against the floor yet, only replacements.
 
 ## Cash panel

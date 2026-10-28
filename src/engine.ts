@@ -43,7 +43,7 @@ import {
 } from "./assess.js";
 import { committedMinor } from "./cash-position.js";
 import { deadlineOf, describeDeadline, isOverdue } from "./deadlines.js";
-import { decide, OUTSIDE_PAYOUT_REASON } from "./decide.js";
+import { decide, floorReason, OUTSIDE_PAYOUT_REASON } from "./decide.js";
 import { likelyDuplicates, nearlyPays } from "./duplicates.js";
 import {
   unverifiedSenders,
@@ -131,7 +131,7 @@ function messageOf(error: unknown): string {
 // What a standing line is about. A standing line says how things are now and is
 // written again on every check. A line with no topic records something that
 // happened.
-export type Topic = "decision" | "waiting" | "approval" | "cost" | "bank-details";
+export type Topic = "decision" | "waiting" | "approval" | "cost" | "bank-details" | "floor";
 
 // True when the timeline's last word on a topic is this message and nothing has
 // happened since.
@@ -977,6 +977,39 @@ function escalate(
   );
 }
 
+// A replacement that takes cash below its floor, or that no floor can be checked
+// for, is paid only on an approval whose request said so. The policy checks some
+// reasons before the cash, such as a payment sent outside PayOnce, so when one of
+// those sent the invoice to a person the floor reason is added to it. The request
+// then names both, and an approval of terms that did not is void.
+function withFloorReason(
+  engine: Engine,
+  obligation: Obligation,
+  assessment: Assessment,
+): Assessment {
+  const decision: Decision = assessment.decision;
+  const incident: Incident = assessment.incident;
+  if (
+    decision.action !== "escalate" ||
+    incident.originalState !== "failed" ||
+    incident.outsidePayoutLive
+  ) {
+    return assessment;
+  }
+  const floor: string | null = floorReason(incident);
+  if (floor === null || floor === decision.reason) {
+    return assessment;
+  }
+  note(
+    engine.ledger,
+    obligation.invoiceId,
+    "warning",
+    `Also, ${floor}. The approval request says this too, and only an approval of that request releases a replacement`,
+    "floor",
+  );
+  return { ...assessment, decision: { action: "escalate", reason: `${decision.reason}, and ${floor}` } };
+}
+
 async function continueEscalated(
   engine: Engine,
   obligation: Obligation,
@@ -984,7 +1017,11 @@ async function continueEscalated(
 ): Promise<NextLook> {
   // Once an invoice has gone to a person, only an approval releases a payment and
   // only a person closes it, even if the policy would now do either unprompted.
-  const assessment: Assessment = await assess(engine, obligation, originalId);
+  const assessment: Assessment = withFloorReason(
+    engine,
+    obligation,
+    await assess(engine, obligation, originalId),
+  );
   const approval: Approval | undefined = engine.ledger.latestApproval(
     obligation.invoiceId,
   );
