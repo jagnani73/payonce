@@ -6,6 +6,7 @@ const EXPECT_WORK_MS = 15000;
 const STARTING_GRACE_MS = 30000;
 // Keep the previous incident on screen this long before showing a loading state.
 const LOADING_DELAY_MS = 250;
+const STARTED_BY_KEY = "payonce.startedBy";
 
 const OBLIGATION_STATES = {
   open: { label: "Open", tone: "active" },
@@ -31,6 +32,9 @@ const APPROVAL_STATES = {
   used: { label: "Used", tone: "paid" },
   void: { label: "Void", tone: "neutral" },
 };
+
+// A request still marked requested after its time has run out.
+const EXPIRED_REQUEST = { label: "Expired", tone: "neutral" };
 
 const EVENT_KINDS = {
   payment: "Payment",
@@ -69,6 +73,7 @@ const els = {
   scenario: byId("scenario"),
   bankOutcome: byId("bank-outcome"),
   emailThread: byId("email-thread"),
+  startedBy: byId("started-by"),
   startButton: byId("start-button"),
   newError: byId("new-error"),
   listError: byId("list-error"),
@@ -215,6 +220,11 @@ function sentence(value) {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+function withPeriod(value) {
+  const text = String(value ?? "").trim();
+  return /[.!?]$/.test(text) ? text : `${text}.`;
+}
+
 function formatMoney(amountMinor, currency) {
   const code = String(currency ?? "").trim();
   if (typeof amountMinor !== "number" || !Number.isFinite(amountMinor)) {
@@ -254,6 +264,40 @@ function failureText(code) {
 
 function shortId(value) {
   return String(value).slice(0, 8);
+}
+
+// The server treats names that differ only in case or spacing as one person.
+function sameName(a, b) {
+  const key = (name) => String(name).trim().replace(/\s+/g, " ").toLowerCase();
+  return key(a) === key(b);
+}
+
+function timeNode(value) {
+  const date = parseDate(value);
+  return date === null
+    ? null
+    : h(
+        "time",
+        { datetime: date.toISOString(), title: dateTimeFormat.format(date) },
+        timeFormat.format(date),
+      );
+}
+
+// Storage can be missing or refuse access. The page works the same without it.
+function readStoredName() {
+  try {
+    return (window.localStorage.getItem(STARTED_BY_KEY) ?? "").slice(0, 80);
+  } catch {
+    return "";
+  }
+}
+
+function storeName(value) {
+  try {
+    window.localStorage.setItem(STARTED_BY_KEY, value);
+  } catch {
+    // The name is not remembered.
+  }
 }
 
 async function api(path, { method = "GET", body } = {}) {
@@ -303,10 +347,20 @@ async function loadOptions() {
   }
   try {
     const options = await api("/api/options");
+    const policy = options.approvalPolicy ?? {};
     state.options = {
       bankOutcomes: Array.isArray(options.bankOutcomes) ? options.bankOutcomes : [],
       emailThreads: Array.isArray(options.emailThreads) ? options.emailThreads : [],
       scenarios: Array.isArray(options.scenarios) ? options.scenarios : [],
+      approvers: Array.isArray(options.approvers)
+        ? options.approvers.filter(
+            (approver) => typeof approver?.name === "string" && approver.name.trim() !== "",
+          )
+        : [],
+      approvalProblem:
+        typeof policy.problem === "string" && policy.problem.trim() !== ""
+          ? policy.problem.trim()
+          : null,
     };
     state.optionsError = null;
   } catch (error) {
@@ -480,6 +534,8 @@ function renderForm() {
   els.scenario.disabled = locked;
   els.bankOutcome.disabled = locked;
   els.emailThread.disabled = locked;
+  // Read-only rather than disabled, so the name keeps focus while the incident starts.
+  els.startedBy.readOnly = state.creating;
   els.startButton.disabled = locked;
   setText(els.startButton, state.creating ? "Starting" : "Start incident");
   showMessage(els.newError, state.createError ?? state.optionsError);
@@ -490,9 +546,17 @@ async function startIncident(event) {
   if (state.creating || state.options === null) {
     return;
   }
+  const startedBy = els.startedBy.value.trim();
+  if (startedBy === "") {
+    state.createError = "Enter your name to start an incident.";
+    renderForm();
+    els.startedBy.focus();
+    return;
+  }
   const body = {
     bankOutcome: els.bankOutcome.value,
     emails: els.emailThread.value,
+    startedBy,
   };
   if (state.options.scenarios.length > 0 && els.scenario.value !== "") {
     body.scenario = els.scenario.value;
@@ -686,6 +750,10 @@ function renderHeader(detail) {
   const busy = detail.busy === true;
   // An incident that stopped part-way is picked up again from here.
   const canResume = !busy && obligation.state !== "settled";
+  const startedBy =
+    typeof obligation.startedBy === "string" && obligation.startedBy.trim() !== ""
+      ? obligation.startedBy.trim()
+      : null;
   if (
     changed("header", [
       invoiceId,
@@ -694,6 +762,7 @@ function renderHeader(detail) {
       obligation.amountMinor,
       obligation.state,
       obligation.origin,
+      startedBy,
       busy,
     ])
   ) {
@@ -716,6 +785,7 @@ function renderHeader(detail) {
         h("p", { class: "eyebrow" }, "Incident"),
         h("h1", null, invoiceId),
         h("p", { class: "detail__supplier" }, obligation.supplier),
+        startedBy !== null && h("p", { class: "detail__started" }, `Started by ${startedBy}`),
         obligation.origin === "outside" &&
           h("p", { class: "hint" }, "Sent outside PayOnce. The sweep found it in Airwallex."),
       ),
@@ -1066,12 +1136,55 @@ function renderEmails(detail) {
   }
 }
 
+function neededOf(approval) {
+  return Number.isInteger(approval.needed) && approval.needed > 1 ? approval.needed : 1;
+}
+
+function signoffsOf(approval) {
+  return Array.isArray(approval.signoffs)
+    ? approval.signoffs.filter((signoff) => typeof signoff?.approver === "string")
+    : [];
+}
+
+// Why this approver cannot approve this request, in the order the server checks, or null.
+function whyCannotApprove(approver, terms, barred, signoffs) {
+  const bar = barred.find((entry) => sameName(entry.name, approver.name));
+  if (bar !== undefined) {
+    return String(bar.why ?? "").trim() || "cannot approve this payment";
+  }
+  if (signoffs.some((signoff) => sameName(signoff.approver, approver.name))) {
+    return "approved already";
+  }
+  // Limits are in the payment's own currency.
+  if (
+    typeof approver.limitMinor === "number" &&
+    typeof terms.amountMinor === "number" &&
+    approver.limitMinor < terms.amountMinor
+  ) {
+    return `can approve up to ${formatMoney(approver.limitMinor, terms.currency)}`;
+  }
+  return null;
+}
+
+function caution(message) {
+  return h("div", { class: "caution" }, icon("warning"), h("p", { class: "caution__title" }, message));
+}
+
 function approvalLead(approval) {
   const approver =
     typeof approval.approver === "string" && approval.approver !== "" ? approval.approver : null;
   switch (approval.state) {
-    case "requested":
-      return "A person must approve this replacement before PayOnce sends it.";
+    case "requested": {
+      const needed = neededOf(approval);
+      if (needed < 2) {
+        return "A person must approve this replacement before PayOnce sends it.";
+      }
+      const people = needed === 2 ? "Two different people" : `${needed} different people`;
+      const why = typeof approval.neededWhy === "string" ? approval.neededWhy.trim() : "";
+      return why === ""
+        ? `${people} must approve this replacement before PayOnce sends it.`
+        : `${people} must approve this replacement before PayOnce sends it, because ${why}.`;
+    }
     case "approved":
       return approver === null
         ? "Approved. PayOnce checks the terms again before it sends the replacement."
@@ -1100,9 +1213,10 @@ function buildApproval(invoiceId, approval) {
   const hasReference =
     typeof evidence.originalReference === "string" && evidence.originalReference !== "";
 
-  const previousInput = approvalRefs?.input ?? null;
-  const hadFocus = previousInput !== null && document.activeElement === previousInput;
-  const selection = hadFocus ? [previousInput.selectionStart, previousInput.selectionEnd] : null;
+  const expired = requested && approval.expired === true;
+
+  const previousSelect = approvalRefs?.select ?? null;
+  const hadFocus = previousSelect !== null && document.activeElement === previousSelect;
 
   // A term the backend did not send is left out rather than shown as an empty row.
   const term = (label, value, ...rest) =>
@@ -1119,7 +1233,7 @@ function buildApproval(invoiceId, approval) {
       "div",
       { class: "approval__head" },
       h("h2", { id: "approval-title" }, "Replacement approval"),
-      badge(APPROVAL_STATES[approval.state], approval.state, false),
+      badge(expired ? EXPIRED_REQUEST : APPROVAL_STATES[approval.state], approval.state, false),
     ),
     h("p", { class: "approval__lead" }, approvalLead(approval)),
     h(
@@ -1145,63 +1259,136 @@ function buildApproval(invoiceId, approval) {
   ];
 
   const error = h("p", { class: "form-error", role: "alert", hidden: true });
-  let input = null;
+  let select = null;
   let button = null;
+  let locked = false;
   if (requested) {
-    input = h("input", {
-      type: "text",
-      id: "approver",
-      name: "approver",
-      autocomplete: "name",
-      maxlength: "80",
-    });
-    input.value = state.drafts.get(invoiceId) ?? "";
-    input.addEventListener("input", () => {
-      state.drafts.set(invoiceId, input.value);
-      if (state.approveError !== null) {
-        state.approveError = null;
-        syncApprovalControls();
-      }
-    });
-    button = h("button", { class: "button button--primary", type: "submit" }, "Approve replacement");
-    const form = h(
-      "form",
-      { class: "approve-form", novalidate: true },
-      h(
-        "div",
-        { class: "approve-form__row" },
-        h("label", { class: "field" }, h("span", { class: "field__label" }, "Your name"), input),
-        button,
-      ),
-      error,
-      h(
-        "p",
-        { class: "hint" },
-        "Your approval covers these exact terms and one payment. If the terms change, it is void.",
-      ),
-    );
-    form.addEventListener("submit", (event) => {
-      event.preventDefault();
-      submitApproval(invoiceId);
-    });
-    children.push(form);
+    const built = buildApproveForm(invoiceId, approval, terms, error);
+    ({ select, button, locked } = built);
+    children.push(built.form);
   } else {
     // With no form left, a refused approval is still explained under the lead.
     children.splice(2, 0, error);
   }
   // The id says which request an approval is for. The server refuses one that is out of date.
-  approvalRefs = { input, button, error, approvalId: approval.id };
+  approvalRefs = { select, button, error, locked, approvalId: approval.id };
 
-  setClass(els.approval, requested ? "card approval approval--requested" : "card approval");
+  setClass(
+    els.approval,
+    requested && !expired ? "card approval approval--requested" : "card approval",
+  );
   els.approval.replaceChildren(...children);
   els.approval.hidden = false;
 
-  if (input !== null && hadFocus) {
-    input.focus();
-    if (selection[0] !== null && selection[1] !== null) {
-      input.setSelectionRange(selection[0], selection[1]);
+  if (select !== null && hadFocus && !select.disabled) {
+    select.focus();
+  }
+}
+
+// The form under a request still waiting: who has approved, who may approve, and
+// anything that stops approving for now.
+function buildApproveForm(invoiceId, approval, terms, error) {
+  const options = state.options;
+  const problem = options?.approvalProblem ?? null;
+  const expired = approval.expired === true;
+  const signoffs = signoffsOf(approval);
+  const barred = Array.isArray(approval.barred)
+    ? approval.barred.filter((entry) => typeof entry?.name === "string")
+    : [];
+  const choices = (options?.approvers ?? []).map((approver) => ({
+    name: approver.name,
+    why: whyCannotApprove(approver, terms, barred, signoffs),
+  }));
+  const anyone = choices.some((choice) => choice.why === null);
+  const locked = options === null || problem !== null || expired || !anyone;
+
+  const notices = [];
+  if (problem !== null) {
+    notices.push(caution(`PayOnce refuses every approval because ${withPeriod(problem)}`));
+  }
+  if (expired) {
+    notices.push(caution("This request has expired. PayOnce opens a new request on its next look."));
+  } else if (options !== null && problem === null && !anyone) {
+    notices.push(caution("Nobody on the approver list can approve this payment."));
+  }
+
+  const status = [];
+  if (signoffs.length > 0) {
+    status.push(
+      h("dt", null, "Approved so far"),
+      h(
+        "dd",
+        null,
+        signoffs.map((signoff) => {
+          const at = timeNode(signoff.at);
+          return h("span", { class: "approval__signoff" }, signoff.approver, at !== null && [" at ", at]);
+        }),
+      ),
+    );
+    const remaining = neededOf(approval) - signoffs.length;
+    if (remaining > 0) {
+      status.push(
+        h("dt", null, "Still needed"),
+        h("dd", null, remaining === 1 ? "1 more approval" : `${remaining} more approvals`),
+      );
     }
   }
+  const expiresAt = expired ? null : timeNode(approval.expiresAt);
+  if (expiresAt !== null) {
+    status.push(h("dt", null, "Expires"), h("dd", null, expiresAt));
+  }
+
+  const select = h(
+    "select",
+    { id: "approver", name: "approver", disabled: locked },
+    h("option", { value: "" }, options === null ? "Loading approvers" : "Choose your name"),
+    choices.map((choice) =>
+      h(
+        "option",
+        { value: choice.name, disabled: choice.why !== null },
+        choice.why === null ? choice.name : `${choice.name} (${choice.why})`,
+      ),
+    ),
+  );
+  const draft = state.drafts.get(invoiceId) ?? "";
+  select.value =
+    choices.find((choice) => choice.why === null && sameName(choice.name, draft))?.name ?? "";
+  select.addEventListener("change", () => {
+    state.drafts.set(invoiceId, select.value);
+    if (state.approveError !== null) {
+      state.approveError = null;
+      syncApprovalControls();
+    }
+  });
+
+  const button = h(
+    "button",
+    { class: "button button--primary", type: "submit", disabled: locked },
+    "Approve replacement",
+  );
+  const form = h(
+    "form",
+    { class: "approve-form", novalidate: true },
+    status.length > 0 && h("dl", { class: "facts approval__status" }, status),
+    notices,
+    h(
+      "div",
+      { class: "approve-form__row" },
+      h("label", { class: "field" }, h("span", { class: "field__label" }, "Your name"), select),
+      button,
+    ),
+    error,
+    h(
+      "p",
+      { class: "hint" },
+      "Your approval covers these exact terms and one payment. If the terms change, it is void.",
+    ),
+  );
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitApproval(invoiceId);
+  });
+  return { form, select, button, locked };
 }
 
 function syncApprovalControls() {
@@ -1209,8 +1396,9 @@ function syncApprovalControls() {
     return;
   }
   if (approvalRefs.button !== null) {
-    approvalRefs.button.disabled = state.approving;
-    approvalRefs.input.readOnly = state.approving;
+    const off = state.approving || approvalRefs.locked;
+    approvalRefs.button.disabled = off;
+    approvalRefs.select.disabled = off;
     setText(approvalRefs.button, state.approving ? "Approving" : "Approve replacement");
   }
   if (liveMessage("approval", state.approveError) === null) {
@@ -1227,7 +1415,10 @@ function syncApprovalControls() {
 function renderApproval(detail) {
   const invoiceId = detail.obligation.invoiceId;
   const approval = detail.approval ?? null;
-  if (changed("approval", [invoiceId, approval])) {
+  // Who may approve comes with the options, which can arrive after the incident.
+  const policy =
+    state.options === null ? null : [state.options.approvers, state.options.approvalProblem];
+  if (changed("approval", [invoiceId, approval, policy])) {
     if (approval === null) {
       approvalRefs = null;
       els.approval.hidden = true;
@@ -1240,14 +1431,19 @@ function renderApproval(detail) {
 }
 
 async function submitApproval(invoiceId) {
-  if (state.approving || approvalRefs === null || approvalRefs.input === null) {
+  if (
+    state.approving ||
+    approvalRefs === null ||
+    approvalRefs.select === null ||
+    approvalRefs.locked
+  ) {
     return;
   }
-  const approver = approvalRefs.input.value.trim();
+  const approver = approvalRefs.select.value;
   if (approver === "") {
-    state.approveError = actionError("approval", "Enter your name to approve.");
+    state.approveError = actionError("approval", "Choose your name to approve.");
     syncApprovalControls();
-    approvalRefs.input.focus();
+    approvalRefs.select.focus();
     return;
   }
   // The approval is for the request on screen, so the request is named.
@@ -1500,6 +1696,14 @@ function render() {
 
 els.form.addEventListener("submit", startIncident);
 els.payAgain.addEventListener("click", payAgain);
+els.startedBy.value = readStoredName();
+els.startedBy.addEventListener("input", () => {
+  storeName(els.startedBy.value);
+  if (state.createError !== null) {
+    state.createError = null;
+    renderForm();
+  }
+});
 
 window.addEventListener("hashchange", () => {
   select(idFromHash());

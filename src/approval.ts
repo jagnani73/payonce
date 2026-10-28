@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Transfer, TransferBankDetails } from "./airwallex/transfers.js";
-import { originalStateOf } from "./assess.js";
+import { bankDetailsKey, originalStateOf } from "./assess.js";
 import type { Decision, OriginalTransferState } from "./incident.js";
 import type { Obligation } from "./ledger.js";
 
@@ -21,6 +21,9 @@ export interface ApprovalTerms {
   currency: string;
   beneficiaryId: string;
   payTo: string;
+  // A hash of every bank detail the payment goes to. payTo shows only part of the
+  // account, so this is what pins it.
+  accountKey: string;
   evidence: ApprovalEvidence;
 }
 
@@ -52,6 +55,7 @@ export function termsFor(
     currency: obligation.currency,
     beneficiaryId: obligation.beneficiaryId,
     payTo: payTo(obligation, bankDetails),
+    accountKey: accountKeyOf(bankDetails),
     evidence: {
       originalReference: original.short_reference_id,
       originalState: originalStateOf(original),
@@ -60,6 +64,10 @@ export function termsFor(
       reason: decision.reason,
     },
   };
+}
+
+export function accountKeyOf(details: TransferBankDetails): string {
+  return createHash("sha256").update(bankDetailsKey(details)).digest("hex").slice(0, 16);
 }
 
 export function bindingOf(terms: ApprovalTerms): string {
@@ -79,7 +87,8 @@ export function changedFields(
   }
   if (
     approved.beneficiaryId !== current.beneficiaryId ||
-    approved.payTo !== current.payTo
+    approved.payTo !== current.payTo ||
+    approved.accountKey !== current.accountKey
   ) {
     changed.push("beneficiary");
   }

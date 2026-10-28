@@ -90,11 +90,14 @@ export function newInvoiceId(ledger: Ledger): string {
   }
 }
 
-// Records the demo invoice as an obligation to the scenario's supplier.
+// Records the demo invoice as an obligation to the scenario's supplier. startedBy
+// is the name the person starting it gave, and that person cannot approve its
+// replacement.
 export async function openScenario(
   engine: Engine,
   invoiceId: string,
   scenarioId: string,
+  startedBy: string,
 ): Promise<Obligation> {
   const def: ScenarioDef | undefined = SCENARIOS.find(
     (scenario: ScenarioDef): boolean => scenario.id === scenarioId,
@@ -126,6 +129,7 @@ export async function openScenario(
     amountMinor: def.amountMinor,
     transferMethod: def.transferMethod,
     reserveFloorMinor,
+    startedBy,
   });
 }
 

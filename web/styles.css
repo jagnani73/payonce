@@ -564,6 +564,13 @@ input:read-only {
   font-size: 16px;
 }
 
+.detail__started {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
 .detail__facts {
   display: grid;
   justify-items: end;
@@ -1136,6 +1143,27 @@ input:read-only {
 
 .approve-form .field {
   margin-bottom: 0;
+}
+
+.approve-form > :first-child {
+  margin-top: 0;
+}
+
+.approval__status,
+.approve-form .caution {
+  margin-bottom: 12px;
+}
+
+.approval__status {
+  grid-template-columns: max-content minmax(0, 1fr);
+}
+
+.approval__status dd {
+  overflow-wrap: anywhere;
+}
+
+.approval__signoff {
+  display: block;
 }
 
 .approve-form .hint {

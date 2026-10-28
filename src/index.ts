@@ -71,6 +71,7 @@ for (const sample of samples) {
     emailsUnread: false,
     availableBalanceMinor: 2_500_000,
     reserveFloorMinor: 1_000_000,
+    twoApproversAboveMinor: 500_000,
   };
   const decision: Decision = decide(incident);
   console.log(sample.label);

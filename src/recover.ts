@@ -1,4 +1,6 @@
+import { userInfo } from "node:os";
 import { AirwallexClient } from "./airwallex/client.js";
+import { policyFromEnv } from "./approvers.js";
 import { Dispatcher } from "./dispatcher.js";
 import { noteError, type Engine } from "./engine.js";
 import { Ledger, LEDGER_PATH, type Obligation } from "./ledger.js";
@@ -26,12 +28,20 @@ async function main(): Promise<void> {
     client,
     (invoiceId: string, error: unknown): void => noteError(ledger, invoiceId, error),
   );
-  const engine: Engine = { client, ledger, reader: readerFromEnv(), bank };
+  const engine: Engine = {
+    client,
+    ledger,
+    reader: readerFromEnv(),
+    approvals: policyFromEnv(),
+    bank,
+  };
   const agent: Dispatcher = new Dispatcher(engine);
   const watcher: Watcher = new Watcher(engine, agent, CHECK_EVERY_MS);
   const invoiceId: string = process.argv[3] ?? newInvoiceId(ledger);
   const emailsName: string = process.argv[4] ?? DEFAULT_EMAILS;
   const scenarioId: string = process.argv[5] ?? DEFAULT_SCENARIO;
+  // Who started the incident. The login name stands in when none is given.
+  const startedBy: string = process.argv.slice(6).join(" ").trim() || userInfo().username;
 
   watcher.start();
   try {
@@ -47,7 +57,7 @@ async function main(): Promise<void> {
         engine,
         agent,
         bank,
-        existing ?? (await openScenario(engine, invoiceId, scenarioId)),
+        existing ?? (await openScenario(engine, invoiceId, scenarioId, startedBy)),
         { bankOutcome, emailsName },
       );
     }

@@ -35,6 +35,7 @@ If the bank sits on a payment past its deadline, a person hears about it. PayOnc
 | The cash position could not be read | Escalate to a person |
 | The original failed and a replacement with its transfer fee would push cash below the reserve floor | Escalate to a person |
 | The original was sent outside PayOnce and would otherwise be replaced | Escalate to a person |
+| The replacement is above `TWO_APPROVERS_ABOVE` | Escalate to a person |
 | The original failed, a resend can fix it and the beneficiary details are unchanged | Replace |
 
 `src/decide.ts` checks the rules in that order. A resend can fix a failure only when it happened on the sending side: a system error or a channel timeout. Any other failure, including a return from the beneficiary's bank, goes to a person.
@@ -73,6 +74,20 @@ Before it sends any replacement, PayOnce lists the transfers again, so a resend 
 When the original has failed and the policy escalates, PayOnce records an approval request with the exact terms: the amount, the currency, the account the supplier's record points to now, and the evidence behind the escalation. A person approves it on the web page or with `pnpm approve`, and the approval names the request they were shown.
 
 Before paying, PayOnce rebuilds the terms from current data and compares them with what was approved. If they match, it sends the replacement. If anything changed, the approval is void and PayOnce opens a new request. An approval is spent on one attempt, and it cannot override the duplicate lock. Once an invoice has gone to a person, only an approval releases a payment, even if the policy would now replace it unprompted.
+
+### Who can approve
+
+Approvers are listed in `.env` as names with limits, for example `APPROVERS=Yash:50000,Alex:10000,Sam:5000`. Without the list nobody can approve. A limit is compared with the amount in the payment's own currency, because PayOnce has no exchange rates yet.
+
+- Two different approvers are needed above `TWO_APPROVERS_ABOVE` (5,000 by default). Two are also needed whatever the amount when the payment would go to an account the original did not go to, and when PayOnce does not know who started the incident, as with a payout found in Airwallex.
+- The person who started an incident cannot approve its replacement. The page asks for a name when an incident starts. `pnpm recover` takes one as its fifth argument and uses the computer's login name without it.
+- An approval request expires after `APPROVAL_TTL_MINUTES` (60 by default). The agent looks at the invoice again when it expires, voids it and opens a new one. Approvals given on the old request no longer count.
+- Each approval records the hash of the terms its approver was shown, and the second approver has to approve the same request. The terms include a hash of every bank detail of the account, because the pay-to line shows only its last four digits. Before paying, PayOnce checks the approvals against the policy as it is then, so an approver taken off the list or a lowered limit voids them.
+- A request completed just before it expired has ten minutes to be used, so a slow look does not lose it.
+- If nobody on the list can approve a payment, for example because it needs two approvers and only one has a high enough limit, PayOnce opens no request and the timeline says so.
+- The agent does not replace a payment above `TWO_APPROVERS_ABOVE` by itself either. It escalates, and the replacement needs two approvers.
+
+The page has no login, so a name is whatever the person types or picks. The rules stop someone approving their own incident under their own name, and the timeline records who said what. They do not prove who was at the keyboard. That needs a login tied to each name.
 
 ## Closing a paid incident
 
@@ -120,8 +135,8 @@ The server has no login. It listens on this machine only and accepts changes onl
 ### The terminal
 
 ```bash
-pnpm recover [OUTCOME] [INVOICE] [EMAILS] [SCENARIO]
-pnpm approve <INVOICE> [NAME]
+pnpm recover [OUTCOME] [INVOICE] [EMAILS] [SCENARIO] [NAME]
+pnpm approve <INVOICE> [REQUEST NAME]
 pnpm close <INVOICE> [NAME] [NOTE]
 pnpm reset
 ```
@@ -132,6 +147,7 @@ pnpm reset
 | `INVOICE` | Any invoice number. A new one starts an incident and an existing one continues it | A random number |
 | `EMAILS` | `nothing-arrived` or `new-account` | `nothing-arrived` |
 | `SCENARIO` | `usd-local`, `eur-swift` or `eur-swift-low-reserve` | `usd-local` |
+| `NAME` | Who is starting the incident. That person cannot approve its replacement | Your login name |
 
 Four runs to try:
 
@@ -140,7 +156,7 @@ pnpm recover
 pnpm recover ACCOUNT_CLOSED
 pnpm recover CHANNEL_TIMEOUT INV-5001 new-account
 pnpm approve INV-5001
-pnpm approve INV-5001 Yash
+pnpm approve INV-5001 1 Alex
 pnpm recover - INV-5001
 pnpm recover PAID INV-5002
 pnpm close INV-5002
@@ -149,7 +165,7 @@ pnpm close INV-5002 Yash supplier found the payment
 
 The terminal has no webhook receiver, so `pnpm recover` checks the bank every 2 seconds and returns once the incident is closed or waiting on a person.
 
-The first replaces the payment and shows the lock refusing a second one. The second ends in an escalation. In the third, the supplier asks for payment to a new account from a look-alike address, so it escalates although a channel timeout on its own would be replaced. `pnpm approve` with no name shows the terms and with a name approves them. `pnpm recover - INV-5001` then sends the replacement to the account on file. The outcome is ignored for an invoice that already exists, so `-` works as a placeholder.
+The first replaces the payment and shows the lock refusing a second one. The second ends in an escalation. In the third, the supplier asks for payment to a new account from a look-alike address, so it escalates although a channel timeout on its own would be replaced. `pnpm approve` with no name shows the terms, the request number and who may approve them. With the request number and a name it records that person's approval, so `1` stands for the number it printed. A request opened since is refused, so nobody approves terms they have not seen. `pnpm recover` started the incident under your login name, so approve it under a name from `APPROVERS`. `pnpm recover - INV-5001` then sends the replacement to the account on file. The outcome is ignored for an invoice that already exists, so `-` works as a placeholder.
 
 In the fourth, the bank pays the original while the supplier says it never arrived, so the incident goes to a person. `pnpm close` with no name shows what is waiting, and with a name and a note it closes the incident.
 

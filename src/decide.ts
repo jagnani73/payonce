@@ -118,6 +118,15 @@ export function decide(incident: Incident): Decision {
     };
   }
 
+  // The approval policy asks two people to approve a payment this size, so the
+  // agent does not replace it by itself either.
+  if (incident.amountMinor > incident.twoApproversAboveMinor) {
+    return {
+      action: "escalate",
+      reason: "a replacement this large needs two approvers",
+    };
+  }
+
   return {
     action: "replace",
     reason: "original failed, a resend can fix it and the beneficiary details are unchanged",

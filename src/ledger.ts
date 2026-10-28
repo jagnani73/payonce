@@ -68,6 +68,14 @@ const SCHEMA: string = `
     invoice_id TEXT NOT NULL REFERENCES obligations(invoice_id),
     found_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS signoffs (
+    approval_id INTEGER NOT NULL REFERENCES approvals(id),
+    approver TEXT NOT NULL,
+    binding TEXT NOT NULL,
+    at TEXT NOT NULL
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS one_signoff_per_approver
+    ON signoffs(approval_id, approver);
   CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -113,6 +121,9 @@ export interface NewObligation {
   amountMinor: number;
   transferMethod: TransferMethod;
   reserveFloorMinor: number;
+  // The name the person who started the incident gave. Null when PayOnce does
+  // not know, as for a payout sent outside it.
+  startedBy: string | null;
 }
 
 export interface Obligation extends NewObligation {
@@ -154,7 +165,16 @@ export interface FoundPayout {
   failureCode: string | null;
 }
 
-// terms is the JSON shown to the approver, binding is its hash.
+// One approver's approval of a request, with the binding of the terms they saw.
+export interface Signoff {
+  approver: string;
+  binding: string;
+  at: string;
+}
+
+// terms is the JSON shown to the approver, binding is its hash. A request is
+// approved once it has as many signoffs as it needs. approver names everyone who
+// approved it.
 export interface Approval {
   id: number;
   invoiceId: string;
@@ -162,6 +182,23 @@ export interface Approval {
   terms: string;
   state: ApprovalState;
   approver: string | null;
+  // ISO times. A request recorded before requests expired has none, and counts
+  // as expired.
+  requestedAt: string | null;
+  expiresAt: string | null;
+  needed: number;
+  // Why it needs more than one approver. Empty when it needs one.
+  neededWhy: string;
+  signoffs: Signoff[];
+}
+
+// What a new approval request asks for.
+export interface ApprovalRequest {
+  binding: string;
+  terms: string;
+  needed: number;
+  neededWhy: string;
+  expiresAt: number;
 }
 
 interface ApprovalRow {
@@ -171,6 +208,10 @@ interface ApprovalRow {
   terms: string;
   state: ApprovalState;
   approver: string | null;
+  requested_at: string | null;
+  expires_at: string | null;
+  needed: number;
+  needed_why: string;
 }
 
 interface EmailRow {
@@ -195,6 +236,7 @@ interface ObligationRow {
   origin: ObligationOrigin;
   state: ObligationState;
   escalation_reason: string;
+  started_by: string | null;
 }
 
 interface ColumnRow {
@@ -228,6 +270,13 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     payout_reference: "TEXT",
     // When the agent next looks at the invoice by itself, as an ISO time.
     look_at: "TEXT",
+    started_by: "TEXT",
+  },
+  approvals: {
+    requested_at: "TEXT",
+    expires_at: "TEXT",
+    needed: "INTEGER NOT NULL DEFAULT 1",
+    needed_why: "TEXT NOT NULL DEFAULT ''",
   },
   attempts: {
     reference: "TEXT",
@@ -283,6 +332,7 @@ function toObligation(row: ObligationRow): Obligation {
     origin: row.origin,
     state: row.state,
     escalationReason: row.escalation_reason,
+    startedBy: row.started_by,
   };
 }
 
@@ -298,7 +348,7 @@ function toAttempt(row: AttemptRow): Attempt {
   };
 }
 
-function toApproval(row: ApprovalRow): Approval {
+function toApproval(row: ApprovalRow, signoffs: Signoff[]): Approval {
   return {
     id: row.id,
     invoiceId: row.invoice_id,
@@ -306,7 +356,20 @@ function toApproval(row: ApprovalRow): Approval {
     terms: row.terms,
     state: row.state,
     approver: row.approver,
+    requestedAt: row.requested_at,
+    expiresAt: row.expires_at,
+    needed: row.needed,
+    neededWhy: row.needed_why,
+    signoffs,
   };
+}
+
+// Everyone who approved, as the timeline names them.
+export function signersOf(signoffs: Signoff[]): string {
+  const names: string[] = signoffs.map((signoff: Signoff): string => signoff.approver);
+  return names.length <= 1
+    ? (names[0] ?? "")
+    : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
 export class Ledger {
@@ -347,8 +410,8 @@ export class Ledger {
       .prepare(
         `INSERT OR IGNORE INTO obligations
            (invoice_id, supplier, supplier_domain, beneficiary_id, currency,
-            amount_minor, transfer_method, reserve_floor_minor)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            amount_minor, transfer_method, reserve_floor_minor, started_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.invoiceId,
@@ -359,6 +422,7 @@ export class Ledger {
         input.amountMinor,
         input.transferMethod,
         input.reserveFloorMinor,
+        input.startedBy,
       );
     const row: ObligationRow = this.db
       .prepare("SELECT * FROM obligations WHERE invoice_id = ?")
@@ -479,8 +543,8 @@ export class Ledger {
           `INSERT INTO obligations
              (invoice_id, supplier, supplier_domain, beneficiary_id, currency,
               amount_minor, transfer_method, reserve_floor_minor, origin,
-              payout_reference)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'outside', ?)`,
+              payout_reference, started_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'outside', ?, ?)`,
         )
         .run(
           input.invoiceId,
@@ -492,6 +556,7 @@ export class Ledger {
           input.transferMethod,
           input.reserveFloorMinor,
           payoutReference,
+          input.startedBy,
         );
       this.db
         .prepare(
@@ -600,14 +665,24 @@ export class Ledger {
       .run(at === null ? null : new Date(at).toISOString(), invoiceId);
   }
 
-  // Moves a look that is already due to a later time. For a look that failed, so
-  // it is tried again later and not on every check.
+  // Moves a look that is already due, or was never set, to a later time. For a
+  // look that failed, so it is tried again later and not on every check.
   postponeDueLook(invoiceId: string, now: number, until: number): void {
     this.db
       .prepare(
-        "UPDATE obligations SET look_at = ? WHERE invoice_id = ? AND look_at <= ?",
+        `UPDATE obligations SET look_at = ?
+          WHERE invoice_id = ? AND (look_at IS NULL OR look_at <= ?)`,
       )
       .run(new Date(until).toISOString(), invoiceId, new Date(now).toISOString());
+  }
+
+  // True when the agent has a look at the invoice planned for later than now.
+  lookPlanned(invoiceId: string, now: number): boolean {
+    return (
+      this.db
+        .prepare("SELECT 1 FROM obligations WHERE invoice_id = ? AND look_at > ?")
+        .get(invoiceId, new Date(now).toISOString()) !== undefined
+    );
   }
 
   // Open invoices whose next look is due.
@@ -729,11 +804,23 @@ export class Ledger {
   }
 
   // A new request voids any earlier one for the invoice that is still open.
-  requestApproval(invoiceId: string, binding: string, terms: string): void {
+  requestApproval(invoiceId: string, request: ApprovalRequest): void {
     this.voidOpenApprovals(invoiceId);
     this.db
-      .prepare("INSERT INTO approvals (invoice_id, binding, terms) VALUES (?, ?, ?)")
-      .run(invoiceId, binding, terms);
+      .prepare(
+        `INSERT INTO approvals
+           (invoice_id, binding, terms, requested_at, expires_at, needed, needed_why)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        invoiceId,
+        request.binding,
+        request.terms,
+        new Date().toISOString(),
+        new Date(request.expiresAt).toISOString(),
+        request.needed,
+        request.neededWhy,
+      );
   }
 
   latestApproval(invoiceId: string): Approval | undefined {
@@ -742,7 +829,83 @@ export class Ledger {
         "SELECT * FROM approvals WHERE invoice_id = ? ORDER BY id DESC LIMIT 1",
       )
       .get(invoiceId) as unknown as ApprovalRow | undefined;
-    return row === undefined ? undefined : toApproval(row);
+    return row === undefined ? undefined : toApproval(row, this.signoffs(row.id));
+  }
+
+  private signoffs(approvalId: number): Signoff[] {
+    return this.db
+      .prepare(
+        "SELECT approver, binding, at FROM signoffs WHERE approval_id = ? ORDER BY rowid",
+      )
+      .all(approvalId) as unknown as Signoff[];
+  }
+
+  // Records one approver's approval of a request that is still waiting and has
+  // not expired, for the binding they were shown. The request becomes approved
+  // once it has as many as it needs, and then has useWithinMs to be used, so a
+  // request completed just before it expired is not lost to a slow look. Both
+  // happen in one transaction, so approvals arriving together from the page and
+  // the CLI are each counted once. Returns the request as it now stands.
+  signOff(
+    approvalId: number,
+    approver: string,
+    binding: string,
+    useWithinMs: number,
+  ): Approval {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const row: ApprovalRow | undefined = this.db
+        .prepare("SELECT * FROM approvals WHERE id = ?")
+        .get(approvalId) as unknown as ApprovalRow | undefined;
+      if (row === undefined || row.state !== "requested") {
+        throw new Error("This approval request is no longer waiting for approval");
+      }
+      if (row.binding !== binding) {
+        throw new Error("These are not the terms of the approval request");
+      }
+      const expiresAt: number = row.expires_at === null ? 0 : Date.parse(row.expires_at);
+      if (!(expiresAt > Date.now())) {
+        throw new Error("This approval request has expired. PayOnce opens a new one on its next look");
+      }
+      try {
+        this.db
+          .prepare(
+            "INSERT INTO signoffs (approval_id, approver, binding, at) VALUES (?, ?, ?, ?)",
+          )
+          .run(approvalId, approver, binding, new Date().toISOString());
+      } catch (error: unknown) {
+        if (isUniqueViolation(error)) {
+          throw new Error(`${approver} has approved this already`);
+        }
+        throw error;
+      }
+      const signoffs: Signoff[] = this.signoffs(approvalId);
+      if (signoffs.length >= row.needed) {
+        const useBy: number = Math.max(expiresAt, Date.now() + useWithinMs);
+        this.db
+          .prepare(
+            "UPDATE approvals SET state = 'approved', approver = ?, expires_at = ? WHERE id = ?",
+          )
+          .run(signersOf(signoffs), new Date(useBy).toISOString(), approvalId);
+      }
+      this.db.exec("COMMIT");
+    } catch (error: unknown) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+    const row: ApprovalRow = this.db
+      .prepare("SELECT * FROM approvals WHERE id = ?")
+      .get(approvalId) as unknown as ApprovalRow;
+    return toApproval(row, this.signoffs(approvalId));
+  }
+
+  // Spends an approval on one payment. False when it is no longer approved, for
+  // example because another process voided it in the meantime.
+  useApproval(id: number): boolean {
+    const result: { changes: number | bigint } = this.db
+      .prepare("UPDATE approvals SET state = 'used' WHERE id = ? AND state = 'approved'")
+      .run(id);
+    return Number(result.changes) === 1;
   }
 
   setApprovalState(

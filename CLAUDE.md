@@ -9,13 +9,13 @@ pnpm install
 pnpm typecheck                                      # tsc --noEmit
 pnpm dev                                            # policy on three sample incidents, no credentials
 pnpm ui                                             # web page and JSON API at http://127.0.0.1:4310, webhook receiver on 4311
-pnpm recover [OUTCOME] [INVOICE] [EMAILS] [SCENARIO] # one incident against the sandbox, or continue an existing invoice (status checks, no webhooks)
-pnpm approve <INVOICE> [NAME]                       # show the waiting approval; with NAME, approve it
+pnpm recover [OUTCOME] [INVOICE] [EMAILS] [SCENARIO] [NAME] # one incident against the sandbox, or continue an existing invoice (status checks, no webhooks)
+pnpm approve <INVOICE> [REQUEST NAME]               # show the waiting approval, its request number and the policy; with both, record that person's approval of that request
 pnpm close <INVOICE> [NAME] [NOTE]                  # show a paid incident waiting on a person; with NAME and NOTE, close it
 pnpm reset                                          # move payonce.db aside so the next run starts an empty ledger
 ```
 
-Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-local`. OUTCOME is a simulator failure type, `PAID`, or `STAYS_IN_FLIGHT`, which leaves the original in `SENT`. There is no lint script and there are no tests.
+Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-local`, NAME the OS login name (who started the incident). OUTCOME is a simulator failure type, `PAID`, or `STAYS_IN_FLIGHT`, which leaves the original in `SENT`. There is no lint script and there are no tests.
 
 ## Structure
 
@@ -34,6 +34,7 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 - `src/ledger.ts`: SQLite tables for obligations, attempts, approvals, emails, findings and events.
 - `src/payments.ts`: idempotent send and status sync between Airwallex and the ledger.
 - `src/approval.ts`: `ApprovalTerms`, `termsFor` and `bindingOf` (SHA-256 of the terms JSON).
+- `src/approvers.ts`: the approval policy. `policyFromEnv` reads `APPROVERS` (name:limit pairs), `TWO_APPROVERS_ABOVE` and `APPROVAL_TTL_MINUTES`. `signoffsNeeded` says how many approvers a payment needs and why, and `checkSigner` says why a person may not approve one.
 - `src/emails.ts`: `EmailReader` interface (a `name` shown on the page, and `read`), `EmailFindings`, `summarise`, `unverifiedSenders` and the fixture loader.
 - `src/model-reader.ts`: `ModelReader` reads the thread with one chat completion over plain `fetch`, with no SDK.
 - `src/reader.ts`: `readerFromEnv` picks `ModelReader` when `READER_API_KEY` is set and the keyword placeholder otherwise.
@@ -53,8 +54,16 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 - Once an invoice is escalated, only a matching approval releases a payment, even if the policy would now replace.
 - After sending a replacement the agent waits for the bank. It closes the incident on the look that reads the replacement as paid. A replacement already out is never approved a second time.
 - Waiting on the bank has a deadline: the transfer's `created_at` plus `BANK_DEADLINE_LOCAL_MINUTES` (default 3) or `BANK_DEADLINE_SWIFT_MINUTES` (default 5). The look saves it in `obligations.look_at`, and the watcher wakes the invoice when it comes. An original still in flight then escalates. A replacement still in flight escalates too, with nothing more sent, and the incident still closes if the bank pays it.
-- A look that throws leaves the next look as it was. If that time has passed, it moves a minute on, so a failing look is retried once a minute and not on every check.
+- A look that throws leaves the next look as it was. If that time has passed or was never set, it moves a minute on, so a failing look is retried once a minute and not on every check. The watcher wakes an invoice for an approved or expired approval only when no later look is planned.
 - If a replacement has failed, the policy escalates instead of sending a third payment.
+- Approvals follow the policy in `src/approvers.ts`, on the page and in `pnpm approve` alike. A name must be in `APPROVERS` and within its limit, compared in the payment's own currency. The person who started the incident (`obligations.started_by`) cannot approve. Two different approvers are needed above `TWO_APPROVERS_ABOVE`, for a payment to an account the original did not go to, and when `started_by` is null. Without `APPROVERS` every approval is refused.
+- An approval request expires `APPROVAL_TTL_MINUTES` after it was opened. `escalate` returns the expiry as the next look, and that look opens a new request. `signOff` refuses an expired request inside its transaction, and a request it completes gets at least `APPROVED_USE_WITHIN_MS` (10 minutes) to be used. An approved request that expired before use is voided. A request recorded before expiry existed counts as expired, and the watcher wakes its invoice.
+- `escalate` opens no request when `APPROVERS` is unusable or fewer approvers could sign than the payment needs (`eligibleApprovers`). It withdraws any open one and says so on the timeline.
+- When one request replaces another that already had signoffs, the timeline says those approvals no longer count.
+- An approval is spent with `useApproval`, which only moves an `approved` row to `used`, so one another process voided meanwhile is not spent. The outside payouts are read again after the last list of transfers.
+- The policy escalates a replacement above `TWO_APPROVERS_ABOVE` instead of sending it unprompted.
+- `ApprovalTerms.accountKey` is a hash of the full bank details the payment goes to, because `payTo` shows only the last four digits.
+- Before an approval is used, `approvalProblem` checks it against the policy as it is then: every signoff has the request's binding, there are enough of them, and each signer still passes `checkSigner`.
 - A payout PayOnce did not send, whose reference names an invoice in the ledger, is tied to that invoice. While one is in flight, paid or in an unknown status, the policy escalates before any other check, an open approval is withdrawn and nothing is sent. A settled invoice that gains one is reopened as escalated.
 - Before any replacement, automatic or approved, the agent lists the transfers again and ties any new payout that names the invoice. If it finds one, it sends nothing, leaves the approval unspent and looks again at once.
 - Any other payout PayOnce did not send becomes an invoice with origin `outside` once it has failed or is in flight past its deadline. The policy escalates where it would replace, so a person approves the replacement.
@@ -75,7 +84,7 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 - The duplicate lock is the partial unique index `one_live_attempt_per_invoice` on `attempts(invoice_id) WHERE state <> 'failed'`. A violation has `errcode` 2067 and is rethrown as `DuplicatePaymentError`.
 - `paidOnce` is true when one attempt is paid and every other attempt has failed. `settle` closes an obligation only then. It also voids any approval still open.
 - `obligations.escalation_reason` holds the policy's last reason for sending the invoice to a person.
-- Approvals live in the `approvals` table with states `requested`, `approved`, `used` and `void`. The binding is the hash of the terms JSON, so build terms only through `termsFor` to keep the key order stable.
+- Approvals live in the `approvals` table with states `requested`, `approved`, `used` and `void`. Each approver's approval is a row in `signoffs` with the binding they approved. `signOff` adds one and marks the request approved once it has `needed` of them, in one transaction, so the server and the CLI cannot both count the last one. `approvals.approver` joins the names for display. The binding is the hash of the terms JSON, so build terms only through `termsFor` to keep the key order stable.
 - A new request voids any earlier request or approval for the invoice that is still open. An approval is marked `used` before the payment is tried, so it covers one attempt.
 - An approval request is created only when the original has failed. The duplicate lock still applies to an approved replacement.
 - Supplier emails and the reader's findings are stored per invoice in `emails` and `email_findings`. The findings record how many emails they cover (`emailsRead`). The thread is read once when new emails arrive and the findings are reused, so a reader that words its summary differently on a second call cannot void an approval.
@@ -112,13 +121,13 @@ Found by running it on 2026-10-06:
 ## Web server
 
 - It binds to loopback and has no login. `guard` checks the Host header and, for writes, the Origin header and a JSON content type.
-- Routes: `GET /api/options`, `GET /api/incidents`, `GET /api/incidents/:id`, `POST /api/incidents` (takes `bankOutcome`, `emails` and `scenario`), `POST /api/incidents/:id/approve` (needs `approver` and `approvalId`), `POST /api/incidents/:id/close` (needs `closedBy` and `finding`), `POST /api/incidents/:id/resume`, `POST /api/incidents/:id/pay-again`.
+- Routes: `GET /api/options`, `GET /api/incidents`, `GET /api/incidents/:id`, `POST /api/incidents` (takes `bankOutcome`, `emails`, `scenario` and `startedBy`), `POST /api/incidents/:id/approve` (needs `approver` and `approvalId`), `POST /api/incidents/:id/close` (needs `closedBy` and `finding`), `POST /api/incidents/:id/resume`, `POST /api/incidents/:id/pay-again`.
 - An incident's detail carries `review` when a person can close it, and the page shows the close card from that. `busy` is true while the agent or the sandbox bank is working on it, and `watching` while a payment is with the bank, including an outside payout tied to it. The page polls every 1.5 seconds while either is true.
 - Approve and close wait for any step already running on the invoice, then run. Resume queues a look.
 - The page scrolls to keep the newest timeline line on screen when that line was already visible, and for 15 seconds after an action.
 - On start it wakes every invoice that still has a pending or in-flight attempt, and the sandbox bank goes back to paying any replacement still in flight.
 - The watcher sweeps every 30 seconds. A paid, failed, cancelled or overdue webhook for a transfer the ledger does not know asks for a sweep on the next check. One for an outside payout already tied to an invoice wakes that invoice.
-- `GET /api/options` lists the default email thread first, so the form opens on the incident that is replaced without a person.
+- `GET /api/options` lists the default email thread first, so the form opens on the incident that is replaced without a person. It also lists the approvers and the approval policy, and an incident's approval carries its signoffs, `needed`, `expiresAt` and who is barred, so the page can offer only the names that may approve.
 
 ## Webhooks
 

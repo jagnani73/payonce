@@ -9,14 +9,17 @@ import { extname } from "node:path";
 import { AirwallexClient } from "./airwallex/client.js";
 import { subscribe } from "./airwallex/webhooks.js";
 import type { ApprovalTerms } from "./approval.js";
+import { describePolicy, policyFromEnv, type Approver, type Barred } from "./approvers.js";
 import { Dispatcher } from "./dispatcher.js";
 import type { EmailFindings } from "./emails.js";
 import {
   approveReplacement,
   closeIncident,
+  isExpired,
   note,
   noteError,
   payAgain,
+  pendingApproval,
   pendingClose,
   type Engine,
   type PayAgainResult,
@@ -30,6 +33,7 @@ import {
   type Attempt,
   type Obligation,
   type OutsidePayout,
+  type Signoff,
 } from "./ledger.js";
 import { PAID_OUTCOME, SandboxBank, STAYS_IN_FLIGHT } from "./sandbox-bank.js";
 import {
@@ -100,7 +104,13 @@ const bank: SandboxBank = new SandboxBank(
   client,
   (invoiceId: string, error: unknown): void => noteError(ledger, invoiceId, error),
 );
-const engine: Engine = { client, ledger, reader: readerFromEnv(), bank };
+const engine: Engine = {
+  client,
+  ledger,
+  reader: readerFromEnv(),
+  approvals: policyFromEnv(),
+  bank,
+};
 const agent: Dispatcher = new Dispatcher(engine);
 const watcher: Watcher = new Watcher(engine, agent, CHECK_EVERY_MS, SWEEP_EVERY_MS);
 
@@ -343,6 +353,8 @@ function incidentDetail(invoiceId: string): unknown {
   const obligation: Obligation = requireObligation(invoiceId);
   const findings: string | undefined = engine.ledger.findings(invoiceId);
   const approval: Approval | undefined = engine.ledger.latestApproval(invoiceId);
+  // The approval card shows who may not approve, and that is the same for any request.
+  const barred: Barred[] = pendingApproval(engine.ledger, invoiceId)?.barred ?? [];
   return {
     obligation,
     attempts: engine.ledger.attempts(invoiceId),
@@ -356,6 +368,15 @@ function incidentDetail(invoiceId: string): unknown {
             state: approval.state,
             approver: approval.approver,
             terms: JSON.parse(approval.terms) as ApprovalTerms,
+            needed: approval.needed,
+            neededWhy: approval.neededWhy,
+            signoffs: approval.signoffs.map((signoff: Signoff) => ({
+              approver: signoff.approver,
+              at: signoff.at,
+            })),
+            expiresAt: approval.expiresAt,
+            expired: isExpired(approval),
+            barred,
           },
     review: pendingClose(engine.ledger, invoiceId) ?? null,
     events: engine.ledger.events(invoiceId),
@@ -374,6 +395,11 @@ async function startIncident(request: IncomingMessage): Promise<unknown> {
   if (typeof emailsName !== "string" || !emailThreads().includes(emailsName)) {
     throw new HttpError(400, "Unknown email thread");
   }
+  const startedBy: string =
+    typeof body["startedBy"] === "string" ? body["startedBy"].trim() : "";
+  if (startedBy === "" || startedBy.length > MAX_NAME_LENGTH) {
+    throw new HttpError(400, "Enter your name");
+  }
   const scenarioId: unknown = body["scenario"] ?? DEFAULT_SCENARIO;
   if (
     typeof scenarioId !== "string" ||
@@ -383,7 +409,7 @@ async function startIncident(request: IncomingMessage): Promise<unknown> {
   }
 
   const invoiceId: string = newInvoiceId(engine.ledger);
-  const obligation: Obligation = await openScenario(engine, invoiceId, scenarioId);
+  const obligation: Obligation = await openScenario(engine, invoiceId, scenarioId, startedBy);
   runScenario(engine, agent, bank, obligation, { bankOutcome, emailsName }).catch(
     (error: unknown): void => noteError(engine.ledger, invoiceId, error),
   );
@@ -415,8 +441,8 @@ async function approveIncident(
   if (typeof approvalId !== "number" || !Number.isInteger(approvalId)) {
     throw new HttpError(400, "Say which approval request is being approved");
   }
-  await inTurn(invoiceId, (): ApprovalTerms =>
-    approveReplacement(engine.ledger, invoiceId, approver, approvalId),
+  await inTurn(invoiceId, (): Approval =>
+    approveReplacement(engine.ledger, engine.approvals, invoiceId, approver, approvalId),
   );
   agent.wake(invoiceId);
   return { ok: true };
@@ -499,6 +525,15 @@ async function route(
     sendJson(response, 200, {
       bankOutcomes: BANK_OUTCOMES,
       emailThreads: emailThreads(),
+      approvers: engine.approvals.approvers.map((approver: Approver) => ({
+        name: approver.name,
+        limitMinor: approver.limitMinor,
+      })),
+      approvalPolicy: {
+        twoApproversAboveMinor: engine.approvals.twoApproversAboveMinor,
+        expiresAfterMinutes: engine.approvals.expiresAfterMs / 60_000,
+        problem: engine.approvals.problem,
+      },
       scenarios: SCENARIOS.map((scenario: ScenarioDef) => ({
         id: scenario.id,
         label: scenario.label,
@@ -586,6 +621,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 server.listen(PORT, HOST, (): void => {
   console.log(`PayOnce is at http://${HOST}:${PORT} (sandbox only, no real money)`);
   console.log(`Supplier emails are read by: ${engine.reader.name}`);
+  console.log(describePolicy(engine.approvals));
   pickUpInterrupted();
   watcher.start();
   void connectWebhooks();

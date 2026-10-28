@@ -62,6 +62,8 @@ function adopt(engine: Engine, transfer: Transfer, state: FoundState): string | 
       amountMinor: toMinor(transfer.transfer_amount),
       transferMethod: transfer.transfer_method as TransferMethod,
       reserveFloorMinor: FOUND_RESERVE_FLOOR_MINOR,
+      // Airwallex does not say who sent it.
+      startedBy: null,
     },
     fits || reference === "" ? null : reference,
     {

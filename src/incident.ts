@@ -22,6 +22,8 @@ export interface Incident {
   emailsUnread: boolean;
   availableBalanceMinor: number;
   reserveFloorMinor: number;
+  // Above this amount the approval policy needs two approvers.
+  twoApproversAboveMinor: number;
 }
 
 export type Action = "wait" | "replace" | "escalate" | "close";

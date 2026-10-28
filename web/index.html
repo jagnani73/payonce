@@ -74,10 +74,15 @@
               <span class="field__label">Supplier emails</span>
               <select id="email-thread" name="emails" disabled></select>
             </label>
+            <label class="field">
+              <span class="field__label">Your name</span>
+              <input id="started-by" name="startedBy" type="text" autocomplete="name" maxlength="80" />
+            </label>
             <button id="start-button" class="button button--primary" type="submit" disabled>
               Start incident
             </button>
             <p class="hint">PayOnce sends a sandbox transfer, then applies the bank outcome above.</p>
+            <p class="hint">The person who starts an incident cannot approve its replacement.</p>
             <p id="new-error" class="form-error" role="alert" hidden></p>
           </form>
         </section>

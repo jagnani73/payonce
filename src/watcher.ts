@@ -1,8 +1,8 @@
 import { getTransfer, type Transfer } from "./airwallex/transfers.js";
 import { attemptStateOf } from "./assess.js";
 import type { Dispatcher } from "./dispatcher.js";
-import type { Engine } from "./engine.js";
-import type { Attempt, AttemptState, OutsidePayout } from "./ledger.js";
+import { isExpired, type Engine } from "./engine.js";
+import type { Approval, Attempt, AttemptState, OutsidePayout } from "./ledger.js";
 import { sweep } from "./sweep.js";
 
 // The fallback for webhooks. It checks every payment the ledger still shows in
@@ -71,18 +71,23 @@ export class Watcher {
   }
 
   async check(): Promise<void> {
-    const due: ReadonlySet<string> = new Set<string>(
-      this.engine.ledger.dueLooks(Date.now()),
-    );
+    const now: number = Date.now();
+    const due: ReadonlySet<string> = new Set<string>(this.engine.ledger.dueLooks(now));
     for (const obligation of this.engine.ledger.obligations()) {
       const invoiceId: string = obligation.invoiceId;
       if (obligation.state === "settled" || this.agent.isBusy(invoiceId)) {
         continue;
       }
-      if (
-        due.has(invoiceId) ||
-        this.engine.ledger.latestApproval(invoiceId)?.state === "approved"
-      ) {
+      // An approval nobody has acted on yet, or a request that expired with no
+      // look planned, such as one from before requests expired. A look that
+      // failed on it has planned the next try, so it is not woken on every check.
+      const approval: Approval | undefined = this.engine.ledger.latestApproval(invoiceId);
+      const waiting: boolean =
+        approval !== undefined &&
+        (approval.state === "approved" ||
+          (approval.state === "requested" && isExpired(approval, now))) &&
+        !this.engine.ledger.lookPlanned(invoiceId, now);
+      if (due.has(invoiceId) || waiting) {
         this.agent.wake(invoiceId);
         continue;
       }

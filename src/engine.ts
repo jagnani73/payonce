@@ -14,6 +14,16 @@ import {
   type ApprovalTerms,
 } from "./approval.js";
 import {
+  APPROVED_USE_WITHIN_MS,
+  checkSigner,
+  eligibleApprovers,
+  signoffsNeeded,
+  type ApprovalPolicy,
+  type Approver,
+  type Barred,
+  type SignoffRule,
+} from "./approvers.js";
+import {
   attemptStateOf,
   originalStateOf,
   resendCanFix,
@@ -30,6 +40,7 @@ import {
 import type { Decision, Incident, OriginalTransferState } from "./incident.js";
 import {
   DuplicatePaymentError,
+  signersOf,
   type Approval,
   type Attempt,
   type AttemptKind,
@@ -40,6 +51,7 @@ import {
   type Obligation,
   type OutsidePayout,
   type PayoutState,
+  type Signoff,
 } from "./ledger.js";
 import { formatMoney, toMinor } from "./money.js";
 import { sendAttempt, syncTransfer, wasRejected } from "./payments.js";
@@ -75,6 +87,7 @@ export interface Engine {
   client: AirwallexClient;
   ledger: Ledger;
   reader: EmailReader;
+  approvals: ApprovalPolicy;
   bank?: Bank;
 }
 
@@ -379,6 +392,7 @@ async function assess(
       findings.unread === true || (emails.length > 0 && stored === undefined),
     availableBalanceMinor: availableMinor,
     reserveFloorMinor: obligation.reserveFloorMinor,
+    twoApproversAboveMinor: engine.approvals.twoApproversAboveMinor,
   };
 
   // Said whatever the policy escalates for, because it checks other things first.
@@ -549,14 +563,81 @@ function termsOf(obligation: Obligation, assessment: Assessment): ApprovalTerms 
   );
 }
 
+// The people who may not approve this invoice's payment, and why.
+function barredFrom(obligation: Obligation): Barred[] {
+  return obligation.startedBy === null
+    ? []
+    : [{ name: obligation.startedBy, why: "started this incident" }];
+}
+
+// When a request stops covering a payment, in epoch milliseconds. One recorded
+// before requests expired counts as expired already.
+function expiryOf(approval: Approval): number {
+  const at: number = approval.expiresAt === null ? Number.NaN : Date.parse(approval.expiresAt);
+  return Number.isFinite(at) ? at : 0;
+}
+
+export function isExpired(approval: Approval, now: number = Date.now()): boolean {
+  return expiryOf(approval) <= now;
+}
+
+function ruleFor(engine: Engine, obligation: Obligation, assessment: Assessment): SignoffRule {
+  return signoffsNeeded(
+    engine.approvals,
+    obligation.amountMinor,
+    obligation.currency,
+    assessment.incident.beneficiaryChanged,
+    obligation.startedBy,
+  );
+}
+
+// Why an approval no longer covers the payment under the approval policy as it
+// is now, or null when it still does. The policy may have changed since the
+// approvers signed: an approver removed, a limit lowered, or a rule that now
+// needs two.
+function approvalProblem(
+  engine: Engine,
+  obligation: Obligation,
+  assessment: Assessment,
+  approval: Approval,
+): string | null {
+  if (approval.signoffs.some((signoff: Signoff): boolean => signoff.binding !== approval.binding)) {
+    return "an approver signed different terms";
+  }
+  const rule: SignoffRule = ruleFor(engine, obligation, assessment);
+  const needed: number = Math.max(approval.needed, rule.needed);
+  if (approval.signoffs.length < needed) {
+    return `it now needs ${needed} approvers, because ${rule.why}`;
+  }
+  for (const signoff of approval.signoffs) {
+    try {
+      checkSigner(
+        engine.approvals,
+        signoff.approver,
+        obligation.amountMinor,
+        obligation.currency,
+        barredFrom(obligation),
+        approval.signoffs
+          .filter((other: Signoff): boolean => other !== signoff)
+          .map((other: Signoff): string => other.approver),
+      );
+    } catch (error: unknown) {
+      return messageOf(error);
+    }
+  }
+  return null;
+}
+
 // A replacement is only on offer when the original has failed, and it goes to the
 // beneficiary on file. A paid original leaves nothing to pay, so the person closes
 // the incident. Any other escalation has no payment a person could approve yet.
+// Returns when to look again: when an open request expires, so a new one can be
+// opened.
 function escalate(
   engine: Engine,
   obligation: Obligation,
   assessment: Assessment,
-): void {
+): NextLook {
   // An invoice that is already with a person keeps the reason it went there for
   // when the policy would now do something else.
   engine.ledger.escalate(
@@ -581,7 +662,7 @@ function escalate(
       "Waiting on a person. A payout sent outside PayOnce may already pay this invoice, so PayOnce sends nothing",
       "waiting",
     );
-    return;
+    return null;
   }
   // An invoice already paid once, by the original or a replacement, has nothing
   // left to approve.
@@ -594,7 +675,7 @@ function escalate(
       "Waiting on a person to check with the supplier and close the incident. PayOnce will not send a second payment",
       "waiting",
     );
-    return;
+    return null;
   }
   if (originalState !== "failed") {
     note(
@@ -606,28 +687,86 @@ function escalate(
         : "Waiting on a person",
       "waiting",
     );
-    return;
+    return null;
   }
 
   const terms: ApprovalTerms = termsOf(obligation, assessment);
   const binding: string = bindingOf(terms);
-  const latest: Approval | undefined = engine.ledger.latestApproval(
-    obligation.invoiceId,
+  const rule: SignoffRule = ruleFor(engine, obligation, assessment);
+
+  // A request nobody on the list could approve would only expire and be opened
+  // again, so none is opened until the approver list changes.
+  const eligible: Approver[] = eligibleApprovers(
+    engine.approvals,
+    obligation.amountMinor,
+    barredFrom(obligation),
   );
-  if (latest?.state !== "requested" || latest.binding !== binding) {
-    engine.ledger.requestApproval(
+  if (engine.approvals.problem !== null || eligible.length < rule.needed) {
+    if (engine.ledger.voidOpenApprovals(obligation.invoiceId)) {
+      note(
+        engine.ledger,
+        obligation.invoiceId,
+        "approval",
+        "Approval request withdrawn: nobody on the approver list can approve it",
+      );
+    }
+    const able: string =
+      eligible.length === 0
+        ? "nobody on the approver list can"
+        : `only ${eligible.map((approver: Approver): string => approver.name).join(" and ")} can`;
+    note(
+      engine.ledger,
       obligation.invoiceId,
-      binding,
-      JSON.stringify(terms),
+      "approval",
+      engine.approvals.problem !== null
+        ? `Waiting on a person. Approvals are refused: ${engine.approvals.problem}`
+        : `Waiting on a person. A replacement of ${money(obligation)} needs ${rule.needed === 1 ? "one approver" : `${rule.needed} approvers, because ${rule.why},`} and ${able} approve it. Change APPROVERS, restart and check again`,
+      "waiting",
     );
+    return null;
+  }
+
+  let latest: Approval | undefined = engine.ledger.latestApproval(obligation.invoiceId);
+  const sameRequest: boolean =
+    latest?.state === "requested" && latest.binding === binding && latest.needed >= rule.needed;
+  if (sameRequest && latest !== undefined && isExpired(latest)) {
+    note(
+      engine.ledger,
+      obligation.invoiceId,
+      "approval",
+      `Approval request expired before ${latest.signoffs.length === 0 ? "anyone approved it" : "enough people approved it"}, so PayOnce opened a new one`,
+    );
+  } else if (!sameRequest && latest?.state === "requested" && latest.signoffs.length > 0) {
+    note(
+      engine.ledger,
+      obligation.invoiceId,
+      "approval",
+      `Approval by ${signersOf(latest.signoffs)} no longer counts: the terms changed, so PayOnce opened a new request`,
+    );
+  }
+  if (!sameRequest || latest === undefined || isExpired(latest)) {
+    engine.ledger.requestApproval(obligation.invoiceId, {
+      binding,
+      terms: JSON.stringify(terms),
+      needed: rule.needed,
+      neededWhy: rule.why,
+      expiresAt: Date.now() + engine.approvals.expiresAfterMs,
+    });
+    latest = engine.ledger.latestApproval(obligation.invoiceId);
+  }
+  if (latest === undefined) {
+    return null;
   }
   note(
     engine.ledger,
     obligation.invoiceId,
     "approval",
-    `Waiting on a person to approve ${money(obligation)} to ${terms.payTo} (the account on file)`,
+    latest.needed === 1
+      ? `Waiting on a person to approve ${money(obligation)} to ${terms.payTo} (the account on file)`
+      : `Waiting on ${latest.needed} approvers for ${money(obligation)} to ${terms.payTo} (the account on file), because ${latest.neededWhy}`,
     "waiting",
   );
+  return expiryOf(latest);
 }
 
 async function continueEscalated(
@@ -642,10 +781,19 @@ async function continueEscalated(
     obligation.invoiceId,
   );
   if (approval?.state !== "approved") {
-    escalate(engine, obligation, assessment);
-    return null;
+    return escalate(engine, obligation, assessment);
   }
 
+  if (isExpired(approval)) {
+    engine.ledger.setApprovalState(approval.id, "void");
+    note(
+      engine.ledger,
+      obligation.invoiceId,
+      "approval",
+      `Approval by ${approval.approver} expired before it was used`,
+    );
+    return escalate(engine, obligation, assessment);
+  }
   const current: ApprovalTerms = termsOf(obligation, assessment);
   if (bindingOf(current) !== approval.binding) {
     const approved: ApprovalTerms = JSON.parse(approval.terms) as ApprovalTerms;
@@ -656,17 +804,34 @@ async function continueEscalated(
       "approval",
       `Approval by ${approval.approver} is void: ${changedFields(approved, current).join(", ")} changed`,
     );
-    escalate(engine, obligation, assessment);
-    return null;
+    return escalate(engine, obligation, assessment);
+  }
+  const problem: string | null = approvalProblem(engine, obligation, assessment, approval);
+  if (problem !== null) {
+    engine.ledger.setApprovalState(approval.id, "void");
+    note(
+      engine.ledger,
+      obligation.invoiceId,
+      "approval",
+      `Approval by ${approval.approver} is void: ${problem}`,
+    );
+    return escalate(engine, obligation, assessment);
   }
 
   // A payout tied to the invoice now is looked at before anything is sent, and the
-  // approval is left as it is until then.
-  if (await linkUnseenPayouts(engine, obligation.invoiceId)) {
+  // approval is left as it is until then. Another process may have tied one while
+  // the list was being read.
+  if (
+    (await linkUnseenPayouts(engine, obligation.invoiceId)) ||
+    anyLive(engine.ledger.outsidePayouts(obligation.invoiceId))
+  ) {
     return Date.now();
   }
   // One approval covers one attempt, so it is spent before the payment is tried.
-  engine.ledger.setApprovalState(approval.id, "used");
+  // Another process may have voided it since it was read.
+  if (!engine.ledger.useApproval(approval.id)) {
+    return Date.now();
+  }
   note(
     engine.ledger,
     obligation.invoiceId,
@@ -693,8 +858,7 @@ async function act(
     case "wait":
       return waitForBank(engine, obligation.invoiceId, "original", assessment.original);
     case "escalate":
-      escalate(engine, obligation, assessment);
-      return null;
+      return escalate(engine, obligation, assessment);
     case "close":
       if (!close(engine, obligation.invoiceId)) {
         note(
@@ -903,43 +1067,82 @@ export function closeIncident(
   note(ledger, invoiceId, "closed", `Incident closed by ${closedBy}: ${finding}`);
 }
 
+export interface PendingApproval {
+  approval: Approval;
+  terms: ApprovalTerms;
+  // Who may not approve it, and why.
+  barred: Barred[];
+  expired: boolean;
+}
+
 // Returns the request an escalated invoice is waiting on, if there is one.
 export function pendingApproval(
   ledger: Ledger,
   invoiceId: string,
-): { id: number; terms: ApprovalTerms } | undefined {
+): PendingApproval | undefined {
   const approval: Approval | undefined = ledger.latestApproval(invoiceId);
-  return approval === undefined || approval.state !== "requested"
+  const obligation: Obligation | undefined = ledger.obligation(invoiceId);
+  return approval === undefined || approval.state !== "requested" || obligation === undefined
     ? undefined
-    : { id: approval.id, terms: JSON.parse(approval.terms) as ApprovalTerms };
+    : {
+        approval,
+        terms: JSON.parse(approval.terms) as ApprovalTerms,
+        barred: barredFrom(obligation),
+        expired: isExpired(approval),
+      };
 }
 
-// approvalId is the request the approver was shown. If a newer one has replaced
-// it, the approval is refused so nobody approves terms they did not see.
+// Records one person's approval under the approval policy. approvalId is the
+// request the approver was shown. If a newer one has replaced it, the approval is
+// refused so nobody approves terms they did not see. A request that needs two
+// approvers stays open after the first.
 export function approveReplacement(
   ledger: Ledger,
+  policy: ApprovalPolicy,
   invoiceId: string,
   approver: string,
   approvalId: number,
-): ApprovalTerms {
-  const approval: Approval | undefined = ledger.latestApproval(invoiceId);
-  if (approval === undefined || approval.state !== "requested") {
+): Approval {
+  const pending: PendingApproval | undefined = pendingApproval(ledger, invoiceId);
+  if (pending === undefined) {
     throw new Error(`No approval is waiting for ${invoiceId}`);
   }
+  const { approval, terms } = pending;
   if (approval.id !== approvalId) {
     throw new Error(
       `The approval request for ${invoiceId} has changed. Review the current terms`,
     );
   }
-  const terms: ApprovalTerms = JSON.parse(approval.terms) as ApprovalTerms;
-  ledger.setApprovalState(approval.id, "approved", approver);
+  if (pending.expired) {
+    throw new Error(
+      `The approval request for ${invoiceId} has expired. PayOnce opens a new one on its next look`,
+    );
+  }
+  const signer: Approver = checkSigner(
+    policy,
+    approver,
+    terms.amountMinor,
+    terms.currency,
+    pending.barred,
+    approval.signoffs.map((signoff: Signoff): string => signoff.approver),
+  );
+  const after: Approval = ledger.signOff(
+    approval.id,
+    signer.name,
+    approval.binding,
+    APPROVED_USE_WITHIN_MS,
+  );
+  const payment: string = `${formatMoney(terms.amountMinor, terms.currency)} to ${terms.payTo} (the account on file)`;
+  const left: number = after.needed - after.signoffs.length;
   note(
     ledger,
     invoiceId,
     "approval",
-    `Approved by ${approver}: ${formatMoney(terms.amountMinor, terms.currency)} to ${terms.payTo} (the account on file)`,
+    after.state === "approved"
+      ? `Approved by ${signersOf(after.signoffs)}: ${payment}`
+      : `${signer.name} approved ${payment}. It needs ${left} more approver${left === 1 ? "" : "s"}`,
     // Standing, so the check that follows does not restate the decision.
     "approval",
   );
-  return terms;
+  return after;
 }

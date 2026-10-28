@@ -41,7 +41,9 @@ export function attemptStateOf(transfer: Transfer): AttemptState | null {
   return state === "unknown" ? null : state;
 }
 
-function canonical(details: TransferBankDetails | undefined): string {
+// The bank details as one string, the same whatever order Airwallex sends the
+// fields in.
+export function bankDetailsKey(details: TransferBankDetails | undefined): string {
   return JSON.stringify(
     Object.entries(details ?? {}).sort(
       ([a]: [string, unknown], [b]: [string, unknown]): number => a.localeCompare(b),
@@ -56,7 +58,7 @@ export function sameBankDetails(
   original: TransferBankDetails | undefined,
   current: TransferBankDetails,
 ): boolean {
-  return original !== undefined && canonical(original) === canonical(current);
+  return original !== undefined && bankDetailsKey(original) === bankDetailsKey(current);
 }
 
 export function resendCanFix(transfer: Transfer): boolean {
