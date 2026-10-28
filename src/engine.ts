@@ -1893,12 +1893,18 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
     await requireAccount(engine, obligation, terms.accountKey, "payment was approved");
     // Another process may have voided the approval, closed the invoice or tied a
     // payout to it since it was read, or changed what the terms say of the
-    // invoices it looks like a second bill for. The next look sees which.
+    // invoices it looks like a second bill for. A match the terms do not list,
+    // even one found before onFile was taken, refuses it too. The next look sees
+    // which, and adds a new match to the terms.
     const attempt: Attempt | undefined = engine.ledger.releaseFor(
       invoiceId,
       approval.id,
       lease,
-      (): boolean => duplicatesOnFile(engine.ledger, held) === onFile,
+      (): boolean =>
+        duplicatesOnFile(engine.ledger, held) === onFile &&
+        likelyDuplicates(engine.ledger, held).every((other: Obligation): boolean =>
+          held.duplicateOf.includes(other.invoiceId),
+        ),
     );
     if (attempt === undefined) {
       return Date.now();
