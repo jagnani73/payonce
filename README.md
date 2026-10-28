@@ -51,6 +51,8 @@ PayOnce writes every payment attempt to a SQLite ledger (`payonce.db`) before it
 
 Each attempt keeps its `request_id`. A retry reuses it, and Airwallex then returns the transfer it already has. An incident closes only when one attempt is paid and every other attempt has failed.
 
+The Payments card has a "Pay again" button for the person who wants to send it once more to be sure. It opens a replacement attempt the way the agent would, inside a database transaction that is always rolled back. While a payment is live or paid, the lock refuses it and the timeline names the payment holding the lock. When every payment has failed there is nothing to refuse, but the button still sends nothing: a replacement goes through the policy, and through an approval once the invoice is with a person. Either way nothing reaches Airwallex.
+
 ## Deadlines
 
 A transfer has a deadline: 3 minutes for a local transfer and 5 for SWIFT, counted from when Airwallex created it. Real rails take days and the sandbox moves in seconds, so the defaults suit the sandbox. `BANK_DEADLINE_LOCAL_MINUTES` and `BANK_DEADLINE_SWIFT_MINUTES` change them. While PayOnce waits on the bank, the timeline says how long the bank has before a person hears about it.

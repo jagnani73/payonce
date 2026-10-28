@@ -87,6 +87,8 @@ const els = {
   review: byId("review"),
   approval: byId("approval"),
   payments: byId("payments"),
+  payAgain: byId("pay-again"),
+  payAgainResult: byId("pay-again-result"),
   emails: byId("emails"),
   findings: byId("findings"),
 };
@@ -111,6 +113,9 @@ const state = {
   closeError: null,
   resuming: false,
   resumeError: null,
+  payingAgain: false,
+  // What the last pay again on screen came back with, kept with the invoice it was for.
+  payAgainResult: null,
   fastUntil: 0,
   drafts: new Map(),
   closeDrafts: new Map(),
@@ -896,6 +901,7 @@ function buildAttempt(attempt) {
 
 function renderPayments(detail) {
   const attempts = Array.isArray(detail.attempts) ? detail.attempts : [];
+  syncPayAgain(detail.obligation.invoiceId);
   if (!changed("payments", [detail.obligation.invoiceId, attempts])) {
     return;
   }
@@ -904,6 +910,39 @@ function renderPayments(detail) {
       ? h("p", { class: "empty" }, "No payments yet")
       : h("ul", null, attempts.map(buildAttempt)),
   );
+}
+
+function syncPayAgain(invoiceId) {
+  els.payAgain.disabled = state.payingAgain;
+  setText(els.payAgain, state.payingAgain ? "Trying" : "Pay again");
+  const result = state.payAgainResult?.invoiceId === invoiceId ? state.payAgainResult : null;
+  setClass(
+    els.payAgainResult,
+    result?.failed === true ? "pay-again__result form-error" : "pay-again__result",
+  );
+  showMessage(els.payAgainResult, result?.message ?? null);
+}
+
+async function payAgain() {
+  const invoiceId = state.selectedId;
+  if (state.payingAgain || invoiceId === null) {
+    return;
+  }
+  state.payingAgain = true;
+  state.payAgainResult = null;
+  syncPayAgain(invoiceId);
+  try {
+    const result = await api(`${incidentPath(invoiceId)}/pay-again`, { method: "POST", body: {} });
+    state.payAgainResult = { invoiceId, message: String(result.message ?? ""), failed: false };
+  } catch (error) {
+    state.payAgainResult = { invoiceId, message: error.message, failed: true };
+  }
+  try {
+    await refresh();
+  } finally {
+    state.payingAgain = false;
+    syncPayAgain(invoiceId);
+  }
 }
 
 function addressParts(from) {
@@ -1460,6 +1499,7 @@ function render() {
 // ---------- start ----------
 
 els.form.addEventListener("submit", startIncident);
+els.payAgain.addEventListener("click", payAgain);
 
 window.addEventListener("hashchange", () => {
   select(idFromHash());

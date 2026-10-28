@@ -16,8 +16,10 @@ import {
   closeIncident,
   note,
   noteError,
+  payAgain,
   pendingClose,
   type Engine,
+  type PayAgainResult,
 } from "./engine.js";
 import { readerFromEnv } from "./reader.js";
 import {
@@ -444,6 +446,13 @@ async function closeByPerson(
   return { ok: true };
 }
 
+// A person asks to pay the invoice again. The lock refuses it while a payment is
+// live, and nothing reaches Airwallex either way.
+async function payAgainByPerson(invoiceId: string): Promise<PayAgainResult> {
+  requireObligation(invoiceId);
+  return inTurn(invoiceId, (): PayAgainResult => payAgain(engine.ledger, invoiceId));
+}
+
 // Has the agent look at an incident again. It cannot send a second live payment,
 // and an escalated invoice still needs its approval.
 function resume(invoiceId: string): unknown {
@@ -530,6 +539,14 @@ async function route(
     parts.length === 4
   ) {
     sendJson(response, 200, resume(invoiceId));
+  } else if (
+    method === "POST" &&
+    parts[1] === "incidents" &&
+    invoiceId !== undefined &&
+    parts[3] === "pay-again" &&
+    parts.length === 4
+  ) {
+    sendJson(response, 200, await payAgainByPerson(invoiceId));
   } else {
     throw new HttpError(404, "Not found");
   }

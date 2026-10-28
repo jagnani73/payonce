@@ -10,7 +10,13 @@ import {
 import type { Transfer } from "./airwallex/transfers.js";
 import type { Dispatcher } from "./dispatcher.js";
 import { loadEmails, type SupplierEmail } from "./emails.js";
-import { deliver, payOriginal, proveLock, type Engine } from "./engine.js";
+import {
+  deliver,
+  payAgain,
+  payOriginal,
+  type Engine,
+  type PayAgainResult,
+} from "./engine.js";
 import type { Attempt, Ledger, Obligation, TransferMethod } from "./ledger.js";
 import type { SandboxBank } from "./sandbox-bank.js";
 
@@ -197,6 +203,6 @@ export async function runScenario(
     .attempts(invoiceId)
     .some((attempt: Attempt): boolean => attempt.kind === "replacement");
   if (replaced && engine.ledger.obligation(invoiceId)?.state === "settled") {
-    await agent.run(invoiceId, (): void => proveLock(engine.ledger, invoiceId));
+    await agent.run(invoiceId, (): PayAgainResult => payAgain(engine.ledger, invoiceId));
   }
 }

@@ -794,19 +794,49 @@ async function look(engine: Engine, invoiceId: string): Promise<NextLook> {
   return act(engine, obligation, await assess(engine, obligation, originalId));
 }
 
-// Shows the lock holding: a second payment for a settled invoice is refused.
-export function proveLock(ledger: Ledger, invoiceId: string): void {
+const ATTEMPT_STATE_WORDS: Record<AttemptState, string> = {
+  pending: "pending",
+  in_flight: "in flight",
+  paid: "paid",
+  failed: "failed",
+};
+
+export interface PayAgainResult {
+  refused: boolean;
+  message: string;
+}
+
+// A person asks for the invoice to be paid again. The request takes the duplicate
+// lock like any payment, inside a transaction that is always rolled back, so it
+// never reaches Airwallex. When every payment has failed the lock has nothing to
+// refuse, but a replacement still goes through the policy and any approval, so
+// nothing is sent from here either.
+export function payAgain(ledger: Ledger, invoiceId: string): PayAgainResult {
   try {
-    const extra: Attempt = ledger.openAttempt(invoiceId, "replacement");
-    // Not expected. Fail the stray attempt so a later run cannot send it.
-    ledger.failAttempt(extra.requestId, null);
-    note(ledger, invoiceId, "error", "The lock let a second payment through");
+    ledger.tryLock(invoiceId);
   } catch (error: unknown) {
     if (!(error instanceof DuplicatePaymentError)) {
       throw error;
     }
-    note(ledger, invoiceId, "lock", `Second payment refused: ${error.message}`);
+    const holder: Attempt | undefined = ledger
+      .attempts(invoiceId)
+      .find((attempt: Attempt): boolean => attempt.state !== "failed");
+    const held: string =
+      holder === undefined
+        ? ""
+        : `: ${holder.kind} ${holder.reference ?? "with no reference yet"} is ${ATTEMPT_STATE_WORDS[holder.state]}`;
+    const message: string = `Pay again refused by the duplicate lock${held}. An invoice can have one live payment`;
+    note(ledger, invoiceId, "lock", message);
+    return { refused: true, message };
   }
+  const message: string =
+    ledger.obligation(invoiceId)?.state === "settled"
+      ? "Pay again not sent. The incident is closed, so PayOnce pays nothing more for this invoice"
+      : anyLive(ledger.outsidePayouts(invoiceId))
+        ? "Pay again not sent. A payout sent outside PayOnce may already pay this invoice"
+        : "Pay again not sent. No payment for this invoice is live, so a replacement goes through the policy, and through a person's approval once the invoice is with a person";
+  note(ledger, invoiceId, "warning", message);
+  return { refused: false, message };
 }
 
 // The original, when it is the one payment the invoice has been paid with.

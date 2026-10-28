@@ -21,7 +21,7 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 
 - `src/decide.ts`: pure decision policy (wait / replace / escalate / close). Rules stay in code; the model never decides amounts or moves money.
 - `src/incident.ts`: `Incident` and `Decision` types. Amounts are minor units.
-- `src/engine.ts`: the agent, shared by the CLI and the server. `resumeIncident` looks at an invoice: it syncs the payments, reads new emails, decides and acts. `deliver` is the inbox. `approveReplacement` records an approval, `closeIncident` records a person closing a paid incident, `note` writes the timeline. `Bank` is the hook told about each payment sent. `linkOutsidePayout` ties a payout sent outside PayOnce to the invoice its reference names. The engine never simulates a bank outcome.
+- `src/engine.ts`: the agent, shared by the CLI and the server. `resumeIncident` looks at an invoice: it syncs the payments, reads new emails, decides and acts. `deliver` is the inbox. `approveReplacement` records an approval, `closeIncident` records a person closing a paid incident, `payAgain` puts a person's second payment to the lock, `note` writes the timeline. `Bank` is the hook told about each payment sent. `linkOutsidePayout` ties a payout sent outside PayOnce to the invoice its reference names. The engine never simulates a bank outcome.
 - `src/dispatcher.ts`: `Dispatcher` runs steps one invoice at a time. `wake` queues a look at an invoice, and a wake that arrives before a queued look has started is dropped.
 - `src/watcher.ts`: the fallback for webhooks. `Watcher` reads every transfer the ledger shows in flight, PayOnce's own and outside payouts tied to its invoices, and wakes the invoice when the bank has paid or failed one. It also wakes an invoice whose next look is due and one with an approval nobody has acted on. Given an interval, it runs the sweep.
 - `src/deadlines.ts`: how long the bank has to pay or fail a transfer, by transfer method, counted from the transfer's `created_at`. `isOverdue` treats a time it cannot read as overdue.
@@ -59,6 +59,7 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 - Before any replacement, automatic or approved, the agent lists the transfers again and ties any new payout that names the invoice. If it finds one, it sends nothing, leaves the approval unspent and looks again at once.
 - Any other payout PayOnce did not send becomes an invoice with origin `outside` once it has failed or is in flight past its deadline. The policy escalates where it would replace, so a person approves the replacement.
 - No approval is requested for an invoice the ledger shows as paid once.
+- Pay again never reaches Airwallex. `Ledger.tryLock` inserts a replacement attempt inside a transaction and always rolls it back, so the lock either refuses it or nothing is left behind. When the lock does not refuse, the timeline says why nothing was sent.
 - A look writes a `bank` line when it finds a payment the ledger had in flight now paid or failed.
 - Approval terms take the pay-to account from the beneficiary record as it is now, and the policy escalates if that differs from the account on the original transfer. The timeline carries a warning whenever they differ, whatever reason the policy escalates for.
 - A reader failure marks the thread unread, which escalates. The next look reads the thread again.
@@ -111,7 +112,7 @@ Found by running it on 2026-10-06:
 ## Web server
 
 - It binds to loopback and has no login. `guard` checks the Host header and, for writes, the Origin header and a JSON content type.
-- Routes: `GET /api/options`, `GET /api/incidents`, `GET /api/incidents/:id`, `POST /api/incidents` (takes `bankOutcome`, `emails` and `scenario`), `POST /api/incidents/:id/approve` (needs `approver` and `approvalId`), `POST /api/incidents/:id/close` (needs `closedBy` and `finding`), `POST /api/incidents/:id/resume`.
+- Routes: `GET /api/options`, `GET /api/incidents`, `GET /api/incidents/:id`, `POST /api/incidents` (takes `bankOutcome`, `emails` and `scenario`), `POST /api/incidents/:id/approve` (needs `approver` and `approvalId`), `POST /api/incidents/:id/close` (needs `closedBy` and `finding`), `POST /api/incidents/:id/resume`, `POST /api/incidents/:id/pay-again`.
 - An incident's detail carries `review` when a person can close it, and the page shows the close card from that. `busy` is true while the agent or the sandbox bank is working on it, and `watching` while a payment is with the bank, including an outside payout tied to it. The page polls every 1.5 seconds while either is true.
 - Approve and close wait for any step already running on the invoice, then run. Resume queues a look.
 - The page scrolls to keep the newest timeline line on screen when that line was already visible, and for 15 seconds after an action.

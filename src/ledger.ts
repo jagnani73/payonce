@@ -402,8 +402,7 @@ export class Ledger {
       .all(invoiceId) as unknown as LedgerEvent[];
   }
 
-  openAttempt(invoiceId: string, kind: AttemptKind): Attempt {
-    const requestId: string = randomUUID();
+  private insertAttempt(requestId: string, invoiceId: string, kind: AttemptKind): void {
     try {
       this.db
         .prepare(
@@ -417,6 +416,11 @@ export class Ledger {
       }
       throw error;
     }
+  }
+
+  openAttempt(invoiceId: string, kind: AttemptKind): Attempt {
+    const requestId: string = randomUUID();
+    this.insertAttempt(requestId, invoiceId, kind);
     return {
       requestId,
       invoiceId,
@@ -426,6 +430,18 @@ export class Ledger {
       state: "pending",
       failureCode: null,
     };
+  }
+
+  // Opens a replacement attempt the way openAttempt does and always rolls it back,
+  // so nothing is left for a later look to send. Throws DuplicatePaymentError when
+  // the lock refuses it.
+  tryLock(invoiceId: string): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.insertAttempt(randomUUID(), invoiceId, "replacement");
+    } finally {
+      this.db.exec("ROLLBACK");
+    }
   }
 
   attempts(invoiceId: string): Attempt[] {

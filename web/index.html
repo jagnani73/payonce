@@ -122,8 +122,13 @@
               <section class="card" aria-labelledby="payments-title">
                 <h2 id="payments-title">Payments</h2>
                 <div id="payments"></div>
+                <div class="pay-again">
+                  <button id="pay-again" class="button button--small" type="button">Pay again</button>
+                  <p id="pay-again-result" class="pay-again__result" role="status" hidden></p>
+                </div>
                 <p class="footnote">
                   An invoice can have one live payment. A replacement can start only after the original has failed.
+                  Pay again asks for a second payment. The duplicate lock refuses it while a payment is live, and it never reaches the bank.
                 </p>
               </section>
 

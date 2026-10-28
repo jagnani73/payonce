@@ -297,6 +297,21 @@ input:read-only {
   margin-top: 4px;
 }
 
+.pay-again {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 12px;
+}
+
+.pay-again__result {
+  margin: 0;
+  flex: 1 1 200px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
 .hint,
 .footnote {
   color: var(--muted);
