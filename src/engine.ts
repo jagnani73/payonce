@@ -2641,12 +2641,15 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
     } else if (attempt.transferId === null) {
       // A payout sent outside PayOnce since the attempt was opened, for example in
       // the Airwallex web app while its create call went unanswered, may already
-      // pay the invoice, so the attempt is not sent again while one is live.
-      if (
-        (await linkUnseenPayouts(engine, invoiceId)) ||
-        anyLive(await syncOutsidePayouts(engine, invoiceId))
-      ) {
+      // pay the invoice, so the attempt is not sent again while one is live. One
+      // tied just now that has already failed holds nothing: the next look, at
+      // once, sends the attempt, as before any other payment.
+      const linked: boolean = await linkUnseenPayouts(engine, invoiceId);
+      if (anyLive(await syncOutsidePayouts(engine, invoiceId))) {
         return holdRetryForOutsidePayout(engine, invoiceId, attempt);
+      }
+      if (linked) {
+        return Date.now();
       }
       const paying: Obligation = obligation;
       const sent: Transfer | null = await withCurrencyLock(
