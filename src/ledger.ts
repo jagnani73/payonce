@@ -203,6 +203,31 @@ const SCHEMA: string = `
     seen_at TEXT NOT NULL,
     PRIMARY KEY (currency, holder)
   );
+  CREATE TABLE IF NOT EXISTS alert_conditions (
+    alert_key TEXT PRIMARY KEY,
+    fingerprint TEXT NOT NULL,
+    episode INTEGER NOT NULL DEFAULT 1,
+    seen_at TEXT NOT NULL,
+    cleared_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_key TEXT NOT NULL,
+    episode INTEGER NOT NULL,
+    fingerprint TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    facts TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'queued',
+    tries INTEGER NOT NULL DEFAULT 0,
+    next_try_at TEXT NOT NULL,
+    claimed_by TEXT,
+    claim_until TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    sent_at TEXT
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS one_alert_per_change
+    ON alerts(alert_key, episode, fingerprint);
 `;
 
 // rejected is an invoice a person closed without paying, because it was a second
@@ -3113,4 +3138,239 @@ export class Ledger {
       .prepare("DELETE FROM currency_locks WHERE currency = ? AND holder = ?")
       .run(currency, holder);
   }
+
+  // Compares the conditions an evaluation found with the ones on file, in one
+  // write transaction, so two processes on the file queue each alert once. A new
+  // condition, a changed one, or one back after more than clearAfterMs queues an
+  // alert. When both alert tables are empty, as when alerts are first turned on,
+  // the conditions standing are recorded without an alert each, and only the
+  // summary is queued. A stored condition whose key starts with one of
+  // unknownPrefixes is not cleared, because the evaluation could not look.
+  recordConditions(
+    found: FoundCondition[],
+    summary: FoundCondition,
+    now: number,
+    settleMs: number,
+    clearAfterMs: number,
+    unknownPrefixes: string[],
+  ): RecordedConditions {
+    return this.transaction((): RecordedConditions => {
+      const at: string = new Date(now).toISOString();
+      const due: string = new Date(now + settleMs).toISOString();
+      const queue = (condition: FoundCondition, episode: number): number =>
+        Number(
+          this.db
+            .prepare(
+              `INSERT OR IGNORE INTO alerts
+                 (alert_key, episode, fingerprint, kind, facts, next_try_at, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(condition.key, episode, condition.fingerprint, condition.kind, condition.facts, due, at)
+            .changes,
+        );
+      const insert = (condition: FoundCondition): void => {
+        this.db
+          .prepare(
+            "INSERT INTO alert_conditions (alert_key, fingerprint, episode, seen_at) VALUES (?, ?, 1, ?)",
+          )
+          .run(condition.key, condition.fingerprint, at);
+      };
+      const empty: boolean =
+        this.db.prepare("SELECT 1 FROM alert_conditions LIMIT 1").get() === undefined &&
+        this.db.prepare("SELECT 1 FROM alerts LIMIT 1").get() === undefined;
+      if (empty) {
+        found.forEach(insert);
+        this.db
+          .prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('alerts_started_at', ?)")
+          .run(at);
+        return { first: true, queued: queue(summary, 1), standing: found.length };
+      }
+      const stored: Map<string, ConditionRow> = new Map(
+        (this.db.prepare("SELECT * FROM alert_conditions").all() as unknown as ConditionRow[]).map(
+          (row: ConditionRow): [string, ConditionRow] => [row.alert_key, row],
+        ),
+      );
+      let queued: number = 0;
+      for (const condition of found) {
+        const row: ConditionRow | undefined = stored.get(condition.key);
+        stored.delete(condition.key);
+        if (row === undefined) {
+          insert(condition);
+          queued += queue(condition, 1);
+          continue;
+        }
+        const same: boolean = row.fingerprint === condition.fingerprint;
+        const back: boolean = row.cleared_at !== null;
+        const episode: number =
+          back && now - Date.parse(row.cleared_at ?? "") >= clearAfterMs ? row.episode + 1 : row.episode;
+        this.db
+          .prepare(
+            `UPDATE alert_conditions SET fingerprint = ?, episode = ?, seen_at = ?, cleared_at = NULL
+              WHERE alert_key = ?`,
+          )
+          .run(condition.fingerprint, episode, at, condition.key);
+        if (episode !== row.episode || !same) {
+          queued += queue(condition, episode);
+        } else if (back) {
+          // Back within the clear window as it was. An alert skipped while it was
+          // gone is due again.
+          this.db
+            .prepare(
+              `UPDATE alerts SET state = 'queued', next_try_at = ?
+                WHERE alert_key = ? AND episode = ? AND fingerprint = ? AND state = 'skipped'`,
+            )
+            .run(due, condition.key, episode, condition.fingerprint);
+        }
+      }
+      for (const row of stored.values()) {
+        const unknown: boolean = unknownPrefixes.some((prefix: string): boolean =>
+          row.alert_key.startsWith(prefix),
+        );
+        if (row.cleared_at === null && !unknown) {
+          this.db
+            .prepare("UPDATE alert_conditions SET cleared_at = ? WHERE alert_key = ?")
+            .run(at, row.alert_key);
+        }
+      }
+      return { first: false, queued, standing: found.length };
+    });
+  }
+
+  // True while the condition an alert was queued for still stands as it was.
+  conditionHolds(key: string, episode: number, fingerprint: string): boolean {
+    return (
+      this.db
+        .prepare(
+          `SELECT 1 FROM alert_conditions
+            WHERE alert_key = ? AND episode = ? AND fingerprint = ? AND cleared_at IS NULL`,
+        )
+        .get(key, episode, fingerprint) !== undefined
+    );
+  }
+
+  // Takes the oldest alert that is due, or one whose sender's claim ran out, in
+  // one statement, so two processes never take the same one.
+  claimAlert(holder: string, now: number, claimMs: number): Alert | undefined {
+    const at: string = new Date(now).toISOString();
+    const row: AlertRow | undefined = this.db
+      .prepare(
+        `UPDATE alerts SET state = 'sending', claimed_by = ?, claim_until = ?
+          WHERE id = (SELECT id FROM alerts
+                       WHERE (state = 'queued' AND next_try_at <= ?)
+                          OR (state = 'sending' AND claim_until < ?)
+                       ORDER BY id LIMIT 1)
+          RETURNING *`,
+      )
+      .get(holder, new Date(now + claimMs).toISOString(), at, at) as unknown as AlertRow | undefined;
+    return row === undefined ? undefined : toAlert(row);
+  }
+
+  // Only the holder of the claim can finish an alert.
+  finishAlert(id: number, holder: string, finish: AlertFinish): boolean {
+    const result: { changes: number | bigint } = this.db
+      .prepare(
+        `UPDATE alerts
+            SET state = ?, tries = tries + ?, next_try_at = COALESCE(?, next_try_at),
+                last_error = COALESCE(?, last_error), sent_at = ?,
+                claimed_by = NULL, claim_until = NULL
+          WHERE id = ? AND claimed_by = ?`,
+      )
+      .run(
+        finish.state,
+        finish.tried ? 1 : 0,
+        finish.nextTryAt === null ? null : new Date(finish.nextTryAt).toISOString(),
+        finish.error,
+        finish.state === "sent" ? new Date().toISOString() : null,
+        id,
+        holder,
+      );
+    return Number(result.changes) === 1;
+  }
+
+  // Newest first.
+  recentAlerts(limit: number): Alert[] {
+    return (
+      this.db.prepare("SELECT * FROM alerts ORDER BY id DESC LIMIT ?").all(limit) as unknown as AlertRow[]
+    ).map(toAlert);
+  }
+}
+
+// A condition that needs a person, as an alert evaluation found it. facts is
+// the JSON an alert about it is built from.
+export interface FoundCondition {
+  key: string;
+  kind: string;
+  fingerprint: string;
+  facts: string;
+}
+
+export interface RecordedConditions {
+  first: boolean;
+  queued: number;
+  standing: number;
+}
+
+export type AlertState = "queued" | "sending" | "sent" | "failed" | "skipped";
+
+export interface Alert {
+  id: number;
+  key: string;
+  episode: number;
+  fingerprint: string;
+  kind: string;
+  facts: string;
+  state: AlertState;
+  tries: number;
+  nextTryAt: string;
+  lastError: string | null;
+  createdAt: string;
+  sentAt: string | null;
+}
+
+// How a sender leaves an alert. nextTryAt is when a queued one is due again.
+export interface AlertFinish {
+  state: AlertState;
+  tried: boolean;
+  nextTryAt: number | null;
+  error: string | null;
+}
+
+interface ConditionRow {
+  alert_key: string;
+  fingerprint: string;
+  episode: number;
+  seen_at: string;
+  cleared_at: string | null;
+}
+
+interface AlertRow {
+  id: number;
+  alert_key: string;
+  episode: number;
+  fingerprint: string;
+  kind: string;
+  facts: string;
+  state: AlertState;
+  tries: number;
+  next_try_at: string;
+  last_error: string | null;
+  created_at: string;
+  sent_at: string | null;
+}
+
+function toAlert(row: AlertRow): Alert {
+  return {
+    id: row.id,
+    key: row.alert_key,
+    episode: row.episode,
+    fingerprint: row.fingerprint,
+    kind: row.kind,
+    facts: row.facts,
+    state: row.state,
+    tries: row.tries,
+    nextTryAt: row.next_try_at,
+    lastError: row.last_error,
+    createdAt: row.created_at,
+    sentAt: row.sent_at,
+  };
 }

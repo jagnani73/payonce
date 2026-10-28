@@ -6,9 +6,11 @@ import {
   type ServerResponse,
 } from "node:http";
 import { extname } from "node:path";
-import { BalanceCache } from "./airwallex/balances.js";
+import { BalanceCache, type BalanceState } from "./airwallex/balances.js";
 import { AirwallexClient, AirwallexError, AirwallexUnreachableError } from "./airwallex/client.js";
 import { subscribe } from "./airwallex/webhooks.js";
+import { alertMessage, type AlertFacts } from "./alert-payloads.js";
+import { Alerts, alertTargetFromEnv, describeAlerts, type AlertSetting, type AlertsStatus } from "./alerts.js";
 import type { ApprovalTerms, RunRowTerms, RunTerms } from "./approval.js";
 import { arrivalAdvice, dueDateProblem, feeSeenText } from "./arrival.js";
 import { describePolicy, policyFromEnv, type Approver, type Barred } from "./approvers.js";
@@ -66,6 +68,7 @@ import {
   NothingToPayError,
   SameFileError,
   WaitingRunError,
+  type Alert,
   type Approval,
   type Attempt,
   type Obligation,
@@ -126,6 +129,8 @@ const SWEEP_EVERY_MS: number = 30_000;
 // How long the cash panel shows a balance before reading it again. The policy
 // reads its own, fresh, before any money moves.
 const BALANCE_MAX_AGE_MS: number = 30_000;
+// How often alerts read the balances when nothing else has.
+const ALERT_BALANCE_EVERY_MS: number = 5 * 60_000;
 const SUBSCRIBE_TRIES: number = 3;
 const SUBSCRIBE_RETRY_MS: number = 5_000;
 const MAX_BODY_BYTES: number = 64 * 1024;
@@ -746,8 +751,10 @@ async function bankChangeByPerson(
 
 // The cash panel: balances from the cache, read again when 30 seconds old, and the
 // ledger as it is now. It answers at once with whatever the cache holds.
-function cash(): CashReport {
-  balances.refreshIfOld();
+function cash(read: boolean = true): CashReport {
+  if (read) {
+    balances.refreshIfOld();
+  }
   return cashReport({
     ledger: engine.ledger,
     reserve: engine.reserve,
@@ -755,6 +762,60 @@ function cash(): CashReport {
     statesCheckedAt: watcher.lastCheckedAt,
     payRunLines: payRunLines(engine.ledger),
   });
+}
+
+// While alerts are on, the balances are read every 5 minutes even with no page
+// open, so a headroom below 0 is noticed. Null until a balance has been read.
+let alertBalanceAskedAt: number = Number.NEGATIVE_INFINITY;
+
+function alertCash(): CashReport | null {
+  const now: number = Date.now();
+  const state: BalanceState = balances.latest();
+  if (
+    now - alertBalanceAskedAt >= ALERT_BALANCE_EVERY_MS &&
+    (state.readAt === null || now - state.readAt >= ALERT_BALANCE_EVERY_MS)
+  ) {
+    alertBalanceAskedAt = now;
+    balances.refreshIfOld(now);
+  }
+  return state.readAt === null ? null : cash(false);
+}
+
+const alertSetting: AlertSetting = alertTargetFromEnv();
+const alerts: Alerts | null =
+  alertSetting.target === null
+    ? null
+    : new Alerts(engine.ledger, alertSetting.target, `http://${HOST}:${PORT}`, alertCash);
+
+function alertsStatus(): AlertsStatus {
+  return (
+    alerts?.status() ?? {
+      on: false,
+      format: null,
+      host: null,
+      test: false,
+      problem: alertSetting.problem,
+      stopped: null,
+    }
+  );
+}
+
+// The latest alerts and how they went. Never the address.
+function recentAlerts(): unknown {
+  return {
+    ...alertsStatus(),
+    recent: engine.ledger.recentAlerts(50).map((alert: Alert) => ({
+      id: alert.id,
+      key: alert.key,
+      kind: alert.kind,
+      title: alertMessage(JSON.parse(alert.facts) as AlertFacts, "").title,
+      state: alert.state,
+      tries: alert.tries,
+      lastError: alert.lastError,
+      createdAt: alert.createdAt,
+      sentAt: alert.sentAt,
+    })),
+  };
 }
 
 // Has the agent look at an incident again. It cannot send a second live payment,
@@ -1038,7 +1099,10 @@ async function route(
         id: scenario.id,
         label: scenario.label,
       })),
+      alerts: alertsStatus(),
     });
+  } else if (method === "GET" && pathname === "/api/alerts") {
+    sendJson(response, 200, recentAlerts());
   } else if (method === "GET" && pathname === "/api/cash") {
     sendJson(response, 200, cash());
   } else if (method === "GET" && pathname === "/api/runs") {
@@ -1172,9 +1236,11 @@ server.listen(PORT, HOST, (): void => {
   console.log(describePolicy(engine.approvals));
   console.log(describeFloors(engine.reserve));
   console.log(describeQuotes());
+  console.log(describeAlerts(alertSetting));
   // The first page load then has balances to show.
   balances.refreshIfOld();
   pickUpInterrupted();
   watcher.start();
+  alerts?.start();
   void connectWebhooks();
 });

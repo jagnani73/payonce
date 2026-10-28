@@ -190,7 +190,7 @@ The balance comes from Airwallex, with the age of the read. Money held for outgo
 
 Below that the panel lists payments already with the bank, payouts sent outside PayOnce and the fees kept on failed transfers. Airwallex takes a transfer out of available as soon as it is created, so the panel does not take these off again. Each is listed under the wallet the money left. A payout paid from another currency counts in the currency it was paid from, and a fee counts in the currency it was charged in.
 
-The panel reads the balance from Airwallex when the page asks for it and the last read is 30 seconds old or more, so it reads nothing while no page is open. After a quiet spell the first answer can show a read several minutes old, with its age, while a new read runs. The page says so and picks up the new read a moment later.
+The panel reads the balance from Airwallex when the page asks for it and the last read is 30 seconds old or more, so it reads nothing while no page is open, unless alerts are on. Then the server also reads it every 5 minutes (see Alerts). After a quiet spell the first answer can show a read several minutes old, with its age, while a new read runs. The page says so and picks up the new read a moment later.
 
 That read is for display. Before an automatic replacement, PayOnce reads the balance fresh and takes off the same committed money the panel does. The panel's headroom can still differ from what that check sees. The panel's balance may be older, and the panel takes off the currency's floor, while an invoice with a stricter floor of its own is held to that floor (the panel lists such invoices under the floor). The check for one invoice also leaves that invoice's own committed money out.
 
@@ -251,6 +251,24 @@ An event counts only if its signature checks out with the subscription's secret,
 A status check runs every 15 seconds in case an event is late or lost, and every 3 seconds when webhooks are off. In the sandbox, Airwallex records an event for every status change but leaves each one queued and never sends it, even a test event sent from its own web app, so the status check finds every change. A request from outside through the tunnel does reach the receiver.
 
 Install cloudflared with `winget install --id Cloudflare.cloudflared`, or set `CLOUDFLARED` to the path of `cloudflared.exe`. Set `WEBHOOK_URL` to use a public address you already have, or `WEBHOOKS=off` to skip webhooks.
+
+## Alerts
+
+PayOnce can post to a Slack or Discord channel when something needs a person. It alerts on an invoice that is escalated, held or waiting on an approval, a bank deadline that has passed, a payout sent outside PayOnce, a pay run waiting for approval, an audit trail that no longer verifies, and a currency whose headroom has gone below 0.
+
+Set `ALERT_WEBHOOK_URL` to a Slack incoming webhook (`https://hooks.slack.com/services/...`) or a Discord webhook (`https://discord.com/api/webhooks/...` or the same on `discordapp.com`, with `ALERT_FORMAT=discord`). PayOnce takes no other address. If the setting is wrong, the start-up line says why and nothing is posted. With no address set, PayOnce makes no alert calls at all. Treat the address as a password and keep it in `.env`. PayOnce prints its host and never the rest.
+
+Only `pnpm ui` posts. Every 5 seconds it works out from the ledger what needs a person, which is the same state the page shows, so an incident escalated in the terminal is alerted by the server on its next check. A condition alerts once when it appears, and again only when it changes: an approval request opening on an escalated invoice, say, or a new reason. A request renewed on the same terms does not alert again, and neither does a floor clause that comes and goes as the balance moves. Each alert waits 10 seconds before it goes out, so when a request opens a moment after an escalation, only the request is posted. A condition that clears and comes back within 10 minutes alerts again only if it changed.
+
+The first time alerts are on for a ledger, PayOnce records what is already waiting and posts one summary, such as "2 invoices are waiting on a person, 1 pay run waits for approval", instead of an alert for each.
+
+An alert gives the invoice number, the supplier, the amount, the reason PayOnce recorded, how many approvers a request needs and when it runs out, and a link to the incident on the local page. The link only works on the machine running PayOnce, and the message says so. An alert never carries email text, anything the model read, an account number or any digits of one, an approver's name or a secret. Text that Slack or Discord would read as formatting is escaped, and Discord mentions are off.
+
+When a post fails, PayOnce tries again after 30 seconds, 2 minutes, 8 minutes and 32 minutes, then gives up. After a 429 it waits as long as the answer asks. If the webhook answers 401, 403, 404 or 410, the address is wrong or the webhook is gone, so PayOnce stops posting until it is restarted. It does not follow redirects. The agent, the watcher and the page never wait on a post. If the server dies between posting an alert and recording it, the alert can be posted again a minute later, because incoming webhooks take no idempotency key.
+
+While alerts are on, the server also reads the balances every 5 minutes when nothing else has, so a headroom below 0 is noticed with no page open.
+
+To try alerts without Slack or Discord, run a receiver on this machine and set `ALERT_TEST_RECEIVER_URL` to it, such as `http://127.0.0.1:4399/slack`. It takes only a 127.0.0.1, localhost or [::1] address, and while it is set PayOnce posts there instead of to `ALERT_WEBHOOK_URL`, in the format `ALERT_FORMAT` names. `GET /api/alerts` lists the last 50 alerts and how each one went.
 
 ## Run it
 
@@ -359,6 +377,8 @@ In the fifth, `inv-05002` has the same supplier, amount and number as INV-5002, 
 | `src/model-reader.ts` | The model reader: one chat completion that returns the findings |
 | `src/reader.ts` | Picks the model reader, or the keyword placeholder when no key is set |
 | `src/keyword-reader.ts` | Keyword placeholder that reads the emails when no key is set |
+| `src/alerts.ts` | Alerts: the webhook setting, what needs a person, and posting with retries |
+| `src/alert-payloads.ts` | What an alert says, and its Slack and Discord message shapes |
 | `src/server.ts` | Local web server and JSON API |
 | `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/audit.ts`, `src/cash.ts`, `src/payrun.ts`, `src/reset.ts`, `src/index.ts` | The commands |
 | `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, exchange rate quotes, balances and their cache for the cash panel, the webhook subscription and the simulation calls |

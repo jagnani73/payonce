@@ -947,6 +947,9 @@ function deadlineLook(transfer: Transfer): number {
   return Number.isFinite(deadline) ? deadline : Date.now();
 }
 
+export const REPLACEMENT_DEADLINE_REASON: string =
+  "the bank has not paid or failed the replacement by its deadline";
+
 // A replacement the bank sits on is never followed by another payment. A person
 // hears about it, and the incident still closes if the bank pays it.
 function replacementOverdue(
@@ -954,7 +957,7 @@ function replacementOverdue(
   invoiceId: string,
   replacement: Transfer,
 ): NextLook {
-  const reason: string = "the bank has not paid or failed the replacement by its deadline";
+  const reason: string = REPLACEMENT_DEADLINE_REASON;
   engine.ledger.escalate(invoiceId, reason);
   note(engine.ledger, invoiceId, "decision", `Escalate: ${reason}`, "decision");
   note(

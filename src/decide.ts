@@ -9,6 +9,15 @@ export const NO_FLOOR_CLAUSE: string = "no reserve floor is set for this currenc
 
 export const NO_FLOOR_REASON: string = `${NO_FLOOR_CLAUSE}, so a person approves any replacement`;
 
+export const BELOW_FLOOR_REASON: string =
+  "a replacement and its transfer fee would push cash below the reserve floor";
+export const UNREADABLE_CASH_REASON: string = "the cash position could not be read";
+export const NEW_BANK_DETAILS_REASON: string = "supplier asked for payment to different bank details";
+export const CHANGED_BANK_DETAILS_REASON: string =
+  "the supplier's bank details on file changed after the original payment";
+export const ORIGINAL_DEADLINE_REASON: string =
+  "the bank has not paid or failed the original transfer by its deadline";
+
 // Why the cash keeps a replacement from being sent unprompted, or null when it
 // and its fee leave the wallet above its floor. The policy and the check before
 // an approved replacement is spent both use it, so they cannot disagree.
@@ -29,11 +38,11 @@ export function floorReason(incident: Incident): string | null {
   // A NaN compares false against everything, so an unreadable cash position must
   // be caught here and not allowed to pass as "above the floor".
   if (!Number.isFinite(balanceAfterMinor) || !Number.isFinite(incident.reserveFloorMinor)) {
-    return "the cash position could not be read";
+    return UNREADABLE_CASH_REASON;
   }
 
   if (balanceAfterMinor < incident.reserveFloorMinor) {
-    return "a replacement and its transfer fee would push cash below the reserve floor";
+    return BELOW_FLOOR_REASON;
   }
   return null;
 }
@@ -48,14 +57,14 @@ export function decide(incident: Incident): Decision {
   if (incident.supplierAsksForNewBankDetails) {
     return {
       action: "escalate",
-      reason: "supplier asked for payment to different bank details",
+      reason: NEW_BANK_DETAILS_REASON,
     };
   }
 
   if (incident.beneficiaryChanged) {
     return {
       action: "escalate",
-      reason: "the supplier's bank details on file changed after the original payment",
+      reason: CHANGED_BANK_DETAILS_REASON,
     };
   }
 
@@ -98,7 +107,7 @@ export function decide(incident: Incident): Decision {
     return incident.bankOverdue
       ? {
           action: "escalate",
-          reason: "the bank has not paid or failed the original transfer by its deadline",
+          reason: ORIGINAL_DEADLINE_REASON,
         }
       : {
           action: "wait",
