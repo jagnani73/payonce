@@ -52,6 +52,13 @@ export function decide(incident: Incident): Decision {
     };
   }
 
+  if (incident.supplierAsksNotToPay) {
+    return {
+      action: "escalate",
+      reason: "supplier asked to hold, cancel or not pay this invoice",
+    };
+  }
+
   if (incident.beneficiaryChanged) {
     return {
       action: "escalate",
@@ -70,6 +77,13 @@ export function decide(incident: Incident): Decision {
     return {
       action: "escalate",
       reason: "supplier emails are on file that could not be read",
+    };
+  }
+
+  if (incident.emailPartlyUnread) {
+    return {
+      action: "escalate",
+      reason: "part of a supplier email could not be read",
     };
   }
 

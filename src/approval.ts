@@ -41,6 +41,9 @@ export interface DuplicateEvidence {
 export interface HeldEvidence {
   reason: string;
   duplicates: DuplicateEvidence[];
+  // The email evidence, as for a replacement. Only when the invoice has emails,
+  // so every held invoice without one keeps its terms and its binding.
+  emails?: string;
 }
 
 // The locked exchange rate a payment from another currency's wallet is sent
@@ -236,12 +239,13 @@ export function termsFor(
 
 // bankDetails is what the beneficiary record holds now, which is where the payment
 // would go. fx is the quote a payment from another currency's wallet is approved
-// at.
+// at. emails is the email evidence, null when the invoice has no emails.
 export function heldTermsFor(
   obligation: Obligation,
   bankDetails: TransferBankDetails,
   duplicates: DuplicateEvidence[],
   fx: FxTerms | null,
+  emails: string | null,
 ): HeldPaymentTerms {
   return {
     action: "pay",
@@ -255,6 +259,7 @@ export function heldTermsFor(
     evidence: {
       reason: obligation.escalationReason,
       duplicates,
+      ...(emails === null ? {} : { emails }),
     },
   };
 }

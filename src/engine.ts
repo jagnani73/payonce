@@ -69,6 +69,8 @@ import {
 } from "./decide.js";
 import { likelyDuplicates, nearlyPays, sameNumberForSupplier } from "./duplicates.js";
 import {
+  emailEvidence,
+  summarise,
   unverifiedSenders,
   type EmailFindings,
   type EmailReader,
@@ -115,14 +117,25 @@ interface StoredFindings extends EmailFindings {
 const NO_FINDINGS: StoredFindings = {
   claimsNonReceipt: false,
   asksForNewBankDetails: false,
+  asksNotToPay: false,
   summary: "no emails on file",
 };
 
-const UNREAD_FINDINGS: EmailFindings = {
-  claimsNonReceipt: false,
-  asksForNewBankDetails: false,
-  summary: "the emails could not be read",
+// Emails on file that no look has read yet.
+const NOT_READ_FINDINGS: StoredFindings = {
+  ...NO_FINDINGS,
+  summary: "the emails have not been read yet",
 };
+
+const UNREAD_SUMMARY: string = "the emails could not be read";
+
+// Why an invoice with emails on file waits: the reader failed on one, or one
+// arrived after the last read.
+const EMAILS_NOT_READ: string = "supplier emails are on file that could not be read";
+
+// An email delivered before the first payment is read by a person first.
+export const EMAILS_BEFORE_PAYMENT_REASON: string =
+  "supplier emails arrived before the first payment, so a person reads them before PayOnce pays it";
 
 // Told about each payment PayOnce sends. In the sandbox it plays the bank, so the
 // payment moves on. In production there is none, because the bank moves it.
@@ -154,6 +167,8 @@ interface Assessment {
   incident: Incident;
   findings: StoredFindings;
   unverified: string[];
+  // The emails on file when the look assessed the invoice.
+  emails: SupplierEmail[];
   bankDetails: TransferBankDetails;
   // The callback that verified the bank details on file, when they are not the
   // ones the original went to. Null when none matches them.
@@ -237,12 +252,60 @@ export function noteError(ledger: Ledger, invoiceId: string, error: unknown): vo
   }
 }
 
-// An obligation recorded before the domain column existed has none on file, and
-// there is nothing to compare its senders with.
+// With no domain on file every sender is flagged, since nothing can vouch for it.
 function sendersNotOnFile(obligation: Obligation, emails: SupplierEmail[]): string[] {
-  return obligation.supplierDomain === ""
-    ? []
-    : unverifiedSenders(emails, obligation.supplierDomain);
+  return unverifiedSenders(emails, obligation.supplierDomain);
+}
+
+// The stored findings, or what stands for them before anything was read.
+function storedFindings(ledger: Ledger, invoiceId: string, emails: SupplierEmail[]): { findings: StoredFindings; stored: boolean } {
+  const stored: string | undefined = ledger.findings(invoiceId);
+  if (stored !== undefined) {
+    return { findings: JSON.parse(stored) as StoredFindings, stored: true };
+  }
+  return { findings: emails.length === 0 ? NO_FINDINGS : NOT_READ_FINDINGS, stored: false };
+}
+
+// True while an email on file has not been read: the reader failed on it, or it
+// arrived after the findings were saved, for example from another process during
+// this look.
+function emailsNotRead(findings: StoredFindings, stored: boolean, emails: SupplierEmail[]): boolean {
+  return (
+    findings.unread === true ||
+    (emails.length > 0 && !stored) ||
+    (findings.emailsRead ?? emails.length) < emails.length
+  );
+}
+
+// Puts the sender check on the timeline: each From and Reply-To address the
+// domain on file does not vouch for.
+export function noteSenders(ledger: Ledger, obligation: Obligation, emails: SupplierEmail[]): void {
+  const invoiceId: string = obligation.invoiceId;
+  const domain: string = obligation.supplierDomain;
+  const fromOnly: SupplierEmail[] = emails.map((email: SupplierEmail): SupplierEmail => ({ ...email, replyTo: [] }));
+  const replies: SupplierEmail[] = emails.flatMap((email: SupplierEmail): SupplierEmail[] =>
+    (email.replyTo ?? []).map((address: string): SupplierEmail => ({ from: address, subject: "", body: "" })),
+  );
+  for (const sender of unverifiedSenders(fromOnly, domain)) {
+    note(
+      ledger,
+      invoiceId,
+      "warning",
+      domain === ""
+        ? `No supplier domain is on file for this invoice, so sender ${sender} cannot be checked`
+        : `Sender ${sender} does not match the supplier's domain on file (${domain})`,
+    );
+  }
+  for (const address of unverifiedSenders(replies, domain)) {
+    note(
+      ledger,
+      invoiceId,
+      "warning",
+      domain === ""
+        ? `No supplier domain is on file for this invoice, so Reply-To address ${address} cannot be checked`
+        : `Replies to this email go to ${address}, which does not match the supplier's domain on file (${domain})`,
+    );
+  }
 }
 
 function describe(transfer: Transfer): string {
@@ -391,20 +454,16 @@ export function deliver(
   for (const email of emails) {
     note(ledger, invoiceId, "email", `Email from ${email.from}: ${email.subject}`);
   }
-  for (const sender of sendersNotOnFile(obligation, emails)) {
-    note(
-      ledger,
-      invoiceId,
-      "warning",
-      `Sender ${sender} does not match the supplier's domain on file (${obligation.supplierDomain})`,
-    );
-  }
+  noteSenders(ledger, obligation, emails);
 }
 
-// Reads the whole thread once emails have arrived since it was last read, and
-// keeps the findings so later looks see the same result. If the reader fails,
-// the thread is marked unread so the policy escalates and does not act on
-// findings from before these emails arrived. It is read again on the next look.
+// Reads the emails that arrived since the thread was last read, one at a time,
+// and keeps the findings so later looks see the same result. One email at a time
+// means an instruction in one cannot change how another is read. Findings only
+// ever add caution: each read is ORed with what earlier reads found, so a later
+// email cannot clear a finding. If the reader fails, the thread is marked unread
+// so the policy escalates, and the count stays at the emails read so far, so the
+// next look reads from the one that failed.
 async function readNewEmails(engine: Engine, obligation: Obligation): Promise<void> {
   const invoiceId: string = obligation.invoiceId;
   const thread: SupplierEmail[] = engine.ledger.emails(invoiceId);
@@ -418,25 +477,45 @@ async function readNewEmails(engine: Engine, obligation: Obligation): Promise<vo
     return;
   }
 
-  let read: EmailFindings = UNREAD_FINDINGS;
+  let claimsNonReceipt: boolean = previous?.claimsNonReceipt === true;
+  let asksForNewBankDetails: boolean = previous?.asksForNewBankDetails === true;
+  let asksNotToPay: boolean = previous?.asksNotToPay === true;
+  let readBy: string | undefined = previous?.readBy;
+  let emailsRead: number = readCount;
   let unread: boolean = false;
-  try {
-    read = await engine.reader.read(thread);
-  } catch (error: unknown) {
-    unread = true;
-    note(
-      engine.ledger,
-      invoiceId,
-      "error",
-      `Supplier emails could not be read: ${messageOf(error)}`,
-    );
+  for (const email of thread.slice(readCount)) {
+    try {
+      const read: EmailFindings = await engine.reader.read([email]);
+      claimsNonReceipt = claimsNonReceipt || read.claimsNonReceipt;
+      asksForNewBankDetails = asksForNewBankDetails || read.asksForNewBankDetails;
+      asksNotToPay = asksNotToPay || read.asksNotToPay === true;
+      readBy = read.readBy ?? engine.reader.name;
+      emailsRead += 1;
+    } catch (error: unknown) {
+      unread = true;
+      note(
+        engine.ledger,
+        invoiceId,
+        "error",
+        `Supplier emails could not be read: ${messageOf(error)}`,
+      );
+      break;
+    }
   }
+  const found: string = summarise(claimsNonReceipt, asksForNewBankDetails, asksNotToPay);
   const findings: StoredFindings = {
-    ...read,
+    claimsNonReceipt,
+    asksForNewBankDetails,
+    asksNotToPay,
+    summary: !unread
+      ? found
+      : claimsNonReceipt || asksForNewBankDetails || asksNotToPay
+        ? `${found}, and some emails could not be read`
+        : UNREAD_SUMMARY,
     unverifiedSenders: sendersNotOnFile(obligation, thread),
     unread,
-    emailsRead: unread ? 0 : thread.length,
-    ...(unread ? {} : { readBy: read.readBy ?? engine.reader.name }),
+    emailsRead,
+    ...(readBy === undefined ? {} : { readBy }),
   };
   engine.ledger.saveFindings(invoiceId, JSON.stringify(findings));
   note(engine.ledger, invoiceId, "email", `Emails read: ${findings.summary}`);
@@ -521,11 +600,37 @@ async function rateFor(
   return { fx, fresh: true, endsAt };
 }
 
-// The email evidence a person sees and approves against.
-function evidenceSummary(assessment: Assessment): string {
-  return assessment.unverified.length === 0
-    ? assessment.findings.summary
-    : `${assessment.findings.summary}, sender ${assessment.unverified.join(", ")} does not match the supplier on file`;
+// The email evidence a person sees and approves against. It names no address, so
+// nothing a sender wrote reaches the binding.
+function evidenceSummary(obligation: Obligation, assessment: Assessment): string {
+  return emailEvidence(assessment.findings.summary, assessment.emails, obligation.supplierDomain);
+}
+
+// Approval terms counted the emails from this version on, and named no sender
+// address. A request opened before then no longer matches its terms once the
+// invoice has emails, so the next request replaces it, once.
+const EMAIL_COUNT: RegExp = /\b[0-9]+ emails? on file\b/;
+
+function noteEvidenceUpgrade(engine: Engine, invoiceId: string, approval: Approval | undefined, emails: number): void {
+  if (
+    emails === 0 ||
+    approval === undefined ||
+    (approval.state !== "requested" && approval.state !== "approved") ||
+    isExpired(approval)
+  ) {
+    return;
+  }
+  const terms: ApprovalTerms = JSON.parse(approval.terms) as ApprovalTerms;
+  const evidence: string | undefined = terms.action === "replace" ? terms.evidence.emails : undefined;
+  if (evidence === undefined || EMAIL_COUNT.test(evidence)) {
+    return;
+  }
+  note(
+    engine.ledger,
+    invoiceId,
+    "approval",
+    "Approval terms now count the supplier emails on file and name no sender address, so this request no longer matches them. PayOnce opens a new one, and approvals given on the old one no longer count",
+  );
 }
 
 async function assess(
@@ -535,9 +640,11 @@ async function assess(
 ): Promise<Assessment> {
   const original: Transfer = await getTransfer(engine.client, originalId);
   const emails: SupplierEmail[] = engine.ledger.emails(obligation.invoiceId);
-  const stored: string | undefined = engine.ledger.findings(obligation.invoiceId);
-  const findings: StoredFindings =
-    stored === undefined ? NO_FINDINGS : (JSON.parse(stored) as StoredFindings);
+  const { findings, stored }: { findings: StoredFindings; stored: boolean } = storedFindings(
+    engine.ledger,
+    obligation.invoiceId,
+    emails,
+  );
   const unverified: string[] = sendersNotOnFile(obligation, emails);
   // A replacement is paid by beneficiary id, so what counts is the account that
   // record points to now, not the one the original went to.
@@ -591,17 +698,14 @@ async function assess(
       ),
     supplierReportsNonReceipt: findings.claimsNonReceipt === true,
     supplierAsksForNewBankDetails: findings.asksForNewBankDetails === true,
+    supplierAsksNotToPay: findings.asksNotToPay === true,
     beneficiaryChanged: !sameBankDetails(
       original.beneficiary?.bank_details,
       bankDetails,
     ),
     emailFromUnverifiedSender: unverified.length > 0,
-    // An email delivered after the findings were saved, for example by another
-    // process during this look, has not been read.
-    emailsUnread:
-      findings.unread === true ||
-      (emails.length > 0 && stored === undefined) ||
-      (findings.emailsRead ?? emails.length) < emails.length,
+    emailsUnread: emailsNotRead(findings, stored, emails),
+    emailPartlyUnread: emails.some((email: SupplierEmail): boolean => email.partial === true),
     availableBalanceMinor: availableMinor,
     committedMinor: committed,
     reserveFloorMinor: floorMinor,
@@ -671,7 +775,7 @@ async function assess(
     ? (engine.ledger.verifiedBankChange(obligation.beneficiaryId, bankDetailsKey(bankDetails)) ??
       null)
     : null;
-  return { original, incident, findings, unverified, bankDetails, bankChange, rate, decision, floor: null, paidDuplicate: paid };
+  return { original, incident, findings, unverified, emails, bankDetails, bankChange, rate, decision, floor: null, paidDuplicate: paid };
 }
 
 // The first invoice this one looks like a second bill for that is paid, by
@@ -877,7 +981,7 @@ function termsOf(obligation: Obligation, assessment: Assessment): ReplacementTer
     obligation,
     assessment.original,
     assessment.decision,
-    evidenceSummary(assessment),
+    evidenceSummary(obligation, assessment),
     assessment.bankDetails,
     assessment.bankChange,
     assessment.rate?.fx ?? null,
@@ -1412,6 +1516,7 @@ async function continueEscalated(
   const approval: Approval | undefined = engine.ledger.latestApproval(
     obligation.invoiceId,
   );
+  noteEvidenceUpgrade(engine, obligation.invoiceId, approval, assessed.emails.length);
   const assessment: Assessment = asRequested(obligation, assessed, approval);
   const current: ReplacementTerms = termsOf(obligation, assessment);
   const rule: SignoffRule = ruleFor(engine, obligation, current, assessment.incident.beneficiaryChanged);
@@ -1444,14 +1549,17 @@ async function continueEscalated(
     // Checked before the approval is spent, so a failed check leaves it unspent.
     await requireAccount(engine, obligation, current.accountKey, "replacement was approved");
     // One approval covers one attempt, so it is spent as the attempt is opened.
-    // Another process may have voided it since it was read, or recorded paid an
-    // invoice this one looks like a second bill for since assess looked. Then
-    // nothing is spent, and the next look names that invoice in a new request.
+    // Another process may have voided it since it was read, recorded paid an
+    // invoice this one looks like a second bill for since assess looked, or
+    // delivered an email the approval did not see. Then nothing is spent, and the
+    // next look names that invoice, or reads that email, in a new request.
     const attempt: Attempt | undefined = engine.ledger.useApproval(
       obligation.invoiceId,
       approval.id,
       lease,
-      (): boolean => paidDuplicate(engine.ledger, obligation) === assessment.paidDuplicate,
+      (): boolean =>
+        paidDuplicate(engine.ledger, obligation) === assessment.paidDuplicate &&
+        engine.ledger.emailCount(obligation.invoiceId) === assessment.emails.length,
     );
     if (attempt === undefined) {
       return Date.now();
@@ -1695,6 +1803,13 @@ export async function startPayment(
           engine.ledger.holdBeforePaying(invoiceId, held.duplicateOf, held.reason);
           return held;
         }
+        // A supplier who wrote before anything was paid may be asking not to pay
+        // it, or to pay elsewhere, so a person reads the email first. That
+        // includes a pay run row waiting its turn.
+        if (engine.ledger.emailCount(invoiceId) > 0) {
+          engine.ledger.holdBeforePaying(invoiceId, [], EMAILS_BEFORE_PAYMENT_REASON);
+          return { kind: "held", duplicateOf: [], sameNumber: [], reason: EMAILS_BEFORE_PAYMENT_REASON, detail: null };
+        }
         // The agent never pays at a rate nobody has seen, so this is the least
         // serious reason to hold it and comes after the others.
         if (crossCurrency(now)) {
@@ -1806,6 +1921,27 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
     }
     return null;
   }
+  // A held invoice reads its emails like any other, and its terms carry what
+  // they say. Until every email is read, nothing is offered for approval, and
+  // the look comes again a minute later.
+  await readNewEmails(engine, obligation);
+  const emails: SupplierEmail[] = engine.ledger.emails(invoiceId);
+  const { findings, stored }: { findings: StoredFindings; stored: boolean } = storedFindings(
+    engine.ledger,
+    invoiceId,
+    emails,
+  );
+  if (emailsNotRead(findings, stored, emails)) {
+    waitWithoutPaying(
+      engine,
+      invoiceId,
+      EMAILS_NOT_READ,
+      "Waiting on a person. Supplier emails are on file that PayOnce could not read yet, so it asks nobody to approve paying this invoice. It tries reading them again in a minute",
+    );
+    return Date.now() + RETRY_FAILED_LOOK_MS;
+  }
+  const evidence: string | null =
+    emails.length === 0 ? null : emailEvidence(findings.summary, emails, obligation.supplierDomain);
   // The invoices it was held for, and any that match it now: one started after
   // it, or one that came first while this one was held for another reason.
   const added: string[] = likelyDuplicates(engine.ledger, obligation)
@@ -1857,7 +1993,7 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
   // Paid from another currency's wallet, it is approved at a quote. Nothing has
   // been sent, so no fee is known yet.
   const rate: Rate | null = crossCurrency(obligation) ? await rateFor(engine, obligation, null) : null;
-  const terms: HeldPaymentTerms = heldTermsFor(held, bankDetails, duplicates, rate?.fx ?? null);
+  const terms: HeldPaymentTerms = heldTermsFor(held, bankDetails, duplicates, rate?.fx ?? null, evidence);
   // A second bill paid to a different account from the first is the pattern of an
   // invoice resent with new bank details, so it needs two approvers.
   const elsewhere: DuplicateEvidence | undefined = duplicates.find(
@@ -1906,6 +2042,7 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
       lease,
       (): boolean =>
         duplicatesOnFile(engine.ledger, held) === onFile &&
+        engine.ledger.emailCount(invoiceId) === emails.length &&
         likelyDuplicates(engine.ledger, held).every((other: Obligation): boolean =>
           held.duplicateOf.includes(other.invoiceId),
         ),
@@ -1989,7 +2126,12 @@ async function replaceUnderLock(
 
   let incident: Incident = assessment.incident;
   let paid: string | null = assessment.paidDuplicate;
-  const next: Attempt | Decision = engine.ledger.transaction((): Attempt | Decision => {
+  const next: Attempt | Decision | null = engine.ledger.transaction((): Attempt | Decision | null => {
+    // An email delivered since assess read the thread is read before anything
+    // is sent.
+    if (engine.ledger.emailCount(invoiceId) !== assessment.emails.length) {
+      return null;
+    }
     incident = {
       ...assessment.incident,
       availableBalanceMinor: availableMinor,
@@ -2007,6 +2149,9 @@ async function replaceUnderLock(
       ? engine.ledger.openAttempt(invoiceId, "replacement", lease)
       : decision;
   });
+  if (next === null) {
+    return Date.now();
+  }
   if ("action" in next) {
     note(engine.ledger, invoiceId, "decision", `Escalate: ${next.reason}`, "decision");
     // The first request names the floor as well, as every later one does.

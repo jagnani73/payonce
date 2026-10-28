@@ -25,9 +25,14 @@ export interface Incident {
   replacementFailed: boolean;
   supplierReportsNonReceipt: boolean;
   supplierAsksForNewBankDetails: boolean;
+  // The supplier asked to hold, cancel or not pay the invoice.
+  supplierAsksNotToPay: boolean;
   beneficiaryChanged: boolean;
   emailFromUnverifiedSender: boolean;
   emailsUnread: boolean;
+  // An email on file has text nobody read, such as text past the cut, an
+  // attachment of text or a part in a charset PayOnce cannot decode.
+  emailPartlyUnread: boolean;
   availableBalanceMinor: number;
   // Money promised to other payments from the same wallet that has not left the
   // available balance yet: payments being sent and approvals not used yet.
