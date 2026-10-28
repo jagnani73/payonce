@@ -85,7 +85,7 @@ function moneyText(money: BoardMoney): string {
 
 function totalLine(total: BoardTotal): string {
   const buckets: [number, string][] = [
-    [total.promisedMinor, "promised"],
+    [total.promisedMinor, "approved or being sent"],
     [total.waitingMinor, "waiting on a person"],
     [total.runWaitingMinor, "pay run waiting for approval"],
     [total.withBankMinor, "with the bank"],
