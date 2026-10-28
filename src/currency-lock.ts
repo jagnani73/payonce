@@ -39,12 +39,22 @@ export async function withCurrencyLock<T>(
 ): Promise<T> {
   const lease: Lease = { currency, holder: `${process.pid}:${randomUUID()}` };
   const deadline: number = Date.now() + WAIT_MS;
-  while (!ledger.takeCurrencyLock(currency, lease.holder, Date.now() + LEASE_MS)) {
-    if (Date.now() > deadline) {
-      ledger.leaveCurrencyQueue(currency, lease.holder);
-      throw new CurrencyBusyError(currency);
+  // A waiter that stops for any reason, a busy ledger included, gives up its
+  // place at once, so it does not hold up the queue until it counts as gone.
+  try {
+    while (!ledger.takeCurrencyLock(currency, lease.holder, Date.now() + LEASE_MS)) {
+      if (Date.now() > deadline) {
+        throw new CurrencyBusyError(currency);
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, POLL_MS));
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, POLL_MS));
+  } catch (error: unknown) {
+    try {
+      ledger.leaveCurrencyQueue(currency, lease.holder);
+    } catch (inner: unknown) {
+      console.warn(`  lock     ${inner instanceof Error ? inner.message : String(inner)}`);
+    }
+    throw error;
   }
   // A renewal that finds the lease gone only warns. The step then fails at its
   // next write, because the ledger checks the lease there.
