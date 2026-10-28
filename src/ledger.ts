@@ -245,8 +245,9 @@ export interface NewObligation {
   currency: string;
   amountMinor: number;
   transferMethod: TransferMethod;
-  // A floor of the invoice's own, stricter than its currency's in RESERVE_FLOORS.
-  // 0 for none. Only the low-reserve demo sets one.
+  // A floor of the invoice's own, stricter than its currency's in RESERVE_FLOORS,
+  // in the currency of the wallet it is paid from. 0 for none. Only the
+  // low-reserve demo sets one.
   invoiceFloorMinor: number;
   // The name the person who started the incident gave. Null when PayOnce does
   // not know, as for a payout sent outside it.
