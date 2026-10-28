@@ -481,10 +481,12 @@ export function outageView(ledger: Ledger, outage: Outage, holding: OutageHoldin
                   : null,
           }),
         );
+  // No time is in the sentence: the page shows declaredAt and endedAt in the
+  // viewer's time zone, and the CLI prints them as they are stored.
   const text: string =
     outage.state === "active"
-      ? `Outage ${outage.id} on ${railOf(outage)} since ${clock(outage.declaredAt)}: payouts to ${outage.payees} payees failed with ${codesText(outage.codes)} within ${outage.windowMinutes} minutes. PayOnce opens no new payment on ${railOf(outage)} until a person ends it`
-      : `Outage ${outage.id} on ${railOf(outage)}, declared at ${clock(outage.declaredAt)}, ended at ${clock(outage.endedAt)} by ${outage.endedBy ?? ""}`;
+      ? `Outage ${outage.id} on ${railOf(outage)}: payouts to ${outage.payees} payees failed with ${codesText(outage.codes)} within ${outage.windowMinutes} minutes. PayOnce opens no new payment on ${railOf(outage)} until a person ends it`
+      : `Outage ${outage.id} on ${railOf(outage)} was ended by ${outage.endedBy ?? ""}`;
   return {
     id: outage.id,
     rail: railOf(outage),

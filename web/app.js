@@ -413,6 +413,22 @@ const minuteFormat = new Intl.DateTimeFormat(undefined, {
   hourCycle: "h23",
 });
 
+const zonedMinuteFormat = new Intl.DateTimeFormat(undefined, {
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+  timeZoneName: "short",
+});
+
+const zonedDayFormat = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+  timeZoneName: "short",
+});
+
 function parseDate(value) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
@@ -434,6 +450,19 @@ function shortId(value) {
 function sameName(a, b) {
   const key = (name) => String(name).trim().replace(/\s+/g, " ").toLowerCase();
   return key(a) === key(b);
+}
+
+// A time on an outage card, in this browser's time zone like the rest of the
+// page, with the zone named: "03:03 GMT+5:30", or "Oct 28, 21:33 GMT+5:30" on
+// another day. Null when it cannot be read.
+function zonedTime(value) {
+  // new Date(null) is 1970, not an invalid date.
+  const date = typeof value === "string" && value !== "" ? parseDate(value) : null;
+  if (date === null) {
+    return null;
+  }
+  const format = date.toDateString() === new Date().toDateString() ? zonedMinuteFormat : zonedDayFormat;
+  return h("time", { datetime: date.toISOString(), title: dateTimeFormat.format(date) }, format.format(date));
 }
 
 function timeNode(value) {
@@ -4619,7 +4648,7 @@ function buildBoardOutage(outage, enders) {
     .map((entry) => `${entry.code} (${entry.label})`)
     .join(", ");
   const atRisk = list(outage.atRisk);
-  const since = boardWhen(outage.declaredAt);
+  const since = zonedTime(outage.declaredAt);
   const held = [
     ["First payments waiting", list(outage.originals), (id) => outageLink(id, null)],
     ["Replacements escalated", list(outage.replacements), (id) => outageLink(id, null)],
@@ -4641,7 +4670,7 @@ function buildBoardOutage(outage, enders) {
       "dl",
       { class: "facts approval__status" },
       h("dt", null, "Since"),
-      h("dd", null, since === null ? "Not on file" : h("time", { datetime: outage.declaredAt }, since)),
+      h("dd", null, since ?? "Not on file"),
       h("dt", null, "Failure codes"),
       h("dd", null, codes),
       h("dt", null, "Payees"),
@@ -5370,7 +5399,8 @@ function buildOutage(view, enders) {
   const counted = Array.isArray(view.counted) ? view.counted : [];
   const held = (Array.isArray(view.held) ? view.held : []).filter((item) => item.what !== "counted");
   const active = view.state === "active";
-  const ended = parseDate(view.endedAt);
+  const declared = zonedTime(view.declaredAt);
+  const ended = zonedTime(view.endedAt);
   return h(
     "div",
     { class: "outage" },
@@ -5384,6 +5414,8 @@ function buildOutage(view, enders) {
     h(
       "dl",
       { class: "facts approval__status" },
+      h("dt", null, "Declared"),
+      h("dd", null, declared ?? "Not on file"),
       h("dt", null, "Failure codes"),
       h("dd", null, codes),
       h("dt", null, "Payouts counted"),
@@ -5406,7 +5438,7 @@ function buildOutage(view, enders) {
           "dd",
           null,
           `By ${view.endedBy ?? ""}`,
-          ended !== null && [" at ", timeNode(view.endedAt)],
+          ended !== null && [" at ", ended],
           `: ${view.endNote ?? ""}`,
         ),
       ],

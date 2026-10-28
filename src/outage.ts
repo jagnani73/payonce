@@ -31,6 +31,7 @@ function loadEnv(): void {
 function show(view: OutageView): void {
   console.log(`Outage ${view.id} on ${view.rail}, ${view.state}`);
   console.log(`  ${view.text}`);
+  console.log(`  declared ${view.declaredAt}`);
   for (const payout of view.counted) {
     console.log(`  counted  ${describeCounted(payout)}`);
   }
