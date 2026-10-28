@@ -693,7 +693,9 @@ function evidenceSummary(obligation: Obligation, assessment: Assessment): string
 
 // Approval terms counted the emails from this version on, and named no sender
 // address. A request opened before then no longer matches its terms once the
-// invoice has emails, so the next request replaces it, once.
+// invoice has emails. This line says only why. What happens to the request, a
+// new one or none, and whether approvals given on it still count, is said once,
+// by the step that does it.
 const EMAIL_COUNT: RegExp = /\b[0-9]+ emails? on file\b/;
 
 function noteEvidenceUpgrade(engine: Engine, invoiceId: string, approval: Approval | undefined, emails: number): void {
@@ -714,7 +716,7 @@ function noteEvidenceUpgrade(engine: Engine, invoiceId: string, approval: Approv
     engine.ledger,
     invoiceId,
     "approval",
-    "Approval terms now count the supplier emails on file and name no sender address, so this request no longer matches them. PayOnce opens a new one, and approvals given on the old one no longer count",
+    `Approval terms now count the supplier emails on file and name no sender address, so the open ${approval.state === "approved" ? "approval" : "request"} no longer matches them`,
   );
 }
 
