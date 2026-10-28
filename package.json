@@ -10,7 +10,7 @@
     "close": "tsx src/close.ts",
     "audit": "tsx src/audit.ts",
     "cash": "tsx --env-file=.env src/cash.ts",
-    "board": "tsx --env-file-if-exists=.env src/board.ts",
+    "board": "tsx src/board.ts",
     "payrun": "tsx --env-file=.env src/payrun.ts",
     "outbox": "tsx --env-file-if-exists=.env src/outbox.ts",
     "reset": "tsx src/reset.ts",

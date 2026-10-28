@@ -16,7 +16,8 @@ import { formatMoney } from "./money.js";
 
 // The incident board in the terminal, ranked as the page ranks it. It reads only
 // the ledger, with no Airwallex call, and loads .env only if there is one, for the
-// bank deadlines.
+// bank deadlines. It loads the file itself, because Node's --env-file-if-exists
+// says the file is missing once for tsx and again for the script.
 const USAGE: string = `Usage: pnpm board [FILTER...]
 Filters, in any order: a group (${BOARD_GROUPS.join(", ")}), a currency such as USD, and an origin (${BOARD_ORIGINS.join(", ")})`;
 
@@ -28,6 +29,17 @@ const INDENT: string = "    ";
 function fail(message: string): void {
   console.log(message);
   process.exitCode = 1;
+}
+
+// Without a .env the default deadlines apply, and nothing is printed about it.
+function loadEnv(): void {
+  try {
+    process.loadEnvFile(".env");
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
 }
 
 function filtersOf(args: string[]): BoardFilters | null {
@@ -174,6 +186,7 @@ function main(): void {
     fail(USAGE);
     return;
   }
+  loadEnv();
   print(boardReport(new Ledger(LEDGER_PATH), filters));
 }
 
