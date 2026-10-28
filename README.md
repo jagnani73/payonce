@@ -52,7 +52,7 @@ The reader is Gemini 3.5 Flash by default, with Gemini 3.1 Flash-Lite as a secon
 
 ## Supplier emails you upload
 
-Real supplier mail reaches PayOnce through the "Supplier email" card on the page. Choose the `.eml` file, or paste the raw source (Show original or View source in your mail client), and add your name. One email per upload, up to 2 MB. PayOnce refuses an Outlook `.msg` file, and refuses text that is not raw source, so pasting what the mail client shows does not lose the first paragraph to the headers.
+Real supplier mail reaches PayOnce through the "Supplier email" card on the page. Choose the `.eml` file, or paste the raw source (Show original or View source in your mail client), and add your name. One email per upload, up to 2 MB. PayOnce refuses an Outlook `.msg` file, and refuses text that is not raw source, so pasting what the mail client shows does not lose the first paragraph to the headers. If a paste starts with a header line such as `Subject:` and the text follows with no blank line, PayOnce reads that text as part of the email and marks the email partly unread.
 
 PayOnce parses the email itself, with no library. It keeps the sender's address, Reply-To, the subject, every text part (plain and HTML) and a list of attachments by name, type and size. It never opens an attachment, loads an image or follows a link. It treats every byte as hostile. An ambiguous sender becomes "no sender address PayOnce could read", which the sender check flags. PayOnce strips invisible characters and terminal control codes, and keeps its own notes about the email apart from the text, so an email cannot forge one.
 

@@ -49,6 +49,7 @@ export type EmailNote =
   | "too-many-text"
   | "undecodable"
   | "skipped-line"
+  | "header-text"
   | "repeated-mime"
   | "encoded-header"
   | "two-subjects"
@@ -72,6 +73,7 @@ export const NOTE_TEXT: Record<EmailNote, string> = {
   "too-many-text": `It has more than ${MAX_TEXT_PARTS} text parts. PayOnce read the first ${MAX_TEXT_PARTS}`,
   undecodable: "Part of its text is in a character set or encoding PayOnce cannot decode",
   "skipped-line": "A line among its headers is not a header field, so PayOnce skipped it",
+  "header-text": "A line among its headers is not a header field. PayOnce read it and the header lines after it as text, but a mail client may show them differently",
   "repeated-mime": "It repeats a Content-Type, Content-Transfer-Encoding, boundary or charset, and mail clients disagree on which one counts",
   "encoded-header": "A header has encoded text in a character set PayOnce cannot decode, so it is shown as written",
   "two-subjects": "It has two Subject fields, shown joined with a bar",
@@ -98,6 +100,7 @@ export const PARTIAL_NOTES: ReadonlySet<EmailNote> = new Set<EmailNote>([
   "too-many-text",
   "undecodable",
   "skipped-line",
+  "header-text",
   "repeated-mime",
   "encoded-header",
   "odd-type",
@@ -165,6 +168,9 @@ interface Walk {
 interface Headers {
   fields: Map<string, string[]>;
   bodyStart: number;
+  // The email's own headers only: the first line that is not a field and every
+  // line after it up to the blank line, as text. Empty for a part's headers.
+  loose: string;
 }
 
 interface ContentType {
@@ -432,9 +438,13 @@ function decodeWords(value: string, walk: Walk): string {
 // The header block that starts at start: its fields by lowercase name, in order,
 // and where the body begins. It ends at the first line that is empty once a
 // trailing CR is gone. A line that is neither a field nor a continuation is
-// skipped, and noted, because a mail client may read it differently.
-function readHeaders(raw: Buffer, start: number, end: number, walk: Walk): Headers {
+// skipped, and noted, because a mail client may read it differently. With
+// keepLoose, as for the email's own headers, that line and the lines after it
+// are also kept as text, so text pasted under a Subject line is still read. The
+// lines after it are read as fields too, so the sender check misses none.
+function readHeaders(raw: Buffer, start: number, end: number, walk: Walk, keepLoose: boolean = false): Headers {
   const fields: Map<string, string[]> = new Map<string, string[]>();
+  const loose: string[] = [];
   let current: { name: string; value: string } | null = null;
   let count: number = 0;
   const finish = (): void => {
@@ -472,6 +482,9 @@ function readHeaders(raw: Buffer, start: number, end: number, walk: Walk): Heade
     }
     const line: string = UTF8.decode(raw.subarray(position, lineEnd));
     position = newline + 1;
+    if (loose.length > 0) {
+      loose.push(line);
+    }
     const first: number = line.charCodeAt(0);
     if ((first === 32 || first === 9) && current !== null) {
       const field: { name: string; value: string } = current;
@@ -483,7 +496,10 @@ function readHeaders(raw: Buffer, start: number, end: number, walk: Walk): Heade
     const match: RegExpExecArray | null = FIELD_NAME.exec(line);
     if (match === null) {
       finish();
-      walk.notes.add("skipped-line");
+      if (keepLoose && loose.length === 0) {
+        loose.push(line);
+      }
+      walk.notes.add(keepLoose ? "header-text" : "skipped-line");
       continue;
     }
     finish();
@@ -498,7 +514,7 @@ function readHeaders(raw: Buffer, start: number, end: number, walk: Walk): Heade
   if (walk.headerBytes > MAX_HEADER_TOTAL) {
     throw new Refusal(`Its headers add up to more than ${MAX_HEADER_TOTAL / 1024} KB`);
   }
-  return { fields, bodyStart: Math.min(bodyStart, end) };
+  return { fields, bodyStart: Math.min(bodyStart, end), loose: loose.join("\n") };
 }
 
 // Splits at a character outside double quotes, which may hold \ escapes.
@@ -1181,9 +1197,13 @@ export function parseEmail(raw: Buffer, source: UploadSource): ParsedUpload {
       textParts: 0,
       headerBytes: 0,
     };
-    const top: Headers = readHeaders(raw, start, raw.length, walk);
+    const top: Headers = readHeaders(raw, start, raw.length, walk, true);
     if (!top.fields.has("from") && !top.fields.has("subject") && !top.fields.has("content-type")) {
       return refused(NOT_SOURCE);
+    }
+    if (top.loose.trim() !== "") {
+      walk.read.add(sameTextKey(top.loose));
+      walk.texts.push(top.loose);
     }
     walkPart(raw, top, raw.length, 0, [], "", walk);
 
