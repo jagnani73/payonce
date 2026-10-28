@@ -3188,10 +3188,11 @@ export class Ledger {
       .run(currency, holder);
   }
 
-  // Compares the conditions an evaluation found with the ones on file, in one
-  // write transaction, so two processes on the file queue each alert once. A new
-  // condition, a changed one, or one back after more than clearAfterMs queues an
-  // alert. A change to a fingerprint whose alert was skipped in this episode
+  // Compares the conditions an evaluation found with the ones on file. When
+  // nothing changed it writes nothing. Otherwise it compares again in one write
+  // transaction, so two processes on the file queue each alert once, and writes
+  // only the rows that changed. A new condition, a changed one, or one back after
+  // more than clearAfterMs queues an alert. A change to a fingerprint whose alert was skipped in this episode
   // queues that alert again. When both alert tables are empty, as when alerts are
   // first turned on, the conditions standing are recorded without an alert each,
   // and only the summary is queued. A stored condition whose key starts with one
@@ -3213,6 +3214,9 @@ export class Ledger {
       }
     }
     const conditions: FoundCondition[] = [...byKey.values()];
+    if (!this.conditionsChanged(conditions, unknownPrefixes)) {
+      return { first: false, queued: 0, standing: conditions.length };
+    }
     return this.transaction((): RecordedConditions => {
       const at: string = new Date(now).toISOString();
       const due: string = new Date(now + settleMs).toISOString();
@@ -3277,6 +3281,9 @@ export class Ledger {
         }
         const same: boolean = row.fingerprint === condition.fingerprint;
         const back: boolean = row.cleared_at !== null;
+        if (same && !back) {
+          continue;
+        }
         const episode: number =
           back && now - Date.parse(row.cleared_at ?? "") >= clearAfterMs ? row.episode + 1 : row.episode;
         this.db
@@ -3307,6 +3314,32 @@ export class Ledger {
     });
   }
 
+  // True when recordConditions has something to write: both alert tables are
+  // empty, or a condition is new, changed, back or gone. It only reads, so a
+  // check that finds nothing new never waits for the write lock.
+  private conditionsChanged(conditions: FoundCondition[], unknownPrefixes: string[]): boolean {
+    const stored: Map<string, ConditionRow> = new Map(
+      (this.db.prepare("SELECT * FROM alert_conditions").all() as unknown as ConditionRow[]).map(
+        (row: ConditionRow): [string, ConditionRow] => [row.alert_key, row],
+      ),
+    );
+    if (stored.size === 0 && this.db.prepare("SELECT 1 FROM alerts LIMIT 1").get() === undefined) {
+      return true;
+    }
+    for (const condition of conditions) {
+      const row: ConditionRow | undefined = stored.get(condition.key);
+      if (row === undefined || row.fingerprint !== condition.fingerprint || row.cleared_at !== null) {
+        return true;
+      }
+      stored.delete(condition.key);
+    }
+    return [...stored.values()].some(
+      (row: ConditionRow): boolean =>
+        row.cleared_at === null &&
+        !unknownPrefixes.some((prefix: string): boolean => row.alert_key.startsWith(prefix)),
+    );
+  }
+
   // True while the condition an alert was queued for still stands as it was.
   conditionHolds(key: string, episode: number, fingerprint: string): boolean {
     return (
@@ -3320,16 +3353,18 @@ export class Ledger {
   }
 
   // Takes the oldest alert that is due, or one whose sender's claim ran out, in
-  // one statement, so two processes never take the same one.
+  // one statement, so two processes never take the same one. A read comes first,
+  // so a check with nothing due never waits for the write lock.
   claimAlert(holder: string, now: number, claimMs: number): Alert | undefined {
     const at: string = new Date(now).toISOString();
+    const due: string = "(state = 'queued' AND next_try_at <= ?) OR (state = 'sending' AND claim_until < ?)";
+    if (this.db.prepare(`SELECT 1 FROM alerts WHERE ${due} LIMIT 1`).get(at, at) === undefined) {
+      return undefined;
+    }
     const row: AlertRow | undefined = this.db
       .prepare(
         `UPDATE alerts SET state = 'sending', claimed_by = ?, claim_until = ?
-          WHERE id = (SELECT id FROM alerts
-                       WHERE (state = 'queued' AND next_try_at <= ?)
-                          OR (state = 'sending' AND claim_until < ?)
-                       ORDER BY id LIMIT 1)
+          WHERE id = (SELECT id FROM alerts WHERE ${due} ORDER BY id LIMIT 1)
           RETURNING *`,
       )
       .get(holder, new Date(now + claimMs).toISOString(), at, at) as unknown as AlertRow | undefined;
