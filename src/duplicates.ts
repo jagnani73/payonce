@@ -40,6 +40,13 @@ export function sameInvoiceNumber(a: string, b: string): boolean {
   return x.full === y.full || x.base === y.full || x.full === y.base;
 }
 
+// True when two invoice numbers are the same apart from case, spacing, marks and
+// leading zeros, with no letters added: INV-0042 and inv 42, not INV-42A.
+export function sameNumberExactly(a: string, b: string): boolean {
+  const x: InvoiceNumber = numberOf(a);
+  return x.full !== "" && x.full === numberOf(b).full;
+}
+
 // The numbers an invoice is known by: its invoice number and, for a payout found
 // outside PayOnce, the reference it was sent with.
 function numbersOf(obligation: Obligation): string[] {
@@ -52,19 +59,28 @@ function knownAs(obligation: Obligation, reference: string): boolean {
   return numbersOf(obligation).some((number: string): boolean => sameInvoiceNumber(number, reference));
 }
 
-interface Bill {
+export interface Bill {
   supplier: string;
   beneficiaryId: string;
   currency: string;
   amountMinor: number;
 }
 
-function sameBill(obligation: Obligation, bill: Bill): boolean {
+function sameBill(obligation: Bill, bill: Bill): boolean {
   return (
     obligation.currency === bill.currency &&
     obligation.amountMinor === bill.amountMinor &&
     (obligation.beneficiaryId === bill.beneficiaryId || sameName(obligation.supplier, bill.supplier))
   );
+}
+
+// The test likelyDuplicates makes, for two bills that are not in the ledger yet,
+// such as two rows of one pay run file.
+export function sameBillAndNumber(
+  a: Bill & { invoiceId: string },
+  b: Bill & { invoiceId: string },
+): boolean {
+  return sameBill(a, b) && sameInvoiceNumber(a.invoiceId, b.invoiceId);
 }
 
 // The other invoices this one may be a second bill for, oldest first: the same

@@ -3,7 +3,7 @@ import { AirwallexClient } from "./airwallex/client.js";
 import { policyFromEnv } from "./approvers.js";
 import { Dispatcher } from "./dispatcher.js";
 import { noteError, type Engine } from "./engine.js";
-import { Ledger, LEDGER_PATH, type Obligation } from "./ledger.js";
+import { Ledger, LEDGER_PATH, type Obligation, type RunRow } from "./ledger.js";
 import { readerFromEnv } from "./reader.js";
 import { describeFloors, reserveFromEnv } from "./reserve.js";
 import { SandboxBank } from "./sandbox-bank.js";
@@ -28,6 +28,7 @@ async function main(): Promise<void> {
   const bank: SandboxBank = new SandboxBank(
     client,
     (invoiceId: string, error: unknown): void => noteError(ledger, invoiceId, error),
+    (invoiceId: string): string | null => ledger.runRowOf(invoiceId)?.sandboxOutcome ?? null,
   );
   const engine: Engine = {
     client,
@@ -45,6 +46,15 @@ async function main(): Promise<void> {
   const scenarioId: string = process.argv[5] ?? DEFAULT_SCENARIO;
   // Who started the incident. The login name stands in when none is given.
   const startedBy: string = process.argv.slice(6).join(" ").trim() || userInfo().username;
+
+  // A pay run's invoice sends its first payment from the server, in the run's
+  // order, and never from a scenario script. This watcher leaves such rows alone.
+  const fromRun: RunRow | undefined = ledger.runRowOf(invoiceId);
+  if (fromRun !== undefined && ledger.attempts(invoiceId).length === 0) {
+    console.log(`${invoiceId} belongs to pay run ${fromRun.runId}, and the server sends it`);
+    process.exitCode = 1;
+    return;
+  }
 
   watcher.start();
   try {

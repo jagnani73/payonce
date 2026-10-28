@@ -6,7 +6,7 @@ import {
 import { getTransfer, type Transfer, type TransferBankDetails } from "./airwallex/transfers.js";
 import { bankDetailsKey } from "./assess.js";
 import { note, type Engine } from "./engine.js";
-import type { Attempt, Obligation, OutsidePayout } from "./ledger.js";
+import type { Attempt, Obligation, OutsidePayout, PayRunRow } from "./ledger.js";
 import { wasRejected } from "./payments.js";
 
 // The bank details a person may change after a callback, with the label the page
@@ -109,19 +109,28 @@ function originalOf(engine: Engine, invoiceId: string): Attempt | undefined {
 }
 
 // True when another open invoice paid to the same beneficiary is about to pay it:
-// a payment not yet with the bank, or an approval not yet spent. Changing the
-// record then would change the account that payment goes to outside its turn.
+// a payment not yet with the bank, an approval not yet spent, or a pay run row
+// approved or released and not sent yet. Changing the record then would change
+// the account that payment goes to outside its turn.
 function anotherPaymentStarting(engine: Engine, obligation: Obligation): boolean {
-  return engine.ledger.obligations().some(
-    (other: Obligation): boolean =>
-      other.invoiceId !== obligation.invoiceId &&
-      other.beneficiaryId === obligation.beneficiaryId &&
-      other.state !== "settled" &&
-      other.state !== "rejected" &&
-      (engine.ledger
-        .attempts(other.invoiceId)
-        .some((attempt: Attempt): boolean => attempt.state === "pending") ||
-        engine.ledger.latestApproval(other.invoiceId)?.state === "approved"),
+  return (
+    engine.ledger.obligations().some(
+      (other: Obligation): boolean =>
+        other.invoiceId !== obligation.invoiceId &&
+        other.beneficiaryId === obligation.beneficiaryId &&
+        other.state !== "settled" &&
+        other.state !== "rejected" &&
+        (engine.ledger
+          .attempts(other.invoiceId)
+          .some((attempt: Attempt): boolean => attempt.state === "pending") ||
+          engine.ledger.latestApproval(other.invoiceId)?.state === "approved"),
+    ) ||
+    engine.ledger
+      .payRunRows()
+      .some(
+        (row: PayRunRow): boolean =>
+          row.beneficiaryId === obligation.beneficiaryId && row.invoiceId !== obligation.invoiceId,
+      )
   );
 }
 

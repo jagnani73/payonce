@@ -18,6 +18,7 @@ export const LEDGER_PATH: string = "payonce.db";
 export const INVOICE_ID_PATTERN: RegExp = /^[A-Za-z0-9-]{1,40}$/;
 
 const SQLITE_CONSTRAINT_UNIQUE: number = 2067;
+const SQLITE_CONSTRAINT_PRIMARYKEY: number = 1555;
 
 // An attempt for the invoice bound as the parameter that became a transfer or may
 // still become one. An invoice with none has sent nothing.
@@ -114,6 +115,81 @@ const SCHEMA: string = `
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_name TEXT NOT NULL,
+    file_hash TEXT NOT NULL,
+    columns TEXT NOT NULL,
+    uploaded_by TEXT NOT NULL,
+    uploaded_at TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'waiting',
+    checked_at TEXT NOT NULL,
+    cash TEXT NOT NULL DEFAULT '[]',
+    released_at TEXT,
+    cancelled_by TEXT,
+    cancel_note TEXT
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS one_waiting_run ON runs(state) WHERE state = 'waiting';
+  CREATE UNIQUE INDEX IF NOT EXISTS one_live_run_per_file
+    ON runs(file_hash) WHERE state <> 'cancelled';
+  CREATE TABLE IF NOT EXISTS run_rows (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES runs(id),
+    line INTEGER NOT NULL,
+    cells TEXT NOT NULL,
+    invoice_id TEXT,
+    supplier TEXT,
+    beneficiary_id TEXT,
+    currency TEXT,
+    amount_minor INTEGER,
+    transfer_method TEXT,
+    sandbox_outcome TEXT NOT NULL,
+    action TEXT NOT NULL,
+    reasons TEXT NOT NULL DEFAULT '[]',
+    held_for TEXT NOT NULL DEFAULT '[]',
+    new_payee INTEGER NOT NULL DEFAULT 0,
+    bank_change_id INTEGER,
+    payee TEXT,
+    pay_to TEXT,
+    account_key TEXT,
+    state TEXT NOT NULL DEFAULT 'waiting',
+    note TEXT,
+    UNIQUE (run_id, line)
+  );
+  CREATE TABLE IF NOT EXISTS run_approvals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES runs(id),
+    binding TEXT NOT NULL,
+    terms TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'requested',
+    approver TEXT,
+    requested_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    needed INTEGER NOT NULL DEFAULT 1,
+    needed_why TEXT NOT NULL DEFAULT ''
+  );
+  CREATE TABLE IF NOT EXISTS run_signoffs (
+    approval_id INTEGER NOT NULL REFERENCES run_approvals(id),
+    approver TEXT NOT NULL,
+    binding TEXT NOT NULL,
+    at TEXT NOT NULL
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS one_run_signoff_per_approver
+    ON run_signoffs(approval_id, approver);
+  CREATE TABLE IF NOT EXISTS run_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES runs(id),
+    at TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    message TEXT NOT NULL,
+    topic TEXT
+  );
+  CREATE INDEX IF NOT EXISTS run_events_by_run ON run_events(run_id, id);
+  CREATE TABLE IF NOT EXISTS currency_locks (
+    currency TEXT PRIMARY KEY,
+    holder TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+  );
 `;
 
 // rejected is an invoice a person closed without paying, because it was a second
@@ -180,6 +256,8 @@ export interface Obligation extends NewObligation {
   duplicateOf: string[];
   // Who closed it without paying, if anyone ever did.
   rejectedBy: string | null;
+  // The pay run row it was released from. Null for any other invoice.
+  runRowId: number | null;
 }
 
 export interface Attempt {
@@ -305,6 +383,7 @@ interface ObligationRow {
   payout_reference: string | null;
   duplicate_of: string | null;
   rejected_by: string | null;
+  run_row_id: number | null;
 }
 
 // A person's callback to the supplier on the number on file, and the bank
@@ -455,6 +534,7 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     // A JSON list of invoice numbers, set when the invoice is held as a duplicate.
     duplicate_of: "TEXT",
     rejected_by: "TEXT",
+    run_row_id: "INTEGER",
   },
   approvals: {
     requested_at: "TEXT",
@@ -466,6 +546,9 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     reference: "TEXT",
     fee_minor: "INTEGER",
     fee_currency: "TEXT",
+    // 1 when the transfer went to other bank details than the ones it was
+    // approved or decided for, so it never counts as the account PayOnce last paid.
+    misdirected: "INTEGER NOT NULL DEFAULT 0",
   },
   events: {
     topic: "TEXT",
@@ -514,6 +597,17 @@ function isUniqueViolation(error: unknown): boolean {
   );
 }
 
+// An invoice number is the primary key of obligations, and SQLite reports a
+// second one with its own code.
+function isPrimaryKeyViolation(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "errcode" in error &&
+    error.errcode === SQLITE_CONSTRAINT_PRIMARYKEY
+  );
+}
+
 function toObligation(row: ObligationRow): Obligation {
   return {
     invoiceId: row.invoice_id,
@@ -532,6 +626,7 @@ function toObligation(row: ObligationRow): Obligation {
     payoutReference: row.payout_reference,
     duplicateOf: row.duplicate_of === null ? [] : (JSON.parse(row.duplicate_of) as string[]),
     rejectedBy: row.rejected_by,
+    runRowId: row.run_row_id,
   };
 }
 
@@ -578,13 +673,14 @@ function toApproval(row: ApprovalRow, signoffs: Signoff[]): Approval {
 }
 
 // When a request stops covering a payment, in epoch milliseconds. One recorded
-// before requests expired counts as expired already.
-export function expiryOf(approval: Approval): number {
+// before requests expired counts as expired already. Works for invoice and run
+// requests alike.
+export function expiryOf(approval: { expiresAt: string | null }): number {
   const at: number = approval.expiresAt === null ? Number.NaN : Date.parse(approval.expiresAt);
   return Number.isFinite(at) ? at : 0;
 }
 
-export function isExpired(approval: Approval, now: number = Date.now()): boolean {
+export function isExpired(approval: { expiresAt: string | null }, now: number = Date.now()): boolean {
   return expiryOf(approval) <= now;
 }
 
@@ -594,6 +690,259 @@ export function signersOf(signoffs: Signoff[]): string {
   return names.length <= 1
     ? (names[0] ?? "")
     : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+}
+
+// The message for an invoice number the ledger already has.
+export function alreadyInLedger(invoiceId: string): string {
+  return `${invoiceId} is already in the ledger, and PayOnce pays an invoice number once`;
+}
+
+export type RunState = "waiting" | "released" | "cancelled";
+// A pay row is paid when the run is released. A skip row never is.
+export type RunRowAction = "pay" | "skip";
+// released is a row written into the ledger as an invoice. dropped is a pay row
+// that never was: its invoice number was taken by then, or the run was cancelled.
+export type RunRowState = "waiting" | "released" | "dropped";
+
+export interface NewRun {
+  fileName: string;
+  fileHash: string;
+  // The file's header, in order, so its rows can be read again from their cells.
+  columns: string[];
+  uploadedBy: string;
+  // JSON: the cash check of the last check, per currency.
+  cash: string;
+}
+
+export interface Run extends NewRun {
+  id: number;
+  uploadedAt: string;
+  state: RunState;
+  checkedAt: string;
+  releasedAt: string | null;
+  cancelledBy: string | null;
+  cancelNote: string | null;
+}
+
+// A row as the last check left it.
+export interface CheckedRow {
+  line: number;
+  cells: string[];
+  invoiceId: string | null;
+  supplier: string | null;
+  beneficiaryId: string | null;
+  currency: string | null;
+  amountMinor: number | null;
+  transferMethod: TransferMethod | null;
+  sandboxOutcome: string;
+  action: RunRowAction;
+  // Why a skip row is skipped.
+  reasons: string[];
+  // Invoices in the ledger the row looks like a second bill for. PayOnce holds it
+  // for a person when it comes to send it.
+  heldFor: string[];
+  newPayee: boolean;
+  // The callback that verified the account on file, when it is not the one
+  // PayOnce last paid.
+  bankChangeId: number | null;
+  // The account name on the beneficiary record. The invoice is recorded under it.
+  payee: string | null;
+  payTo: string | null;
+  accountKey: string | null;
+}
+
+export interface RunRow extends CheckedRow {
+  id: number;
+  runId: number;
+  state: RunRowState;
+  // Why a dropped row was not released.
+  note: string | null;
+}
+
+// A request to approve a run, shaped like an invoice's.
+export interface RunApproval {
+  id: number;
+  runId: number;
+  binding: string;
+  terms: string;
+  state: ApprovalState;
+  approver: string | null;
+  requestedAt: string;
+  expiresAt: string;
+  needed: number;
+  neededWhy: string;
+  signoffs: Signoff[];
+}
+
+// A pay row the release writes as an invoice.
+export interface ReleaseRow {
+  rowId: number;
+  line: number;
+  invoiceId: string;
+  payee: string;
+  beneficiaryId: string;
+  currency: string;
+  amountMinor: number;
+  transferMethod: TransferMethod;
+  // The invoice's first timeline line, chained like any other.
+  firstLine: string;
+}
+
+export interface ReleasedRun {
+  released: string[];
+  dropped: { line: number; invoiceId: string }[];
+}
+
+// Money a pay run has promised and not opened a payment for: a pay row of a
+// waiting run whose approval is approved, or a released row whose invoice is
+// open with no attempt yet.
+export interface PayRunRow {
+  runId: number;
+  invoiceId: string;
+  beneficiaryId: string;
+  currency: string;
+  amountMinor: number;
+  transferMethod: TransferMethod;
+}
+
+interface PayRunRecord {
+  run_id: number;
+  invoice_id: string;
+  beneficiary_id: string;
+  currency: string;
+  amount_minor: number;
+  transfer_method: TransferMethod;
+}
+
+interface RunRowRecord {
+  id: number;
+  run_id: number;
+  line: number;
+  cells: string;
+  invoice_id: string | null;
+  supplier: string | null;
+  beneficiary_id: string | null;
+  currency: string | null;
+  amount_minor: number | null;
+  transfer_method: TransferMethod | null;
+  sandbox_outcome: string;
+  action: RunRowAction;
+  reasons: string;
+  held_for: string;
+  new_payee: number;
+  bank_change_id: number | null;
+  payee: string | null;
+  pay_to: string | null;
+  account_key: string | null;
+  state: RunRowState;
+  note: string | null;
+}
+
+interface RunRecord {
+  id: number;
+  file_name: string;
+  file_hash: string;
+  columns: string;
+  uploaded_by: string;
+  uploaded_at: string;
+  state: RunState;
+  checked_at: string;
+  cash: string;
+  released_at: string | null;
+  cancelled_by: string | null;
+  cancel_note: string | null;
+}
+
+interface RunApprovalRow {
+  id: number;
+  run_id: number;
+  binding: string;
+  terms: string;
+  state: ApprovalState;
+  approver: string | null;
+  requested_at: string;
+  expires_at: string;
+  needed: number;
+  needed_why: string;
+}
+
+function toRun(row: RunRecord): Run {
+  return {
+    id: row.id,
+    fileName: row.file_name,
+    fileHash: row.file_hash,
+    columns: JSON.parse(row.columns) as string[],
+    uploadedBy: row.uploaded_by,
+    uploadedAt: row.uploaded_at,
+    state: row.state,
+    checkedAt: row.checked_at,
+    cash: row.cash,
+    releasedAt: row.released_at,
+    cancelledBy: row.cancelled_by,
+    cancelNote: row.cancel_note,
+  };
+}
+
+function toRunRow(row: RunRowRecord): RunRow {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    line: row.line,
+    cells: JSON.parse(row.cells) as string[],
+    invoiceId: row.invoice_id,
+    supplier: row.supplier,
+    beneficiaryId: row.beneficiary_id,
+    currency: row.currency,
+    amountMinor: row.amount_minor,
+    transferMethod: row.transfer_method,
+    sandboxOutcome: row.sandbox_outcome,
+    action: row.action,
+    reasons: JSON.parse(row.reasons) as string[],
+    heldFor: JSON.parse(row.held_for) as string[],
+    newPayee: row.new_payee === 1,
+    bankChangeId: row.bank_change_id,
+    payee: row.payee,
+    payTo: row.pay_to,
+    accountKey: row.account_key,
+    state: row.state,
+    note: row.note,
+  };
+}
+
+// Another run is waiting for approval, and PayOnce takes one at a time.
+export class WaitingRunError extends Error {
+  readonly runId: number;
+
+  constructor(runId: number) {
+    super(`Run ${runId} is still waiting for approval. Cancel it or wait until it is released`);
+    this.name = "WaitingRunError";
+    this.runId = runId;
+  }
+}
+
+// The same file is a run already, waiting or released.
+export class SameFileError extends Error {
+  readonly runId: number;
+
+  constructor(run: Run) {
+    super(
+      `This file is run ${run.id}, uploaded by ${run.uploadedBy} at ${run.uploadedAt}, ${run.state === "released" ? "released" : "waiting for approval"}`,
+    );
+    this.name = "SameFileError";
+    this.runId = run.id;
+  }
+}
+
+// Every row of the file is skipped, so there is nothing to approve. rows says why
+// each was skipped.
+export class NothingToPayError extends Error {
+  readonly rows: CheckedRow[];
+
+  constructor(rows: CheckedRow[]) {
+    super("Nothing to pay: every row of the file is skipped");
+    this.name = "NothingToPayError";
+    this.rows = rows;
+  }
 }
 
 export class Ledger {
@@ -762,47 +1111,71 @@ export class Ledger {
     message: string,
     topic: string | null = null,
   ): void {
-    // Hashed as it will read back from the file.
-    const invoice: string = storable(invoiceId);
+    this.transaction((): void => {
+      this.appendEvent(invoiceId, kind, message, topic);
+    });
+  }
+
+  // Runs fn in one write transaction and commits it, or rolls it all back if fn
+  // throws. Steps that open a transaction of their own cannot run inside one, so
+  // a nested call throws instead of failing part way.
+  transaction<T>(fn: () => T): T {
+    if (this.db.isTransaction) {
+      throw new Error("A ledger transaction is already open");
+    }
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      const last: HashRow | undefined = this.db
-        .prepare(
-          `SELECT hash FROM events WHERE invoice_id = ? AND hash IS NOT NULL
-            ORDER BY id DESC LIMIT 1`,
-        )
-        .get(invoice) as unknown as HashRow | undefined;
-      const prevHash: string = last?.hash ?? GENESIS;
-      const line: EventFields = {
-        invoiceId: invoice,
-        at: new Date().toISOString(),
-        kind,
-        message: storable(message),
-        topic: topic === null ? null : storable(topic),
-      };
-      const hash: string = eventHash(prevHash, line);
-      this.db
-        .prepare(
-          `INSERT INTO events (invoice_id, at, kind, message, topic, prev_hash, hash)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(line.invoiceId, line.at, line.kind, line.message, line.topic, prevHash, hash);
-      // A missing running hash starts again from the genesis, and the audit then
-      // reports it as not matching.
-      this.db
-        .prepare(
-          `INSERT INTO meta (key, value) VALUES (?, ?)
-           ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-        )
-        .run(
-          LEDGER_HEAD_KEY,
-          nextLedgerHead(this.metaValue(LEDGER_HEAD_KEY) ?? GENESIS, hash),
-        );
+      const result: T = fn();
       this.db.exec("COMMIT");
+      return result;
     } catch (error: unknown) {
       this.db.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  // Chains one line to the invoice's timeline. The caller holds the write
+  // transaction.
+  private appendEvent(
+    invoiceId: string,
+    kind: EventKind,
+    message: string,
+    topic: string | null,
+  ): void {
+    // Hashed as it will read back from the file.
+    const invoice: string = storable(invoiceId);
+    const last: HashRow | undefined = this.db
+      .prepare(
+        `SELECT hash FROM events WHERE invoice_id = ? AND hash IS NOT NULL
+          ORDER BY id DESC LIMIT 1`,
+      )
+      .get(invoice) as unknown as HashRow | undefined;
+    const prevHash: string = last?.hash ?? GENESIS;
+    const line: EventFields = {
+      invoiceId: invoice,
+      at: new Date().toISOString(),
+      kind,
+      message: storable(message),
+      topic: topic === null ? null : storable(topic),
+    };
+    const hash: string = eventHash(prevHash, line);
+    this.db
+      .prepare(
+        `INSERT INTO events (invoice_id, at, kind, message, topic, prev_hash, hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(line.invoiceId, line.at, line.kind, line.message, line.topic, prevHash, hash);
+    // A missing running hash starts again from the genesis, and the audit then
+    // reports it as not matching.
+    this.db
+      .prepare(
+        `INSERT INTO meta (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      )
+      .run(
+        LEDGER_HEAD_KEY,
+        nextLedgerHead(this.metaValue(LEDGER_HEAD_KEY) ?? GENESIS, hash),
+      );
   }
 
   // What an audit checks, read in one transaction so a line another process adds
@@ -1564,5 +1937,573 @@ export class Ledger {
     // Nothing is left to approve on a settled invoice.
     this.voidOpenApprovals(invoiceId);
     return true;
+  }
+
+  // A transfer that went to other bank details than the ones it was approved or
+  // decided for.
+  markMisdirected(requestId: string): void {
+    this.db.prepare("UPDATE attempts SET misdirected = 1 WHERE request_id = ?").run(requestId);
+  }
+
+  // The latest payment PayOnce sent this beneficiary that the bank paid, to the
+  // details it was meant for. Payouts sent outside PayOnce do not count, so a
+  // record changed and paid in the web app does not become the account on file.
+  lastPaidTransfer(beneficiaryId: string): { transferId: string; reference: string | null } | undefined {
+    const row: { transfer_id: string; reference: string | null } | undefined = this.db
+      .prepare(
+        `SELECT attempts.transfer_id, attempts.reference FROM attempts
+           JOIN obligations ON obligations.invoice_id = attempts.invoice_id
+          WHERE obligations.beneficiary_id = ? AND obligations.origin = 'payonce'
+            AND attempts.state = 'paid' AND attempts.transfer_id IS NOT NULL
+            AND attempts.misdirected = 0
+          ORDER BY attempts.rowid DESC LIMIT 1`,
+      )
+      .get(beneficiaryId) as unknown as { transfer_id: string; reference: string | null } | undefined;
+    return row === undefined ? undefined : { transferId: row.transfer_id, reference: row.reference };
+  }
+
+  bankChange(id: number): BankChange | undefined {
+    const row: BankChangeRow | undefined = this.db
+      .prepare("SELECT * FROM bank_changes WHERE id = ?")
+      .get(id) as unknown as BankChangeRow | undefined;
+    return row === undefined ? undefined : toBankChange(row);
+  }
+
+  // ---------- pay runs ----------
+
+  run(id: number): Run | undefined {
+    const row: RunRecord | undefined = this.db
+      .prepare("SELECT * FROM runs WHERE id = ?")
+      .get(id) as unknown as RunRecord | undefined;
+    return row === undefined ? undefined : toRun(row);
+  }
+
+  // Newest first.
+  runs(): Run[] {
+    return (
+      this.db.prepare("SELECT * FROM runs ORDER BY id DESC").all() as unknown as RunRecord[]
+    ).map(toRun);
+  }
+
+  waitingRun(): Run | undefined {
+    const row: RunRecord | undefined = this.db
+      .prepare("SELECT * FROM runs WHERE state = 'waiting' LIMIT 1")
+      .get() as unknown as RunRecord | undefined;
+    return row === undefined ? undefined : toRun(row);
+  }
+
+  // The run made from this file that is not cancelled, if any.
+  liveRunForFile(fileHash: string): Run | undefined {
+    const row: RunRecord | undefined = this.db
+      .prepare("SELECT * FROM runs WHERE file_hash = ? AND state <> 'cancelled' LIMIT 1")
+      .get(fileHash) as unknown as RunRecord | undefined;
+    return row === undefined ? undefined : toRun(row);
+  }
+
+  // In file order.
+  runRows(runId: number): RunRow[] {
+    return (
+      this.db
+        .prepare("SELECT * FROM run_rows WHERE run_id = ? ORDER BY line")
+        .all(runId) as unknown as RunRowRecord[]
+    ).map(toRunRow);
+  }
+
+  runRow(id: number): RunRow | undefined {
+    const row: RunRowRecord | undefined = this.db
+      .prepare("SELECT * FROM run_rows WHERE id = ?")
+      .get(id) as unknown as RunRowRecord | undefined;
+    return row === undefined ? undefined : toRunRow(row);
+  }
+
+  // The run row an invoice was released from.
+  runRowOf(invoiceId: string): RunRow | undefined {
+    const row: RunRowRecord | undefined = this.db
+      .prepare(
+        `SELECT run_rows.* FROM run_rows
+           JOIN obligations ON obligations.run_row_id = run_rows.id
+          WHERE obligations.invoice_id = ?`,
+      )
+      .get(invoiceId) as unknown as RunRowRecord | undefined;
+    return row === undefined ? undefined : toRunRow(row);
+  }
+
+  // A pay row of the run waiting for approval with this invoice number.
+  waitingRunRow(invoiceId: string): RunRow | undefined {
+    const row: RunRowRecord | undefined = this.db
+      .prepare(
+        `SELECT run_rows.* FROM run_rows JOIN runs ON runs.id = run_rows.run_id
+          WHERE runs.state = 'waiting' AND run_rows.action = 'pay'
+            AND run_rows.invoice_id = ? LIMIT 1`,
+      )
+      .get(invoiceId) as unknown as RunRowRecord | undefined;
+    return row === undefined ? undefined : toRunRow(row);
+  }
+
+  private insertRunRow(runId: number, row: CheckedRow): void {
+    this.db
+      .prepare(
+        `INSERT INTO run_rows
+           (run_id, line, cells, invoice_id, supplier, beneficiary_id, currency, amount_minor,
+            transfer_method, sandbox_outcome, action, reasons, held_for, new_payee,
+            bank_change_id, payee, pay_to, account_key)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        runId,
+        row.line,
+        JSON.stringify(row.cells),
+        row.invoiceId,
+        row.supplier,
+        row.beneficiaryId,
+        row.currency,
+        row.amountMinor,
+        row.transferMethod,
+        row.sandboxOutcome,
+        row.action,
+        JSON.stringify(row.reasons),
+        JSON.stringify(row.heldFor),
+        row.newPayee ? 1 : 0,
+        row.bankChangeId,
+        row.payee,
+        row.payTo,
+        row.accountKey,
+      );
+  }
+
+  // Stores a checked file as a run waiting for approval, in one write transaction.
+  // A row whose invoice number reached the ledger since the check is skipped
+  // here, under the write lock. Throws WaitingRunError while another run waits,
+  // SameFileError for a file that is a run already, and NothingToPayError when no
+  // row is left to pay.
+  createRun(input: NewRun, rows: CheckedRow[]): number {
+    return this.transaction((): number => {
+      const waiting: Run | undefined = this.waitingRun();
+      if (waiting !== undefined) {
+        throw new WaitingRunError(waiting.id);
+      }
+      const same: Run | undefined = this.liveRunForFile(input.fileHash);
+      if (same !== undefined) {
+        throw new SameFileError(same);
+      }
+      const checked: CheckedRow[] = rows.map((row: CheckedRow): CheckedRow =>
+        row.action === "pay" && row.invoiceId !== null && this.obligation(row.invoiceId) !== undefined
+          ? { ...row, action: "skip", reasons: [alreadyInLedger(row.invoiceId)], heldFor: [] }
+          : row,
+      );
+      if (!checked.some((row: CheckedRow): boolean => row.action === "pay")) {
+        throw new NothingToPayError(checked);
+      }
+      const now: string = new Date().toISOString();
+      const result: { lastInsertRowid: number | bigint } = this.db
+        .prepare(
+          `INSERT INTO runs (file_name, file_hash, columns, uploaded_by, uploaded_at, checked_at, cash)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          input.fileName,
+          input.fileHash,
+          JSON.stringify(input.columns),
+          input.uploadedBy,
+          now,
+          now,
+          input.cash,
+        );
+      const runId: number = Number(result.lastInsertRowid);
+      for (const row of checked) {
+        this.insertRunRow(runId, row);
+      }
+      return runId;
+    });
+  }
+
+  // What a check found, written over the rows of a run still waiting. False when
+  // the run is no longer waiting.
+  setRunRows(runId: number, rows: CheckedRow[], cash: string): boolean {
+    return this.transaction((): boolean => {
+      const updated: { changes: number | bigint } = this.db
+        .prepare("UPDATE runs SET checked_at = ?, cash = ? WHERE id = ? AND state = 'waiting'")
+        .run(new Date().toISOString(), cash, runId);
+      if (Number(updated.changes) !== 1) {
+        return false;
+      }
+      const update: StatementSync = this.db.prepare(
+        `UPDATE run_rows SET invoice_id = ?, supplier = ?, beneficiary_id = ?, currency = ?,
+                amount_minor = ?, transfer_method = ?, sandbox_outcome = ?, action = ?,
+                reasons = ?, held_for = ?, new_payee = ?, bank_change_id = ?, payee = ?,
+                pay_to = ?, account_key = ?
+          WHERE run_id = ? AND line = ?`,
+      );
+      for (const row of rows) {
+        update.run(
+          row.invoiceId,
+          row.supplier,
+          row.beneficiaryId,
+          row.currency,
+          row.amountMinor,
+          row.transferMethod,
+          row.sandboxOutcome,
+          row.action,
+          JSON.stringify(row.reasons),
+          JSON.stringify(row.heldFor),
+          row.newPayee ? 1 : 0,
+          row.bankChangeId,
+          row.payee,
+          row.payTo,
+          row.accountKey,
+          runId,
+          row.line,
+        );
+      }
+      return true;
+    });
+  }
+
+  // Cancels a run still waiting, voids its open request and drops its rows, so
+  // their invoice numbers are free again. False when it is not waiting.
+  cancelRun(runId: number, cancelledBy: string, note: string): boolean {
+    return this.transaction((): boolean => {
+      const result: { changes: number | bigint } = this.db
+        .prepare(
+          `UPDATE runs SET state = 'cancelled', cancelled_by = ?, cancel_note = ?
+            WHERE id = ? AND state = 'waiting'`,
+        )
+        .run(cancelledBy, note, runId);
+      if (Number(result.changes) !== 1) {
+        return false;
+      }
+      this.voidOpenRunApprovals(runId);
+      this.db
+        .prepare(
+          `UPDATE run_rows SET state = 'dropped', note = 'the run was cancelled'
+            WHERE run_id = ? AND action = 'pay' AND state = 'waiting'`,
+        )
+        .run(runId);
+      return true;
+    });
+  }
+
+  // Spends the run's approval, marks the run released and writes each pay row as
+  // an invoice with its first chained timeline line, all in one write
+  // transaction, so a run is never half released and an approval is never spent
+  // twice. A row whose invoice number another invoice took since the check is
+  // dropped and not released. Undefined, with nothing changed, when the approval
+  // is no longer approved or has expired, or the run is no longer waiting.
+  releaseRun(
+    runId: number,
+    approvalId: number,
+    uploadedBy: string,
+    rows: ReleaseRow[],
+    runLine: string,
+  ): ReleasedRun | undefined {
+    return this.transaction((): ReleasedRun | undefined => {
+      const now: string = new Date().toISOString();
+      // Read under the write lock, so nothing can change between this and the
+      // updates.
+      const ready: unknown = this.db
+        .prepare(
+          `SELECT 1 FROM run_approvals JOIN runs ON runs.id = run_approvals.run_id
+            WHERE run_approvals.id = ? AND run_approvals.run_id = ?
+              AND run_approvals.state = 'approved' AND run_approvals.expires_at > ?
+              AND runs.state = 'waiting'`,
+        )
+        .get(approvalId, runId, now);
+      if (ready === undefined) {
+        return undefined;
+      }
+      this.db.prepare("UPDATE run_approvals SET state = 'used' WHERE id = ?").run(approvalId);
+      this.db
+        .prepare("UPDATE runs SET state = 'released', released_at = ? WHERE id = ?")
+        .run(now, runId);
+      this.addRunEventRow(runId, "payment", runLine, null);
+      const result: ReleasedRun = { released: [], dropped: [] };
+      for (const row of rows) {
+        this.db.exec("SAVEPOINT release_row");
+        try {
+          // A plain INSERT, so an invoice number taken since the check fails here.
+          this.db
+            .prepare(
+              `INSERT INTO obligations
+                 (invoice_id, supplier, supplier_domain, beneficiary_id, currency, amount_minor,
+                  transfer_method, invoice_floor_minor, started_by, supplier_phone, run_row_id,
+                  look_at)
+               VALUES (?, ?, '', ?, ?, ?, ?, 0, ?, NULL, ?, ?)`,
+            )
+            .run(
+              row.invoiceId,
+              row.payee,
+              row.beneficiaryId,
+              row.currency,
+              row.amountMinor,
+              row.transferMethod,
+              uploadedBy,
+              row.rowId,
+              now,
+            );
+          this.db
+            .prepare("UPDATE run_rows SET state = 'released' WHERE id = ? AND state = 'waiting'")
+            .run(row.rowId);
+          this.appendEvent(row.invoiceId, "approval", row.firstLine, null);
+          this.db.exec("RELEASE release_row");
+          result.released.push(row.invoiceId);
+        } catch (error: unknown) {
+          this.db.exec("ROLLBACK TO release_row");
+          this.db.exec("RELEASE release_row");
+          if (!isUniqueViolation(error) && !isPrimaryKeyViolation(error)) {
+            throw error;
+          }
+          this.db
+            .prepare(
+              `UPDATE run_rows SET state = 'dropped', note = ?
+                WHERE id = ? AND state = 'waiting'`,
+            )
+            .run(`PayOnce already had ${row.invoiceId} when the run was released`, row.rowId);
+          result.dropped.push({ line: row.line, invoiceId: row.invoiceId });
+        }
+      }
+      return result;
+    });
+  }
+
+  private addRunEventRow(runId: number, kind: EventKind, message: string, topic: string | null): void {
+    this.db
+      .prepare("INSERT INTO run_events (run_id, at, kind, message, topic) VALUES (?, ?, ?, ?, ?)")
+      .run(runId, new Date().toISOString(), kind, message, topic);
+  }
+
+  // A run's timeline is not hash-chained. Each released invoice's first line, which
+  // is, records the run and the approval that released it.
+  addRunEvent(runId: number, kind: EventKind, message: string, topic: string | null = null): void {
+    this.addRunEventRow(runId, kind, message, topic);
+  }
+
+  runEvents(runId: number): LedgerEvent[] {
+    return this.db
+      .prepare("SELECT id, at, kind, message, topic FROM run_events WHERE run_id = ? ORDER BY id")
+      .all(runId) as unknown as LedgerEvent[];
+  }
+
+  // Run approvals are kept apart from invoice approvals, because a run has no
+  // invoice until it is released. The methods copy the invoice ones.
+
+  voidOpenRunApprovals(runId: number): boolean {
+    const result: { changes: number | bigint } = this.db
+      .prepare(
+        `UPDATE run_approvals SET state = 'void'
+          WHERE run_id = ? AND state IN ('requested', 'approved')`,
+      )
+      .run(runId);
+    return Number(result.changes) > 0;
+  }
+
+  // A new request voids any earlier one for the run that is still open. Only a
+  // run still waiting gets one. False when none was opened.
+  requestRunApproval(runId: number, request: ApprovalRequest): boolean {
+    return this.transaction((): boolean => {
+      this.voidOpenRunApprovals(runId);
+      const result: { changes: number | bigint } = this.db
+        .prepare(
+          `INSERT INTO run_approvals
+             (run_id, binding, terms, requested_at, expires_at, needed, needed_why)
+           SELECT ?, ?, ?, ?, ?, ?, ?
+            WHERE EXISTS (SELECT 1 FROM runs WHERE id = ? AND state = 'waiting')`,
+        )
+        .run(
+          runId,
+          request.binding,
+          request.terms,
+          new Date().toISOString(),
+          new Date(request.expiresAt).toISOString(),
+          request.needed,
+          request.neededWhy,
+          runId,
+        );
+      return Number(result.changes) === 1;
+    });
+  }
+
+  private runSignoffs(approvalId: number): Signoff[] {
+    return this.db
+      .prepare(
+        "SELECT approver, binding, at FROM run_signoffs WHERE approval_id = ? ORDER BY rowid",
+      )
+      .all(approvalId) as unknown as Signoff[];
+  }
+
+  private toRunApproval(row: RunApprovalRow): RunApproval {
+    return {
+      id: row.id,
+      runId: row.run_id,
+      binding: row.binding,
+      terms: row.terms,
+      state: row.state,
+      approver: row.approver,
+      requestedAt: row.requested_at,
+      expiresAt: row.expires_at,
+      needed: row.needed,
+      neededWhy: row.needed_why,
+      signoffs: this.runSignoffs(row.id),
+    };
+  }
+
+  latestRunApproval(runId: number): RunApproval | undefined {
+    const row: RunApprovalRow | undefined = this.db
+      .prepare("SELECT * FROM run_approvals WHERE run_id = ? ORDER BY id DESC LIMIT 1")
+      .get(runId) as unknown as RunApprovalRow | undefined;
+    return row === undefined ? undefined : this.toRunApproval(row);
+  }
+
+  // Records one approver's approval of a run request that is still waiting and
+  // has not expired, for the binding they were shown, as signOff does for an
+  // invoice. Returns the request as it now stands.
+  signOffRun(
+    approvalId: number,
+    approver: string,
+    binding: string,
+    useWithinMs: number,
+  ): RunApproval {
+    this.transaction((): void => {
+      const row: RunApprovalRow | undefined = this.db
+        .prepare("SELECT * FROM run_approvals WHERE id = ?")
+        .get(approvalId) as unknown as RunApprovalRow | undefined;
+      if (row === undefined || row.state !== "requested") {
+        throw new Error("This approval request is no longer waiting for approval");
+      }
+      if (row.binding !== binding) {
+        throw new Error("These are not the terms of the approval request");
+      }
+      const expiresAt: number = Date.parse(row.expires_at);
+      if (!(expiresAt > Date.now())) {
+        throw new Error("This approval request has expired. Check the run again to open a new one");
+      }
+      try {
+        this.db
+          .prepare(
+            "INSERT INTO run_signoffs (approval_id, approver, binding, at) VALUES (?, ?, ?, ?)",
+          )
+          .run(approvalId, approver, binding, new Date().toISOString());
+      } catch (error: unknown) {
+        if (isUniqueViolation(error)) {
+          throw new Error(`${approver} has approved this already`);
+        }
+        throw error;
+      }
+      const signoffs: Signoff[] = this.runSignoffs(approvalId);
+      if (signoffs.length >= row.needed) {
+        const useBy: number = Math.max(expiresAt, Date.now() + useWithinMs);
+        this.db
+          .prepare(
+            "UPDATE run_approvals SET state = 'approved', approver = ?, expires_at = ? WHERE id = ?",
+          )
+          .run(signersOf(signoffs), new Date(useBy).toISOString(), approvalId);
+      }
+    });
+    const row: RunApprovalRow = this.db
+      .prepare("SELECT * FROM run_approvals WHERE id = ?")
+      .get(approvalId) as unknown as RunApprovalRow;
+    return this.toRunApproval(row);
+  }
+
+  setRunApprovalState(id: number, state: ApprovalState): void {
+    this.db.prepare("UPDATE run_approvals SET state = ? WHERE id = ?").run(state, id);
+  }
+
+  // Waiting runs whose latest request is approved, for the server to release.
+  approvedRuns(): number[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT runs.id FROM runs
+            WHERE runs.state = 'waiting'
+              AND (SELECT state FROM run_approvals WHERE run_id = runs.id
+                    ORDER BY id DESC LIMIT 1) = 'approved'`,
+        )
+        .all() as unknown as { id: number }[]
+    ).map((row: { id: number }): number => row.id);
+  }
+
+  // Released invoices that have not opened their first payment yet, by run, in
+  // file order.
+  unsentRunInvoices(): { invoiceId: string; runId: number }[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT obligations.invoice_id, run_rows.run_id FROM obligations
+             JOIN run_rows ON run_rows.id = obligations.run_row_id
+            WHERE obligations.state = 'open'
+              AND NOT EXISTS (SELECT 1 FROM attempts WHERE attempts.invoice_id = obligations.invoice_id)
+            ORDER BY run_rows.run_id, run_rows.line`,
+        )
+        .all() as unknown as { invoice_id: string; run_id: number }[]
+    ).map((row: { invoice_id: string; run_id: number }): { invoiceId: string; runId: number } => ({
+      invoiceId: row.invoice_id,
+      runId: row.run_id,
+    }));
+  }
+
+  // Money pay runs have promised and not opened a payment for. Both kinds are read
+  // from the state of the rows, so a row stops counting in the transaction that
+  // opens its attempt.
+  payRunRows(now: number = Date.now()): PayRunRow[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT run_rows.run_id, run_rows.invoice_id, run_rows.beneficiary_id, run_rows.currency,
+                  run_rows.amount_minor, run_rows.transfer_method
+             FROM run_rows JOIN runs ON runs.id = run_rows.run_id
+            WHERE runs.state = 'waiting' AND run_rows.action = 'pay' AND run_rows.state = 'waiting'
+              AND EXISTS (SELECT 1 FROM run_approvals a WHERE a.run_id = runs.id
+                           AND a.state = 'approved' AND a.expires_at > ?
+                           AND a.id = (SELECT MAX(id) FROM run_approvals WHERE run_id = runs.id))
+           UNION ALL
+           SELECT run_rows.run_id, obligations.invoice_id, obligations.beneficiary_id,
+                  obligations.currency, obligations.amount_minor, obligations.transfer_method
+             FROM obligations JOIN run_rows ON run_rows.id = obligations.run_row_id
+            WHERE obligations.state = 'open'
+              AND NOT EXISTS (SELECT 1 FROM attempts WHERE attempts.invoice_id = obligations.invoice_id)`,
+        )
+        .all(new Date(now).toISOString()) as unknown as PayRunRecord[]
+    ).map((row: PayRunRecord): PayRunRow => ({
+      runId: row.run_id,
+      invoiceId: row.invoice_id,
+      beneficiaryId: row.beneficiary_id,
+      currency: row.currency,
+      amountMinor: row.amount_minor,
+      transferMethod: row.transfer_method,
+    }));
+  }
+
+  // ---------- the per-currency lock ----------
+
+  // Takes the lease on a currency for holder until the given time, if nobody
+  // holds it or the last holder's lease has run out. True when taken.
+  takeCurrencyLock(currency: string, holder: string, until: number): boolean {
+    return this.transaction((): boolean => {
+      const now: string = new Date().toISOString();
+      const result: { changes: number | bigint } = this.db
+        .prepare(
+          `INSERT INTO currency_locks (currency, holder, expires_at) VALUES (?, ?, ?)
+           ON CONFLICT(currency) DO UPDATE SET holder = excluded.holder,
+                                               expires_at = excluded.expires_at
+            WHERE currency_locks.expires_at <= ?`,
+        )
+        .run(currency, holder, new Date(until).toISOString(), now);
+      return Number(result.changes) === 1;
+    });
+  }
+
+  // False when holder no longer holds it, because the lease ran out and someone
+  // else took it.
+  renewCurrencyLock(currency: string, holder: string, until: number): boolean {
+    const result: { changes: number | bigint } = this.db
+      .prepare("UPDATE currency_locks SET expires_at = ? WHERE currency = ? AND holder = ?")
+      .run(new Date(until).toISOString(), currency, holder);
+    return Number(result.changes) === 1;
+  }
+
+  releaseCurrencyLock(currency: string, holder: string): void {
+    this.db
+      .prepare("DELETE FROM currency_locks WHERE currency = ? AND holder = ?")
+      .run(currency, holder);
   }
 }

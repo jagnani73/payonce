@@ -26,9 +26,18 @@ function record(ledger: Ledger, transfer: Transfer): void {
   );
 }
 
-// A 4xx means Airwallex refused the request and created nothing.
+const TOO_MANY_REQUESTS: number = 429;
+
+// A 4xx means Airwallex refused the request and created nothing. A 429 only says
+// to slow down, so like a 5xx it leaves the attempt pending, and a later look
+// tries it again under the same request_id.
 export function wasRejected(error: unknown): error is AirwallexError {
-  return error instanceof AirwallexError && error.status >= 400 && error.status < 500;
+  return (
+    error instanceof AirwallexError &&
+    error.status >= 400 &&
+    error.status < 500 &&
+    error.status !== TOO_MANY_REQUESTS
+  );
 }
 
 // Safe to call again for the same attempt: the request_id is reused, so Airwallex

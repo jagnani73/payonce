@@ -51,7 +51,7 @@ The reader is Gemini 3.5 Flash by default, with Gemini 3.1 Flash-Lite as a secon
 
 PayOnce writes every payment attempt to a SQLite ledger (`payonce.db`) before it creates the transfer. A unique index allows one attempt per invoice that has not failed, so the database refuses a second live payment. PayOnce can open a replacement only after the ledger records the original as failed.
 
-Each attempt keeps its `request_id`. A retry reuses it, and Airwallex then returns the transfer it already has. An incident closes only when one attempt is paid and every other attempt has failed.
+Each attempt keeps its `request_id`. A retry reuses it, and Airwallex then returns the transfer it already has. A 4xx from Airwallex marks the attempt failed, except a 429, which only asks PayOnce to slow down: like a 5xx, it leaves the attempt pending for the next look to retry. An incident closes only when one attempt is paid and every other attempt has failed.
 
 The Payments card has a "Pay again" button for the person who wants to send it once more to be sure. It opens a replacement attempt the way the agent would, inside a database transaction that is always rolled back. While a payment is live or paid, the lock refuses it and the timeline names the payment holding the lock. When every payment has failed there is nothing to refuse, but the button still sends nothing: a replacement goes through the policy, and through an approval once the invoice is with a person. Either way nothing reaches Airwallex.
 
@@ -144,7 +144,7 @@ A failed SWIFT transfer gets its amount back but not its fee, so a replacement p
 
 A currency that is not listed has no floor, and PayOnce never replaces a payment in it by itself. The incident goes to a person, the same way approvals are refused when `APPROVERS` is missing. To say on purpose that a currency needs no floor, list it with 0, as in `EUR:0`. If the setting cannot be read, every automatic replacement goes to a person. Floors are read when PayOnce starts, so a change needs a restart.
 
-New payments are not checked against the floor yet, only replacements.
+A single incident's first payment is not checked against the floor. A pay run's rows are, when the run is checked, again when it is released, and once more when each row is sent.
 
 ## Cash panel
 
@@ -158,9 +158,51 @@ The panel reads Airwallex at most every 30 seconds, and only while the page is o
 
 If a read fails, the panel keeps the last good one, shows its age and says why the newer one failed. If no read has worked yet, it shows no headroom, because a headroom worked out from a missing balance would be wrong.
 
-PayOnce reads each transfer's fee and keeps it in the ledger, and fills in older failed transfers a few at a time. The fee line is called "Fees on failed transfers", with a note that the sandbox keeps the fee when a transfer fails. That rests on what the sandbox did with failed EUR SWIFT transfers, so the panel does not claim every rail works this way. Pay runs are not built yet, and their line says so.
+PayOnce reads each transfer's fee and keeps it in the ledger, and fills in older failed transfers a few at a time. The fee line is called "Fees on failed transfers", with a note that the sandbox keeps the fee when a transfer fails. That rests on what the sandbox did with failed EUR SWIFT transfers, so the panel does not claim every rail works this way. The pay runs line takes off the rows of an approved run, and the released rows that have not sent their payment yet.
 
 `pnpm cash` prints the same figures in the terminal after one fresh read. It exits with 1 when Airwallex could not be read, the floor setting is unreadable or a headroom is below 0, so a script can check it.
+
+## Pay runs
+
+A pay run pays a batch of invoices from one CSV file on one approval. Upload the file on the page under "Pay run", or with `pnpm payrun upload <FILE> <NAME>`.
+
+```csv
+invoice,supplier,beneficiary_id,amount,currency,method,sandbox_outcome
+INV-RUN-1001,Example Supplier LLC,6170b987-3840-4825-8da6-c27671bd26ad,40.00,USD,LOCAL,PAID
+INV-RUN-1002,Example Supplier LLC,6170b987-3840-4825-8da6-c27671bd26ad,41.00,USD,LOCAL,ACCOUNT_CLOSED
+```
+
+`fixtures/pay-run-example.csv` is a sample. Its beneficiary ids belong to the sandbox account PayOnce was built on, so use your own.
+
+Each row names the beneficiary by its Airwallex id and gives the supplier's name, the amount and the currency. The amount is in major units with a dot, at most two decimals and no thousands separator. `method` is optional. `sandbox_outcome` tells the sandbox bank what to do with the row's payment: `PAID` by default, or a failure type as in `pnpm recover`. PayOnce never reads bank details, phone numbers or email domains from a file. It pays the account on the beneficiary record. A file holds 50 rows at most. A file PayOnce cannot read, such as one with a missing or unknown column or a quote that never closes, is refused, and each problem is listed with its line.
+
+PayOnce checks every row with GETs only. It skips a row that:
+
+- has a cell it cannot read, such as `4,000.00`, `40.005` or a currency without two decimals;
+- has an invoice number the ledger already has, or the same number for the same supplier apart from case, spacing or leading zeros;
+- repeats an earlier row's number, or looks like a second bill for an earlier row of the file;
+- names a beneficiary Airwallex does not have, or one whose account name, currency or transfer method does not match the row (names are compared without case, spacing or punctuation);
+- pays a beneficiary whose bank details are not the ones PayOnce last paid it, unless a callback verified the new ones.
+
+A skipped row says why on the page and on the run's timeline, and its number stays free for a corrected file. A row that looks like a second bill for an invoice already in the ledger is released with the run, and PayOnce holds it for a person when it comes to send it, as it holds any likely duplicate.
+
+The cash check comes last. In each currency, the rows and their expected fees must leave the wallet above its reserve floor, after money already committed elsewhere. If they do not, every row in that currency is skipped, and the timeline says how far below the floor they would take cash. So the order of the rows never decides who is paid. A currency with no floor set does not stop a run, because a person approves every run, and the approval card says no floor is set.
+
+### Approving a run
+
+The run's approval covers every row it pays and the total in each currency, bound by a hash like any other approval. Limits apply to the total in each currency, so splitting one payment into small rows gains nothing. Two approvers are needed when any currency's total is above `TWO_APPROVERS_ABOVE`, when a row pays a beneficiary PayOnce has never paid, and when a row pays an account a callback verified. The person who uploaded the run cannot approve it, and nor can anyone who recorded the callback for an account it pays. The upload in the terminal needs a name, so nobody uploads under their login name and approves under another without noticing.
+
+A run's request expires like any other, but it does not renew by itself. "Check again" on the page, or `pnpm payrun check`, runs every check again and opens a new request. Only one run waits for approval at a time. To upload a corrected file, cancel the waiting run first. Cancelling moves no money and frees its invoice numbers.
+
+### Release
+
+Once the run is approved, the server checks every row again. If anything changed, or the approval policy no longer accepts the approval, the approval is void and the run waits for someone to check it again. Next, PayOnce takes the lock of each currency the run pays, reads the balance again and checks the floor. If the run no longer fits, it is not released. Otherwise one database transaction spends the approval and writes each row as an invoice. Each invoice's first timeline line names the run, the row and the approval. `pnpm payrun approve` only records an approval, and `pnpm ui` releases the run on its next check.
+
+The server then sends each invoice's first payment one at a time, in file order, each under its currency's lock and checked against the floor once more. A row whose beneficiary's bank details changed since the approval, or that would now take cash below the floor, is held for a person instead. From there each invoice is an incident like any other. A row whose payment fails is escalated or replaced by the usual rules.
+
+### One payment at a time per currency
+
+Every payment PayOnce sends holds a lease on its currency, from the balance read to the recorded transfer: a run's row, an automatic or approved replacement, or a held invoice paid on an approval. The lease is a row in the ledger, so the terminal and the server take turns, and it runs out after a minute if the process holding it dies. An automatic replacement reads the balance again under the lease and decides again on it, so two replacements in one currency can no longer pass on the same cash. Payouts sent from the Airwallex web app take no lease.
 
 ## Webhooks
 
@@ -203,8 +245,15 @@ pnpm approve <INVOICE> [REQUEST NAME]
 pnpm close <INVOICE> [NAME] [NOTE]
 pnpm run audit [INVOICE] [json|csv]
 pnpm cash
+pnpm payrun upload <FILE> <NAME>
+pnpm payrun show <RUN>
+pnpm payrun approve <RUN> [REQUEST NAME]
+pnpm payrun check <RUN>
+pnpm payrun cancel <RUN> <NAME> <NOTE>
 pnpm reset
 ```
+
+`pnpm payrun upload` and `check` read Airwallex, GETs only. `show`, `approve` and `cancel` read only the ledger. `approve` without a name shows the terms and the request number, like `pnpm approve`.
 
 | Argument | Values | Default |
 | --- | --- | --- |
@@ -258,7 +307,10 @@ In the fifth, `inv-05002` has the same supplier, amount and number as INV-5002, 
 | `src/audit-trail.ts` | How timeline lines are hashed and checked, and the JSON and CSV export |
 | `src/payments.ts` | Sends an attempt under its `request_id`, syncs transfer state and fees into the ledger, and fills in fees missing from older failed transfers |
 | `src/reserve.ts` | The reserve floors from `RESERVE_FLOORS`, and the floor one invoice's replacement is held to |
-| `src/cash-position.ts` | The cash panel's figures, and the committed money the policy also takes off |
+| `src/cash-position.ts` | The cash panel's figures, and the committed money the policy also takes off, pay runs included |
+| `src/run-file.ts` | Reads a pay run CSV file and the cells of each row |
+| `src/runs.ts` | Pay runs: the checks, the terms and the request, approving, releasing and cancelling a run |
+| `src/currency-lock.ts` | The lease that lets one payment at a time be sent in each currency |
 | `src/approval.ts` | Approval terms and the hash that binds an approval to them |
 | `src/approvers.ts` | The approval policy: who may approve, how many are needed, and when a request expires |
 | `src/bank-change.ts` | Records a callback about new bank details and updates the supplier's record in Airwallex |
@@ -267,10 +319,11 @@ In the fifth, `inv-05002` has the same supplier, amount and number as INV-5002, 
 | `src/reader.ts` | Picks the model reader, or the keyword placeholder when no key is set |
 | `src/keyword-reader.ts` | Keyword placeholder that reads the emails when no key is set |
 | `src/server.ts` | Local web server and JSON API |
-| `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/audit.ts`, `src/cash.ts`, `src/reset.ts`, `src/index.ts` | The commands |
+| `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/audit.ts`, `src/cash.ts`, `src/payrun.ts`, `src/reset.ts`, `src/index.ts` | The commands |
 | `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, balances and their cache for the cash panel, the webhook subscription and the simulation calls |
 | `web/` | The page: plain HTML, CSS and JavaScript with no build step |
 | `fixtures/emails/` | Sample supplier emails |
+| `fixtures/pay-run-example.csv` | A sample pay run file |
 
 The code holds amounts in minor units and converts at the Airwallex boundary. The ledger is `payonce.db` in the working directory. `pnpm reset` moves it aside, and the next run starts an empty one. Stop `pnpm ui` first.
 
@@ -279,7 +332,10 @@ The code holds amounts in minor units and converts at the Airwallex boundary. Th
 - A model's explanation of each decision. The reasons on the timeline come from the policy.
 - Closing an incident without a payment, except a held duplicate. A person can close any other only when the bank reports a payment for the invoice as paid.
 - Chasing the bank. When a payment passes its deadline, PayOnce tells a person and does nothing else.
-- A floor check on new payments, and a lock per currency so that two replacements checked at the same moment cannot both pass. Both come with pay runs.
-- Totals across currencies. They need exchange rates.
+- A floor check on a single incident's first payment. Pay run rows have one.
+- Totals across currencies. They need exchange rates. A run's approver limits are compared with each currency's total on its own.
+- Editing a run, approving part of one, or scheduling one for a later date. Cancel it and upload a corrected file.
+- A hash chain on a run's own timeline. The first line of each invoice it releases is chained and names the run.
+- Recording a callback for a supplier outside an incident, so a run can pay a supplier who changed banks.
 - A webhook delivered by the sandbox. The receiver, the tunnel and the subscription work, and Airwallex records the events, but the sandbox has not sent one.
 - Real bank outcomes. The run uses the sandbox simulator to send, fail and pay transfers.

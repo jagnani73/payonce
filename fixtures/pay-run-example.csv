@@ -1,0 +1,4 @@
+invoice,supplier,beneficiary_id,amount,currency,method,sandbox_outcome
+INV-RUN-1001,Example Supplier LLC,6170b987-3840-4825-8da6-c27671bd26ad,40.00,USD,LOCAL,PAID
+INV-RUN-1002,Example Supplier LLC,6170b987-3840-4825-8da6-c27671bd26ad,41.00,USD,LOCAL,ACCOUNT_CLOSED
+INV-RUN-1003,Example Supplier GmbH,b5cb3168-086d-43b7-9c7d-0365dfe2185c,50.00,EUR,SWIFT,

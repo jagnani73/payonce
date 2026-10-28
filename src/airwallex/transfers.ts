@@ -11,6 +11,7 @@ export interface TransferFailure {
 // Airwallex returns the same object on a transfer and on the beneficiary record.
 // Only the fields the code reads are named.
 export interface TransferBankDetails {
+  account_currency?: string;
   account_name?: string;
   account_number?: string;
   iban?: string;

@@ -11,6 +11,18 @@ export const PAID_OUTCOME: string = "PAID";
 // runs out.
 export const STAYS_IN_FLIGHT: string = "STAYS_IN_FLIGHT";
 
+// What the sandbox bank can do with an original: fail it one of these ways, pay
+// it, or leave it in flight past its deadline. A pay run file can name one per row.
+export const SANDBOX_OUTCOMES: string[] = [
+  "CHANNEL_TIMEOUT",
+  "SYSTEM_ERROR",
+  "BENEFICIARY_BANK_RETURNED",
+  "ACCOUNT_CLOSED",
+  "INVALID_ACCOUNT_NAME_OR_NUMBER",
+  STAYS_IN_FLIGHT,
+  PAID_OUTCOME,
+];
+
 const SETTLED_STATUSES: ReadonlySet<string> = new Set<string>([
   "PAID",
   "FAILED",
@@ -33,13 +45,18 @@ export class SandboxBank implements Bank {
   private readonly held: Map<string, string> = new Map<string, string>();
   // Invoices whose original the scripted run is sending and settles itself.
   private readonly scripted: Set<string> = new Set<string>();
+  // The outcome the ledger keeps for an invoice's original, such as a pay run
+  // row's sandbox_outcome, or null. It survives a restart and works in any process.
+  private readonly outcomeOf: (invoiceId: string) => string | null;
 
   constructor(
     client: AirwallexClient,
     onError: (invoiceId: string, error: unknown) => void,
+    outcomeOf: (invoiceId: string) => string | null = (): string | null => null,
   ) {
     this.client = client;
     this.onError = onError;
+    this.outcomeOf = outcomeOf;
   }
 
   isBusy(invoiceId: string): boolean {
@@ -113,14 +130,17 @@ export class SandboxBank implements Bank {
   }
 
   // PayOnce sent a payment. The scripted run decides what happens to the original
-  // it sends. The bank pays a replacement, and gives an original released after a
-  // hold the outcome expectOriginal recorded, or pays it.
+  // it sends. The bank pays a replacement. It gives any other original the outcome
+  // expectOriginal recorded, else the one the ledger keeps for it, such as a pay
+  // run row's, else pays it.
   sent(invoiceId: string, kind: AttemptKind, transferId: string): void {
     if (kind === "original" && this.scripted.has(invoiceId)) {
       return;
     }
     const outcome: string =
-      kind === "replacement" ? PAID_OUTCOME : (this.held.get(invoiceId) ?? PAID_OUTCOME);
+      kind === "replacement"
+        ? PAID_OUTCOME
+        : (this.held.get(invoiceId) ?? this.outcomeOf(invoiceId) ?? PAID_OUTCOME);
     this.held.delete(invoiceId);
     this.run(invoiceId, async (): Promise<void> => {
       await this.send(transferId);

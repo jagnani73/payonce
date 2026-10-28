@@ -1,4 +1,4 @@
-import type { AirwallexClient } from "./client.js";
+import { AirwallexError, type AirwallexClient } from "./client.js";
 import type { TransferBankDetails } from "./transfers.js";
 
 export interface Beneficiary {
@@ -79,6 +79,7 @@ export const US_BANK_CHANGE_SUPPLIER: BeneficiarySpec = {
 
 // A beneficiary as Airwallex returns it. Only the fields the code reads are named.
 export interface BeneficiaryRecord {
+  id?: string;
   nickname?: string;
   payer_entity_type?: string;
   transfer_methods?: string[];
@@ -90,6 +91,25 @@ export function getBeneficiary(
   beneficiaryId: string,
 ): Promise<BeneficiaryRecord> {
   return client.get<BeneficiaryRecord>(`/api/v1/beneficiaries/${beneficiaryId}`);
+}
+
+// The record, or undefined when Airwallex has none with this id. The sandbox
+// answers 200 with an empty body for an unknown id that is well formed, and 400
+// for one that is not. Any other error, such as Airwallex being unreachable, is
+// thrown, so an outage never reads as every beneficiary being unknown.
+export async function findBeneficiary(
+  client: AirwallexClient,
+  beneficiaryId: string,
+): Promise<BeneficiaryRecord | undefined> {
+  try {
+    const record: BeneficiaryRecord = await getBeneficiary(client, beneficiaryId);
+    return record.id === beneficiaryId ? record : undefined;
+  } catch (error: unknown) {
+    if (error instanceof AirwallexError && (error.status === 400 || error.status === 404)) {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 // Fields of a beneficiary that a bank transfer's record does not need sent back.

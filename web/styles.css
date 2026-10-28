@@ -1471,6 +1471,143 @@ input:read-only {
 
 /* Narrower windows */
 
+/* Pay runs */
+
+.runs {
+  padding-bottom: 20px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+input[type="file"] {
+  width: 100%;
+  font-size: 14px;
+}
+
+.form-error p + p {
+  margin-top: 4px;
+}
+
+.form-error a {
+  color: inherit;
+}
+
+.form-error__list {
+  margin-top: 6px;
+  padding-left: 18px;
+  list-style: disc;
+  font-weight: 500;
+}
+
+.run-rows {
+  display: grid;
+}
+
+.run-row {
+  padding: 10px 0 11px;
+  border-top: 1px solid var(--line);
+}
+
+.run-row:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.run-row__top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+}
+
+.run-row__line {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  min-width: 48px;
+}
+
+.run-row__invoice {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.run-row__invoice a {
+  color: var(--accent);
+}
+
+.run-row__amount {
+  margin-left: auto;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.run-row__payee {
+  margin-top: 2px;
+  color: var(--ink-2);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.run-row.is-skipped .run-row__invoice,
+.run-row.is-skipped .run-row__amount,
+.run-row.is-skipped .run-row__payee {
+  color: var(--muted);
+}
+
+.run-row__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.tag {
+  padding: 1px 8px;
+  border: 1px solid var(--slate-line);
+  border-radius: 6px;
+  background: var(--slate-soft);
+  color: var(--slate);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.tag--caution {
+  border-color: var(--amber-line);
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.run-row__reasons {
+  margin-top: 6px;
+  padding-left: 18px;
+  list-style: disc;
+  color: var(--ink-2);
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+
+.run-row__reasons li + li {
+  margin-top: 3px;
+}
+
+.run-cash__when {
+  margin: -6px 0 12px;
+}
+
+.run-cash__currency + .run-cash__currency {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.run-cash__currency h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
 @media (max-width: 1180px) {
   .detail__grid {
     grid-template-columns: minmax(0, 1fr);

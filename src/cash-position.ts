@@ -6,6 +6,7 @@ import {
   type Ledger,
   type Obligation,
   type OutsidePayout,
+  type PayRunRow,
 } from "./ledger.js";
 import {
   currencyFloor,
@@ -60,6 +61,8 @@ export interface CashLine {
   reference: string | null;
   // The amount is the invoice's, because the transfer's was never read.
   estimated: boolean;
+  // The pay run a pay-run line belongs to. Null on every other line.
+  runId: number | null;
 }
 
 interface FeeEstimate {
@@ -110,6 +113,7 @@ function feeLost(
     feeKnown: feeMinor !== null,
     reference,
     estimated: false,
+    runId: null,
   };
 }
 
@@ -148,6 +152,7 @@ export function cashLines(ledger: Ledger, now: number = Date.now()): CashLine[] 
           ...feeEstimate(ledger, obligation, attempts),
           reference: null,
           estimated: false,
+          runId: null,
         });
       } else if (attempt.state === "pending" || attempt.state === "in_flight") {
         // A found invoice's original is a payout someone sent outside PayOnce.
@@ -160,6 +165,7 @@ export function cashLines(ledger: Ledger, now: number = Date.now()): CashLine[] 
           feeKnown: attempt.feeMinor !== null,
           reference: attempt.reference,
           estimated: false,
+          runId: null,
         });
       }
     }
@@ -174,6 +180,7 @@ export function cashLines(ledger: Ledger, now: number = Date.now()): CashLine[] 
           feeKnown: payout.feeMinor !== null,
           reference: payout.reference === "" ? null : payout.reference,
           estimated: payout.amountMinor === null,
+          runId: null,
         });
       }
     }
@@ -194,36 +201,61 @@ export function cashLines(ledger: Ledger, now: number = Date.now()): CashLine[] 
         ...feeEstimate(ledger, obligation, attempts),
         reference: null,
         estimated: false,
+        runId: null,
       });
     }
   }
   return lines;
 }
 
-// Approved pay-run rows whose payment has not been opened yet, one line each with
-// kind pay-run. A row must drop out in the transaction that opens its attempt, or
-// it is counted twice. Pay runs are not built yet, so there are none to count and
-// the panel says so.
-export function payRunLines(_ledger: Ledger): CashLine[] | null {
-  return null;
+// Pay-run rows whose payment has not been opened yet, one line each with kind
+// pay-run: the pay rows of a waiting run whose approval is approved and not
+// expired, and released rows whose invoice is open with no attempt. Both come from
+// the state of the rows, so a row drops out in the transaction that opens its
+// attempt and is never counted twice. The fee is the latest the ledger recorded in
+// the currency by the row's transfer method.
+export function payRunLines(ledger: Ledger, now: number = Date.now()): CashLine[] {
+  return ledger.payRunRows(now).map((row: PayRunRow): CashLine => {
+    const fee: number | null = ledger.latestFee(row.currency, row.transferMethod);
+    return {
+      kind: "pay-run",
+      invoiceId: row.invoiceId,
+      currency: row.currency,
+      amountMinor: row.amountMinor,
+      feeMinor: fee ?? 0,
+      feeKnown: fee !== null,
+      reference: null,
+      estimated: false,
+      runId: row.runId,
+    };
+  });
+}
+
+// What committedMinor leaves out: the invoice being paid, or the run being
+// released, whose own money is the payment in question.
+export interface CommittedExcept {
+  invoiceId?: string;
+  runId?: number;
 }
 
 // Money promised to payments from this wallet that has not left its available
-// balance yet, on every invoice but exceptInvoiceId: payments being sent with no
-// transfer yet, approvals not used or expired, and approved pay-run rows. The
-// policy takes it off before an automatic replacement, and the panel's headroom
-// takes off the same lines, so the two always agree.
+// balance yet, on every invoice and run but the one excepted: payments being sent
+// with no transfer yet, approvals not used or expired, and pay-run rows approved or
+// released and not sent. The policy takes it off before an automatic replacement
+// and a pay run's checks do the same, and the panel's headroom takes off the same
+// lines, so they always agree.
 export function committedMinor(
   ledger: Ledger,
   currency: string,
-  exceptInvoiceId: string,
+  except: CommittedExcept,
 ): number {
-  return [...cashLines(ledger), ...(payRunLines(ledger) ?? [])]
+  return [...cashLines(ledger), ...payRunLines(ledger)]
     .filter(
       (line: CashLine): boolean =>
         FIRM_KINDS.has(line.kind) &&
         line.currency === currency &&
-        line.invoiceId !== exceptInvoiceId,
+        line.invoiceId !== except.invoiceId &&
+        (except.runId === undefined || line.runId !== except.runId),
     )
     .reduce((sum: number, line: CashLine): number => sum + line.amountMinor + line.feeMinor, 0);
 }
@@ -273,6 +305,7 @@ export interface CashReport {
   // Null where no watcher runs.
   ledger: { statesCheckedAt: string | null };
   floors: { problem: string | null };
+  // Null where pay runs are not counted.
   payRuns: { built: true } | null;
   currencies: CurrencyCash[];
 }

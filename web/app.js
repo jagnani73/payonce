@@ -41,6 +41,24 @@ const APPROVAL_STATES = {
 // A request still marked requested after its time has run out.
 const EXPIRED_REQUEST = { label: "Expired", tone: "neutral" };
 
+// How a pay run stands, as the server's runStatus names it.
+const RUN_STATES = {
+  "waiting-approval": { label: "Waiting for approval", tone: "waiting" },
+  approved: { label: "Approved", tone: "active" },
+  expired: { label: "Request expired", tone: "neutral" },
+  "needs-check": { label: "Waiting on a person", tone: "waiting" },
+  released: { label: "Released", tone: "paid" },
+  cancelled: { label: "Cancelled", tone: "neutral" },
+};
+
+// A run's row before release: paid, held for a person when sent, skipped, or not released.
+const ROW_ACTIONS = {
+  pay: { label: "Pay", tone: "active" },
+  held: { label: "Held when sent", tone: "waiting" },
+  skip: { label: "Skipped", tone: "neutral" },
+  dropped: { label: "Not released", tone: "failed" },
+};
+
 const EVENT_KINDS = {
   payment: "Payment",
   email: "Supplier email",
@@ -108,6 +126,23 @@ const els = {
   cashFresh: byId("cash-fresh"),
   cashProblem: byId("cash-problem"),
   cashCurrencies: byId("cash-currencies"),
+  runForm: byId("run-form"),
+  runFile: byId("run-file"),
+  runUploadedBy: byId("run-uploaded-by"),
+  runButton: byId("run-button"),
+  runColumns: byId("run-columns"),
+  runError: byId("run-error"),
+  runsError: byId("runs-error"),
+  runsEmpty: byId("runs-empty"),
+  runList: byId("run-list"),
+  runDetail: byId("run-detail"),
+  runHeader: byId("run-header"),
+  runRows: byId("run-rows"),
+  runTimeline: byId("run-timeline"),
+  runWorking: byId("run-working"),
+  runApproval: byId("run-approval"),
+  runCash: byId("run-cash"),
+  runCancel: byId("run-cancel"),
 };
 
 const state = {
@@ -146,6 +181,21 @@ const state = {
   // The cash panel as /api/cash last returned it, kept when a later load fails.
   cash: null,
   cashError: null,
+  // Pay runs: the list, the run on screen, and what the last action on one came back with.
+  runs: null,
+  runsError: null,
+  run: null,
+  runId: null,
+  runError: null,
+  uploading: false,
+  uploadError: null,
+  runApproving: false,
+  runApproveError: null,
+  runChecking: false,
+  runCheckError: null,
+  runCancelling: false,
+  runCancelError: null,
+  runDrafts: new Map(),
 };
 
 // Signatures of what each section last drew, so an unchanged poll touches nothing.
@@ -377,7 +427,11 @@ async function api(path, { method = "GET", body } = {}) {
       data !== null && typeof data.error === "string" && data.error !== ""
         ? data.error
         : `The server returned ${response.status}.`;
-    throw new Error(message);
+    // A refused upload says more than its message: the file's problems, or the run it names.
+    const error = new Error(message);
+    error.status = response.status;
+    error.data = data;
+    throw error;
   }
   if (data === null || typeof data !== "object") {
     throw new Error("The server sent a reply this page could not read.");
@@ -411,6 +465,9 @@ async function loadOptions() {
         typeof policy.problem === "string" && policy.problem.trim() !== ""
           ? policy.problem.trim()
           : null,
+      runColumns: Array.isArray(options.runColumns) ? options.runColumns : [],
+      maxRunRows: typeof options.maxRunRows === "number" ? options.maxRunRows : null,
+      maxRunFileChars: typeof options.maxRunFileChars === "number" ? options.maxRunFileChars : null,
     };
     state.optionsError = null;
   } catch (error) {
@@ -441,9 +498,50 @@ async function loadCash() {
   }
 }
 
+async function loadRuns() {
+  try {
+    const data = await api("/api/runs");
+    state.runs = Array.isArray(data.runs) ? data.runs : [];
+    state.runsError = null;
+  } catch (error) {
+    state.runsError = `Could not refresh the pay runs. ${error.message}`;
+  }
+}
+
+// "run/7" is pay run 7. A slash cannot be in an invoice number.
+function runIdOf(id) {
+  const match = /^run\/([1-9][0-9]{0,9})$/.exec(String(id ?? ""));
+  return match === null ? null : Number(match[1]);
+}
+
+async function loadRunDetail(runId) {
+  const id = state.selectedId;
+  try {
+    const detail = await api(`/api/runs/${runId}`);
+    if (state.selectedId !== id) {
+      return;
+    }
+    if (detail.run === null || typeof detail.run !== "object" || !Array.isArray(detail.rows)) {
+      throw new Error("The server sent a pay run this page could not read.");
+    }
+    state.run = detail;
+    state.runId = runId;
+    state.runError = null;
+  } catch (error) {
+    if (state.selectedId === id) {
+      state.runError = error.message;
+    }
+  }
+}
+
 async function loadDetail() {
   const id = state.selectedId;
   if (id === null) {
+    return;
+  }
+  const runId = runIdOf(id);
+  if (runId !== null) {
+    await loadRunDetail(runId);
     return;
   }
   try {
@@ -468,6 +566,11 @@ function currentDetail() {
   return state.detailId === state.selectedId ? state.detail : null;
 }
 
+function currentRun() {
+  const runId = runIdOf(state.selectedId);
+  return runId !== null && state.runId === runId ? state.run : null;
+}
+
 function isStarting(id) {
   return (
     state.started !== null &&
@@ -485,6 +588,13 @@ function expectsWork() {
     return true;
   }
   if (detail?.busy === true || detail?.watching === true) {
+    return true;
+  }
+  const run = currentRun();
+  if (run?.busy === true || run?.watching === true || run?.status === "approved") {
+    return true;
+  }
+  if ((state.runs ?? []).some((entry) => entry.busy === true || entry.watching === true)) {
     return true;
   }
   // The server's first balance read shows up as soon as it lands.
@@ -511,7 +621,7 @@ function refresh() {
   refreshing = (async () => {
     do {
       refreshAgain = false;
-      await Promise.all([loadOptions(), loadList(), loadDetail(), loadCash()]);
+      await Promise.all([loadOptions(), loadList(), loadRuns(), loadDetail(), loadCash()]);
       if (state.selectedId === null && (state.incidents ?? []).length > 0) {
         setSelected(state.incidents[0].invoiceId);
         refreshAgain = true;
@@ -548,7 +658,12 @@ function setSelected(id) {
   state.closeError = null;
   state.resumeError = null;
   state.bankError = null;
-  const hash =id === null ? "" : `#${encodeURIComponent(id)}`;
+  state.runError = null;
+  state.runApproveError = null;
+  state.runCheckError = null;
+  state.runCancelError = null;
+  const hash =
+    id === null ? "" : runIdOf(id) !== null ? `#${id}` : `#${encodeURIComponent(id)}`;
   if (window.location.hash !== hash) {
     window.history.replaceState(null, "", hash === "" ? window.location.pathname : hash);
   }
@@ -838,8 +953,13 @@ function renderHeader(detail) {
       obligation.origin,
       startedBy,
       busy,
+      detail.run ?? null,
     ])
   ) {
+    const fromRun =
+      detail.run !== null && typeof detail.run === "object" && Number.isInteger(detail.run.id)
+        ? detail.run
+        : null;
     const hadFocus =
       headerRefs !== null &&
       headerRefs.button !== null &&
@@ -859,7 +979,20 @@ function renderHeader(detail) {
         h("p", { class: "eyebrow" }, "Incident"),
         h("h1", null, invoiceId),
         h("p", { class: "detail__supplier" }, obligation.supplier),
-        startedBy !== null && h("p", { class: "detail__started" }, `Started by ${startedBy}`),
+        startedBy !== null &&
+          h(
+            "p",
+            { class: "detail__started" },
+            fromRun === null ? `Started by ${startedBy}` : `Uploaded by ${startedBy}`,
+          ),
+        fromRun !== null &&
+          h(
+            "p",
+            { class: "detail__started" },
+            "From ",
+            h("a", { href: `#run/${fromRun.id}` }, `pay run ${fromRun.id}`),
+            `, row ${fromRun.line}`,
+          ),
         obligation.origin === "outside" &&
           h("p", { class: "hint" }, "Sent outside PayOnce. The sweep found it in Airwallex."),
       ),
@@ -2268,6 +2401,12 @@ async function submitBankChange(invoiceId) {
 
 function renderMain() {
   const id = state.selectedId;
+  if (runIdOf(id) !== null) {
+    els.detail.hidden = true;
+    renderRunMain();
+    return;
+  }
+  els.runDetail.hidden = true;
   const detail = currentDetail();
   if (
     id !== null &&
@@ -2300,6 +2439,843 @@ function renderMain() {
   renderEmails(detail);
   els.placeholder.hidden = true;
   els.detail.hidden = false;
+}
+
+// ---------- pay runs ----------
+
+let runHeaderRefs = null;
+let runApprovalRefs = null;
+let runCancelRefs = null;
+
+function runTotalsText(totals) {
+  return Array.isArray(totals) && totals.length > 0
+    ? totals.map((total) => formatMoney(total.amountMinor, total.currency)).join(" and ")
+    : "Nothing to pay";
+}
+
+function runCountsText(counts) {
+  if (counts === null || typeof counts !== "object") {
+    return "";
+  }
+  const parts = [`${counts.pay} to pay`];
+  if (counts.held > 0) {
+    parts.push(`${counts.held} held when sent`);
+  }
+  if (counts.skip > 0) {
+    parts.push(`${counts.skip} skipped`);
+  }
+  return parts.join(", ");
+}
+
+// The page keeps one name for whoever uses it, in both name fields.
+function syncNames(source) {
+  const value = source.value;
+  storeName(value);
+  for (const input of [els.startedBy, els.runUploadedBy]) {
+    if (input !== source && document.activeElement !== input) {
+      input.value = value;
+    }
+  }
+}
+
+function renderUploadError() {
+  const error = state.uploadError;
+  if (!changed("uploadError", error)) {
+    return;
+  }
+  if (error === null) {
+    els.runError.hidden = true;
+    els.runError.replaceChildren();
+    return;
+  }
+  const items = [
+    ...(error.problems ?? []).map((problem) =>
+      h("li", null, problem.line === null ? withPeriod(problem.message) : `Line ${problem.line}: ${withPeriod(problem.message)}`),
+    ),
+    ...(error.rows ?? []).slice(0, 10).map((row) =>
+      h(
+        "li",
+        null,
+        `Line ${row.line}${row.invoiceId ? ` (${row.invoiceId})` : ""}: ${withPeriod((row.reasons ?? []).join(". "))}`,
+      ),
+    ),
+  ];
+  els.runError.replaceChildren(
+    h(
+      "div",
+      null,
+      h("p", null, withPeriod(error.message)),
+      Number.isInteger(error.runId) && h("p", null, h("a", { href: `#run/${error.runId}` }, `Open run ${error.runId}`)),
+      items.length > 0 && h("ul", { class: "form-error__list" }, items),
+    ),
+  );
+  els.runError.hidden = false;
+}
+
+function renderRunForm() {
+  els.runButton.disabled = state.uploading || state.options === null;
+  els.runFile.disabled = state.uploading;
+  els.runUploadedBy.readOnly = state.uploading;
+  setText(els.runButton, state.uploading ? "Checking the file" : "Check file");
+  renderUploadError();
+}
+
+async function submitRunFile(event) {
+  event.preventDefault();
+  if (state.uploading) {
+    return;
+  }
+  const file = els.runFile.files?.[0] ?? null;
+  const uploadedBy = els.runUploadedBy.value.trim();
+  if (file === null) {
+    state.uploadError = { message: "Choose a CSV file." };
+    renderRunForm();
+    els.runFile.focus();
+    return;
+  }
+  if (uploadedBy === "") {
+    state.uploadError = { message: "Enter your name to upload a pay run." };
+    renderRunForm();
+    els.runUploadedBy.focus();
+    return;
+  }
+  const limit = state.options?.maxRunFileChars ?? 40000;
+  state.uploading = true;
+  state.uploadError = null;
+  renderRunForm();
+  try {
+    const csv = await file.text();
+    if (csv.length > limit) {
+      throw new Error(
+        `The file is ${csv.length.toLocaleString("en-US")} characters long. A pay run file can be at most ${limit.toLocaleString("en-US")}.`,
+      );
+    }
+    const created = await api("/api/runs", {
+      method: "POST",
+      body: { fileName: file.name, csv, uploadedBy },
+    });
+    if (!Number.isInteger(created.runId)) {
+      throw new Error("The server did not name the new pay run.");
+    }
+    els.runFile.value = "";
+    state.fastUntil = Date.now() + EXPECT_WORK_MS;
+    window.scrollTo(0, 0);
+    select(`run/${created.runId}`);
+  } catch (error) {
+    const data = error.data ?? null;
+    state.uploadError = {
+      message: error.message,
+      problems: Array.isArray(data?.problems) ? data.problems : [],
+      rows: Array.isArray(data?.rows) ? data.rows.filter((row) => row.action === "skip") : [],
+      runId: Number.isInteger(data?.runId) ? data.runId : null,
+    };
+  } finally {
+    state.uploading = false;
+    renderRunForm();
+  }
+}
+
+function createRunNode(key) {
+  const button = h(
+    "button",
+    { class: "incident", type: "button" },
+    h("span", { class: "incident__top" }, h("span", { class: "incident__id" }), h("span", { class: "badge" })),
+    h(
+      "span",
+      { class: "incident__meta" },
+      h("span", { class: "incident__amount" }),
+      h("span", { class: "incident__supplier" }),
+    ),
+    h("span", { class: "incident__headline" }),
+    h("span", { class: "incident__busy", hidden: true }, h("span", { class: "pulse" }), "Working"),
+  );
+  button.addEventListener("click", () => {
+    if (key !== state.selectedId) {
+      window.scrollTo(0, 0);
+    }
+    select(key);
+  });
+  return h("li", { dataset: { id: key } }, button);
+}
+
+function updateRunNode(node, run, key) {
+  const button = node.firstElementChild;
+  const entry = RUN_STATES[run.status];
+  const badgeNode = button.querySelector(".badge");
+  setText(button.querySelector(".incident__id"), `Run ${run.id}`);
+  setClass(badgeNode, badgeClass(entry));
+  setText(badgeNode, entry?.label ?? humanize(run.status));
+  setText(button.querySelector(".incident__amount"), runTotalsText(run.counts?.totals));
+  setText(button.querySelector(".incident__supplier"), run.fileName);
+  setText(button.querySelector(".incident__headline"), runCountsText(run.counts));
+  button.querySelector(".incident__busy").hidden = run.busy !== true;
+  if (key === state.selectedId) {
+    button.setAttribute("aria-current", "true");
+  } else {
+    button.removeAttribute("aria-current");
+  }
+}
+
+function renderRunList() {
+  const runs = state.runs ?? [];
+  reconcile(
+    els.runList,
+    runs,
+    (run) => `run/${run.id}`,
+    (node, run, key) => {
+      const target = node ?? createRunNode(key);
+      updateRunNode(target, run, key);
+      return target;
+    },
+  );
+  els.runsEmpty.hidden = state.runs === null || runs.length > 0;
+  showMessage(els.runsError, state.runsError);
+}
+
+function syncRunChecks() {
+  for (const button of [runHeaderRefs?.button, runApprovalRefs?.checkButton]) {
+    if (button !== null && button !== undefined) {
+      button.disabled = state.runChecking;
+      setText(button, state.runChecking ? "Checking" : "Check again");
+    }
+  }
+  if (runHeaderRefs === null) {
+    return;
+  }
+  if (liveMessage("runHeader", state.runCheckError) === null) {
+    state.runCheckError = null;
+  }
+  showMessage(runHeaderRefs.error, state.runCheckError?.message);
+}
+
+function checkButton(runId) {
+  const button = h("button", { class: "button button--small", type: "button" }, "Check again");
+  button.addEventListener("click", () => {
+    checkRunAgain(runId);
+  });
+  return button;
+}
+
+async function checkRunAgain(runId) {
+  if (state.runChecking) {
+    return;
+  }
+  state.runChecking = true;
+  state.runCheckError = null;
+  syncRunChecks();
+  let failure = null;
+  try {
+    await api(`/api/runs/${runId}/check`, { method: "POST", body: {} });
+    state.fastUntil = Date.now() + EXPECT_WORK_MS;
+  } catch (error) {
+    failure = error.message;
+  }
+  try {
+    await refresh();
+  } finally {
+    state.runChecking = false;
+    if (failure !== null && runIdOf(state.selectedId) === runId) {
+      state.runCheckError = actionError("runHeader", failure);
+    }
+    syncRunChecks();
+  }
+}
+
+function renderRunHeader(run) {
+  const info = run.run;
+  const busy = run.busy === true;
+  if (
+    changed("runHeader", [info.id, info.fileName, info.uploadedBy, info.uploadedAt, info.state, info.cancelNote, run.status, run.counts, busy])
+  ) {
+    const hadFocus =
+      runHeaderRefs !== null && runHeaderRefs.button !== null && document.activeElement === runHeaderRefs.button;
+    const button = info.state === "waiting" && !busy ? checkButton(info.id) : null;
+    const error = h("p", { class: "form-error", role: "alert", hidden: true });
+    const uploadedAt = timeNode(info.uploadedAt);
+    els.runHeader.replaceChildren(
+      h(
+        "div",
+        { class: "detail__title" },
+        h("p", { class: "eyebrow" }, "Pay run"),
+        h("h1", null, `Run ${info.id}`),
+        h("p", { class: "detail__supplier" }, info.fileName),
+        h("p", { class: "detail__started" }, `Uploaded by ${info.uploadedBy}`, uploadedAt !== null && [" at ", uploadedAt]),
+        info.state === "cancelled" &&
+          h("p", { class: "detail__started" }, `Cancelled by ${info.cancelledBy}: ${info.cancelNote}`),
+      ),
+      h(
+        "div",
+        { class: "detail__facts" },
+        h("p", { class: "detail__amount" }, runTotalsText(run.counts?.totals)),
+        h("p", { class: "detail__started" }, runCountsText(run.counts)),
+        h(
+          "div",
+          { class: "detail__state" },
+          busy && h("span", { class: "working-pill" }, h("span", { class: "pulse" }), "Working"),
+          button,
+          badge(RUN_STATES[run.status], run.status, true),
+        ),
+      ),
+      error,
+    );
+    runHeaderRefs = { button, error };
+    if (hadFocus && button !== null) {
+      button.focus();
+    }
+  }
+  syncRunChecks();
+}
+
+// What became of a released row's invoice, in a word or two.
+function invoiceStatus(invoice) {
+  if (invoice.state === "settled") {
+    return { label: "Paid", tone: "paid" };
+  }
+  if (invoice.state === "rejected") {
+    return OBLIGATION_STATES.rejected;
+  }
+  if (invoice.state === "escalated") {
+    return { label: "With a person", tone: "waiting" };
+  }
+  const last = Array.isArray(invoice.attempts) ? invoice.attempts.at(-1) : undefined;
+  if (last === undefined || last.state === "pending") {
+    return { label: "Sending", tone: "active" };
+  }
+  if (last.state === "failed") {
+    return { label: "Failed", tone: "failed" };
+  }
+  return last.state === "paid" ? { label: "Paid", tone: "paid" } : { label: "With the bank", tone: "active" };
+}
+
+function cellOf(columns, row, name) {
+  const index = Array.isArray(columns) ? columns.indexOf(name) : -1;
+  return index < 0 || !Array.isArray(row.cells) ? "" : String(row.cells[index] ?? "");
+}
+
+function buildRunRow(row, columns) {
+  const invoice = row.invoice !== null && typeof row.invoice === "object" ? row.invoice : null;
+  const held = Array.isArray(row.heldFor) && row.heldFor.length > 0;
+  const chip =
+    invoice !== null
+      ? badge(invoiceStatus(invoice), invoice.state)
+      : row.state === "dropped"
+        ? badge(ROW_ACTIONS.dropped, "dropped")
+        : row.action === "skip"
+          ? badge(ROW_ACTIONS.skip, "skip")
+          : badge(held ? ROW_ACTIONS.held : ROW_ACTIONS.pay, row.action);
+  const number = row.invoiceId ?? (cellOf(columns, row, "invoice") || "No invoice number");
+  const amount =
+    typeof row.amountMinor === "number" && typeof row.currency === "string"
+      ? formatMoney(row.amountMinor, row.currency)
+      : `${cellOf(columns, row, "amount")} ${cellOf(columns, row, "currency")}`.trim();
+  const tags = [];
+  if (row.newPayee === true) {
+    tags.push(h("span", { class: "tag tag--caution" }, "New payee"));
+  }
+  if (row.bankChangeId !== null && row.bankChangeId !== undefined) {
+    tags.push(h("span", { class: "tag tag--caution" }, "Account verified by a callback"));
+  }
+  if (typeof row.sandboxOutcome === "string" && row.sandboxOutcome !== "PAID") {
+    tags.push(h("span", { class: "tag" }, "Sandbox: ", h("span", { class: "mono" }, row.sandboxOutcome)));
+  }
+  const notes = [...(Array.isArray(row.reasons) ? row.reasons : [])];
+  if (held && invoice === null) {
+    notes.push(`Looks like a second bill for ${row.heldFor.join(", ")}, so PayOnce holds it for a person when it comes to send it`);
+  }
+  if (typeof row.note === "string" && row.note !== "" && row.state === "dropped") {
+    notes.push(`Not released: ${row.note}`);
+  }
+  return h(
+    "li",
+    { class: row.action === "skip" || row.state === "dropped" ? "run-row is-skipped" : "run-row" },
+    h(
+      "div",
+      { class: "run-row__top" },
+      h("span", { class: "run-row__line" }, `Row ${row.line}`),
+      h(
+        "span",
+        { class: "run-row__invoice mono" },
+        invoice !== null ? h("a", { href: `#${encodeURIComponent(invoice.invoiceId)}` }, invoice.invoiceId) : number,
+      ),
+      h("span", { class: "run-row__amount" }, amount),
+      chip,
+    ),
+    h("p", { class: "run-row__payee" }, row.payTo ?? row.supplier ?? cellOf(columns, row, "supplier")),
+    tags.length > 0 && h("p", { class: "run-row__tags" }, tags),
+    notes.length > 0 && h("ul", { class: "run-row__reasons" }, notes.map((note) => h("li", null, withPeriod(note)))),
+  );
+}
+
+function renderRunRows(run) {
+  if (!changed("runRows", [run.run.id, run.run.columns, run.rows])) {
+    return;
+  }
+  els.runRows.replaceChildren(...run.rows.map((row) => buildRunRow(row, run.run.columns)));
+}
+
+function renderRunTimeline(run) {
+  const events = Array.isArray(run.events) ? run.events : [];
+  const fresh = els.runTimeline.dataset.run !== String(run.run.id);
+  if (fresh) {
+    els.runTimeline.replaceChildren();
+    els.runTimeline.dataset.run = String(run.run.id);
+  }
+  reconcile(
+    els.runTimeline,
+    events,
+    (event, index) => String(event.id ?? `row-${index}`),
+    (node, event, key) => {
+      const signature = JSON.stringify([event.kind, event.at, event.message]);
+      if (node !== null && node.dataset.signature === signature) {
+        return node;
+      }
+      const next = createEventNode(event, key, signature);
+      if (node !== null) {
+        node.replaceWith(next);
+      } else if (!fresh) {
+        next.classList.add("event--new");
+      }
+      return next;
+    },
+  );
+  els.runTimeline.classList.toggle("is-busy", run.busy === true);
+  els.runWorking.hidden = run.busy !== true;
+}
+
+function runApprovalLead(approval, terms) {
+  const count = Array.isArray(terms.rows) ? terms.rows.length : 0;
+  const held = Array.isArray(terms.rows) ? terms.rows.filter((row) => row.heldFor?.length > 0).length : 0;
+  const what = `paying ${count === 1 ? "1 invoice" : `${count} invoices`}, ${runTotalsText(terms.totals)}`;
+  const heldText =
+    held === 0
+      ? ""
+      : held === 1
+        ? " One of them looks like a second bill, so PayOnce holds it for a person when it comes to send it."
+        : ` ${held} of them look like second bills, so PayOnce holds them for a person when it comes to send them.`;
+  const approver = typeof approval.approver === "string" && approval.approver !== "" ? approval.approver : null;
+  switch (approval.state) {
+    case "requested": {
+      const needed = neededOf(approval);
+      const why = typeof approval.neededWhy === "string" ? approval.neededWhy.trim() : "";
+      const people = needed < 2 ? "One person" : "Two different people";
+      return `${people} must approve ${what} before PayOnce releases the run${needed > 1 && why !== "" ? `, because ${why}` : ""}.${heldText}`;
+    }
+    case "approved":
+      return `Approved by ${approver ?? "the approvers"}. PayOnce checks every row again and then releases the run.`;
+    case "used":
+      return `Approved by ${approver ?? "the approvers"} and used to release the run.`;
+    case "void":
+      return approver === null
+        ? "Void. This request no longer covers the run. Check the run again to open a new one."
+        : `Void. ${approver} approved it, but it no longer covers the run. Check the run again to open a new request.`;
+    default:
+      return "";
+  }
+}
+
+// The last thing the run's timeline says it is waiting on.
+function runWaitingLine(run) {
+  const events = Array.isArray(run.events) ? run.events : [];
+  return [...events].reverse().find((event) => event.topic === "waiting")?.message ?? null;
+}
+
+function buildRunApproveForm(runId, approval, error) {
+  const options = state.options;
+  const problem = options?.approvalProblem ?? null;
+  const signoffs = signoffsOf(approval);
+  const barred = Array.isArray(approval.barred)
+    ? approval.barred.filter((entry) => typeof entry?.name === "string")
+    : [];
+  // Limits are checked against the largest currency total.
+  const limitTerms = approval.largest ?? { amountMinor: null, currency: "" };
+  const choices = (options?.approvers ?? []).map((approver) => ({
+    name: approver.name,
+    why: whyCannotApprove(approver, limitTerms, barred, signoffs),
+  }));
+  const anyone = choices.some((choice) => choice.why === null);
+  const locked = options === null || problem !== null || !anyone;
+
+  const notices = [];
+  if (problem !== null) {
+    notices.push(caution(`PayOnce refuses every approval because ${withPeriod(problem)}`));
+  } else if (options !== null && !anyone) {
+    notices.push(caution("Nobody on the approver list can approve this run."));
+  }
+  const status = [];
+  if (signoffs.length > 0) {
+    status.push(
+      h("dt", null, "Approved so far"),
+      h(
+        "dd",
+        null,
+        signoffs.map((signoff) => {
+          const at = timeNode(signoff.at);
+          return h("span", { class: "approval__signoff" }, signoff.approver, at !== null && [" at ", at]);
+        }),
+      ),
+    );
+    const remaining = neededOf(approval) - signoffs.length;
+    if (remaining > 0) {
+      status.push(h("dt", null, "Still needed"), h("dd", null, remaining === 1 ? "1 more approval" : `${remaining} more approvals`));
+    }
+  }
+  const expiresAt = timeNode(approval.expiresAt);
+  if (expiresAt !== null) {
+    status.push(h("dt", null, "Expires"), h("dd", null, expiresAt));
+  }
+
+  const select = h(
+    "select",
+    { id: "run-approver", name: "approver", disabled: locked },
+    h("option", { value: "" }, options === null ? "Loading approvers" : "Choose your name"),
+    choices.map((choice) =>
+      h("option", { value: choice.name, disabled: choice.why !== null }, choice.why === null ? choice.name : `${choice.name} (${choice.why})`),
+    ),
+  );
+  const draft = state.runDrafts.get(runId)?.approver ?? "";
+  select.value = choices.find((choice) => choice.why === null && sameName(choice.name, draft))?.name ?? "";
+  select.addEventListener("change", () => {
+    state.runDrafts.set(runId, { ...(state.runDrafts.get(runId) ?? {}), approver: select.value });
+    if (state.runApproveError !== null) {
+      state.runApproveError = null;
+      syncRunApproval();
+    }
+  });
+  const button = h("button", { class: "button button--primary", type: "submit", disabled: locked }, "Approve run");
+  const form = h(
+    "form",
+    { class: "approve-form", novalidate: true },
+    status.length > 0 && h("dl", { class: "facts approval__status" }, status),
+    notices,
+    h("div", { class: "approve-form__row" }, h("label", { class: "field" }, h("span", { class: "field__label" }, "Your name"), select), button),
+    error,
+    h(
+      "p",
+      { class: "hint" },
+      "Your approval covers these rows and totals and nothing else. If a check finds anything different before the release, it is void.",
+    ),
+  );
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitRunApproval(runId);
+  });
+  return { form, select, button, locked };
+}
+
+function renderRunApproval(run) {
+  const info = run.run;
+  const approval = run.approval ?? null;
+  const policy = state.options === null ? null : [state.options.approvers, state.options.approvalProblem];
+  const waitingLine = runWaitingLine(run);
+  if (!changed("runApproval", [info.id, info.state, run.status, approval, policy, waitingLine])) {
+    syncRunApproval();
+    return;
+  }
+  const previousSelect = runApprovalRefs?.select ?? null;
+  const hadFocus = previousSelect !== null && document.activeElement === previousSelect;
+  const error = h("p", { class: "form-error", role: "alert", hidden: true });
+  const waiting = info.state === "waiting";
+  const expired = approval?.state === "requested" && approval.expired === true;
+  const open = approval?.state === "requested" && !expired && waiting;
+  // Without an open or approved request, a person checks the run again to open one.
+  const stuck = waiting && !open && approval?.state !== "approved";
+  const checkAgain = stuck ? checkButton(info.id) : null;
+  const children = [
+    h(
+      "div",
+      { class: "approval__head" },
+      h("h2", { id: "run-approval-title" }, "Run approval"),
+      approval === null
+        ? badge(RUN_STATES[run.status], run.status, false)
+        : badge(expired ? EXPIRED_REQUEST : APPROVAL_STATES[approval.state], approval.state, false),
+    ),
+  ];
+  if (approval === null) {
+    children.push(h("p", { class: "approval__lead" }, "No approval request is open for this run."));
+  } else {
+    const terms = approval.terms ?? {};
+    children.push(h("p", { class: "approval__lead" }, expired ? "This request expired before enough people approved it. Check the run again to open a new one." : runApprovalLead(approval, terms)));
+    const totals = Array.isArray(terms.totals) ? terms.totals : [];
+    children.push(
+      h(
+        "dl",
+        { class: "terms" },
+        totals.map((total) => [
+          h("dt", null, `${total.currency}, ${total.payments === 1 ? "1 payment" : `${total.payments} payments`}`),
+          h(
+            "dd",
+            null,
+            h("span", { class: "terms__amount" }, formatMoney(total.amountMinor, total.currency)),
+            total.reserveFloorMinor === null
+              ? h("span", { class: "terms__sub terms__sub--caution" }, `No reserve floor is set for ${total.currency}`)
+              : h("span", { class: "terms__sub" }, `Reserve floor ${formatMoney(total.reserveFloorMinor, total.currency)}`),
+          ),
+        ]),
+        approval.largest !== null &&
+          approval.largest !== undefined &&
+          totals.length > 1 && [
+            h("dt", null, "Limits checked against"),
+            h("dd", null, `${formatMoney(approval.largest.amountMinor, approval.largest.currency)}, the largest total`),
+          ],
+      ),
+      h(
+        "p",
+        { class: "terms__meta" },
+        h("span", null, "Request ", h("span", { class: "mono" }, String(approval.id))),
+        h("span", null, "File ", h("span", { class: "mono" }, String(info.fileHash ?? "").slice(0, 8))),
+      ),
+    );
+  }
+  if (stuck && waitingLine !== null) {
+    children.push(caution(waitingLine));
+  }
+  let select = null;
+  let button = null;
+  let locked = false;
+  if (open) {
+    const built = buildRunApproveForm(info.id, approval, error);
+    ({ select, button, locked } = built);
+    children.push(built.form);
+  } else {
+    children.push(error);
+  }
+  if (checkAgain !== null) {
+    children.push(h("div", { class: "pay-again" }, checkAgain));
+  }
+  runApprovalRefs = { select, button, error, locked, checkButton: checkAgain, approvalId: approval?.id ?? null };
+  setClass(els.runApproval, open ? "card approval approval--requested" : "card approval");
+  els.runApproval.replaceChildren(...children);
+  els.runApproval.hidden = false;
+  if (select !== null && hadFocus && !select.disabled) {
+    select.focus();
+  }
+  syncRunApproval();
+  syncRunChecks();
+}
+
+function syncRunApproval() {
+  if (runApprovalRefs === null) {
+    return;
+  }
+  if (runApprovalRefs.button !== null) {
+    const off = state.runApproving || runApprovalRefs.locked;
+    runApprovalRefs.button.disabled = off;
+    runApprovalRefs.select.disabled = off;
+    setText(runApprovalRefs.button, state.runApproving ? "Approving" : "Approve run");
+  }
+  if (liveMessage("runApproval", state.runApproveError) === null) {
+    state.runApproveError = null;
+  }
+  showMessage(runApprovalRefs.error, state.runApproveError?.message);
+}
+
+async function submitRunApproval(runId) {
+  if (state.runApproving || runApprovalRefs === null || runApprovalRefs.select === null || runApprovalRefs.locked) {
+    return;
+  }
+  const approver = runApprovalRefs.select.value;
+  if (approver === "") {
+    state.runApproveError = actionError("runApproval", "Choose your name to approve.");
+    syncRunApproval();
+    runApprovalRefs.select.focus();
+    return;
+  }
+  // The approval is for the request on screen, so the request is named.
+  const approvalId = runApprovalRefs.approvalId;
+  state.runApproving = true;
+  state.runApproveError = null;
+  syncRunApproval();
+  let failure = null;
+  try {
+    await api(`/api/runs/${runId}/approve`, { method: "POST", body: { approver, approvalId } });
+    state.fastUntil = Date.now() + EXPECT_WORK_MS;
+  } catch (error) {
+    failure = error.message;
+  }
+  try {
+    await refresh();
+  } finally {
+    state.runApproving = false;
+    if (failure !== null && runIdOf(state.selectedId) === runId) {
+      state.runApproveError = actionError("runApproval", failure);
+    }
+    syncRunApproval();
+  }
+}
+
+function renderRunCash(run) {
+  const cash = Array.isArray(run.cash) ? run.cash : [];
+  if (!changed("runCash", [run.run.id, run.run.checkedAt, cash])) {
+    return;
+  }
+  if (cash.length === 0) {
+    els.runCash.hidden = true;
+    els.runCash.replaceChildren();
+    return;
+  }
+  const checkedAt = timeNode(run.run.checkedAt);
+  const amount = (minor) => cashAmount(minor);
+  els.runCash.replaceChildren(
+    h("h2", { id: "run-cash-title" }, "Cash at the last check"),
+    h(
+      "p",
+      { class: "hint run-cash__when" },
+      checkedAt === null ? [] : ["Checked at ", checkedAt, ". "],
+      "PayOnce checks again, on a fresh balance, before it releases the run.",
+    ),
+    ...cash.map((entry) =>
+      h(
+        "div",
+        { class: "run-cash__currency" },
+        h("h3", null, entry.currency),
+        h(
+          "dl",
+          { class: "cash__rows" },
+          cashRow("To pay", `${entry.payments === 1 ? "1 payment" : `${entry.payments} payments`}`, amount(entry.payMinor)),
+          cashRow(
+            "Fees",
+            entry.feeUnknown > 0 ? (entry.feeUnknown === entry.payments ? "not known" : `not known for ${entry.feeUnknown}`) : "the latest recorded",
+            amount(entry.feeMinor),
+            entry.feeUnknown > 0 ? "is-unknown" : null,
+          ),
+          cashRow("Available", "Airwallex", amount(entry.availableMinor), entry.availableMinor === null ? "is-unknown" : null),
+          cashRow("Committed elsewhere", "not sent yet", `- ${amount(entry.committedMinor)}`),
+          entry.floorMinor === null
+            ? cashRow("Reserve floor", `none is set for ${entry.currency}`, "None", "is-unknown")
+            : cashRow("Reserve floor", null, amount(entry.floorMinor)),
+          cashRow("After the run", null, amount(entry.afterMinor), `is-total ${typeof entry.shortMinor === "number" ? "is-negative" : ""}`.trim()),
+        ),
+        typeof entry.problem === "string" && entry.problem !== "" && caution(withPeriod(entry.problem)),
+      ),
+    ),
+  );
+  els.runCash.hidden = false;
+}
+
+function renderRunCancel(run) {
+  const info = run.run;
+  const show = info.state === "waiting";
+  if (!changed("runCancel", [info.id, show])) {
+    syncRunCancel();
+    return;
+  }
+  if (!show) {
+    runCancelRefs = null;
+    els.runCancel.hidden = true;
+    els.runCancel.replaceChildren();
+    return;
+  }
+  const draft = state.runDrafts.get(info.id) ?? {};
+  const remember = () => {
+    state.runDrafts.set(info.id, { ...(state.runDrafts.get(info.id) ?? {}), cancelledBy: cancelledBy.value, note: note.value });
+    if (state.runCancelError !== null) {
+      state.runCancelError = null;
+      syncRunCancel();
+    }
+  };
+  const cancelledBy = h("input", { type: "text", id: "run-cancelled-by", autocomplete: "name", maxlength: "80" });
+  cancelledBy.value = draft.cancelledBy ?? readStoredName();
+  cancelledBy.addEventListener("input", remember);
+  const note = h("input", { type: "text", id: "run-cancel-note", autocomplete: "off", maxlength: "200" });
+  note.value = draft.note ?? "";
+  note.addEventListener("input", remember);
+  const button = h("button", { class: "button", type: "submit" }, "Cancel run");
+  const error = h("p", { class: "form-error", role: "alert", hidden: true });
+  const form = h(
+    "form",
+    { class: "close-form", novalidate: true },
+    h("label", { class: "field" }, h("span", { class: "field__label" }, "Your name"), cancelledBy),
+    h("label", { class: "field" }, h("span", { class: "field__label" }, "Why"), note),
+    button,
+    error,
+    h("p", { class: "hint" }, "Cancelling moves no money. The run's invoice numbers are free again, so a corrected file can use them."),
+  );
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitRunCancel(info.id);
+  });
+  runCancelRefs = { cancelledBy, note, button, error };
+  els.runCancel.replaceChildren(h("h2", { id: "run-cancel-title" }, "Cancel this run"), form);
+  els.runCancel.hidden = false;
+  syncRunCancel();
+}
+
+function syncRunCancel() {
+  if (runCancelRefs === null) {
+    return;
+  }
+  runCancelRefs.button.disabled = state.runCancelling;
+  runCancelRefs.cancelledBy.readOnly = state.runCancelling;
+  runCancelRefs.note.readOnly = state.runCancelling;
+  setText(runCancelRefs.button, state.runCancelling ? "Cancelling" : "Cancel run");
+  if (liveMessage("runCancel", state.runCancelError) === null) {
+    state.runCancelError = null;
+  }
+  showMessage(runCancelRefs.error, state.runCancelError?.message);
+}
+
+async function submitRunCancel(runId) {
+  if (state.runCancelling || runCancelRefs === null) {
+    return;
+  }
+  const cancelledBy = runCancelRefs.cancelledBy.value.trim();
+  const note = runCancelRefs.note.value.trim();
+  const missing =
+    cancelledBy === ""
+      ? { field: runCancelRefs.cancelledBy, message: "Enter your name to cancel." }
+      : note === ""
+        ? { field: runCancelRefs.note, message: "Say why the run is cancelled." }
+        : null;
+  if (missing !== null) {
+    state.runCancelError = actionError("runCancel", missing.message);
+    syncRunCancel();
+    missing.field.focus();
+    return;
+  }
+  state.runCancelling = true;
+  state.runCancelError = null;
+  syncRunCancel();
+  let failure = null;
+  try {
+    await api(`/api/runs/${runId}/cancel`, { method: "POST", body: { cancelledBy, note } });
+    state.runDrafts.delete(runId);
+  } catch (error) {
+    failure = error.message;
+  }
+  try {
+    await refresh();
+  } finally {
+    state.runCancelling = false;
+    if (failure !== null && runIdOf(state.selectedId) === runId) {
+      state.runCancelError = actionError("runCancel", failure);
+    }
+    syncRunCancel();
+  }
+}
+
+function renderRunMain() {
+  const runId = runIdOf(state.selectedId);
+  const run = currentRun();
+  if (run === null) {
+    if (state.runError === null && Date.now() - state.selectedAt < LOADING_DELAY_MS) {
+      return;
+    }
+    setText(els.placeholderTitle, state.runError === null ? `Loading pay run ${runId}` : `Could not load pay run ${runId}`);
+    setText(els.placeholderText, state.runError ?? "");
+    els.runDetail.hidden = true;
+    els.placeholder.hidden = false;
+    showMessage(els.connection, null);
+    return;
+  }
+  showMessage(els.connection, state.runError === null ? null : `Could not refresh this pay run. ${state.runError}`);
+  renderRunHeader(run);
+  renderRunRows(run);
+  renderRunTimeline(run);
+  renderRunApproval(run);
+  renderRunCash(run);
+  renderRunCancel(run);
+  els.placeholder.hidden = true;
+  els.runDetail.hidden = false;
 }
 
 // ---------- cash panel ----------
@@ -2377,15 +3353,25 @@ function cashTotal(lines) {
   return lines.reduce((sum, line) => sum + line.amountMinor + line.feeMinor, 0);
 }
 
-// Links to the invoices behind a line, five at most.
+// Links to the invoices behind a line, five at most. A pay run row not released
+// yet has no invoice to open, so it links to its run.
 function invoiceLinks(lines) {
-  const ids = [...new Set(lines.map((line) => String(line.invoiceId)))];
+  const hrefs = new Map();
+  for (const line of lines) {
+    const id = String(line.invoiceId);
+    if (!hrefs.has(id)) {
+      const fromRun = line.kind === "pay-run" && Number.isInteger(line.runId);
+      const released = (state.incidents ?? []).some((incident) => incident.invoiceId === id);
+      hrefs.set(id, fromRun && !released ? `#run/${line.runId}` : `#${encodeURIComponent(id)}`);
+    }
+  }
+  const ids = [...hrefs.keys()];
   const parts = [];
   ids.slice(0, CASH_INVOICES_SHOWN).forEach((id, index) => {
     if (index > 0) {
       parts.push(", ");
     }
-    parts.push(h("a", { href: `#${encodeURIComponent(id)}` }, id));
+    parts.push(h("a", { href: hrefs.get(id) }, id));
   });
   if (ids.length > CASH_INVOICES_SHOWN) {
     parts.push(` and ${ids.length - CASH_INVOICES_SHOWN} more`);
@@ -2670,7 +3656,9 @@ function renderCash() {
 
 function render() {
   renderForm();
+  renderRunForm();
   renderList();
+  renderRunList();
   renderCash();
   renderMain();
 }
@@ -2678,13 +3666,28 @@ function render() {
 // ---------- start ----------
 
 els.form.addEventListener("submit", startIncident);
+els.runForm.addEventListener("submit", submitRunFile);
 els.payAgain.addEventListener("click", payAgain);
 els.startedBy.value = readStoredName();
+els.runUploadedBy.value = readStoredName();
 els.startedBy.addEventListener("input", () => {
-  storeName(els.startedBy.value);
+  syncNames(els.startedBy);
   if (state.createError !== null) {
     state.createError = null;
     renderForm();
+  }
+});
+els.runUploadedBy.addEventListener("input", () => {
+  syncNames(els.runUploadedBy);
+  if (state.uploadError !== null) {
+    state.uploadError = null;
+    renderRunForm();
+  }
+});
+els.runFile.addEventListener("change", () => {
+  if (state.uploadError !== null) {
+    state.uploadError = null;
+    renderRunForm();
   }
 });
 

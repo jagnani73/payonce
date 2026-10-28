@@ -95,6 +95,32 @@
           </form>
         </section>
 
+        <section class="new-incident" aria-labelledby="run-form-title">
+          <h2 id="run-form-title">Pay run</h2>
+          <form id="run-form" novalidate>
+            <label class="field">
+              <span class="field__label">CSV file</span>
+              <input id="run-file" name="file" type="file" accept=".csv,text/csv" />
+            </label>
+            <label class="field">
+              <span class="field__label">Your name</span>
+              <input id="run-uploaded-by" name="uploadedBy" type="text" autocomplete="name" maxlength="80" />
+            </label>
+            <button id="run-button" class="button button--primary" type="submit">Check file</button>
+            <p id="run-columns" class="hint">Columns: invoice, supplier, beneficiary_id, amount and currency, plus method and sandbox_outcome if you need them. One row per invoice, 50 rows at most.</p>
+            <p class="hint">PayOnce never reads bank details from a file. It pays the account on the beneficiary record.</p>
+            <p class="hint">The person who uploads a run cannot approve it.</p>
+            <div id="run-error" class="form-error" role="alert" hidden></div>
+          </form>
+        </section>
+
+        <section class="runs" aria-labelledby="runs-title">
+          <h2 id="runs-title">Pay runs</h2>
+          <p id="runs-error" class="form-error" role="status" hidden></p>
+          <p id="runs-empty" class="empty" hidden>No pay runs yet</p>
+          <ul id="run-list" class="incident-list"></ul>
+        </section>
+
         <section class="incidents" aria-labelledby="incidents-title">
           <h2 id="incidents-title">Incidents</h2>
           <p id="list-error" class="form-error" role="status" hidden></p>
@@ -162,6 +188,39 @@
                 <div id="emails"></div>
                 <div id="findings"></div>
               </section>
+            </div>
+          </div>
+        </article>
+
+        <article id="run-detail" class="detail" hidden>
+          <header id="run-header" class="detail__header"></header>
+
+          <div class="detail__grid">
+            <div class="detail__side">
+              <section class="card" aria-labelledby="run-rows-title">
+                <h2 id="run-rows-title">Rows</h2>
+                <ol id="run-rows" class="run-rows"></ol>
+              </section>
+
+              <section class="card" aria-labelledby="run-timeline-title">
+                <h2 id="run-timeline-title">Timeline</h2>
+                <ol id="run-timeline" class="timeline" aria-live="polite"></ol>
+                <div id="run-working" class="working" hidden>
+                  <span class="working__marker" aria-hidden="true"><span class="pulse"></span></span>
+                  <p class="working__text">Working on the run. Each payment takes a few seconds in the bank sandbox.</p>
+                </div>
+                <p class="footnote">
+                  A run's own timeline is not hash-chained. The first line of each invoice it releases is, and it names the run, the row and the approval.
+                </p>
+              </section>
+            </div>
+
+            <div class="detail__side">
+              <section id="run-approval" class="card approval" aria-labelledby="run-approval-title" hidden></section>
+
+              <section id="run-cash" class="card" aria-labelledby="run-cash-title" hidden></section>
+
+              <section id="run-cancel" class="card approval" aria-labelledby="run-cancel-title" hidden></section>
             </div>
           </div>
         </article>

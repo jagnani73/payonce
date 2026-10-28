@@ -7,9 +7,9 @@ import {
 } from "node:http";
 import { extname } from "node:path";
 import { BalanceCache } from "./airwallex/balances.js";
-import { AirwallexClient } from "./airwallex/client.js";
+import { AirwallexClient, AirwallexError, AirwallexUnreachableError } from "./airwallex/client.js";
 import { subscribe } from "./airwallex/webhooks.js";
-import type { ApprovalTerms } from "./approval.js";
+import type { ApprovalTerms, RunTerms } from "./approval.js";
 import { describePolicy, policyFromEnv, type Approver, type Barred } from "./approvers.js";
 import {
   auditCsv,
@@ -51,13 +51,41 @@ import {
   isExpired,
   Ledger,
   LEDGER_PATH,
+  NothingToPayError,
+  SameFileError,
+  WaitingRunError,
   type Approval,
   type Attempt,
   type Obligation,
   type OutsidePayout,
+  type Run,
+  type RunApproval,
+  type RunRow,
   type Signoff,
 } from "./ledger.js";
-import { PAID_OUTCOME, SandboxBank, STAYS_IN_FLIGHT } from "./sandbox-bank.js";
+import {
+  cleanFileName,
+  MAX_RUN_FILE_CHARS,
+  MAX_RUN_ROWS,
+  parseRunFile,
+  RUN_COLUMNS,
+  type ParsedRunFile,
+} from "./run-file.js";
+import {
+  approveRun,
+  cancelRun,
+  largestTotal,
+  recheckRun,
+  releaseRun,
+  runBarred,
+  runCounts,
+  runKey,
+  runNoteError,
+  runStatus,
+  uploadRun,
+  type RunCash,
+} from "./runs.js";
+import { SANDBOX_OUTCOMES, SandboxBank } from "./sandbox-bank.js";
 import {
   DEFAULT_EMAILS,
   DEFAULT_SCENARIO,
@@ -94,18 +122,7 @@ const EMAILS_DIR: URL = new URL("../fixtures/emails/", import.meta.url);
 
 const MAX_NAME_LENGTH: number = 80;
 const MAX_FINDING_LENGTH: number = 200;
-
-// What the scripted bank can do to the original: fail it one of these ways, pay
-// it, or leave it in flight past its deadline.
-const BANK_OUTCOMES: string[] = [
-  "CHANNEL_TIMEOUT",
-  "SYSTEM_ERROR",
-  "BENEFICIARY_BANK_RETURNED",
-  "ACCOUNT_CLOSED",
-  "INVALID_ACCOUNT_NAME_OR_NUMBER",
-  STAYS_IN_FLIGHT,
-  PAID_OUTCOME,
-];
+const RUN_ID_PATTERN: RegExp = /^[1-9][0-9]{0,9}$/;
 
 const CONTENT_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -114,20 +131,26 @@ const CONTENT_TYPES: Record<string, string> = {
   ".svg": "image/svg+xml",
 };
 
+// extra is merged into the error's JSON, such as a file's problems or the run a
+// refused upload names.
 class HttpError extends Error {
   readonly status: number;
+  readonly extra: Record<string, unknown>;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, extra: Record<string, unknown> = {}) {
     super(message);
     this.status = status;
+    this.extra = extra;
   }
 }
 
 const client: AirwallexClient = AirwallexClient.fromEnv();
 const ledger: Ledger = new Ledger(LEDGER_PATH);
+// A pay run row's original gets the row's sandbox outcome, kept in the ledger.
 const bank: SandboxBank = new SandboxBank(
   client,
   (invoiceId: string, error: unknown): void => noteError(ledger, invoiceId, error),
+  (invoiceId: string): string | null => ledger.runRowOf(invoiceId)?.sandboxOutcome ?? null,
 );
 const engine: Engine = {
   client,
@@ -138,7 +161,23 @@ const engine: Engine = {
   bank,
 };
 const agent: Dispatcher = new Dispatcher(engine);
-const watcher: Watcher = new Watcher(engine, agent, CHECK_EVERY_MS, SWEEP_EVERY_MS);
+
+// Starts releasing an approved run in its turn and does not wait for it, because
+// the release goes on to send its rows one at a time.
+function startRelease(runId: number): void {
+  agent
+    .run(runKey(runId), (): Promise<void> => releaseRun(engine, agent, runId))
+    .catch((error: unknown): void => {
+      runNoteError(
+        engine.ledger,
+        runId,
+        error,
+        "The run could not be released, and PayOnce tries again in a minute: ",
+      );
+    });
+}
+
+const watcher: Watcher = new Watcher(engine, agent, CHECK_EVERY_MS, SWEEP_EVERY_MS, startRelease);
 // After each read it fills in the fees of failed transfers the ledger has none for.
 // That writes only fee columns, so it runs outside the invoices' turns.
 const balances: BalanceCache = new BalanceCache(
@@ -236,8 +275,10 @@ async function readJson(request: IncomingMessage): Promise<Record<string, unknow
 // What was running lives in memory, so a restart forgets it. Any invoice with a
 // payment still pending or in flight is looked at again, which syncs it with
 // Airwallex and never sends a new payment by itself. In the sandbox the bank
-// also goes back to paying a replacement it had not finished with, and an
-// original paid on an approval after a hold.
+// also goes back to paying a replacement it had not finished with, an original
+// paid on an approval after a hold, and a pay run row's original, which gets the
+// row's sandbox outcome. A released row that never sent is left to the watcher,
+// which wakes such rows one at a time.
 function pickUpInterrupted(): void {
   for (const obligation of engine.ledger.obligations()) {
     if (
@@ -249,7 +290,8 @@ function pickUpInterrupted(): void {
     }
     const latest: Approval | undefined = engine.ledger.latestApproval(obligation.invoiceId);
     const released: boolean =
-      latest?.state === "used" && (JSON.parse(latest.terms) as ApprovalTerms).action === "pay";
+      obligation.runRowId !== null ||
+      (latest?.state === "used" && (JSON.parse(latest.terms) as ApprovalTerms).action === "pay");
     for (const attempt of engine.ledger.attempts(obligation.invoiceId)) {
       if (
         (attempt.kind === "replacement" || released) &&
@@ -388,6 +430,7 @@ function listIncidents(): unknown {
       headline: engine.ledger.events(obligation.invoiceId).at(-1)?.message ?? "",
       busy: isBusy(obligation.invoiceId),
       watching: isWatching(obligation.invoiceId),
+      runId: engine.ledger.runRowOf(obligation.invoiceId)?.runId ?? null,
     })),
   };
 }
@@ -440,8 +483,10 @@ function incidentDetail(invoiceId: string): unknown {
   const approval: Approval | undefined = engine.ledger.latestApproval(invoiceId);
   // The approval card shows who may not approve, and that is the same for any request.
   const barred: Barred[] = pendingApproval(engine.ledger, invoiceId)?.barred ?? [];
+  const row: RunRow | undefined = engine.ledger.runRowOf(invoiceId);
   return {
     obligation,
+    run: row === undefined ? null : { id: row.runId, line: row.line },
     attempts: engine.ledger.attempts(invoiceId),
     emails: engine.ledger.emails(invoiceId),
     findings: findings === undefined ? null : (JSON.parse(findings) as EmailFindings),
@@ -475,7 +520,7 @@ async function startIncident(request: IncomingMessage): Promise<unknown> {
   const body: Record<string, unknown> = await readJson(request);
   const bankOutcome: unknown = body["bankOutcome"];
   const emailsName: unknown = body["emails"];
-  if (typeof bankOutcome !== "string" || !BANK_OUTCOMES.includes(bankOutcome)) {
+  if (typeof bankOutcome !== "string" || !SANDBOX_OUTCOMES.includes(bankOutcome)) {
     throw new HttpError(400, "Unknown bank outcome");
   }
   if (typeof emailsName !== "string" || !emailThreads().includes(emailsName)) {
@@ -502,6 +547,13 @@ async function startIncident(request: IncomingMessage): Promise<unknown> {
   }
   if (given !== "" && engine.ledger.obligation(given) !== undefined) {
     throw new HttpError(409, `${given} is already in the ledger, and PayOnce pays an invoice number once`);
+  }
+  const waitingRow: RunRow | undefined = given === "" ? undefined : engine.ledger.waitingRunRow(given);
+  if (waitingRow !== undefined) {
+    throw new HttpError(
+      409,
+      `${given} is on pay run ${waitingRow.runId}, which is waiting for approval, and PayOnce pays an invoice number once`,
+    );
   }
   const invoiceId: string = given === "" ? newInvoiceId(engine.ledger) : given;
   const obligation: Obligation = await openScenario(engine, invoiceId, scenarioId, startedBy);
@@ -642,6 +694,210 @@ function resume(invoiceId: string): unknown {
   return { ok: true };
 }
 
+// ---------- pay runs ----------
+
+function requireRun(raw: string): Run {
+  const run: Run | undefined = RUN_ID_PATTERN.test(raw) ? engine.ledger.run(Number(raw)) : undefined;
+  if (run === undefined) {
+    throw new HttpError(404, `Run ${raw.slice(0, 20)} is not in the ledger`);
+  }
+  return run;
+}
+
+function releasedInvoices(run: Run): string[] {
+  return engine.ledger
+    .runRows(run.id)
+    .filter((row: RunRow): boolean => row.state === "released" && row.invoiceId !== null)
+    .map((row: RunRow): string => row.invoiceId ?? "");
+}
+
+// True while the run's own step or any of its invoices is being worked on.
+function runBusy(run: Run): boolean {
+  return agent.isBusy(runKey(run.id)) || releasedInvoices(run).some(isBusy);
+}
+
+function runWatching(run: Run): boolean {
+  return releasedInvoices(run).some(isWatching);
+}
+
+function listRuns(): unknown {
+  return {
+    runs: engine.ledger.runs().map((run: Run) => ({
+      id: run.id,
+      fileName: run.fileName,
+      uploadedBy: run.uploadedBy,
+      uploadedAt: run.uploadedAt,
+      state: run.state,
+      status: runStatus(engine.ledger, run),
+      counts: runCounts(engine.ledger.runRows(run.id)),
+      busy: runBusy(run),
+      watching: runWatching(run),
+    })),
+  };
+}
+
+// A released row's invoice as the rows card shows it.
+function invoiceSummary(invoiceId: string): unknown {
+  const obligation: Obligation | undefined = engine.ledger.obligation(invoiceId);
+  if (obligation === undefined) {
+    return null;
+  }
+  return {
+    invoiceId,
+    state: obligation.state,
+    attempts: engine.ledger.attempts(invoiceId).map((attempt: Attempt) => ({
+      kind: attempt.kind,
+      state: attempt.state,
+      reference: attempt.reference,
+    })),
+    busy: isBusy(invoiceId),
+    watching: isWatching(invoiceId),
+  };
+}
+
+function runDetail(raw: string): unknown {
+  const run: Run = requireRun(raw);
+  const rows: RunRow[] = engine.ledger.runRows(run.id);
+  const approval: RunApproval | undefined = engine.ledger.latestRunApproval(run.id);
+  const terms: RunTerms | null =
+    approval === undefined ? null : (JSON.parse(approval.terms) as RunTerms);
+  return {
+    run: {
+      id: run.id,
+      fileName: run.fileName,
+      fileHash: run.fileHash,
+      columns: run.columns,
+      uploadedBy: run.uploadedBy,
+      uploadedAt: run.uploadedAt,
+      state: run.state,
+      checkedAt: run.checkedAt,
+      releasedAt: run.releasedAt,
+      cancelledBy: run.cancelledBy,
+      cancelNote: run.cancelNote,
+    },
+    status: runStatus(engine.ledger, run),
+    counts: runCounts(rows),
+    rows: rows.map((row: RunRow) => ({
+      ...row,
+      invoice:
+        row.state === "released" && row.invoiceId !== null ? invoiceSummary(row.invoiceId) : null,
+    })),
+    cash: JSON.parse(run.cash) as RunCash[],
+    approval:
+      approval === undefined || terms === null
+        ? null
+        : {
+            id: approval.id,
+            state: approval.state,
+            approver: approval.approver,
+            terms,
+            needed: approval.needed,
+            neededWhy: approval.neededWhy,
+            signoffs: approval.signoffs.map((signoff: Signoff) => ({
+              approver: signoff.approver,
+              at: signoff.at,
+            })),
+            expiresAt: approval.expiresAt,
+            expired: isExpired(approval),
+            barred: runBarred(engine.ledger, terms),
+            largest: largestTotal(terms.totals),
+          },
+    events: engine.ledger.runEvents(run.id),
+    busy: runBusy(run),
+    watching: runWatching(run),
+  };
+}
+
+function name(body: Record<string, unknown>, field: string, missing: string): string {
+  const value: string = text(body, field);
+  if (value === "" || value.length > MAX_NAME_LENGTH) {
+    throw new HttpError(400, missing);
+  }
+  return value;
+}
+
+// An Airwallex read that failed while checking a file is the bank's problem, not
+// the file's.
+function airwallexDown(error: unknown): HttpError | undefined {
+  return error instanceof AirwallexError || error instanceof AirwallexUnreachableError
+    ? new HttpError(502, `Airwallex could not be read, so the file was not checked: ${error.message}`)
+    : undefined;
+}
+
+// The page sends the file's text inside JSON, so the guard's Origin and content
+// type checks cover an upload too, and nothing parses multipart. The checks are a
+// handful of Airwallex GETs, so the answer waits for them.
+async function uploadRunFile(request: IncomingMessage): Promise<unknown> {
+  const body: Record<string, unknown> = await readJson(request);
+  const uploadedBy: string = name(body, "uploadedBy", "Enter your name");
+  const csv: unknown = body["csv"];
+  if (typeof csv !== "string") {
+    throw new HttpError(400, "Choose a CSV file");
+  }
+  const parsed: ParsedRunFile = parseRunFile(
+    typeof body["fileName"] === "string" ? cleanFileName(body["fileName"]) : "",
+    csv,
+  );
+  if (!parsed.ok) {
+    throw new HttpError(400, "PayOnce cannot read this file", { problems: parsed.problems });
+  }
+  try {
+    return { runId: await uploadRun(engine, parsed.file, uploadedBy) };
+  } catch (error: unknown) {
+    if (error instanceof WaitingRunError || error instanceof SameFileError) {
+      throw new HttpError(409, error.message, { runId: error.runId });
+    }
+    if (error instanceof NothingToPayError) {
+      throw new HttpError(422, error.message, { rows: error.rows });
+    }
+    throw airwallexDown(error) ?? error;
+  }
+}
+
+// A person's action on a run waits its turn behind any step already running on it.
+async function inRunTurn<T>(runId: number, step: () => Promise<T> | T): Promise<T> {
+  try {
+    return await agent.run(runKey(runId), step);
+  } catch (error: unknown) {
+    throw airwallexDown(error) ?? new HttpError(409, error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function approveRunByPerson(request: IncomingMessage, raw: string): Promise<unknown> {
+  const run: Run = requireRun(raw);
+  const body: Record<string, unknown> = await readJson(request);
+  const approver: string = name(body, "approver", "Enter the approver's name");
+  const approvalId: unknown = body["approvalId"];
+  if (typeof approvalId !== "number" || !Number.isInteger(approvalId)) {
+    throw new HttpError(400, "Say which approval request is being approved");
+  }
+  const after: RunApproval = await inRunTurn(run.id, (): RunApproval =>
+    approveRun(engine.ledger, engine.approvals, run.id, approver, approvalId),
+  );
+  if (after.state === "approved") {
+    startRelease(run.id);
+  }
+  return { ok: true, approved: after.state === "approved" };
+}
+
+async function checkRunAgain(raw: string): Promise<unknown> {
+  const run: Run = requireRun(raw);
+  await inRunTurn(run.id, (): Promise<void> => recheckRun(engine, run.id));
+  return { ok: true };
+}
+
+async function cancelRunByPerson(request: IncomingMessage, raw: string): Promise<unknown> {
+  const run: Run = requireRun(raw);
+  const body: Record<string, unknown> = await readJson(request);
+  const cancelledBy: string = name(body, "cancelledBy", "Enter your name");
+  const note: string = text(body, "note");
+  if (note === "" || note.length > MAX_FINDING_LENGTH) {
+    throw new HttpError(400, "Say why the run is cancelled");
+  }
+  await inRunTurn(run.id, (): void => cancelRun(engine.ledger, run.id, cancelledBy, note));
+  return { ok: true };
+}
+
 // Only files that exist directly in web/ are served, so a path cannot leave it.
 function serveStatic(response: ServerResponse, pathname: string): void {
   const name: string = pathname === "/" ? "index.html" : pathname.slice(1);
@@ -679,8 +935,12 @@ async function route(
   const invoiceId: string | undefined = parts[2];
   if (method === "GET" && pathname === "/api/options") {
     sendJson(response, 200, {
-      bankOutcomes: BANK_OUTCOMES,
+      bankOutcomes: SANDBOX_OUTCOMES,
       emailThreads: emailThreads(),
+      runColumns: RUN_COLUMNS,
+      sandboxOutcomes: SANDBOX_OUTCOMES,
+      maxRunRows: MAX_RUN_ROWS,
+      maxRunFileChars: MAX_RUN_FILE_CHARS,
       approvers: engine.approvals.approvers.map((approver: Approver) => ({
         name: approver.name,
         limitMinor: approver.limitMinor,
@@ -697,6 +957,23 @@ async function route(
     });
   } else if (method === "GET" && pathname === "/api/cash") {
     sendJson(response, 200, cash());
+  } else if (method === "GET" && pathname === "/api/runs") {
+    sendJson(response, 200, listRuns());
+  } else if (method === "POST" && pathname === "/api/runs") {
+    sendJson(response, 201, await uploadRunFile(request));
+  } else if (parts[1] === "runs" && parts[2] !== undefined) {
+    const runId: string = parts[2];
+    if (method === "GET" && parts.length === 3) {
+      sendJson(response, 200, runDetail(runId));
+    } else if (method === "POST" && parts[3] === "approve" && parts.length === 4) {
+      sendJson(response, 200, await approveRunByPerson(request, runId));
+    } else if (method === "POST" && parts[3] === "check" && parts.length === 4) {
+      sendJson(response, 200, await checkRunAgain(runId));
+    } else if (method === "POST" && parts[3] === "cancel" && parts.length === 4) {
+      sendJson(response, 200, await cancelRunByPerson(request, runId));
+    } else {
+      throw new HttpError(404, "Not found");
+    }
   } else if (method === "GET" && pathname === "/api/incidents") {
     sendJson(response, 200, listIncidents());
   } else if (method === "POST" && pathname === "/api/incidents") {
@@ -781,7 +1058,10 @@ const server: Server = createServer(
         response.end();
         return;
       }
-      sendJson(response, status, { error: message });
+      sendJson(response, status, {
+        error: message,
+        ...(error instanceof HttpError ? error.extra : {}),
+      });
     });
   },
 );

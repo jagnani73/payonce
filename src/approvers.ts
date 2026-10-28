@@ -187,3 +187,55 @@ export function checkSigner(
   }
   return approver;
 }
+
+// What a check of an approval needs from it, for an invoice's request and a
+// run's alike.
+export interface SignedRequest {
+  binding: string;
+  needed: number;
+  signoffs: SignedBy[];
+}
+
+interface SignedBy {
+  approver: string;
+  binding: string;
+}
+
+// Why an approval no longer covers the payment under the approval policy as it
+// is now, or null when it still does: every signoff has the request's binding,
+// there are enough of them, and each signer still passes checkSigner. The policy
+// may have changed since they signed: an approver removed, a limit lowered, or a
+// rule that now needs two.
+export function signoffProblem(
+  policy: ApprovalPolicy,
+  rule: SignoffRule,
+  approval: SignedRequest,
+  amountMinor: number,
+  currency: string,
+  barred: Barred[],
+): string | null {
+  if (approval.signoffs.some((signoff: SignedBy): boolean => signoff.binding !== approval.binding)) {
+    return "an approver signed different terms";
+  }
+  const needed: number = Math.max(approval.needed, rule.needed);
+  if (approval.signoffs.length < needed) {
+    return `it now needs ${needed} approvers, because ${rule.why}`;
+  }
+  for (const signoff of approval.signoffs) {
+    try {
+      checkSigner(
+        policy,
+        signoff.approver,
+        amountMinor,
+        currency,
+        barred,
+        approval.signoffs
+          .filter((other: SignedBy): boolean => other !== signoff)
+          .map((other: SignedBy): string => other.approver),
+      );
+    } catch (error: unknown) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  }
+  return null;
+}

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { Transfer, TransferBankDetails } from "./airwallex/transfers.js";
 import { bankDetailsKey, originalStateOf } from "./assess.js";
 import type { Decision, OriginalTransferState } from "./incident.js";
-import type { BankChange, Obligation, ObligationState } from "./ledger.js";
+import type { BankChange, Obligation, ObligationState, TransferMethod } from "./ledger.js";
 
 // The callback that verified the bank details the payment goes to, when they are
 // not the ones the original went to.
@@ -70,8 +70,86 @@ export interface HeldPaymentTerms extends PaymentTerms {
 // stable.
 export type ApprovalTerms = ReplacementTerms | HeldPaymentTerms;
 
-function payTo(obligation: Obligation, details: TransferBankDetails): string {
-  const parts: string[] = [details.account_name ?? obligation.supplier];
+// One pay row of a run as its approvers see it. heldFor lists the invoices in the
+// ledger the row looks like a second bill for: it is released with the run, and
+// PayOnce holds it for a person when it comes to send it.
+export interface RunRowTerms {
+  line: number;
+  invoiceId: string;
+  amountMinor: number;
+  currency: string;
+  beneficiaryId: string;
+  transferMethod: TransferMethod;
+  payTo: string;
+  accountKey: string;
+  heldFor: string[];
+  // The callback that verified the account, when PayOnce last paid this supplier
+  // another one.
+  bankChange: number | null;
+}
+
+// A currency's pay rows. reserveFloorMinor is the floor the cash check used, null
+// when none is set for the currency.
+export interface RunTotal {
+  currency: string;
+  amountMinor: number;
+  payments: number;
+  reserveFloorMinor: number | null;
+}
+
+// What a run's approvers approve: every pay row in file order and the totals per
+// currency, sorted by code. Skipped rows move no money and are left out. Build it
+// only with runTermsFor so the key order, and with it the binding, stays stable.
+export interface RunTerms {
+  action: "run";
+  runId: number;
+  fileHash: string;
+  uploadedBy: string;
+  rows: RunRowTerms[];
+  totals: RunTotal[];
+}
+
+export function runTermsFor(
+  runId: number,
+  fileHash: string,
+  uploadedBy: string,
+  rows: RunRowTerms[],
+  totals: RunTotal[],
+): RunTerms {
+  return {
+    action: "run",
+    runId,
+    fileHash,
+    uploadedBy,
+    rows: rows.map(
+      (row: RunRowTerms): RunRowTerms => ({
+        line: row.line,
+        invoiceId: row.invoiceId,
+        amountMinor: row.amountMinor,
+        currency: row.currency,
+        beneficiaryId: row.beneficiaryId,
+        transferMethod: row.transferMethod,
+        payTo: row.payTo,
+        accountKey: row.accountKey,
+        heldFor: row.heldFor,
+        bankChange: row.bankChange,
+      }),
+    ),
+    totals: totals.map(
+      (total: RunTotal): RunTotal => ({
+        currency: total.currency,
+        amountMinor: total.amountMinor,
+        payments: total.payments,
+        reserveFloorMinor: total.reserveFloorMinor,
+      }),
+    ),
+  };
+}
+
+// Who a payment goes to, as a person reads it: the account name, the bank and the
+// last four characters of the account.
+export function payTo(supplier: string, details: TransferBankDetails): string {
+  const parts: string[] = [details.account_name ?? supplier];
   if (details.bank_name !== undefined) {
     parts.push(details.bank_name);
   }
@@ -99,7 +177,7 @@ export function termsFor(
     amountMinor: obligation.amountMinor,
     currency: obligation.currency,
     beneficiaryId: obligation.beneficiaryId,
-    payTo: payTo(obligation, bankDetails),
+    payTo: payTo(obligation.supplier, bankDetails),
     accountKey: accountKeyOf(bankDetails),
     evidence: {
       originalReference: original.short_reference_id,
@@ -136,7 +214,7 @@ export function heldTermsFor(
     amountMinor: obligation.amountMinor,
     currency: obligation.currency,
     beneficiaryId: obligation.beneficiaryId,
-    payTo: payTo(obligation, bankDetails),
+    payTo: payTo(obligation.supplier, bankDetails),
     accountKey: accountKeyOf(bankDetails),
     evidence: {
       reason: obligation.escalationReason,
@@ -154,7 +232,7 @@ export function accountKeyOf(details: TransferBankDetails | undefined): string {
   return keyHash(bankDetailsKey(details));
 }
 
-export function bindingOf(terms: ApprovalTerms): string {
+export function bindingOf(terms: ApprovalTerms | RunTerms): string {
   return createHash("sha256").update(JSON.stringify(terms)).digest("hex");
 }
 

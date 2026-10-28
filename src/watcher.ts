@@ -9,7 +9,12 @@ import {
   type AttemptState,
   type OutsidePayout,
 } from "./ledger.js";
+import { runKey } from "./runs.js";
 import { sweep } from "./sweep.js";
+
+// A release that failed, for example because Airwallex could not be read, is
+// tried again this much later, not on every check.
+const RETRY_RELEASE_MS: number = 60_000;
 
 // The fallback for webhooks. It checks every payment the ledger still shows in
 // flight, PayOnce's own and those for its invoices sent outside it, and wakes the
@@ -18,14 +23,20 @@ import { sweep } from "./sweep.js";
 // nobody has acted on yet, such as one given with pnpm approve while the server
 // was running. Given a sweep interval, it also sweeps Airwallex for payouts
 // PayOnce did not send.
+// Given release, which only the server passes, it releases a run once its
+// approval is complete, and wakes a released row that has not sent its first
+// payment once the release has stopped going through the rows, one row per run
+// per check. Without it, as in the CLI, it never touches such a row.
 export class Watcher {
   private readonly engine: Engine;
   private readonly agent: Dispatcher;
   private readonly sweepEveryMs: number | null;
+  private readonly release: ((runId: number) => void) | null;
   private intervalMs: number;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private lastSweep: number = 0;
   private sweepRequested: boolean = false;
+  private readonly releaseTriedAt: Map<number, number> = new Map<number, number>();
   // When a check last went through the payments with the bank. A state the ledger
   // still shows then is at most one interval old, because a change wakes the
   // invoice. Null before the first check.
@@ -36,11 +47,13 @@ export class Watcher {
     agent: Dispatcher,
     intervalMs: number,
     sweepEveryMs: number | null = null,
+    release: ((runId: number) => void) | null = null,
   ) {
     this.engine = engine;
     this.agent = agent;
     this.intervalMs = intervalMs;
     this.sweepEveryMs = sweepEveryMs;
+    this.release = release;
   }
 
   start(): void {
@@ -83,6 +96,14 @@ export class Watcher {
   async check(): Promise<void> {
     const now: number = Date.now();
     const due: ReadonlySet<string> = new Set<string>(this.engine.ledger.dueLooks(now));
+    // Released rows that have not sent their first payment. Only the release, or
+    // this check in the server once the release has stopped, sends them.
+    const unsent: Map<string, number> = new Map(
+      this.engine.ledger
+        .unsentRunInvoices()
+        .map((row: { invoiceId: string; runId: number }): [string, number] => [row.invoiceId, row.runId]),
+    );
+    const runsWoken: Set<number> = new Set<number>();
     for (const obligation of this.engine.ledger.obligations()) {
       const invoiceId: string = obligation.invoiceId;
       if (
@@ -90,6 +111,19 @@ export class Watcher {
         obligation.state === "rejected" ||
         this.agent.isBusy(invoiceId)
       ) {
+        continue;
+      }
+      const runId: number | undefined = unsent.get(invoiceId);
+      if (runId !== undefined) {
+        if (
+          this.release !== null &&
+          due.has(invoiceId) &&
+          !runsWoken.has(runId) &&
+          !this.agent.isBusy(runKey(runId))
+        ) {
+          runsWoken.add(runId);
+          this.agent.wake(invoiceId);
+        }
         continue;
       }
       // An approval nobody has acted on yet, or a request that expired with no
@@ -132,6 +166,15 @@ export class Watcher {
       }
     }
     this.lastCheckedAt = Date.now();
+    if (this.release !== null) {
+      for (const runId of this.engine.ledger.approvedRuns()) {
+        const tried: number = this.releaseTriedAt.get(runId) ?? Number.NEGATIVE_INFINITY;
+        if (!this.agent.isBusy(runKey(runId)) && Date.now() - tried >= RETRY_RELEASE_MS) {
+          this.releaseTriedAt.set(runId, Date.now());
+          this.release(runId);
+        }
+      }
+    }
     if (
       this.sweepEveryMs !== null &&
       (this.sweepRequested || Date.now() - this.lastSweep >= this.sweepEveryMs)
