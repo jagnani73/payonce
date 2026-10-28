@@ -47,14 +47,37 @@ const WORKER_START_MS: number = 15_000;
 const TOO_SLOW: string = `PayOnce gave up reading this email because it took more than ${PARSE_BUDGET_MS / 1000} seconds, and did not keep it. Read it in your mail client instead, and report it, because no email should take this long`;
 const TOO_MUCH_MEMORY: string = `PayOnce gave up reading this email because it needed more than ${PARSE_HEAP_MB} MB of memory, and did not keep it. Read it in your mail client instead, and report it, because no email should need this much`;
 
+// Every waiting upload holds its bytes, up to 2 MB, so only this many wait behind
+// the one being parsed.
+const MAX_WAITING_PARSES: number = 4;
+
+// Refused when MAX_WAITING_PARSES uploads already wait, before anything is kept.
+export class ParserBusyError extends Error {
+  constructor() {
+    super("PayOnce is reading other emails, try again in a moment");
+    this.name = "ParserBusyError";
+  }
+}
+
 // One parse at a time, so uploads arriving together cost one worker's memory.
 let parsing: Promise<unknown> = Promise.resolve();
+// Uploads taken and not yet answered, the one being parsed included.
+let taken: number = 0;
 
 // Parses an upload in a worker thread, off the thread that runs the agent and
 // the page. Throws EmailRefusedError for an email PayOnce cannot read, or one
-// that took longer than PARSE_BUDGET_MS or more than PARSE_HEAP_MB to read.
+// that took longer than PARSE_BUDGET_MS or more than PARSE_HEAP_MB to read, and
+// ParserBusyError when too many uploads already wait.
 export function parseUpload(raw: Buffer, source: UploadSource): Promise<ParsedEmail> {
-  const next: Promise<ParsedEmail> = parsing.then((): Promise<ParsedEmail> => parseInWorker(raw, source));
+  if (taken > MAX_WAITING_PARSES) {
+    return Promise.reject(new ParserBusyError());
+  }
+  taken += 1;
+  const next: Promise<ParsedEmail> = parsing
+    .then((): Promise<ParsedEmail> => parseInWorker(raw, source))
+    .finally((): void => {
+      taken -= 1;
+    });
   parsing = next.catch((): void => undefined);
   return next;
 }

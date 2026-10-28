@@ -67,6 +67,7 @@ import {
   deliverUpload,
   EmailRefusedError,
   parseUpload,
+  ParserBusyError,
   storeUpload,
   UploadNotWaitingError,
   type Match,
@@ -1254,6 +1255,9 @@ async function addUpload(request: IncomingMessage): Promise<unknown> {
   } catch (error: unknown) {
     if (error instanceof EmailRefusedError) {
       throw new HttpError(error.tooLarge ? 413 : 400, error.message);
+    }
+    if (error instanceof ParserBusyError) {
+      throw new HttpError(503, error.message);
     }
     if (error instanceof DuplicateUploadError) {
       throw new HttpError(409, error.message, {
