@@ -222,10 +222,10 @@ PayOnce reads each transfer's fee and keeps it in the ledger, and fills in older
 
 The page opens on the incident board, under the cash panel. It lists every invoice that is not closed, and the rows of a pay run waiting for approval, in four groups, most urgent first:
 
-1. Waiting on a person, with money that could still leave a wallet: an approval request that is open, or approved and not used yet, an invoice held before paying, a failed payment with no request open, a pay run waiting for approval, or an invoice that an email waiting in the inbox names on its own, so the inbox offers it first. An email that names the invoice beside others, only nearly, or inside other digits adds a note to it and leaves it in its group.
+1. Waiting on a person, with money that could still leave a wallet: an approval request that is open, an invoice held before paying, a failed payment with no request open, a pay run waiting for approval, or an invoice that an email waiting in the inbox names on its own, so the inbox offers it first. An email that names the invoice beside others, only nearly, or inside other digits adds a note to it and leaves it in its group.
 2. Bank deadline passed: a payment still with the bank after its deadline.
 3. With the bank: a payment, or a payout sent outside PayOnce, that the bank still has.
-4. Everything else that is open, such as a paid invoice waiting for someone to close it, an approved pay run that PayOnce releases on its next check, or a pay run row waiting for its turn.
+4. Everything else that is open, such as an approved payment that PayOnce sends on its next look, an approved pay run that it releases on its next check, a pay run row waiting for its turn, or a paid invoice waiting for someone to close it.
 
 Within a group, the invoice with the most money at risk comes first, then the oldest. Money at risk is what could still leave a wallet for the invoice, fee included, in the currency of the wallet it leaves: a payment being sent, approved or waiting on a person, a held invoice's amount, a pay run row, or a payment still with the bank. For an invoice paid from another wallet it is the quote's amount. The board takes these figures from the cash panel and never works them out another way.
 

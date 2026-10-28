@@ -287,9 +287,6 @@ function personSituation(
   now: number,
 ): Situation | null {
   const latest: Approval | undefined = ledger.latestApproval(obligation.invoiceId);
-  if (kinds.has("approved")) {
-    return situation("person", "approved", "Approved, and PayOnce sends the payment on its next look");
-  }
   if (kinds.has("awaiting-approval") && latest !== undefined) {
     const terms: ApprovalTerms = JSON.parse(latest.terms) as ApprovalTerms;
     return terms.action === "pay"
@@ -326,6 +323,11 @@ function otherSituation(
   }
   if (lines.some((line: CashLine): boolean => line.kind === "sending")) {
     return situation("open", "sending", "PayOnce is sending a payment and has no transfer for it yet");
+  }
+  // The look spends an approved request, as the watcher releases an approved run,
+  // so the next step is PayOnce's.
+  if (lines.some((line: CashLine): boolean => line.kind === "approved")) {
+    return situation("open", "approved", "The payment is approved, and PayOnce sends it on its next look");
   }
   if (obligation.state === "escalated") {
     return pendingClose(ledger, obligation.invoiceId) === undefined
