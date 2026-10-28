@@ -869,7 +869,13 @@ function awaitApproval(
   let latest: Approval | undefined = engine.ledger.latestApproval(invoiceId);
   const sameRequest: boolean =
     latest?.state === "requested" && latest.binding === binding && latest.needed >= rule.needed;
-  if (sameRequest && latest !== undefined && isExpired(latest)) {
+  // A partly signed request that expired is reported as expired, even when the
+  // terms have changed since.
+  if (
+    latest?.state === "requested" &&
+    isExpired(latest) &&
+    (sameRequest || latest.signoffs.length > 0)
+  ) {
     note(
       engine.ledger,
       invoiceId,
@@ -1051,7 +1057,8 @@ function namingFloor(assessment: Assessment): Assessment {
 }
 
 // namingFloor, and a line on the timeline once the floor stops applying after a
-// line said it applied.
+// line said it applied. The line says an approval still counts only when an open
+// request or approval named the floor.
 function withFloorReason(
   engine: Engine,
   obligation: Obligation,
@@ -1061,43 +1068,59 @@ function withFloorReason(
     .reverse()
     .find((event: LedgerEvent): boolean => event.topic === "floor");
   if (floorReason(assessment.incident) === null && lastFloorLine?.kind === "warning") {
+    const approval: Approval | undefined = engine.ledger.latestApproval(obligation.invoiceId);
+    const above: string =
+      "A replacement and its transfer fee would now leave cash above the reserve floor";
     note(
       engine.ledger,
       obligation.invoiceId,
       "payment",
-      "A replacement and its transfer fee would now leave cash above the reserve floor. An approval of a request that named the floor still counts",
+      requestedDecision(obligation, assessment, approval) === undefined
+        ? above
+        : `${above}. An approval of a request that named the floor still counts`,
       "floor",
     );
   }
   return namingFloor(assessment);
 }
 
-// The assessment as an open request or approval saw it, when the floor applied
+// The decision an open request or approval was made under, when the floor applied
 // then and does not now: cash was below it, could not be read, or no floor was
-// set. Only the floor is changed, so the policy gives the reason it gave then. An
-// approval given with less cash than there is now still covers the replacement.
-// Otherwise the assessment as it is.
-function asRequested(
+// set. Only the floor is changed, so the policy gives the reason it gave then.
+// Undefined when no open request or approval named the floor.
+function requestedDecision(
   obligation: Obligation,
   assessment: Assessment,
   approval: Approval | undefined,
-): Assessment {
+): Decision | undefined {
   if (
     approval === undefined ||
     (approval.state !== "requested" && approval.state !== "approved") ||
     isExpired(approval) ||
     floorReason(assessment.incident) !== null
   ) {
-    return assessment;
+    return undefined;
   }
   for (const floorMinor of [Number.MAX_SAFE_INTEGER, Number.NaN, null]) {
     const incident: Incident = { ...assessment.incident, reserveFloorMinor: floorMinor };
     const requested: Assessment = namingFloor({ ...assessment, incident, decision: decide(incident) });
     if (bindingOf(termsOf(obligation, requested)) === approval.binding) {
-      return { ...assessment, decision: requested.decision };
+      return requested.decision;
     }
   }
-  return assessment;
+  return undefined;
+}
+
+// The assessment as an open request or approval that named the floor saw it, so
+// an approval given with less cash than there is now still covers the
+// replacement. Otherwise the assessment as it is.
+function asRequested(
+  obligation: Obligation,
+  assessment: Assessment,
+  approval: Approval | undefined,
+): Assessment {
+  const decision: Decision | undefined = requestedDecision(obligation, assessment, approval);
+  return decision === undefined ? assessment : { ...assessment, decision };
 }
 
 async function continueEscalated(
