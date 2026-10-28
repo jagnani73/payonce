@@ -1117,11 +1117,18 @@ async function continueEscalated(
   );
   const assessment: Assessment = asRequested(obligation, assessed, approval);
   const current: ReplacementTerms = termsOf(obligation, assessment);
-  if (
-    approval?.state !== "approved" ||
-    voidIfStale(engine, obligation, approval, current, ruleFor(engine, obligation, assessment))
-  ) {
-    return escalate(engine, obligation, assessment);
+  const rule: SignoffRule = ruleFor(engine, obligation, assessment);
+  // A request that stays open keeps the terms it was opened with. A new one, after
+  // a void or because more approvers are needed, gives the terms as they are now.
+  if (approval?.state !== "approved") {
+    return escalate(
+      engine,
+      obligation,
+      approval?.state === "requested" && approval.needed >= rule.needed ? assessment : assessed,
+    );
+  }
+  if (voidIfStale(engine, obligation, approval, current, rule)) {
+    return escalate(engine, obligation, assessed);
   }
 
   // A payout tied to the invoice now is looked at before anything is sent, and the
