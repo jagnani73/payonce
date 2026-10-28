@@ -258,15 +258,15 @@ PayOnce can post to a Slack or Discord channel when something needs a person. It
 
 Set `ALERT_WEBHOOK_URL` to a Slack incoming webhook (`https://hooks.slack.com/services/...`) or a Discord webhook (`https://discord.com/api/webhooks/...` or the same on `discordapp.com`, with `ALERT_FORMAT=discord`). PayOnce takes no other address. If the setting is wrong, the start-up line says why and nothing is posted. With no address set, PayOnce makes no alert calls at all. Treat the address as a password and keep it in `.env`. PayOnce prints its host and never the rest.
 
-Only `pnpm ui` posts. Every 5 seconds it works out from the ledger what needs a person, which is the same state the page shows, so an incident escalated in the terminal is alerted by the server on its next check. A condition alerts once when it appears, and again only when it changes: an approval request opening on an escalated invoice, say, or a new reason. A request renewed on the same terms does not alert again, and neither does a floor clause that comes and goes as the balance moves. Each alert waits 10 seconds before it goes out, so when a request opens a moment after an escalation, only the request is posted. A condition that clears and comes back within 10 minutes alerts again only if it changed.
+Only `pnpm ui` posts. Every 5 seconds it works out from the ledger what needs a person, which is the same state the page shows, so an incident escalated in the terminal is alerted by the server on its next check. A condition alerts once when it appears, and again only when it changes: an approval request opening on an escalated invoice, say, or a new reason. A request renewed on the same terms does not alert again, and neither does a floor clause that comes and goes as the balance moves. Each alert waits 10 seconds before it goes out, so when a request opens a moment after an escalation, only the request is posted. If the condition then goes back to what it was, as when that request is withdrawn, the alert held back is posted after all. A condition that clears and comes back within 10 minutes alerts again only if it changed.
 
-The first time alerts are on for a ledger, PayOnce records what is already waiting and posts one summary, such as "2 invoices are waiting on a person, 1 pay run waits for approval", instead of an alert for each.
+The first time alerts are on for a ledger, PayOnce records what is already waiting and posts one summary, such as "2 invoices are waiting on a person, 1 pay run waits for approval", instead of an alert for each. It waits for the server's first balance read before it looks, so a currency already below 0 is counted in the summary too.
 
-An alert gives the invoice number, the supplier, the amount, the reason PayOnce recorded, how many approvers a request needs and when it runs out, and a link to the incident on the local page. The link only works on the machine running PayOnce, and the message says so. An alert never carries email text, anything the model read, an account number or any digits of one, an approver's name or a secret. Text PayOnce did not write itself, such as a supplier name, goes out as code, with `://` and `www.` broken up, so it cannot turn into a link, a mention or formatting. The only link in an alert is the one to the local page. Discord mentions are off, and long values are cut to fit each service's limits.
+An alert gives the invoice number, the supplier, the amount, the reason PayOnce recorded, how many approvers a request needs and when it runs out, and a link to the incident on the local page. The link only works on the machine running PayOnce, and the message says so. An alert never carries email text, anything the model read, an account number or any digits of one, an approver's name or a secret. Text PayOnce did not write itself, such as a supplier name, goes out as code, with `://` and `www.` broken up, so it cannot turn into a link, a mention or formatting. PayOnce also strips characters that can reverse or hide part of it, such as right-to-left overrides and zero-width spaces. The only link in an alert is the one to the local page. Discord mentions are off, and long values are cut to fit each service's limits.
 
 When a post fails, PayOnce tries again after 30 seconds, 2 minutes, 8 minutes and 32 minutes, then gives up. After a 429 it waits as long as the answer asks. If the webhook answers 401, 403, 404 or 410, the address is wrong or the webhook is gone, so PayOnce stops posting until it is restarted. It does not follow redirects. The agent, the watcher and the page never wait on a post. If the server dies between posting an alert and recording it, the alert can be posted again a minute later, because incoming webhooks take no idempotency key.
 
-While alerts are on, the server also reads the balances every 5 minutes when nothing else has, so a headroom below 0 is noticed with no page open.
+While alerts are on, the server also reads the balances every 5 minutes when nothing else has, so a headroom below 0 is noticed with no page open. Like any balance read, each one also reads up to five transfers to fill in the fees of failed transfers.
 
 To try alerts without Slack or Discord, run a receiver on this machine and set `ALERT_TEST_RECEIVER_URL` to it, such as `http://127.0.0.1:4399/slack`. It takes only a 127.0.0.1, localhost or [::1] address, and while it is set PayOnce posts there instead of to `ALERT_WEBHOOK_URL`, in the format `ALERT_FORMAT` names. `GET /api/alerts` lists the last 50 alerts and how each one went.
 
@@ -279,6 +279,8 @@ There are four messages for the supplier: the payment has been sent (with its re
 A draft is built only from what PayOnce formats itself: the invoice number, amounts, bank references, dates and statuses, and the last four digits of the phone number on file. It never includes the supplier's name, anything from an email, an escalation reason or account details. For when a payment usually arrives it uses the route advisory's latest usual day, never PayOnce's own bank deadline, and without an estimate it says "within the usual time for this route".
 
 The text is fixed when it is drafted. Its SHA-256 goes on the incident's timeline in the same write, and copying, sending and dismissing are recorded there too. If the payment changes afterwards, for example the bank pays it, the card says what changed and suggests drafting it again. If the stored text no longer matches its hash, the card says that too.
+
+## Run it
 
 ```bash
 pnpm install
@@ -323,7 +325,7 @@ pnpm outbox <INVOICE> dismiss <DRAFT> <NAME> [NOTE]
 pnpm reset
 ```
 
-`pnpm outbox` lists an invoice's drafts and the messages that fit now. The templates are `payment-sent`, `replacement-sent`, `checking`, `callback-notice` and `bank-trace`. It reads and writes only the ledger.
+`pnpm outbox` lists an invoice's drafts and the messages that fit now. The templates are `payment-sent`, `replacement-sent`, `checking`, `callback-notice` and `bank-trace`. It reads and writes only the ledger, and runs without a `.env`. When there is one, it takes the bank deadlines from it.
 
 `pnpm payrun upload` and `check` read Airwallex, GETs only. `show`, `approve` and `cancel` read only the ledger. `approve` without a name shows the terms and the request number, like `pnpm approve`.
 
