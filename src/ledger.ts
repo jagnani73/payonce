@@ -467,6 +467,8 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     reference: "TEXT",
     fee_minor: "INTEGER",
     fee_currency: "TEXT",
+    // When recordMissingFees last tried to read the fee, as an ISO time.
+    fee_tried_at: "TEXT",
   },
   events: {
     topic: "TEXT",
@@ -481,6 +483,7 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     currency: "TEXT",
     fee_minor: "INTEGER",
     fee_currency: "TEXT",
+    fee_tried_at: "TEXT",
   },
 };
 
@@ -1138,20 +1141,36 @@ export class Ledger {
   }
 
   // Failed transfers, PayOnce's and payouts sent outside it, whose fee has not
-  // been recorded, such as those failed before fees were kept.
-  failedWithoutFee(limit: number): string[] {
+  // been recorded, such as those failed before fees were kept. Only those never
+  // tried, or last tried at triedBefore or earlier, and the least recently tried
+  // first, so a transfer that cannot be read does not keep the others waiting.
+  failedWithoutFee(limit: number, triedBefore: number): string[] {
+    const before: string = new Date(triedBefore).toISOString();
     return (
       this.db
         .prepare(
-          `SELECT transfer_id FROM attempts
+          `SELECT transfer_id, fee_tried_at FROM attempts
             WHERE state = 'failed' AND transfer_id IS NOT NULL AND fee_minor IS NULL
+              AND (fee_tried_at IS NULL OR fee_tried_at <= ?)
            UNION
-           SELECT transfer_id FROM outside_payouts
+           SELECT transfer_id, fee_tried_at FROM outside_payouts
             WHERE state = 'failed' AND fee_minor IS NULL
+              AND (fee_tried_at IS NULL OR fee_tried_at <= ?)
+           ORDER BY fee_tried_at, transfer_id
            LIMIT ?`,
         )
-        .all(limit) as unknown as TransferRow[]
+        .all(before, before, limit) as unknown as TransferRow[]
     ).map((row: TransferRow): string => row.transfer_id);
+  }
+
+  // Notes that the fee of a transfer is being read, so it goes to the back of
+  // failedWithoutFee's list whether or not the read works.
+  feeTried(transferId: string, at: number): void {
+    for (const table of ["attempts", "outside_payouts"]) {
+      this.db
+        .prepare(`UPDATE ${table} SET fee_tried_at = ? WHERE transfer_id = ?`)
+        .run(new Date(at).toISOString(), transferId);
+    }
   }
 
   // Writes only the fee of a transfer that has none on file, so it never changes
