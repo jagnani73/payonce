@@ -2657,13 +2657,14 @@ export class Ledger {
         this.db.exec("SAVEPOINT release_row");
         try {
           // A plain INSERT, so an invoice number taken since the check fails here.
+          // A row pays from its own currency's wallet, so source_currency is null.
           this.db
             .prepare(
               `INSERT INTO obligations
                  (invoice_id, supplier, supplier_domain, beneficiary_id, currency, amount_minor,
                   transfer_method, invoice_floor_minor, started_by, supplier_phone, run_row_id,
-                  look_at)
-               VALUES (?, ?, '', ?, ?, ?, ?, 0, ?, NULL, ?, ?)`,
+                  look_at, source_currency)
+               VALUES (?, ?, '', ?, ?, ?, ?, 0, ?, NULL, ?, ?, NULL)`,
             )
             .run(
               row.invoiceId,

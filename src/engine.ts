@@ -1546,6 +1546,13 @@ export async function startPayment(
   if (waitingForFirst(engine.ledger, invoiceId) === undefined) {
     throw new Error(`${invoiceId} is not waiting for its first payment`);
   }
+  // Pay runs do not pay across currencies: a row pays in its own currency from
+  // that currency's wallet.
+  if (obligation.runRowId !== null && crossCurrency(obligation)) {
+    throw new Error(
+      `${invoiceId} is a pay run row paid from ${obligation.sourceCurrency}, and a pay run pays each row from its own currency's wallet, so PayOnce sent nothing`,
+    );
+  }
   const wallet: string = debitCurrency(obligation);
   try {
     return await withCurrencyLock(engine.ledger, wallet, async (lease: Lease): Promise<Transfer | null> => {

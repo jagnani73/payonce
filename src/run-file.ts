@@ -19,6 +19,10 @@ export const RUN_COLUMNS: RunColumn[] = [
   { name: "sandbox_outcome", required: false },
 ];
 
+// Columns that would name a wallet to pay from. A run pays each row in its own
+// currency from that currency's wallet, so a file that names another is refused.
+const SOURCE_COLUMNS: string[] = ["source_currency", "paid_from", "pay_from", "sell_currency"];
+
 export const MAX_RUN_ROWS: number = 50;
 // Small enough that the largest file fits the server's 64 KB request body.
 export const MAX_RUN_FILE_CHARS: number = 40_000;
@@ -321,6 +325,11 @@ export function parseRunFile(fileName: string, text: string): ParsedRunFile {
   columns.forEach((column: string, index: number): void => {
     if (column === "") {
       problems.push({ line: header.line, message: `Column ${index + 1} of the header has no name` });
+    } else if (SOURCE_COLUMNS.includes(column)) {
+      problems.push({
+        line: header.line,
+        message: `The header has a ${column} column. A pay run pays each row in its own currency from that currency's wallet, so pay an invoice from another currency on its own`,
+      });
     } else if (!known.includes(column)) {
       problems.push({
         line: header.line,
