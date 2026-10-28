@@ -11,6 +11,7 @@
     "audit": "tsx src/audit.ts",
     "cash": "tsx --env-file=.env src/cash.ts",
     "payrun": "tsx --env-file=.env src/payrun.ts",
+    "outbox": "tsx --env-file=.env src/outbox.ts",
     "reset": "tsx src/reset.ts",
     "ui": "tsx --env-file=.env src/server.ts",
     "typecheck": "tsc --noEmit"

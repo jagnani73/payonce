@@ -886,6 +886,7 @@ async function send(
     obligation.dueDate,
     Number.isNaN(createdAt) ? today() : today(new Date(createdAt)),
   );
+  engine.ledger.setArrival(attempt.requestId, arrival);
   note(
     engine.ledger,
     obligation.invoiceId,

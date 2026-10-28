@@ -270,7 +270,15 @@ While alerts are on, the server also reads the balances every 5 minutes when not
 
 To try alerts without Slack or Discord, run a receiver on this machine and set `ALERT_TEST_RECEIVER_URL` to it, such as `http://127.0.0.1:4399/slack`. It takes only a 127.0.0.1, localhost or [::1] address, and while it is set PayOnce posts there instead of to `ALERT_WEBHOOK_URL`, in the format `ALERT_FORMAT` names. `GET /api/alerts` lists the last 50 alerts and how each one went.
 
-## Run it
+## Messages to send
+
+Each incident has a "Messages to send" card, and `pnpm outbox` does the same in the terminal. PayOnce suggests the messages that fit the incident now, a person drafts one, copies it into their own email and sends it to the contact on file, then marks it sent. PayOnce never sends anything itself.
+
+There are four messages for the supplier: the payment has been sent (with its reference, amount and when it usually arrives), it has been sent again after a failure, we are looking into it (which promises nothing), and we will call you on the number we have on file to confirm a change of bank details. That last one asks the supplier not to send bank details by email. The fifth is a trace request to Airwallex for a transfer past its deadline, with its reference, amount, creation time and status.
+
+A draft is built only from what PayOnce formats itself: the invoice number, amounts, bank references, dates and statuses, and the last four digits of the phone number on file. It never includes the supplier's name, anything from an email, an escalation reason or account details. For when a payment usually arrives it uses the route advisory's latest usual day, never PayOnce's own bank deadline, and without an estimate it says "within the usual time for this route".
+
+The text is fixed when it is drafted. Its SHA-256 goes on the incident's timeline in the same write, and copying, sending and dismissing are recorded there too. If the payment changes afterwards, for example the bank pays it, the card says what changed and suggests drafting it again. If the stored text no longer matches its hash, the card says that too.
 
 ```bash
 pnpm install
@@ -307,8 +315,15 @@ pnpm payrun show <RUN>
 pnpm payrun approve <RUN> [REQUEST NAME]
 pnpm payrun check <RUN>
 pnpm payrun cancel <RUN> <NAME> <NOTE>
+pnpm outbox <INVOICE>
+pnpm outbox <INVOICE> draft <TEMPLATE> <NAME>
+pnpm outbox <INVOICE> show <DRAFT>
+pnpm outbox <INVOICE> sent <DRAFT> <NAME>
+pnpm outbox <INVOICE> dismiss <DRAFT> <NAME> [NOTE]
 pnpm reset
 ```
+
+`pnpm outbox` lists an invoice's drafts and the messages that fit now. The templates are `payment-sent`, `replacement-sent`, `checking`, `callback-notice` and `bank-trace`. It reads and writes only the ledger.
 
 `pnpm payrun upload` and `check` read Airwallex, GETs only. `show`, `approve` and `cancel` read only the ledger. `approve` without a name shows the terms and the request number, like `pnpm approve`.
 
@@ -377,10 +392,11 @@ In the fifth, `inv-05002` has the same supplier, amount and number as INV-5002, 
 | `src/model-reader.ts` | The model reader: one chat completion that returns the findings |
 | `src/reader.ts` | Picks the model reader, or the keyword placeholder when no key is set |
 | `src/keyword-reader.ts` | Keyword placeholder that reads the emails when no key is set |
+| `src/drafts.ts` | Messages to send: the templates, which ones fit an incident, and drafts that keep their hash |
 | `src/alerts.ts` | Alerts: the webhook setting, what needs a person, and posting with retries |
 | `src/alert-payloads.ts` | What an alert says, and its Slack and Discord message shapes |
 | `src/server.ts` | Local web server and JSON API |
-| `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/audit.ts`, `src/cash.ts`, `src/payrun.ts`, `src/reset.ts`, `src/index.ts` | The commands |
+| `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/audit.ts`, `src/cash.ts`, `src/payrun.ts`, `src/outbox.ts`, `src/reset.ts`, `src/index.ts` | The commands |
 | `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, exchange rate quotes, balances and their cache for the cash panel, the webhook subscription and the simulation calls |
 | `web/` | The page: plain HTML, CSS and JavaScript with no build step |
 | `fixtures/emails/` | Sample supplier emails |
@@ -392,7 +408,8 @@ The code holds amounts in minor units and converts at the Airwallex boundary. Th
 
 - A model's explanation of each decision. The reasons on the timeline come from the policy.
 - Closing an incident without a payment, except a held duplicate. A person can close any other only when the bank reports a payment for the invoice as paid.
-- Chasing the bank. When a payment passes its deadline, PayOnce tells a person and does nothing else.
+- Chasing the bank by itself. When a payment passes its deadline, PayOnce tells a person and offers a trace request for them to send to Airwallex.
+- Sending email. Messages are drafted for a person, who sends them from their own mail, and PayOnce keeps no recipient addresses.
 - A floor check on a single incident's first payment. Pay run rows have one.
 - Totals across currencies. They need exchange rates. A run's approver limits are compared with each currency's total on its own.
 - Editing a run, approving part of one, or scheduling one for a later date. Cancel it and upload a corrected file.

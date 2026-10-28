@@ -43,6 +43,15 @@ import {
 import { cashReport, payRunLines, type CashReport } from "./cash-position.js";
 import { CurrencyBusyError } from "./currency-lock.js";
 import { Dispatcher } from "./dispatcher.js";
+import {
+  createDraft,
+  DraftNotFitError,
+  isTemplate,
+  markDraft,
+  outboxOf,
+  type DraftTemplate,
+  type DraftView,
+} from "./drafts.js";
 import type { EmailFindings } from "./emails.js";
 import { describeQuotes } from "./fx.js";
 import {
@@ -60,6 +69,7 @@ import { recordMissingFees } from "./payments.js";
 import { readerFromEnv } from "./reader.js";
 import { describeFloors, reserveFromEnv } from "./reserve.js";
 import {
+  DraftOpenError,
   INVOICE_ID_PATTERN,
   isExpired,
   LeaseLostError,
@@ -71,6 +81,9 @@ import {
   type Alert,
   type Approval,
   type Attempt,
+  type Draft,
+  type DraftMove,
+  type LedgerEvent,
   type Obligation,
   type OutsidePayout,
   type Run,
@@ -449,7 +462,12 @@ function listIncidents(): unknown {
       currency: obligation.currency,
       amountMinor: obligation.amountMinor,
       state: obligation.state,
-      headline: engine.ledger.events(obligation.invoiceId).at(-1)?.message ?? "",
+      // A line about a message draft does not stand for how the incident is.
+      headline:
+        engine.ledger
+          .events(obligation.invoiceId)
+          .filter((event: LedgerEvent): boolean => event.kind !== "outbox")
+          .at(-1)?.message ?? "",
       busy: isBusy(obligation.invoiceId),
       watching: isWatching(obligation.invoiceId),
       runId: engine.ledger.runRowOf(obligation.invoiceId)?.runId ?? null,
@@ -569,6 +587,7 @@ function incidentDetail(invoiceId: string): unknown {
             barred,
           },
     review: pendingClose(engine.ledger, invoiceId) ?? null,
+    outbox: outboxOf(engine.ledger, obligation),
     events: engine.ledger.events(invoiceId),
     audit: auditSummary(invoiceId),
     busy: isBusy(invoiceId),
@@ -823,6 +842,78 @@ function recentAlerts(): unknown {
 function resume(invoiceId: string): unknown {
   requireObligation(invoiceId);
   agent.wake(invoiceId);
+  return { ok: true };
+}
+
+// ---------- outbox ----------
+
+const DRAFT_MOVES: Record<string, DraftMove> = {
+  copied: "copied",
+  sent: "sent",
+  dismiss: "dismissed",
+};
+
+// A person's step on a draft waits its turn on the invoice like any other.
+async function inOutboxTurn<T>(invoiceId: string, step: () => T): Promise<T> {
+  try {
+    return await agent.run(invoiceId, step);
+  } catch (error: unknown) {
+    if (error instanceof DraftOpenError) {
+      throw new HttpError(409, error.message, { draftId: error.draftId });
+    }
+    if (error instanceof DraftNotFitError) {
+      throw new HttpError(422, error.message);
+    }
+    throw new HttpError(409, error instanceof Error ? error.message : String(error));
+  }
+}
+
+// Renders a message for a person to send and records it. PayOnce sends nothing.
+async function draftByPerson(request: IncomingMessage, invoiceId: string): Promise<unknown> {
+  requireObligation(invoiceId);
+  const body: Record<string, unknown> = await readJson(request);
+  const template: unknown = body["template"];
+  if (!isTemplate(template)) {
+    throw new HttpError(400, "Choose a message PayOnce offers");
+  }
+  const createdBy: string = name(body, "createdBy", "Enter your name");
+  const chosen: DraftTemplate = template;
+  const draft: DraftView = await inOutboxTurn(invoiceId, (): DraftView =>
+    createDraft(engine.ledger, requireObligation(invoiceId), chosen, createdBy),
+  );
+  return { draftId: draft.id };
+}
+
+// Records a person copying a draft, marking it sent or dismissing it.
+async function markByPerson(
+  request: IncomingMessage,
+  invoiceId: string,
+  rawId: string,
+  move: DraftMove,
+): Promise<unknown> {
+  requireObligation(invoiceId);
+  const draft: Draft | undefined = RUN_ID_PATTERN.test(rawId) ? engine.ledger.draft(Number(rawId)) : undefined;
+  if (draft === undefined || draft.invoiceId !== invoiceId) {
+    throw new HttpError(404, `Draft ${rawId.slice(0, 20)} is not a draft for ${invoiceId}`);
+  }
+  const body: Record<string, unknown> = await readJson(request);
+  let by: string | null;
+  if (move === "copied") {
+    const given: string = text(body, "copiedBy");
+    if (given.length > MAX_NAME_LENGTH) {
+      throw new HttpError(400, "That name is too long");
+    }
+    by = given === "" ? null : given;
+  } else {
+    by = name(body, move === "sent" ? "sentBy" : "dismissedBy", "Enter your name");
+  }
+  const note: string = move === "dismissed" ? text(body, "note") : "";
+  if (note.length > MAX_FINDING_LENGTH) {
+    throw new HttpError(400, "The note is too long");
+  }
+  await inOutboxTurn(invoiceId, (): void =>
+    markDraft(engine.ledger, requireObligation(invoiceId), draft.id, move, by, note === "" ? null : note),
+  );
   return { ok: true };
 }
 
@@ -1175,6 +1266,25 @@ async function route(
     parts.length === 4
   ) {
     sendJson(response, 200, await payAgainByPerson(invoiceId));
+  } else if (
+    method === "POST" &&
+    parts[1] === "incidents" &&
+    invoiceId !== undefined &&
+    parts[3] === "outbox" &&
+    parts.length === 4
+  ) {
+    sendJson(response, 201, await draftByPerson(request, invoiceId));
+  } else if (
+    method === "POST" &&
+    parts[1] === "incidents" &&
+    invoiceId !== undefined &&
+    parts[3] === "outbox" &&
+    parts[4] !== undefined &&
+    parts[5] !== undefined &&
+    Object.hasOwn(DRAFT_MOVES, parts[5]) &&
+    parts.length === 6
+  ) {
+    sendJson(response, 200, await markByPerson(request, invoiceId, parts[4], DRAFT_MOVES[parts[5]] ?? "copied"));
   } else if (
     method === "GET" &&
     parts[1] === "incidents" &&

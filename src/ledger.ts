@@ -228,6 +228,28 @@ const SCHEMA: string = `
   );
   CREATE UNIQUE INDEX IF NOT EXISTS one_alert_per_change
     ON alerts(alert_key, episode, fingerprint);
+  CREATE TABLE IF NOT EXISTS outbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    invoice_id TEXT NOT NULL REFERENCES obligations(invoice_id),
+    template TEXT NOT NULL,
+    audience TEXT NOT NULL,
+    facts TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL,
+    text_hash TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'draft',
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    copied_by TEXT,
+    copied_at TEXT,
+    sent_by TEXT,
+    sent_at TEXT,
+    dismissed_by TEXT,
+    dismissed_at TEXT,
+    dismiss_note TEXT
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS one_open_draft_per_template
+    ON outbox(invoice_id, template) WHERE state IN ('draft', 'copied');
 `;
 
 // rejected is an invoice a person closed without paying, because it was a second
@@ -249,7 +271,8 @@ export type EventKind =
   | "lock"
   | "closed"
   | "callback"
-  | "error";
+  | "error"
+  | "outbox";
 
 // One line of an incident's timeline.
 export interface LedgerEvent {
@@ -336,6 +359,12 @@ export interface Attempt {
   // Why the transfer did not go out on its approved quote. Null when it did, or
   // has not been checked. Only a person closes an invoice with one.
   rateMismatch: string | null;
+  // The transfer's created_at and status as Airwallex last gave them, and when it
+  // usually arrives as the route advisory worked it out when it was sent. Null
+  // until read, and on payments from before these columns.
+  bankCreatedAt: string | null;
+  bankStatus: string | null;
+  arrival: ArrivalTerms | null;
 }
 
 // The quote an attempt is sent with, from the terms of the approval it was opened
@@ -679,6 +708,11 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     quote_valid_to: "TEXT",
     approval_id: "INTEGER",
     rate_mismatch: "TEXT",
+    // The transfer's created_at and status as last read, and its arrival estimate
+    // as ArrivalTerms JSON.
+    bank_created_at: "TEXT",
+    bank_status: "TEXT",
+    arrival: "TEXT",
   },
   events: {
     topic: "TEXT",
@@ -724,6 +758,9 @@ interface AttemptRow {
   quote_valid_to: string | null;
   approval_id: number | null;
   rate_mismatch: string | null;
+  bank_created_at: string | null;
+  bank_status: string | null;
+  arrival: string | null;
 }
 
 export class DuplicatePaymentError extends Error {
@@ -810,6 +847,9 @@ function toAttempt(row: AttemptRow): Attempt {
     quoteValidTo: row.quote_valid_to,
     approvalId: row.approval_id,
     rateMismatch: row.rate_mismatch,
+    bankCreatedAt: row.bank_created_at ?? null,
+    bankStatus: row.bank_status ?? null,
+    arrival: row.arrival === null || row.arrival === undefined ? null : (JSON.parse(row.arrival) as ArrivalTerms),
   };
 }
 
@@ -1588,6 +1628,9 @@ export class Ledger {
       quoteValidTo: quote?.validTo ?? null,
       approvalId,
       rateMismatch: null,
+      bankCreatedAt: null,
+      bankStatus: null,
+      arrival: null,
     };
   }
 
@@ -1835,8 +1878,8 @@ export class Ledger {
     return Number(result.changes) === 1;
   }
 
-  // A null state leaves the stored state as it is, and a null fee or amount the
-  // stored one.
+  // A null state leaves the stored state as it is, and a null fee, amount,
+  // creation time or bank status the stored one.
   record(
     requestId: string,
     transferId: string,
@@ -1847,6 +1890,8 @@ export class Ledger {
     feeCurrency: string | null,
     amountMinor: number | null,
     currency: string | null,
+    bankCreatedAt: string | null = null,
+    bankStatus: string | null = null,
   ): void {
     const result: { changes: number | bigint } = this.db
       .prepare(
@@ -1854,7 +1899,9 @@ export class Ledger {
             SET transfer_id = ?, reference = ?, state = COALESCE(?, state),
                 failure_code = ?, fee_minor = COALESCE(?, fee_minor),
                 fee_currency = COALESCE(?, fee_currency),
-                amount_minor = COALESCE(?, amount_minor), currency = COALESCE(?, currency)
+                amount_minor = COALESCE(?, amount_minor), currency = COALESCE(?, currency),
+                bank_created_at = COALESCE(?, bank_created_at),
+                bank_status = COALESCE(?, bank_status)
           WHERE request_id = ?`,
       )
       .run(
@@ -1866,6 +1913,8 @@ export class Ledger {
         feeCurrency,
         amountMinor,
         currency,
+        bankCreatedAt,
+        bankStatus,
         requestId,
       );
     if (Number(result.changes) !== 1) {
@@ -3293,6 +3342,187 @@ export class Ledger {
       this.db.prepare("SELECT * FROM alerts ORDER BY id DESC LIMIT ?").all(limit) as unknown as AlertRow[]
     ).map(toAlert);
   }
+
+  // When the payment usually arrives, as the route advisory worked it out when it
+  // was sent. Advice for people only.
+  setArrival(requestId: string, arrival: ArrivalTerms): void {
+    this.db.prepare("UPDATE attempts SET arrival = ? WHERE request_id = ?").run(JSON.stringify(arrival), requestId);
+  }
+
+  // Stores a draft and its chained timeline line in one write transaction, so a
+  // draft never exists without the line that records its hash. A draft of the
+  // same template still open on the invoice refuses it.
+  createDraft(input: NewDraft, line: (id: number) => string): number {
+    try {
+      return this.transaction((): number => {
+        const id: number = Number(
+          this.db
+            .prepare(
+              `INSERT INTO outbox
+                 (invoice_id, template, audience, facts, subject, body, text_hash, created_by, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              input.invoiceId,
+              input.template,
+              input.audience,
+              input.facts,
+              input.subject,
+              input.body,
+              input.textHash,
+              input.createdBy,
+              new Date().toISOString(),
+            ).lastInsertRowid,
+        );
+        this.appendEvent(input.invoiceId, "outbox", line(id), `outbox:${id}`);
+        return id;
+      });
+    } catch (error: unknown) {
+      if (isUniqueViolation(error)) {
+        const open: DraftRow | undefined = this.db
+          .prepare(
+            `SELECT * FROM outbox WHERE invoice_id = ? AND template = ? AND state IN ('draft', 'copied')`,
+          )
+          .get(input.invoiceId, input.template) as unknown as DraftRow | undefined;
+        throw new DraftOpenError(open?.id ?? 0);
+      }
+      throw error;
+    }
+  }
+
+  // Moves a draft on and writes its timeline line in one write transaction. The
+  // move happens only from the states given, so a mark from the page and one
+  // from the CLI cannot both succeed. False when it did not move.
+  markDraft(
+    invoiceId: string,
+    id: number,
+    move: DraftMove,
+    from: DraftState[],
+    by: string | null,
+    note: string | null,
+    line: string,
+  ): boolean {
+    const column: Record<DraftMove, string> = {
+      copied: "copied_by = ?, copied_at = ?",
+      sent: "sent_by = ?, sent_at = ?",
+      dismissed: "dismissed_by = ?, dismissed_at = ?, dismiss_note = ?",
+    };
+    return this.transaction((): boolean => {
+      const values: (string | number | null)[] = [move, by, new Date().toISOString()];
+      if (move === "dismissed") {
+        values.push(note);
+      }
+      const result: { changes: number | bigint } = this.db
+        .prepare(
+          `UPDATE outbox SET state = ?, ${column[move]}
+            WHERE id = ? AND invoice_id = ? AND state IN (${from.map((): string => "?").join(", ")})`,
+        )
+        .run(...values, id, invoiceId, ...from);
+      if (Number(result.changes) !== 1) {
+        return false;
+      }
+      this.appendEvent(invoiceId, "outbox", line, `outbox:${id}`);
+      return true;
+    });
+  }
+
+  drafts(invoiceId: string): Draft[] {
+    return (
+      this.db.prepare("SELECT * FROM outbox WHERE invoice_id = ? ORDER BY id").all(invoiceId) as unknown as DraftRow[]
+    ).map(toDraft);
+  }
+
+  draft(id: number): Draft | undefined {
+    const row: DraftRow | undefined = this.db.prepare("SELECT * FROM outbox WHERE id = ?").get(id) as unknown as
+      | DraftRow
+      | undefined;
+    return row === undefined ? undefined : toDraft(row);
+  }
+}
+
+export type DraftState = "draft" | "copied" | "sent" | "dismissed";
+export type DraftMove = "copied" | "sent" | "dismissed";
+
+// A message for a person to send, never sent by PayOnce. facts is the JSON the
+// text was rendered from, and textHash the SHA-256 of the template, subject and
+// body, as recorded on the timeline when it was drafted.
+export interface NewDraft {
+  invoiceId: string;
+  template: string;
+  audience: string;
+  facts: string;
+  subject: string;
+  body: string;
+  textHash: string;
+  createdBy: string;
+}
+
+export interface Draft extends NewDraft {
+  id: number;
+  state: DraftState;
+  createdAt: string;
+  copiedBy: string | null;
+  copiedAt: string | null;
+  sentBy: string | null;
+  sentAt: string | null;
+  dismissedBy: string | null;
+  dismissedAt: string | null;
+  dismissNote: string | null;
+}
+
+// A draft of the template is already open on the invoice.
+export class DraftOpenError extends Error {
+  readonly draftId: number;
+
+  constructor(draftId: number) {
+    super(`Draft ${draftId} of this message is still open. Mark it sent or dismiss it first`);
+    this.name = "DraftOpenError";
+    this.draftId = draftId;
+  }
+}
+
+interface DraftRow {
+  id: number;
+  invoice_id: string;
+  template: string;
+  audience: string;
+  facts: string;
+  subject: string;
+  body: string;
+  text_hash: string;
+  state: DraftState;
+  created_by: string;
+  created_at: string;
+  copied_by: string | null;
+  copied_at: string | null;
+  sent_by: string | null;
+  sent_at: string | null;
+  dismissed_by: string | null;
+  dismissed_at: string | null;
+  dismiss_note: string | null;
+}
+
+function toDraft(row: DraftRow): Draft {
+  return {
+    id: row.id,
+    invoiceId: row.invoice_id,
+    template: row.template,
+    audience: row.audience,
+    facts: row.facts,
+    subject: row.subject,
+    body: row.body,
+    textHash: row.text_hash,
+    createdBy: row.created_by,
+    state: row.state,
+    createdAt: row.created_at,
+    copiedBy: row.copied_by,
+    copiedAt: row.copied_at,
+    sentBy: row.sent_by,
+    sentAt: row.sent_at,
+    dismissedBy: row.dismissed_by,
+    dismissedAt: row.dismissed_at,
+    dismissNote: row.dismiss_note,
+  };
 }
 
 // A condition that needs a person, as an alert evaluation found it. facts is
