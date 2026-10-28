@@ -9,6 +9,9 @@ import {
   type Obligation,
   type OutsidePayout,
   type PayRunRow,
+  type Run,
+  type RunApproval,
+  type RunRow,
 } from "./ledger.js";
 import {
   currencyFloor,
@@ -43,8 +46,8 @@ export const CASH_KINDS: CashKind[] = [
   "fee-lost",
 ];
 
-const FIRM_KINDS: ReadonlySet<CashKind> = new Set<CashKind>(["sending", "approved", "pay-run"]);
-const WAITING_KINDS: ReadonlySet<CashKind> = new Set<CashKind>([
+export const FIRM_KINDS: ReadonlySet<CashKind> = new Set<CashKind>(["sending", "approved", "pay-run"]);
+export const WAITING_KINDS: ReadonlySet<CashKind> = new Set<CashKind>([
   "awaiting-approval",
   "awaiting-person",
 ]);
@@ -297,20 +300,62 @@ export function cashLines(ledger: Ledger, now: number = Date.now()): CashLine[] 
 // attempt and is never counted twice. The fee is the latest the ledger recorded in
 // the currency by the row's transfer method.
 export function payRunLines(ledger: Ledger, now: number = Date.now()): CashLine[] {
-  return ledger.payRunRows(now).map((row: PayRunRow): CashLine => {
-    const fee: number | null = ledger.latestFee(row.currency, row.transferMethod);
-    return {
-      kind: "pay-run",
-      invoiceId: row.invoiceId,
-      currency: row.currency,
-      amountMinor: row.amountMinor,
-      feeMinor: fee ?? 0,
-      feeKnown: fee !== null,
-      reference: null,
-      estimated: false,
-      runId: row.runId,
-    };
-  });
+  return ledger.payRunRows(now).map((row: PayRunRow): CashLine => runRowLine(ledger, row, "pay-run"));
+}
+
+function runRowLine(ledger: Ledger, row: PayRunRow, kind: CashKind): CashLine {
+  const fee: number | null = ledger.latestFee(row.currency, row.transferMethod);
+  return {
+    kind,
+    invoiceId: row.invoiceId,
+    currency: row.currency,
+    amountMinor: row.amountMinor,
+    feeMinor: fee ?? 0,
+    feeKnown: fee !== null,
+    reference: null,
+    estimated: false,
+    runId: row.runId,
+  };
+}
+
+// The pay rows of the waiting run that payRunLines leaves out, because its latest
+// request is not approved or has expired: what the run would take from each
+// wallet once a person approves it, worked out as payRunLines does.
+// awaiting-approval while the request is open, awaiting-person otherwise, as for
+// an invoice. cashReport never takes these lines, so neither headroom counts a run
+// before its approval. The incident board shows them as money waiting on a person.
+export function waitingRunLines(ledger: Ledger, now: number = Date.now()): CashLine[] {
+  const run: Run | undefined = ledger.waitingRun();
+  const approval: RunApproval | undefined = run === undefined ? undefined : ledger.latestRunApproval(run.id);
+  const open: boolean = approval !== undefined && !isExpired(approval, now);
+  if (run === undefined || (open && approval?.state === "approved")) {
+    return [];
+  }
+  const kind: CashKind = open && approval?.state === "requested" ? "awaiting-approval" : "awaiting-person";
+  return ledger.runRows(run.id).flatMap((row: RunRow): CashLine[] =>
+    row.action !== "pay" ||
+    row.state !== "waiting" ||
+    row.invoiceId === null ||
+    row.beneficiaryId === null ||
+    row.currency === null ||
+    row.amountMinor === null ||
+    row.transferMethod === null
+      ? []
+      : [
+          runRowLine(
+            ledger,
+            {
+              runId: run.id,
+              invoiceId: row.invoiceId,
+              beneficiaryId: row.beneficiaryId,
+              currency: row.currency,
+              amountMinor: row.amountMinor,
+              transferMethod: row.transferMethod,
+            },
+            kind,
+          ),
+        ],
+  );
 }
 
 // What committedMinor leaves out: the invoice being paid, or the run being
