@@ -439,6 +439,9 @@ export interface Attempt {
   bankCreatedAt: string | null;
   bankStatus: string | null;
   arrival: ArrivalTerms | null;
+  // When PayOnce opened it. Null on attempts from before this was kept and on a
+  // found payout's.
+  openedAt: string | null;
 }
 
 // The quote an attempt is sent with, from the terms of the approval it was opened
@@ -917,6 +920,9 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     bank_created_at: "TEXT",
     bank_status: "TEXT",
     arrival: "TEXT",
+    // When PayOnce opened the attempt, as an ISO time. Null on attempts from
+    // before the column and on a found payout's.
+    opened_at: "TEXT",
   },
   events: {
     topic: "TEXT",
@@ -975,6 +981,7 @@ interface AttemptRow {
   bank_created_at: string | null;
   bank_status: string | null;
   arrival: string | null;
+  opened_at: string | null;
 }
 
 export class DuplicatePaymentError extends Error {
@@ -1064,6 +1071,7 @@ function toAttempt(row: AttemptRow): Attempt {
     bankCreatedAt: row.bank_created_at ?? null,
     bankStatus: row.bank_status ?? null,
     arrival: row.arrival === null || row.arrival === undefined ? null : (JSON.parse(row.arrival) as ArrivalTerms),
+    openedAt: row.opened_at ?? null,
   };
 }
 
@@ -2151,13 +2159,14 @@ export class Ledger {
     kind: AttemptKind,
     approvalId: number | null,
     quote: AttemptQuote | null,
+    openedAt: string = new Date().toISOString(),
   ): void {
     try {
       this.db
         .prepare(
           `INSERT INTO attempts
-             (request_id, invoice_id, kind, state, quote_id, quote_valid_to, approval_id)
-           VALUES (?, ?, ?, 'pending', ?, ?, ?)`,
+             (request_id, invoice_id, kind, state, quote_id, quote_valid_to, approval_id, opened_at)
+           VALUES (?, ?, ?, 'pending', ?, ?, ?, ?)`,
         )
         .run(
           requestId,
@@ -2166,6 +2175,7 @@ export class Ledger {
           quote?.quoteId ?? null,
           quote?.validTo ?? null,
           approvalId,
+          openedAt,
         );
     } catch (error: unknown) {
       if (isUniqueViolation(error)) {
@@ -2226,7 +2236,8 @@ export class Ledger {
       );
     }
     const requestId: string = randomUUID();
-    this.insertAttempt(requestId, invoiceId, kind, approvalId, quote);
+    const openedAt: string = new Date().toISOString();
+    this.insertAttempt(requestId, invoiceId, kind, approvalId, quote, openedAt);
     return {
       requestId,
       invoiceId,
@@ -2246,6 +2257,7 @@ export class Ledger {
       bankCreatedAt: null,
       bankStatus: null,
       arrival: null,
+      openedAt,
     };
   }
 
@@ -2605,15 +2617,18 @@ export class Ledger {
       .run(reason, requestId);
   }
 
-  // For an attempt Airwallex refused to create. It never became a transfer, so
-  // it releases the lock. One a look has since found a transfer for is kept.
-  failAttempt(requestId: string, failureCode: string | null): void {
-    this.db
+  // For an attempt that never became a transfer: Airwallex refused to create it,
+  // or lists none under its request id long after it was opened. It releases the
+  // lock. One a look has since found a transfer for is kept. True when it changed
+  // the attempt.
+  failAttempt(requestId: string, failureCode: string | null): boolean {
+    const result: { changes: number | bigint } = this.db
       .prepare(
         `UPDATE attempts SET state = 'failed', failure_code = ?
           WHERE request_id = ? AND state = 'pending' AND transfer_id IS NULL`,
       )
       .run(failureCode, requestId);
+    return Number(result.changes) === 1;
   }
 
   escalate(invoiceId: string, reason: string): void {
