@@ -1497,16 +1497,20 @@ export class Ledger {
   // transaction, so the money is counted as approved or as being sent at every
   // moment and never as neither. Undefined, with nothing changed, when it is no
   // longer approved, for example because another process voided it in the
-  // meantime, or when it has expired since the look checked it.
+  // meantime, or when it has expired since the look checked it. Also when the
+  // invoice is no longer escalated, as when a person closed it, or a payout for
+  // it sent outside PayOnce is live.
   useApproval(invoiceId: string, approvalId: number): Attempt | undefined {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const result: { changes: number | bigint } = this.db
         .prepare(
           `UPDATE approvals SET state = 'used'
-            WHERE id = ? AND invoice_id = ? AND state = 'approved' AND expires_at > ?`,
+            WHERE id = ? AND invoice_id = ? AND state = 'approved' AND expires_at > ?
+              AND EXISTS (SELECT 1 FROM obligations WHERE invoice_id = ? AND state = 'escalated')
+              AND NOT EXISTS (${LIVE_OUTSIDE_PAYOUT})`,
         )
-        .run(approvalId, invoiceId, new Date().toISOString());
+        .run(approvalId, invoiceId, new Date().toISOString(), invoiceId, invoiceId);
       if (Number(result.changes) !== 1) {
         this.db.exec("ROLLBACK");
         return undefined;
