@@ -505,6 +505,10 @@ function wait(ms: number): Promise<void> {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
+// The cash panel's report, null while no balance has been read, or "reading"
+// while no balance has been read and a read is running.
+export type AlertCash = CashReport | null | "reading";
+
 export interface AlertsStatus {
   on: boolean;
   format: AlertFormat | null;
@@ -521,17 +525,17 @@ export class Alerts {
   private readonly ledger: Ledger;
   private readonly target: AlertTarget;
   private readonly base: string;
-  private readonly cash: () => CashReport | null;
+  private readonly cash: () => AlertCash;
   private readonly holder: string = randomUUID();
   private running: boolean = false;
+  private evaluated: boolean = false;
   private stopped: string | null = null;
   private auditAt: number = Number.NEGATIVE_INFINITY;
   private audit: FoundCondition[] = [];
   private timer: NodeJS.Timeout | null = null;
 
-  // base is the local page the links point to. cash is the panel's report, or
-  // null while no balance has been read.
-  constructor(ledger: Ledger, target: AlertTarget, base: string, cash: () => CashReport | null) {
+  // base is the local page the links point to. cash is the panel's report.
+  constructor(ledger: Ledger, target: AlertTarget, base: string, cash: () => AlertCash) {
     this.ledger = ledger;
     this.target = target;
     this.base = base;
@@ -555,9 +559,12 @@ export class Alerts {
     };
   }
 
-  // Skips a tick while the last one is still posting.
+  // Skips a tick while the last one is still posting. The first evaluation waits
+  // for the start-up balance read to finish, good or failed, so a currency
+  // already below 0 when alerts are first turned on joins the summary instead of
+  // getting an alert of its own.
   async tick(now: number = Date.now()): Promise<void> {
-    if (this.running) {
+    if (this.running || (!this.evaluated && this.cash() === "reading")) {
       return;
     }
     this.running = true;
@@ -595,7 +602,9 @@ export class Alerts {
     found.push(...this.audit);
     // Before the first balance read the cash is not known, so a standing cash
     // condition is neither found nor cleared.
-    const report: CashReport | null = this.cash();
+    const cash: AlertCash = this.cash();
+    const report: CashReport | null = cash === "reading" ? null : cash;
+    this.evaluated = true;
     if (report !== null) {
       found.push(...cashConditions(report));
     }

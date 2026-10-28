@@ -10,7 +10,14 @@ import { BalanceCache, type BalanceState } from "./airwallex/balances.js";
 import { AirwallexClient, AirwallexError, AirwallexUnreachableError } from "./airwallex/client.js";
 import { subscribe } from "./airwallex/webhooks.js";
 import { alertMessage, type AlertFacts } from "./alert-payloads.js";
-import { Alerts, alertTargetFromEnv, describeAlerts, type AlertSetting, type AlertsStatus } from "./alerts.js";
+import {
+  Alerts,
+  alertTargetFromEnv,
+  describeAlerts,
+  type AlertCash,
+  type AlertSetting,
+  type AlertsStatus,
+} from "./alerts.js";
 import type { ApprovalTerms, RunRowTerms, RunTerms } from "./approval.js";
 import { arrivalAdvice, dueDateProblem, feeSeenText } from "./arrival.js";
 import { describePolicy, policyFromEnv, type Approver, type Barred } from "./approvers.js";
@@ -784,10 +791,11 @@ function cash(read: boolean = true): CashReport {
 }
 
 // While alerts are on, the balances are read every 5 minutes even with no page
-// open, so a headroom below 0 is noticed. Null until a balance has been read.
+// open, so a headroom below 0 is noticed. Null until a balance has been read,
+// and "reading" while none has and a read is running.
 let alertBalanceAskedAt: number = Number.NEGATIVE_INFINITY;
 
-function alertCash(): CashReport | null {
+function alertCash(): AlertCash {
   const now: number = Date.now();
   const state: BalanceState = balances.latest();
   if (
@@ -797,7 +805,10 @@ function alertCash(): CashReport | null {
     alertBalanceAskedAt = now;
     balances.refreshIfOld(now);
   }
-  return state.readAt === null ? null : cash(false);
+  if (state.readAt !== null) {
+    return cash(false);
+  }
+  return balances.latest().refreshing ? "reading" : null;
 }
 
 const alertSetting: AlertSetting = alertTargetFromEnv();
