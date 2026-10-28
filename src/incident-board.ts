@@ -8,7 +8,12 @@ import {
   type CashKind,
   type CashLine,
 } from "./cash-position.js";
-import { CHANGED_BANK_DETAILS_REASON, NEW_BANK_DETAILS_REASON, ORIGINAL_DEADLINE_REASON } from "./decide.js";
+import {
+  CHANGED_BANK_DETAILS_REASON,
+  NEW_BANK_DETAILS_REASON,
+  ORIGINAL_DEADLINE_REASON,
+  OUTAGE_REASON,
+} from "./decide.js";
 import { deadlineMinutes } from "./deadlines.js";
 import { heldBeforePaying, pendingClose, REPLACEMENT_DEADLINE_REASON } from "./engine.js";
 import { candidatesFor, invoiceIndex, type InvoiceIndex, type Match } from "./intake.js";
@@ -20,12 +25,14 @@ import {
   type LedgerEvent,
   type Obligation,
   type ObligationState,
+  type Outage,
   type OutsidePayout,
   type Run,
   type RunApproval,
   type RunRow,
   type Upload,
 } from "./ledger.js";
+import { outageView, railOf, type OutageCode, type OutageView } from "./outages.js";
 import { debitCurrency } from "./reserve.js";
 import { runStatus, type RunStatus } from "./runs.js";
 
@@ -34,6 +41,8 @@ import { runStatus, type RunStatus } from "./runs.js";
 // by the money that could still leave a wallet for it, then by age. It reads the
 // ledger only. Its money is the cash panel's lines, never a figure of its own,
 // and its reasons are fixed text, never an email's or an escalation reason.
+// Each active rail outage is listed above the groups with what it holds, and an
+// entry it holds says so.
 
 export type BoardGroup = "person" | "deadline" | "bank" | "open";
 export const BOARD_GROUPS: BoardGroup[] = ["person", "deadline", "bank", "open"];
@@ -62,6 +71,10 @@ const BANK_DETAILS_REASONS: readonly string[] = [NEW_BANK_DETAILS_REASON, CHANGE
 const MS_PER_MINUTE: number = 60_000;
 
 export type BoardReason =
+  | "outage-original"
+  | "outage-replacement"
+  | "outage-approved"
+  | "outage-run"
   | "approve-replacement"
   | "approve-held"
   | "approved"
@@ -85,6 +98,19 @@ export type BoardReason =
   | "close"
   | "escalated"
   | "open";
+
+// How an active outage on the rail an entry pays on touches it. original,
+// replacement, approved and run: the outage holds its first payment, the
+// replacement PayOnce would have sent by itself, a payment a person approved, or
+// the release of the pay run it is on. approval: it holds nothing yet, but a
+// payment approved for the entry waits until the outage ends.
+export type OutageTouch = "original" | "replacement" | "approved" | "run" | "approval";
+
+export interface BoardOutageMark {
+  id: number;
+  rail: string;
+  touch: OutageTouch;
+}
 
 // What an entry has at risk in one currency: the sum of its cash lines there,
 // amount and fee, as the cash panel adds them.
@@ -126,6 +152,36 @@ export interface BoardEntry {
   // When PayOnce took the invoice on (its first timeline line), or when the run
   // was uploaded. Null when neither is on file.
   waitingSince: string | null;
+  // The active outage on its rail, or for a run row on any rail the run pays
+  // on, when it holds the entry or an approval for it would wait. Null otherwise.
+  outage: BoardOutageMark | null;
+}
+
+// An active outage as the board shows it, with what it holds now: the entries it
+// marks, whatever the filters, and the money they have at risk from their cash
+// lines. Entries whose touch is approval are not in it, since it holds nothing
+// of theirs yet.
+export interface BoardOutage {
+  id: number;
+  rail: string;
+  currency: string;
+  method: string;
+  codes: OutageCode[];
+  // The different payees whose payouts failed.
+  payees: number;
+  windowMinutes: number;
+  declaredAt: string;
+  // PayOnce's own sentence about it.
+  text: string;
+  // Invoices whose first payment it holds.
+  originals: string[];
+  // Invoices whose automatic replacement it held, now waiting for approval.
+  replacements: string[];
+  // Invoices whose approved payment it holds.
+  approved: string[];
+  // Pay runs whose release it holds.
+  runs: number[];
+  atRisk: BoardMoney[];
 }
 
 export interface BoardTotal {
@@ -136,6 +192,8 @@ export interface BoardTotal {
   promisedMinor: number;
   // Invoices waiting on a person: the cash panel's "Waiting on a person".
   waitingMinor: number;
+  // First payments an outage holds: the cash panel's "Waiting on an outage".
+  outageMinor: number;
   // Rows of a pay run waiting for approval, which the cash panel does not count.
   runWaitingMinor: number;
   // With the bank and payouts sent outside PayOnce.
@@ -165,6 +223,8 @@ export interface BoardGroupCount {
 
 export interface BoardReport {
   generatedAt: string;
+  // Every active outage, oldest first, whatever the filters.
+  outages: BoardOutage[];
   filters: BoardFilters;
   groups: BoardGroupCount[];
   origins: { origin: BoardOrigin; label: string }[];
@@ -188,6 +248,8 @@ interface Ranked {
 interface Board {
   ranked: Ranked[];
   invoices: number;
+  // Active outages, oldest first.
+  outages: Outage[];
 }
 
 interface Situation {
@@ -337,6 +399,104 @@ function otherSituation(
   return situation("open", "open", "Open, with no payment being sent, approved or with the bank");
 }
 
+// The invoices each active outage held, as "outage-id invoice-id". An invoice has
+// one hold per outage, the first: an invoice whose own failure the outage counted
+// keeps "counted" when the outage later holds its replacement.
+function outageHeld(ledger: Ledger, outages: Outage[]): Set<string> {
+  const held: Set<string> = new Set<string>();
+  for (const outage of outages) {
+    for (const hold of ledger.outageHolds(outage.id)) {
+      if (hold.invoiceId !== null) {
+        held.add(`${outage.id} ${hold.invoiceId}`);
+      }
+    }
+  }
+  return held;
+}
+
+// How the active outage on an invoice's rail touches it, read from its cash
+// lines as the cash panel books them: a first payment not opened (waiting-outage,
+// or pay-run for a released row), an approved payment, or one a person can still
+// approve. That last is a replacement the outage held when this outage held the
+// invoice and the policy last escalated it for an outage. Money with the bank is
+// not held.
+function invoiceTouch(
+  outage: Outage,
+  obligation: Obligation,
+  kinds: ReadonlySet<CashKind>,
+  held: ReadonlySet<string>,
+): OutageTouch | null {
+  if (kinds.has("waiting-outage") || kinds.has("pay-run")) {
+    return "original";
+  }
+  if (kinds.has("approved")) {
+    return "approved";
+  }
+  if (kinds.has("awaiting-approval") || kinds.has("awaiting-person")) {
+    return held.has(`${outage.id} ${obligation.invoiceId}`) && obligation.escalationReason.startsWith(OUTAGE_REASON)
+      ? "replacement"
+      : "approval";
+  }
+  return null;
+}
+
+function outageLead(mark: BoardOutageMark): string {
+  return `Outage ${mark.id} on ${mark.rail}`;
+}
+
+// An invoice the outage holds is in the person group with the outage's reason,
+// because a person ends an outage. A held replacement keeps its own reason unless
+// it waits for approval.
+function outageSituation(ledger: Ledger, invoiceId: string, mark: BoardOutageMark, found: Situation): Situation {
+  const lead: string = outageLead(mark);
+  switch (mark.touch) {
+    case "original":
+      return situation("person", "outage-original", `${lead} holds the first payment. PayOnce sends it once a person ends the outage`);
+    case "approved":
+      return situation(
+        "person",
+        "outage-approved",
+        `The payment is approved, and outage ${mark.id} on ${mark.rail} holds it. PayOnce sends it once a person ends the outage, if the approval still counts`,
+      );
+    case "replacement": {
+      const latest: Approval | undefined = ledger.latestApproval(invoiceId);
+      return found.reason === "approve-replacement" && latest !== undefined
+        ? situation(
+            "person",
+            "outage-replacement",
+            `${lead} held the replacement PayOnce would have sent by itself, so it waits for approval (${progress(latest)}) and then for the outage to end`,
+          )
+        : found;
+    }
+    default:
+      return found;
+  }
+}
+
+// The line an outage adds to an entry whose reason does not name it.
+function outageAlso(mark: BoardOutageMark, found: Situation): string | null {
+  const lead: string = outageLead(mark);
+  if (mark.touch === "replacement" && found.reason !== "outage-replacement") {
+    return `${lead} held the replacement PayOnce would have sent by itself, and a payment approved now waits until a person ends it`;
+  }
+  return mark.touch === "approval" ? `${lead} is active, so a payment approved now waits until a person ends it` : null;
+}
+
+// The first active outage on a rail a pay row of the run pays on, as the release
+// checks them. The run is released whole, so it touches every row.
+function runOutage(ledger: Ledger, rows: RunRow[]): Outage | undefined {
+  for (const row of rows) {
+    const outage: Outage | undefined =
+      row.currency === null || row.transferMethod === null
+        ? undefined
+        : ledger.activeOutage(row.currency, row.transferMethod);
+    if (outage !== undefined) {
+      return outage;
+    }
+  }
+  return undefined;
+}
+
 function originOf(obligation: Obligation): BoardOrigin {
   return obligation.runRowId !== null ? "pay-run" : obligation.origin;
 }
@@ -371,6 +531,7 @@ function invoiceEntry(
   obligation: Obligation,
   lines: CashLine[],
   inbox: InboxNames,
+  held: ReadonlySet<string>,
   now: number,
 ): Ranked {
   const invoiceId: string = obligation.invoiceId;
@@ -401,6 +562,18 @@ function invoiceEntry(
   } else {
     found = otherSituation(ledger, obligation, lines);
   }
+  const active: Outage | undefined = ledger.activeOutage(obligation.currency, obligation.transferMethod);
+  const touch: OutageTouch | null =
+    active === undefined ? null : invoiceTouch(active, obligation, kinds, held);
+  const mark: BoardOutageMark | null =
+    active === undefined || touch === null ? null : { id: active.id, rail: railOf(active), touch };
+  if (mark !== null) {
+    found = outageSituation(ledger, invoiceId, mark, found);
+    const line: string | null = outageAlso(mark, found);
+    if (line !== null) {
+      also.push(line);
+    }
+  }
   if (inbox.offered > 0 && found.reason !== "inbox") {
     also.push(offeredText(inbox.offered));
   }
@@ -428,6 +601,7 @@ function invoiceEntry(
       rankMinor: rankOf(atRisk),
       deadlineAt: timed === undefined ? null : iso(deadlineOf(obligation, timed)),
       waitingSince: first?.at ?? null,
+      outage: mark,
     },
   };
 }
@@ -446,7 +620,13 @@ function runSituation(run: Run, status: RunStatus, approval: RunApproval | undef
   return situation("person", "run-needs-check", `Pay run ${run.id} waits for a person to check it again`);
 }
 
-function runRowEntry(run: Run, found: Situation, row: RunRow, lines: CashLine[]): Ranked {
+function runRowEntry(
+  run: Run,
+  found: Situation,
+  row: RunRow,
+  lines: CashLine[],
+  mark: BoardOutageMark | null,
+): Ranked {
   const atRisk: BoardMoney[] = moneyOf(lines);
   return {
     lines,
@@ -461,11 +641,15 @@ function runRowEntry(run: Run, found: Situation, row: RunRow, lines: CashLine[])
       state: null,
       runId: run.id,
       ...found,
-      also: [],
+      also:
+        mark?.touch === "approval"
+          ? [`${outageLead(mark)} is active, so pay run ${run.id} is released only once a person ends it`]
+          : [],
       atRisk,
       rankMinor: rankOf(atRisk),
       deadlineAt: null,
       waitingSince: run.uploadedAt,
+      outage: mark,
     },
   };
 }
@@ -537,6 +721,11 @@ function rankedBoard(ledger: Ledger, now: number): Board {
   }
 
   const inbox: Map<string, InboxNames> = inboxNames(ledger);
+  const outages: Outage[] = ledger
+    .outages()
+    .filter((outage: Outage): boolean => outage.state === "active")
+    .reverse();
+  const held: Set<string> = outageHeld(ledger, outages);
   const obligations: Obligation[] = ledger.obligations();
   const ranked: Ranked[] = [];
   for (const obligation of obligations) {
@@ -544,17 +733,71 @@ function rankedBoard(ledger: Ledger, now: number): Board {
       continue;
     }
     const id: string = obligation.invoiceId;
-    ranked.push(invoiceEntry(ledger, obligation, byInvoice.get(id) ?? [], inbox.get(id) ?? NO_NAMES, now));
+    ranked.push(
+      invoiceEntry(ledger, obligation, byInvoice.get(id) ?? [], inbox.get(id) ?? NO_NAMES, held, now),
+    );
   }
   if (run !== undefined) {
-    const found: Situation = runSituation(run, runStatus(ledger, run), ledger.latestRunApproval(run.id));
-    for (const row of ledger.runRows(run.id)) {
-      if (row.action === "pay" && row.state === "waiting" && row.invoiceId !== null) {
-        ranked.push(runRowEntry(run, found, row, byRow.get(row.invoiceId) ?? []));
-      }
+    const status: RunStatus = runStatus(ledger, run);
+    const rows: RunRow[] = ledger
+      .runRows(run.id)
+      .filter((row: RunRow): boolean => row.action === "pay" && row.state === "waiting" && row.invoiceId !== null);
+    // An approved run on a rail with an outage waits whole for it to end.
+    const outage: Outage | undefined = runOutage(ledger, rows);
+    const mark: BoardOutageMark | null =
+      outage === undefined
+        ? null
+        : { id: outage.id, rail: railOf(outage), touch: status === "approved" ? "run" : "approval" };
+    const found: Situation =
+      mark?.touch === "run"
+        ? situation(
+            "person",
+            "outage-run",
+            `Pay run ${run.id} is approved, and outage ${mark.id} on ${mark.rail} holds its release. PayOnce releases the whole run once a person ends the outage, if the approval still counts`,
+          )
+        : runSituation(run, status, ledger.latestRunApproval(run.id));
+    for (const row of rows) {
+      ranked.push(runRowEntry(run, found, row, byRow.get(row.invoiceId ?? "") ?? [], mark));
     }
   }
-  return { ranked: ranked.sort(compare), invoices: obligations.length };
+  return { ranked: ranked.sort(compare), invoices: obligations.length, outages };
+}
+
+// Each active outage with what it holds now, from the board's entries before any
+// filter, and their money at risk from the same cash lines.
+function boardOutages(ledger: Ledger, outages: Outage[], ranked: Ranked[]): BoardOutage[] {
+  return outages.map((outage: Outage): BoardOutage => {
+    const view: OutageView = outageView(ledger, outage);
+    const held: Ranked[] = ranked.filter(
+      (item: Ranked): boolean => item.entry.outage?.id === outage.id && item.entry.outage.touch !== "approval",
+    );
+    const invoices = (touch: OutageTouch): string[] =>
+      held
+        .filter((item: Ranked): boolean => item.entry.kind === "invoice" && item.entry.outage?.touch === touch)
+        .map((item: Ranked): string => item.entry.invoiceId);
+    const runs: Set<number> = new Set<number>();
+    for (const item of held) {
+      if (item.entry.outage?.touch === "run" && item.entry.runId !== null) {
+        runs.add(item.entry.runId);
+      }
+    }
+    return {
+      id: view.id,
+      rail: view.rail,
+      currency: view.currency,
+      method: view.method,
+      codes: view.codes,
+      payees: view.payees,
+      windowMinutes: view.windowMinutes,
+      declaredAt: view.declaredAt,
+      text: view.text,
+      originals: invoices("original"),
+      replacements: invoices("replacement"),
+      approved: invoices("approved"),
+      runs: [...runs],
+      atRisk: moneyOf(held.flatMap((item: Ranked): CashLine[] => item.lines)),
+    };
+  });
 }
 
 function blankTotal(currency: string): BoardTotal {
@@ -563,6 +806,7 @@ function blankTotal(currency: string): BoardTotal {
     minor: 0,
     promisedMinor: 0,
     waitingMinor: 0,
+    outageMinor: 0,
     runWaitingMinor: 0,
     withBankMinor: 0,
     entries: 0,
@@ -588,6 +832,8 @@ function totalsOf(ranked: Ranked[], currency: string | null): BoardTotal[] {
         total.promisedMinor += minor;
       } else if (WITH_BANK.has(line.kind)) {
         total.withBankMinor += minor;
+      } else if (line.kind === "waiting-outage") {
+        total.outageMinor += minor;
       } else if (line.runId === null) {
         total.waitingMinor += minor;
       } else {
@@ -627,7 +873,7 @@ export function boardReport(
   filters: BoardFilters,
   now: number = Date.now(),
 ): BoardReport {
-  const { ranked, invoices }: Board = rankedBoard(ledger, now);
+  const { ranked, invoices, outages }: Board = rankedBoard(ledger, now);
   const others: Ranked[] = ranked.filter(
     (item: Ranked): boolean =>
       (filters.currency === null || inCurrency(item.entry, filters.currency)) &&
@@ -646,6 +892,7 @@ export function boardReport(
   currencies.delete("");
   return {
     generatedAt: new Date(now).toISOString(),
+    outages: boardOutages(ledger, outages, ranked),
     filters,
     groups: BOARD_GROUPS.map(
       (group: BoardGroup): BoardGroupCount => ({

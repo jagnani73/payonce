@@ -8,11 +8,13 @@ import {
   type BoardEntry,
   type BoardFilters,
   type BoardMoney,
+  type BoardOutage,
   type BoardReport,
   type BoardTotal,
 } from "./incident-board.js";
 import { Ledger, LEDGER_PATH } from "./ledger.js";
 import { formatMoney } from "./money.js";
+import type { OutageCode } from "./outages.js";
 
 // The incident board in the terminal, ranked as the page ranks it. It reads only
 // the ledger, with no Airwallex call, and loads .env only if there is one, for the
@@ -116,6 +118,7 @@ function totalLine(total: BoardTotal): string {
   const buckets: [number, string][] = [
     [total.promisedMinor, "approved or being sent"],
     [total.waitingMinor, "waiting on a person"],
+    [total.outageMinor, "waiting on an outage"],
     [total.runWaitingMinor, "pay run waiting for approval"],
     [total.withBankMinor, "with the bank"],
   ];
@@ -130,6 +133,26 @@ function totalLine(total: BoardTotal): string {
     notes.push(`fee not known for ${total.feeUnknown}`);
   }
   return `  ${formatMoney(total.minor, total.currency).padStart(AMOUNT_WIDTH)}  ${parts.join(", ")}${notes.length === 0 ? "" : ` (${notes.join(", ")})`}`;
+}
+
+function heldLine(label: string, items: string[]): string {
+  return `${INDENT}${label}: ${items.length === 0 ? "none" : items.join(", ")}`;
+}
+
+// An active outage, before everything else on the board: what it saw, what it
+// holds and how to end it.
+function outageLines(outage: BoardOutage): string[] {
+  const codes: string = outage.codes.map((entry: OutageCode): string => `${entry.code} (${entry.label})`).join(", ");
+  return [
+    `  Outage ${outage.id} on ${outage.rail}, since ${utc(outage.declaredAt)}`,
+    `${INDENT}Payouts to ${outage.payees} payees failed within ${outage.windowMinutes} minutes with ${codes}. PayOnce opens no new payment on ${outage.rail} until a person ends it`,
+    heldLine("First payments waiting", outage.originals.map(printable)),
+    heldLine("Replacements escalated", outage.replacements.map(printable)),
+    heldLine("Approved payments waiting", outage.approved.map(printable)),
+    heldLine("Pay runs waiting", outage.runs.map((id: number): string => `pay run ${id}`)),
+    `${INDENT}${outage.atRisk.length === 0 ? "Nothing at risk" : `At risk ${outage.atRisk.map(moneyText).join(", ")}`}`,
+    `${INDENT}End it with pnpm outage end ${outage.id} NAME NOTE, or with the form on the board in pnpm ui`,
+  ];
 }
 
 function entryLines(entry: BoardEntry, now: string): string[] {
@@ -164,6 +187,15 @@ function print(report: BoardReport): void {
   console.log(`Incident board at ${utc(report.generatedAt)}, from the ledger only`);
   if (applied.length > 0) {
     console.log(`Showing ${report.entries.length} of ${report.all}: ${applied.join(", ")}`);
+  }
+  if (report.outages.length > 0) {
+    console.log("");
+    console.log(`Active rail outages (${report.outages.length}), whatever the filters`);
+    for (const outage of report.outages) {
+      for (const line of outageLines(outage)) {
+        console.log(line);
+      }
+    }
   }
   console.log("");
   console.log("Money that could still leave a wallet");
