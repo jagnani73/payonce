@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Quote } from "./airwallex/fx.js";
 import type { Transfer, TransferBankDetails } from "./airwallex/transfers.js";
+import { arrivalBlock, type ArrivalTerms } from "./arrival.js";
 import { bankDetailsKey, debitOf, originalStateOf, type Debit } from "./assess.js";
 import type { Decision, OriginalTransferState } from "./incident.js";
 import type { BankChange, Obligation, ObligationState, TransferMethod } from "./ledger.js";
@@ -80,6 +81,10 @@ interface PaymentTerms {
   // Only on a payment from another currency's wallet, so every other payment's
   // terms, and their binding, are as they were before FX.
   fx?: FxTerms;
+  // Only on an invoice with a due date, so every other invoice's terms, and their
+  // binding, are as they were before. Advice for the approvers: it never decides
+  // anything.
+  arrival?: ArrivalTerms;
 }
 
 // A second payment for an invoice whose original failed.
@@ -116,6 +121,10 @@ export interface RunRowTerms {
   // The callback that verified the account, when PayOnce last paid this supplier
   // another one.
   bankChange: number | null;
+  // When the row usually arrives, against its due date. Only on a row the file
+  // gives a due date, so every other row's terms, and a run's binding, are as they
+  // were before.
+  arrival?: ArrivalTerms;
 }
 
 // A currency's pay rows. reserveFloorMinor is the floor the cash check used, null
@@ -163,6 +172,9 @@ export function runTermsFor(
         accountKey: row.accountKey,
         heldFor: row.heldFor,
         bankChange: row.bankChange,
+        ...(row.arrival === undefined || row.arrival.dueDate === null
+          ? {}
+          : { arrival: arrivalBlock(row.arrival) }),
       }),
     ),
     totals: totals.map(
@@ -193,7 +205,8 @@ export function payTo(supplier: string, details: TransferBankDetails): string {
 // bankDetails is what the beneficiary record holds now, which is where a new
 // transfer would go. It is not taken from the original transfer. bankChange is
 // the callback that verified those details, if they changed. fx is the quote a
-// payment from another currency's wallet is approved at.
+// payment from another currency's wallet is approved at. arrival is when the
+// replacement usually arrives, given only for an invoice with a due date.
 export function termsFor(
   obligation: Obligation,
   original: Transfer,
@@ -202,6 +215,7 @@ export function termsFor(
   bankDetails: TransferBankDetails,
   bankChange: BankChange | null,
   fx: FxTerms | null,
+  arrival: ArrivalTerms | null,
 ): ReplacementTerms {
   return {
     action: "replace",
@@ -212,6 +226,7 @@ export function termsFor(
     payTo: payTo(obligation.supplier, bankDetails),
     accountKey: accountKeyOf(bankDetails),
     ...(fx === null ? {} : { fx }),
+    ...(arrival === null ? {} : { arrival: arrivalBlock(arrival) }),
     evidence: {
       originalReference: original.short_reference_id,
       originalState: originalStateOf(original),
@@ -236,12 +251,14 @@ export function termsFor(
 
 // bankDetails is what the beneficiary record holds now, which is where the payment
 // would go. fx is the quote a payment from another currency's wallet is approved
-// at.
+// at. arrival is when the payment usually arrives, given only for an invoice with
+// a due date.
 export function heldTermsFor(
   obligation: Obligation,
   bankDetails: TransferBankDetails,
   duplicates: DuplicateEvidence[],
   fx: FxTerms | null,
+  arrival: ArrivalTerms | null,
 ): HeldPaymentTerms {
   return {
     action: "pay",
@@ -252,6 +269,7 @@ export function heldTermsFor(
     payTo: payTo(obligation.supplier, bankDetails),
     accountKey: accountKeyOf(bankDetails),
     ...(fx === null ? {} : { fx }),
+    ...(arrival === null ? {} : { arrival: arrivalBlock(arrival) }),
     evidence: {
       reason: obligation.escalationReason,
       duplicates,
@@ -295,6 +313,9 @@ export function changedFields(
   }
   if (JSON.stringify(approved.fx ?? null) !== JSON.stringify(current.fx ?? null)) {
     changed.push("exchange rate");
+  }
+  if (JSON.stringify(approved.arrival ?? null) !== JSON.stringify(current.arrival ?? null)) {
+    changed.push("arrival estimate");
   }
   if (JSON.stringify(approved.evidence) !== JSON.stringify(current.evidence)) {
     changed.push("evidence");

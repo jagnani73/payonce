@@ -10,6 +10,7 @@ import { BalanceCache } from "./airwallex/balances.js";
 import { AirwallexClient, AirwallexError, AirwallexUnreachableError } from "./airwallex/client.js";
 import { subscribe } from "./airwallex/webhooks.js";
 import type { ApprovalTerms, RunTerms } from "./approval.js";
+import { dueDateProblem, feeSeenText } from "./arrival.js";
 import { describePolicy, policyFromEnv, type Approver, type Barred } from "./approvers.js";
 import {
   auditCsv,
@@ -587,6 +588,13 @@ async function startIncident(request: IncomingMessage): Promise<unknown> {
   ) {
     throw new HttpError(400, "Unknown scenario");
   }
+  // Optional. A date in the past is taken, and the arrival estimates say it has
+  // passed.
+  const dueDate: string = typeof body["dueDate"] === "string" ? body["dueDate"].trim() : "";
+  const badDue: string | null = dueDate === "" ? null : dueDateProblem(dueDate);
+  if (badDue !== null) {
+    throw new HttpError(400, badDue);
+  }
 
   // The supplier's invoice number when the person gives one, so a second bill
   // under a near-identical number can be caught.
@@ -605,7 +613,13 @@ async function startIncident(request: IncomingMessage): Promise<unknown> {
     );
   }
   const invoiceId: string = given === "" ? newInvoiceId(engine.ledger) : given;
-  const obligation: Obligation = await openScenario(engine, invoiceId, scenarioId, startedBy);
+  const obligation: Obligation = await openScenario(
+    engine,
+    invoiceId,
+    scenarioId,
+    startedBy,
+    dueDate === "" ? null : dueDate,
+  );
   runScenario(engine, agent, bank, obligation, { bankOutcome, emailsName }).catch(
     (error: unknown): void => noteError(engine.ledger, invoiceId, error),
   );
@@ -828,6 +842,11 @@ function runDetail(raw: string): unknown {
     counts: runCounts(rows),
     rows: rows.map((row: RunRow) => ({
       ...row,
+      // The fee PayOnce last saw by the row's method in its currency, as an estimate.
+      feeSeen:
+        row.arrival === null || row.currency === null
+          ? null
+          : feeSeenText(engine.ledger, row.currency, row.arrival.method),
       invoice:
         row.state === "released" && row.invoiceId !== null ? invoiceSummary(row.invoiceId) : null,
     })),

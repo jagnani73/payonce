@@ -23,6 +23,7 @@ import {
   type Barred,
   type SignoffRule,
 } from "./approvers.js";
+import { arrivalFor, today } from "./arrival.js";
 import { bankDetailsKey } from "./assess.js";
 import { committedAcross, committedByInvoice, type CommittedExcept } from "./cash-position.js";
 import { withCurrencyLocks } from "./currency-lock.js";
@@ -182,6 +183,7 @@ function asObligation(row: RunFileRow, payee: string, method: TransferMethod): O
     duplicateOf: [],
     rejectedBy: null,
     runRowId: null,
+    dueDate: row.dueDate,
   };
 }
 
@@ -204,11 +206,13 @@ function billOf(row: RunFileRow, payees: Map<string, Payee>): (Bill & { invoiceI
 }
 
 // Every reason a row is skipped, or none, and what PayOnce would pay with it.
+// from is the day a pay row's arrival estimate counts from.
 function checkRow(
   ledger: Ledger,
   row: RunFileRow,
   earlier: RunFileRow[],
   payees: Map<string, Payee>,
+  from: string,
 ): CheckedRow {
   const reasons: string[] = [...row.problems];
   const payee: Payee | undefined =
@@ -346,6 +350,11 @@ function checkRow(
     payee: details === undefined ? null : name,
     payTo: details === undefined ? null : payTo(name, details),
     accountKey: details === undefined ? null : accountKeyOf(details),
+    dueDate: row.dueDate,
+    arrival:
+      pays && method !== null && row.currency !== null
+        ? arrivalFor(method, row.currency, details, row.dueDate, from)
+        : null,
   };
 }
 
@@ -362,7 +371,8 @@ export function payRows(rows: CheckedRow[]): PayRow[] {
       row.transferMethod !== null &&
       row.payee !== null &&
       row.payTo !== null &&
-      row.accountKey !== null
+      row.accountKey !== null &&
+      row.arrival !== null
     ) {
       pay.push({
         line: row.line,
@@ -375,6 +385,7 @@ export function payRows(rows: CheckedRow[]): PayRow[] {
         accountKey: row.accountKey,
         heldFor: row.heldFor,
         bankChange: row.bankChangeId,
+        arrival: row.arrival,
         payee: row.payee,
         newPayee: row.newPayee,
       });
@@ -458,15 +469,19 @@ async function cashCheck(engine: Engine, rows: CheckedRow[], runId: number | nul
 // read. A row with any problem is skipped with every reason found. Then each
 // currency's pay rows are checked against its floor, and when they do not fit,
 // every row in that currency is skipped, so file order never decides who is paid.
+// Each pay row's arrival estimate counts from the day from: today for a check, and
+// the approved estimate's day for a release, so a release after midnight still
+// matches its approval.
 export async function checkRows(
   engine: Engine,
   rows: RunFileRow[],
   runId: number | null,
+  from: string = today(),
 ): Promise<RunCheck> {
   const payees: Map<string, Payee> = await readPayees(engine, rows);
   const checked: CheckedRow[] = rows.map(
     (row: RunFileRow, index: number): CheckedRow =>
-      checkRow(engine.ledger, row, rows.slice(0, index), payees),
+      checkRow(engine.ledger, row, rows.slice(0, index), payees, from),
   );
   const cash: RunCash[] = await cashCheck(engine, checked, runId);
   const short: Map<string, string> = new Map(
@@ -951,7 +966,14 @@ export async function releaseRun(engine: Engine, agent: Dispatcher, runId: numbe
   if (run?.state !== "waiting" || approval?.state !== "approved") {
     return;
   }
-  const check: RunCheck = await checkRows(engine, fileRowsOf(ledger, run), runId);
+  const approved: RunTerms = JSON.parse(approval.terms) as RunTerms;
+  const check: RunCheck = await checkRows(
+    engine,
+    fileRowsOf(ledger, run),
+    runId,
+    approved.rows.find((row: RunRowTerms): boolean => row.arrival !== undefined)?.arrival?.from ??
+      today(),
+  );
   const terms: RunTerms = termsOf(run, check.rows, check.cash);
   const amount: PaymentAmount = runAmount(terms);
   let why: string | null = null;
@@ -987,7 +1009,6 @@ export async function releaseRun(engine: Engine, agent: Dispatcher, runId: numbe
   // The rows are released as the approved terms have them, whatever a check in
   // another process has written on them since. The binding matched, so they are
   // the rows this release checked.
-  const approved: RunTerms = JSON.parse(approval.terms) as RunTerms;
   const payees: Map<number, string> = new Map(
     payRows(check.rows).map((row: PayRow): [number, string] => [row.line, row.payee]),
   );
@@ -1003,6 +1024,7 @@ export async function releaseRun(engine: Engine, agent: Dispatcher, runId: numbe
     transferMethod: row.transferMethod,
     accountKey: row.accountKey,
     payTo: row.payTo,
+    dueDate: row.arrival?.dueDate ?? null,
     firstLine: `Opened from pay run ${runId}, row ${row.line} (${run.fileName}, file ${run.fileHash.slice(0, 8)}), uploaded by ${run.uploadedBy} and approved by ${approval.approver ?? ""} on request ${approval.id} (binding ${approval.binding.slice(0, 8)}): ${formatMoney(row.amountMinor, row.currency)} to ${row.payTo}`,
   }));
 

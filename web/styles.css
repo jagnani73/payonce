@@ -332,6 +332,11 @@ input:read-only {
   margin-top: 10px;
 }
 
+.hint--caution {
+  color: var(--amber);
+  font-weight: 600;
+}
+
 .form-error {
   margin-top: 8px;
   padding: 7px 10px;
@@ -1553,6 +1558,18 @@ input[type="file"] {
   color: var(--ink-2);
   font-size: 14px;
   overflow-wrap: anywhere;
+}
+
+.run-row__arrival {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 13.5px;
+  overflow-wrap: anywhere;
+}
+
+.run-row__arrival--caution {
+  color: var(--amber);
+  font-weight: 600;
 }
 
 .run-row.is-skipped .run-row__invoice,

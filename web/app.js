@@ -98,6 +98,7 @@ const els = {
   bankOutcome: byId("bank-outcome"),
   emailThread: byId("email-thread"),
   invoiceNumber: byId("invoice-number"),
+  dueDate: byId("due-date"),
   startedBy: byId("started-by"),
   startButton: byId("start-button"),
   newError: byId("new-error"),
@@ -722,6 +723,7 @@ function renderForm() {
   // Read-only rather than disabled, so the name keeps focus while the incident starts.
   els.startedBy.readOnly = state.creating;
   els.invoiceNumber.readOnly = state.creating;
+  els.dueDate.readOnly = state.creating;
   els.startButton.disabled = locked;
   setText(els.startButton, state.creating ? "Starting" : "Start incident");
   showMessage(els.newError, state.createError ?? state.optionsError);
@@ -748,6 +750,16 @@ async function startIncident(event) {
   if (invoiceNumber !== "") {
     body.invoiceId = invoiceNumber;
   }
+  // The date input gives YYYY-MM-DD, or nothing when it is empty or incomplete.
+  if (els.dueDate.validity.badInput) {
+    state.createError = "Finish the due date, or clear it.";
+    renderForm();
+    els.dueDate.focus();
+    return;
+  }
+  if (els.dueDate.value !== "") {
+    body.dueDate = els.dueDate.value;
+  }
   if (state.options.scenarios.length > 0 && els.scenario.value !== "") {
     body.scenario = els.scenario.value;
   }
@@ -761,6 +773,7 @@ async function startIncident(event) {
     }
     state.started = { id: created.invoiceId, at: Date.now() };
     els.invoiceNumber.value = "";
+    els.dueDate.value = "";
     state.fastUntil = Date.now() + EXPECT_WORK_MS;
     window.scrollTo(0, 0);
     select(created.invoiceId);
@@ -950,6 +963,8 @@ function renderHeader(detail) {
     typeof obligation.sourceCurrency === "string" && obligation.sourceCurrency !== obligation.currency
       ? obligation.sourceCurrency
       : null;
+  const dueDate = typeof obligation.dueDate === "string" ? obligation.dueDate : null;
+  const duePassed = dueDate !== null && dueDate < localToday();
   if (
     changed("header", [
       invoiceId,
@@ -957,6 +972,8 @@ function renderHeader(detail) {
       obligation.currency,
       obligation.amountMinor,
       paidFrom,
+      dueDate,
+      duePassed,
       obligation.state,
       obligation.origin,
       startedBy,
@@ -1013,6 +1030,12 @@ function renderHeader(detail) {
           formatMoney(obligation.amountMinor, obligation.currency),
         ),
         paidFrom !== null && h("p", { class: "hint" }, `Paid from ${paidFrom}`),
+        dueDate !== null &&
+          h(
+            "p",
+            { class: duePassed ? "hint hint--caution" : "hint" },
+            duePassed ? `Due ${dueDate}, which has passed` : `Due ${dueDate}`,
+          ),
         h(
           "div",
           { class: "detail__state" },
@@ -1461,6 +1484,105 @@ function caution(message) {
   return h("div", { class: "caution" }, icon("warning"), h("p", { class: "caution__title" }, message));
 }
 
+// ---------- arrival estimates ----------
+
+const HOLIDAYS_NOTE = "Business days skip weekends. Public holidays are not counted.";
+
+const ARRIVAL_RISK_WORDS = {
+  "on-time": "on time",
+  "may-be-late": "may arrive late",
+  late: "arrives late even at its fastest",
+  passed: "the due date has passed",
+  unknown: "PayOnce cannot say if it is on time",
+};
+
+// Today on this computer's calendar, as YYYY-MM-DD.
+function localToday() {
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
+// The arrival estimate in terms or on a run row, or null.
+function arrivalOf(holder) {
+  const arrival = holder?.arrival;
+  return arrival !== null &&
+    typeof arrival === "object" &&
+    typeof arrival.method === "string" &&
+    typeof arrival.from === "string"
+    ? arrival
+    : null;
+}
+
+// As on the server: null without a due date.
+function arrivalRisk(arrival) {
+  if (typeof arrival.dueDate !== "string") {
+    return null;
+  }
+  if (arrival.dueDate < arrival.from) {
+    return "passed";
+  }
+  if (typeof arrival.earliest !== "string" || typeof arrival.latest !== "string") {
+    return "unknown";
+  }
+  if (arrival.earliest > arrival.dueDate) {
+    return "late";
+  }
+  return arrival.latest > arrival.dueDate ? "may-be-late" : "on-time";
+}
+
+function arrivalAtRisk(arrival) {
+  const risk = arrivalRisk(arrival);
+  return risk === "may-be-late" || risk === "late" || risk === "passed";
+}
+
+// "SWIFT, usually 0 to 3 business days, by 2026-10-31 if sent on 2026-10-28"
+function arrivalRoute(arrival) {
+  if (typeof arrival.route !== "string" || !Number.isInteger(arrival.minDays) || !Number.isInteger(arrival.maxDays)) {
+    return `${arrival.method}${typeof arrival.country === "string" ? ` to ${arrival.country}` : ""}, arrival not known`;
+  }
+  const days =
+    arrival.minDays === arrival.maxDays
+      ? `${arrival.maxDays} business ${arrival.maxDays === 1 ? "day" : "days"}`
+      : `${arrival.minDays} to ${arrival.maxDays} business days`;
+  const by = typeof arrival.latest === "string" ? `, by ${arrival.latest} if sent on ${arrival.from}` : "";
+  return `${arrival.route}, usually ${days}${by}`;
+}
+
+// "due 2026-10-30; may arrive late", or null without a due date.
+function arrivalDue(arrival) {
+  const risk = arrivalRisk(arrival);
+  return risk === null ? null : `due ${arrival.dueDate}; ${ARRIVAL_RISK_WORDS[risk]}`;
+}
+
+function arrivalText(arrival) {
+  const due = arrivalDue(arrival);
+  return due === null ? arrivalRoute(arrival) : `${arrivalRoute(arrival)}; ${due}`;
+}
+
+// The Arrival row of an approval card, or nothing when the terms carry no estimate.
+function arrivalTerm(arrival) {
+  if (arrival === null) {
+    return [];
+  }
+  const due = arrivalDue(arrival);
+  return [
+    h("dt", null, "Arrival"),
+    h(
+      "dd",
+      null,
+      arrivalRoute(arrival),
+      due !== null &&
+        h(
+          "span",
+          { class: arrivalAtRisk(arrival) ? "terms__sub terms__sub--caution" : "terms__sub" },
+          sentence(due),
+        ),
+      h("span", { class: "terms__sub" }, HOLIDAYS_NOTE),
+    ),
+  ];
+}
+
 // A held invoice's payment is its first, so the card does not call it a replacement.
 function isHeldPayment(approval) {
   return approval.terms?.action === "pay";
@@ -1561,6 +1683,8 @@ function buildApproval(invoiceId, approval) {
 
   // Set on a payment from another currency's wallet. The approval covers this quote.
   const fx = fxOf(terms);
+  // Set on an invoice with a due date. Advice only: it never stops a payment.
+  const arrival = arrivalOf(terms);
   const validTo = fx === null ? null : parseDate(fx.validTo);
   const rateSub =
     fx === null
@@ -1623,6 +1747,7 @@ function buildApproval(invoiceId, approval) {
             "Not the account the original payment went to",
           ),
       ),
+      arrivalTerm(arrival),
       held
         ? [
             term("Why it was held", sentence(evidence.reason)),
@@ -2867,6 +2992,9 @@ function buildRunRow(row, columns) {
   if (typeof row.note === "string" && row.note !== "" && row.state === "dropped") {
     notes.push(`Not released: ${row.note}`);
   }
+  // When a pay row usually arrives, and the fee PayOnce last saw on its route.
+  const arrival = pays ? arrivalOf(row) : null;
+  const fee = typeof row.feeSeen === "string" && row.feeSeen !== "" ? `; ${row.feeSeen}` : "";
   return h(
     "li",
     { class: row.action === "skip" || row.state === "dropped" ? "run-row is-skipped" : "run-row" },
@@ -2883,6 +3011,12 @@ function buildRunRow(row, columns) {
       chip,
     ),
     h("p", { class: "run-row__payee" }, row.payTo ?? row.supplier ?? cellOf(columns, row, "supplier")),
+    arrival !== null &&
+      h(
+        "p",
+        { class: arrivalAtRisk(arrival) ? "run-row__arrival run-row__arrival--caution" : "run-row__arrival" },
+        `${sentence(arrivalText(arrival))}${fee}`,
+      ),
     tags.length > 0 && h("p", { class: "run-row__tags" }, tags),
     notes.length > 0 && h("ul", { class: "run-row__reasons" }, notes.map((note) => h("li", null, withPeriod(note)))),
   );
@@ -2978,6 +3112,31 @@ function runApprovalLead(approval, terms) {
     default:
       return "";
   }
+}
+
+// The Arrival row of a run's approval card: when each row usually arrives, as the
+// terms carry it. A request from before the estimates has none.
+function runArrivalTerm(terms) {
+  const rows = Array.isArray(terms.rows) ? terms.rows.filter((row) => arrivalOf(row) !== null) : [];
+  if (rows.length === 0) {
+    return [];
+  }
+  return [
+    h("dt", null, "Arrival"),
+    h(
+      "dd",
+      null,
+      rows.map((row) => {
+        const arrival = arrivalOf(row);
+        return h(
+          "span",
+          { class: arrivalAtRisk(arrival) ? "terms__sub terms__sub--caution" : "terms__sub" },
+          `Row ${row.line}, ${row.invoiceId}: ${arrivalText(arrival)}`,
+        );
+      }),
+      h("span", { class: "terms__sub" }, HOLIDAYS_NOTE),
+    ),
+  ];
 }
 
 // The last thing the run's timeline says it is waiting on.
@@ -3124,6 +3283,7 @@ function renderRunApproval(run) {
             h("dt", null, "Limits checked against"),
             h("dd", null, `${formatMoney(approval.largest.amountMinor, approval.largest.currency)}, the largest total`),
           ],
+        runArrivalTerm(terms),
       ),
       h(
         "p",

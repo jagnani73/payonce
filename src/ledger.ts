@@ -14,6 +14,7 @@ import {
   type RunEventFields,
 } from "./audit-trail.js";
 import type { ApprovalTerms, FxTerms } from "./approval.js";
+import type { ArrivalTerms } from "./arrival.js";
 import type { SupplierEmail } from "./emails.js";
 
 export const LEDGER_PATH: string = "payonce.db";
@@ -256,11 +257,15 @@ export interface NewObligation {
   supplierPhone: string | null;
   // The wallet the invoice is paid from, when not its own currency's.
   sourceCurrency?: string;
+  // When the supplier expects the money, as YYYY-MM-DD. Advice for people only:
+  // it never changes a decision or a payment.
+  dueDate?: string | null;
 }
 
 export interface Obligation extends NewObligation {
   // The invoice's own currency when it is not paid from another wallet.
   sourceCurrency: string;
+  dueDate: string | null;
   origin: ObligationOrigin;
   state: ObligationState;
   // Why the invoice last went to a person. Empty if it never has.
@@ -429,6 +434,7 @@ interface ObligationRow {
   rejected_by: string | null;
   run_row_id: number | null;
   source_currency: string | null;
+  due_date: string | null;
 }
 
 // A person's callback to the supplier on the number on file, and the bank
@@ -622,6 +628,8 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     source_currency: "TEXT",
     // The latest exchange rate quote taken for it, as JSON.
     last_quote: "TEXT",
+    // When the supplier expects the money, as YYYY-MM-DD.
+    due_date: "TEXT",
   },
   approvals: {
     requested_at: "TEXT",
@@ -656,6 +664,12 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     // The hash of the run's line before this one, and this line's own.
     prev_hash: "TEXT",
     hash: "TEXT",
+  },
+  run_rows: {
+    // The due date the file gives, as YYYY-MM-DD, and when a pay row usually
+    // arrives, as ArrivalTerms JSON.
+    due_date: "TEXT",
+    arrival: "TEXT",
   },
   outside_payouts: {
     reference: "TEXT NOT NULL DEFAULT ''",
@@ -736,6 +750,7 @@ function toObligation(row: ObligationRow): Obligation {
     duplicateOf: row.duplicate_of === null ? [] : (JSON.parse(row.duplicate_of) as string[]),
     rejectedBy: row.rejected_by,
     runRowId: row.run_row_id,
+    dueDate: row.due_date ?? null,
   };
 }
 
@@ -877,6 +892,10 @@ export interface CheckedRow {
   payee: string | null;
   payTo: string | null;
   accountKey: string | null;
+  // The due date the file gives, or null.
+  dueDate: string | null;
+  // When a pay row usually arrives, as its approvers see it. Null on a skip row.
+  arrival: ArrivalTerms | null;
 }
 
 export interface RunRow extends CheckedRow {
@@ -916,6 +935,7 @@ export interface ReleaseRow {
   // every payment of the row is sent only while the record still holds it.
   accountKey: string;
   payTo: string;
+  dueDate: string | null;
   // The invoice's first timeline line, chained like any other.
   firstLine: string;
 }
@@ -939,9 +959,9 @@ export class LeaseLostError extends Error {
 }
 
 // A pay row with the fields a skipped row keeps: the reasons, and no hold, new
-// payee or callback, since those only matter for a row that pays.
+// payee, callback or arrival, since those only matter for a row that pays.
 export function skipRow(row: CheckedRow, reasons: string[]): CheckedRow {
-  return { ...row, action: "skip", reasons, heldFor: [], newPayee: false, bankChangeId: null };
+  return { ...row, action: "skip", reasons, heldFor: [], newPayee: false, bankChangeId: null, arrival: null };
 }
 
 export interface ReleasedRun {
@@ -992,6 +1012,8 @@ interface RunRowRecord {
   account_key: string | null;
   state: RunRowState;
   note: string | null;
+  due_date: string | null;
+  arrival: string | null;
 }
 
 interface RunRecord {
@@ -1060,6 +1082,8 @@ function toRunRow(row: RunRowRecord): RunRow {
     payee: row.payee,
     payTo: row.pay_to,
     accountKey: row.account_key,
+    dueDate: row.due_date ?? null,
+    arrival: typeof row.arrival === "string" ? (JSON.parse(row.arrival) as ArrivalTerms) : null,
     state: row.state,
     note: row.note,
   };
@@ -1289,8 +1313,8 @@ export class Ledger {
         `INSERT OR IGNORE INTO obligations
            (invoice_id, supplier, supplier_domain, beneficiary_id, currency,
             amount_minor, transfer_method, invoice_floor_minor, started_by,
-            supplier_phone, source_currency)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            supplier_phone, source_currency, due_date)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.invoiceId,
@@ -1304,6 +1328,7 @@ export class Ledger {
         input.startedBy,
         input.supplierPhone,
         sourceColumn(input),
+        input.dueDate ?? null,
       );
     const row: ObligationRow = this.db
       .prepare("SELECT * FROM obligations WHERE invoice_id = ?")
@@ -2446,8 +2471,8 @@ export class Ledger {
         `INSERT INTO run_rows
            (run_id, line, cells, invoice_id, supplier, beneficiary_id, currency, amount_minor,
             transfer_method, sandbox_outcome, action, reasons, held_for, new_payee,
-            bank_change_id, payee, pay_to, account_key)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            bank_change_id, payee, pay_to, account_key, due_date, arrival)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         runId,
@@ -2468,6 +2493,8 @@ export class Ledger {
         row.payee,
         row.payTo,
         row.accountKey,
+        row.dueDate,
+        row.arrival === null ? null : JSON.stringify(row.arrival),
       );
   }
 
@@ -2555,7 +2582,7 @@ export class Ledger {
         `UPDATE run_rows SET invoice_id = ?, supplier = ?, beneficiary_id = ?, currency = ?,
                 amount_minor = ?, transfer_method = ?, sandbox_outcome = ?, action = ?,
                 reasons = ?, held_for = ?, new_payee = ?, bank_change_id = ?, payee = ?,
-                pay_to = ?, account_key = ?
+                pay_to = ?, account_key = ?, due_date = ?, arrival = ?
           WHERE run_id = ? AND line = ?`,
       );
       for (const row of rows) {
@@ -2575,6 +2602,8 @@ export class Ledger {
           row.payee,
           row.payTo,
           row.accountKey,
+          row.dueDate,
+          row.arrival === null ? null : JSON.stringify(row.arrival),
           runId,
           row.line,
         );
@@ -2663,8 +2692,8 @@ export class Ledger {
               `INSERT INTO obligations
                  (invoice_id, supplier, supplier_domain, beneficiary_id, currency, amount_minor,
                   transfer_method, invoice_floor_minor, started_by, supplier_phone, run_row_id,
-                  look_at, source_currency)
-               VALUES (?, ?, '', ?, ?, ?, ?, 0, ?, NULL, ?, ?, NULL)`,
+                  look_at, source_currency, due_date)
+               VALUES (?, ?, '', ?, ?, ?, ?, 0, ?, NULL, ?, ?, NULL, ?)`,
             )
             .run(
               row.invoiceId,
@@ -2676,6 +2705,7 @@ export class Ledger {
               uploadedBy,
               row.rowId,
               now,
+              row.dueDate,
             );
           const marked: { changes: number | bigint } = this.db
             .prepare(

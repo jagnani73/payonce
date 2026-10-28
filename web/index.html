@@ -82,6 +82,10 @@
               <input id="invoice-number" name="invoiceId" type="text" autocomplete="off" spellcheck="false" maxlength="40" />
             </label>
             <label class="field">
+              <span class="field__label">Due date (optional)</span>
+              <input id="due-date" name="dueDate" type="date" min="2000-01-01" max="2099-12-31" />
+            </label>
+            <label class="field">
               <span class="field__label">Your name</span>
               <input id="started-by" name="startedBy" type="text" autocomplete="name" maxlength="80" />
             </label>
@@ -91,6 +95,7 @@
             <p class="hint">PayOnce sends a sandbox transfer, then applies the bank outcome above.</p>
             <p class="hint">Leave the invoice number empty to get a new one. PayOnce holds an invoice before paying it when its number matches one already in the ledger for the same supplier and amount, apart from case, spacing, leading zeros or letters added at the end.</p>
             <p class="hint">The person who starts an incident cannot approve its payments.</p>
+            <p class="hint">With a due date, the timeline and the approval card say when a payment usually arrives and whether it may be late. A late payment is still paid.</p>
             <p id="new-error" class="form-error" role="alert" hidden></p>
           </form>
         </section>
@@ -107,7 +112,7 @@
               <input id="run-uploaded-by" name="uploadedBy" type="text" autocomplete="name" maxlength="80" />
             </label>
             <button id="run-button" class="button button--primary" type="submit">Check file</button>
-            <p id="run-columns" class="hint">Columns: invoice, supplier, beneficiary_id, amount and currency, plus method and sandbox_outcome if you need them. One row per invoice, 50 rows at most.</p>
+            <p id="run-columns" class="hint">Columns: invoice, supplier, beneficiary_id, amount and currency, plus method, due_date (such as 2026-11-02) and sandbox_outcome if you need them. One row per invoice, 50 rows at most.</p>
             <p class="hint">PayOnce never reads bank details from a file. It pays the account on the beneficiary record.</p>
             <p class="hint">The person who uploads a run cannot approve it.</p>
             <div id="run-error" class="form-error" role="alert" hidden></div>
@@ -200,6 +205,7 @@
               <section class="card" aria-labelledby="run-rows-title">
                 <h2 id="run-rows-title">Rows</h2>
                 <ol id="run-rows" class="run-rows"></ol>
+                <p class="hint">Arrival dates count business days. Weekends are skipped, and public holidays are not counted. A row that may arrive late is still paid.</p>
               </section>
 
               <section class="card" aria-labelledby="run-timeline-title">
