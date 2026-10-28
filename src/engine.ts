@@ -1193,8 +1193,15 @@ function escalate(
     ruleFor(engine, obligation, terms, assessment.incident.beneficiaryChanged),
     assessment.rate,
   );
-  // No request is open when nobody on the approver list could approve it.
-  noteFloor(engine, obligation, assessment, next !== null);
+  // No request is open when nobody on the approver list could approve it, or when
+  // a request on an old quote was withdrawn so the next look takes a fresh one.
+  const latest: Approval | undefined = engine.ledger.latestApproval(obligation.invoiceId);
+  noteFloor(
+    engine,
+    obligation,
+    assessment,
+    latest?.state === "requested" && latest.binding === bindingOf(terms) && !isExpired(latest),
+  );
   return next;
 }
 
