@@ -249,10 +249,20 @@ function field(name: string, value: AlertText, inline: boolean = true): AlertFie
   return { name, value, inline };
 }
 
+// An invoice number PayOnce did not accept is never shown or linked to.
+function invoiceLink(invoice: string, known: boolean, base: string): { link: string; linkText: string } {
+  return known
+    ? { link: `${base}/#${encodeURIComponent(invoice)}`, linkText: `Open ${invoice} in PayOnce` }
+    : { link: `${base}/`, linkText: "Open PayOnce" };
+}
+
 function invoiceMessage(facts: InvoiceAlertFacts, base: string): AlertMessage {
-  const invoice: string = identifier(facts.invoice, "An invoice");
+  const known: boolean = IDENTIFIER.test(facts.invoice);
+  const invoice: string = known ? facts.invoice : "an invoice";
   const title: string =
-    facts.need === "bank" ? `Bank deadline passed on ${invoice}` : `${invoice} ${NEED_TITLES[facts.need]}`;
+    facts.need === "bank"
+      ? `Bank deadline passed on ${invoice}`
+      : `${known ? invoice : "An invoice"} ${NEED_TITLES[facts.need]}`;
   return {
     title,
     line: [ours(`${facts.amount} to`), theirs(facts.supplier)],
@@ -269,14 +279,14 @@ function invoiceMessage(facts: InvoiceAlertFacts, base: string): AlertMessage {
         ? [field("Account", ours("the request pays an account the original did not go to"), false)]
         : []),
     ],
-    link: `${base}/#${encodeURIComponent(invoice)}`,
-    linkText: `Open ${invoice} in PayOnce`,
+    ...invoiceLink(invoice, known, base),
     urgent: facts.need === "bank",
   };
 }
 
 function payoutMessage(facts: PayoutAlertFacts, base: string): AlertMessage {
-  const invoice: string = identifier(facts.invoice, "an invoice");
+  const known: boolean = IDENTIFIER.test(facts.invoice);
+  const invoice: string = known ? facts.invoice : "an invoice";
   const reference: string | null = facts.reference === null ? null : identifier(facts.reference, "");
   return {
     title:
@@ -290,8 +300,7 @@ function payoutMessage(facts: PayoutAlertFacts, base: string): AlertMessage {
       field("Amount", ours(facts.amount)),
       field("Status", ours(facts.state)),
     ],
-    link: `${base}/#${encodeURIComponent(invoice)}`,
-    linkText: `Open ${invoice} in PayOnce`,
+    ...invoiceLink(invoice, known, base),
     urgent: false,
   };
 }
