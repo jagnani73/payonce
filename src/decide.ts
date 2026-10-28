@@ -17,6 +17,10 @@ export const CHANGED_BANK_DETAILS_REASON: string =
   "the supplier's bank details on file changed after the original payment";
 export const ORIGINAL_DEADLINE_REASON: string =
   "the bank has not paid or failed the original transfer by its deadline";
+// The reasons supplier emails escalate for are PayOnce's own words, never the
+// email's, because alerts post escalation reasons.
+export const NOT_TO_PAY_REASON: string = "supplier asked to hold, cancel or not pay this invoice";
+export const PARTLY_UNREAD_REASON: string = "part of a supplier email could not be read";
 
 // Why the cash keeps a replacement from being sent unprompted, or null when it
 // and its fee leave the wallet above its floor. The policy and the check before
@@ -64,7 +68,7 @@ export function decide(incident: Incident): Decision {
   if (incident.supplierAsksNotToPay) {
     return {
       action: "escalate",
-      reason: "supplier asked to hold, cancel or not pay this invoice",
+      reason: NOT_TO_PAY_REASON,
     };
   }
 
@@ -92,7 +96,7 @@ export function decide(incident: Incident): Decision {
   if (incident.emailPartlyUnread) {
     return {
       action: "escalate",
-      reason: "part of a supplier email could not be read",
+      reason: PARTLY_UNREAD_REASON,
     };
   }
 
