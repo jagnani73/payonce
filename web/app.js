@@ -181,6 +181,7 @@ const els = {
   boardGroup: byId("board-group"),
   boardCurrency: byId("board-currency"),
   boardOrigin: byId("board-origin"),
+  boardEmpty: byId("board-empty"),
   boardError: byId("board-error"),
   boardTotals: byId("board-totals"),
   boardGroups: byId("board-groups"),
@@ -4696,6 +4697,8 @@ function renderBoard() {
   renderBoardOutages();
   renderBoardFilters(board);
   showMessage(els.boardError, state.boardError);
+  // An empty ledger gets the hint the page showed before the board existed.
+  els.boardEmpty.hidden = board === null || board.invoices !== 0;
   if (board === null) {
     if (changed("board", null)) {
       els.boardTotals.replaceChildren(h("p", { class: "empty" }, "Loading"));
@@ -4703,12 +4706,22 @@ function renderBoard() {
     }
     return;
   }
-  if (changed("board", [board.filters, board.totals, board.groups, board.entries, board.all])) {
+  if (changed("board", [board.filters, board.totals, board.groups, board.entries, board.all, board.invoices])) {
     const focus = focusedControl(els.boardGroups);
     els.boardTotals.replaceChildren(
       ...(board.totals.length > 0
         ? board.totals.map(buildBoardTotal)
-        : [h("p", { class: "empty" }, board.all === 0 ? "None. Every invoice in the ledger is closed." : "None in what is shown.")]),
+        : [
+            h(
+              "p",
+              { class: "empty" },
+              board.invoices === 0
+                ? "None."
+                : board.all === 0
+                  ? "None. Every invoice in the ledger is closed."
+                  : "None in what is shown.",
+            ),
+          ]),
     );
     const only = board.filters?.group ?? null;
     els.boardGroups.replaceChildren(

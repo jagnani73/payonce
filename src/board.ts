@@ -189,7 +189,10 @@ function print(report: BoardReport): void {
       }
     }
   }
-  if (report.all === 0) {
+  if (report.invoices === 0) {
+    console.log("");
+    console.log("No incidents yet. Start one with pnpm recover, or with the new incident form in pnpm ui");
+  } else if (report.all === 0) {
     console.log("");
     console.log("Every invoice in the ledger is closed, and no pay run waits for approval");
   }

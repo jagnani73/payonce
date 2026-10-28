@@ -171,11 +171,18 @@ export interface BoardReport {
   entries: BoardEntry[];
   // How many entries the board holds before any filter.
   all: number;
+  // How many invoices the ledger holds, closed ones included.
+  invoices: number;
 }
 
 interface Ranked {
   entry: BoardEntry;
   lines: CashLine[];
+}
+
+interface Board {
+  ranked: Ranked[];
+  invoices: number;
 }
 
 interface Situation {
@@ -506,8 +513,8 @@ function compare(a: Ranked, b: Ranked): number {
   );
 }
 
-// Every entry on the board, ranked.
-function rankedBoard(ledger: Ledger, now: number): Ranked[] {
+// Every entry on the board, ranked, and how many invoices the ledger holds.
+function rankedBoard(ledger: Ledger, now: number): Board {
   const run: Run | undefined = ledger.waitingRun();
   const byInvoice: Map<string, CashLine[]> = new Map<string, CashLine[]>();
   const byRow: Map<string, CashLine[]> = new Map<string, CashLine[]>();
@@ -523,8 +530,9 @@ function rankedBoard(ledger: Ledger, now: number): Ranked[] {
   }
 
   const inbox: Map<string, InboxNames> = inboxNames(ledger);
+  const obligations: Obligation[] = ledger.obligations();
   const ranked: Ranked[] = [];
-  for (const obligation of ledger.obligations()) {
+  for (const obligation of obligations) {
     if (obligation.state === "settled" || obligation.state === "rejected") {
       continue;
     }
@@ -539,7 +547,7 @@ function rankedBoard(ledger: Ledger, now: number): Ranked[] {
       }
     }
   }
-  return ranked.sort(compare);
+  return { ranked: ranked.sort(compare), invoices: obligations.length };
 }
 
 function blankTotal(currency: string): BoardTotal {
@@ -600,7 +608,7 @@ export function boardReport(
   filters: BoardFilters,
   now: number = Date.now(),
 ): BoardReport {
-  const ranked: Ranked[] = rankedBoard(ledger, now);
+  const { ranked, invoices }: Board = rankedBoard(ledger, now);
   const others: Ranked[] = ranked.filter(
     (item: Ranked): boolean =>
       (filters.currency === null || inCurrency(item.entry, filters.currency)) &&
@@ -632,5 +640,6 @@ export function boardReport(
     totals: totalsOf(shown, filters.currency),
     entries: shown.map((item: Ranked): BoardEntry => item.entry),
     all: ranked.length,
+    invoices,
   };
 }
