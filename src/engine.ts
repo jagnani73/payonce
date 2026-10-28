@@ -1514,24 +1514,6 @@ function quoteLapsed(obligation: Obligation, attempt: Attempt): boolean {
   return !(Date.now() < deadline);
 }
 
-// A payment sent on a quote that has run out, with no transfer in Airwallex to
-// show for it. PayOnce cannot prove it was never created, so the attempt stays
-// pending and keeps the duplicate lock, and a person checks Airwallex.
-function unsentOnQuote(engine: Engine, obligation: Obligation, attempt: Attempt): NextLook {
-  const invoiceId: string = obligation.invoiceId;
-  const reason: string = `the exchange rate quote of the ${attempt.kind} payment ran out and Airwallex shows no transfer for it`;
-  engine.ledger.escalate(invoiceId, reason);
-  note(engine.ledger, invoiceId, "decision", `Escalate: ${reason}`, "decision");
-  note(
-    engine.ledger,
-    invoiceId,
-    "approval",
-    `Waiting on a person to look in Airwallex for a transfer with request id ${attempt.requestId}. PayOnce keeps that payment open, so the duplicate lock holds and nothing more is sent for this invoice`,
-    "waiting",
-  );
-  return null;
-}
-
 // Looks at an invoice again, after a webhook, a status check, new emails, a
 // person's action or a deadline. It syncs each payment with Airwallex, retrying an
 // attempt that has no transfer yet under its original request_id, and notes any
@@ -1565,7 +1547,6 @@ async function look(engine: Engine, invoiceId: string): Promise<NextLook> {
   let originalId: string | null = null;
   let original: Transfer | null = null;
   let liveReplacement: Transfer | null = null;
-  let unsent: Attempt | null = null;
   for (const attempt of engine.ledger.attempts(invoiceId)) {
     // An attempt Airwallex refused never became a transfer. Only one still
     // pending is retried.
@@ -1581,10 +1562,6 @@ async function look(engine: Engine, invoiceId: string): Promise<NextLook> {
       transfer = await syncTransfer(engine.client, engine.ledger, existing.id);
       checkRate(engine, obligation, attempt, transfer);
       engine.bank?.sent(invoiceId, attempt.kind, transfer.id);
-    } else if (attempt.transferId === null && quoteLapsed(obligation, attempt)) {
-      // Airwallex can no longer create it, but nothing proves it never did.
-      unsent = attempt;
-      continue;
     } else if (attempt.transferId === null) {
       // A retry pays the record as it is now, so a replacement, or an original
       // paid on an approval after a hold, goes out only to the account it was
@@ -1604,7 +1581,30 @@ async function look(engine: Engine, invoiceId: string): Promise<NextLook> {
       } else if (approved?.action === "pay") {
         await requireAccount(engine, obligation, approved.accountKey, "payment was approved");
       }
-      transfer = await sendAttempt(engine.client, engine.ledger, obligation, attempt, true);
+      // Once its quote has run out a bank deadline ago, a payment from another
+      // currency's wallet has one last try, which fails it if Airwallex refuses it
+      // and lists no transfer for it. A person then approves it on a new quote.
+      const lapsed: boolean = quoteLapsed(obligation, attempt);
+      try {
+        transfer = await sendAttempt(
+          engine.client,
+          engine.ledger,
+          obligation,
+          attempt,
+          lapsed ? "lapsed" : "retry",
+        );
+      } catch (error: unknown) {
+        if (!lapsed || !wasRejected(error) || error.code === "duplicate_request_id") {
+          throw error;
+        }
+        note(
+          engine.ledger,
+          invoiceId,
+          "payment",
+          `${capitalise(attempt.kind)} payment never became a transfer: its exchange rate quote ran out, and Airwallex refused a last try under the same request id and lists no transfer with it (${error.code ?? String(error.status)}). Nothing was sent, so it needs a new approval on a new quote`,
+        );
+        continue;
+      }
       checkRate(engine, obligation, attempt, transfer);
       engine.bank?.sent(invoiceId, attempt.kind, transfer.id);
     } else {
@@ -1623,9 +1623,6 @@ async function look(engine: Engine, invoiceId: string): Promise<NextLook> {
     console.log(`  ${attempt.kind} ${describe(transfer)}`);
   }
 
-  if (unsent !== null) {
-    return unsentOnQuote(engine, obligation, unsent);
-  }
   if (originalId === null) {
     const refused: Attempt | undefined = engine.ledger.attempts(invoiceId).at(-1);
     if (refused !== undefined && obligation.state === "open") {

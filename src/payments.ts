@@ -32,20 +32,26 @@ export function wasRejected(error: unknown): error is AirwallexError {
   return error instanceof AirwallexError && error.status >= 400 && error.status < 500;
 }
 
+// How a send treats a refusal. first: the attempt was never sent. retry: it may
+// have been. lapsed: it may have been, and its quote ran out a bank deadline ago.
+export type SendTry = "first" | "retry" | "lapsed";
+
 // Safe to call again for the same attempt: the request_id is reused, so Airwallex
-// either creates the transfer once or reports the one it already has. A refused
-// request marks the attempt failed. Any other error leaves it pending, because
-// the transfer may exist. retry is true when the attempt may have been sent
-// before. A payment from another currency's wallet goes out with the attempt's
-// own quote, and a retry of one that is refused stays pending: its quote may
-// have run out after the first try created the transfer, so the refusal does not
-// prove nothing was sent.
+// either creates the transfer once or answers duplicate_request_id, which it
+// checks before anything else, the quote included, and the transfer with that
+// request_id is recorded. Any error that is not a refusal leaves the attempt
+// pending, because the transfer may exist. Any other refusal fails the attempt
+// and releases the lock, with one exception: a retry of a payment from another
+// currency's wallet stays pending until its quote ran out a bank deadline ago,
+// so a slow first try or a passing refusal cannot release the lock while the
+// quote could still pay. Then one last try goes out under the same request_id,
+// and a refusal fails the attempt if Airwallex also lists no transfer with it.
 export async function sendAttempt(
   client: AirwallexClient,
   ledger: Ledger,
   obligation: Obligation,
   attempt: Attempt,
-  retry: boolean = false,
+  tried: SendTry = "first",
 ): Promise<Transfer> {
   // Without a quote Airwallex converts at its own rate, which nobody approved.
   if (crossCurrency(obligation) && attempt.quoteId === null) {
@@ -69,17 +75,15 @@ export async function sendAttempt(
     if (!wasRejected(error)) {
       throw error;
     }
-    if (error.code !== "duplicate_request_id") {
-      if (!(retry && attempt.quoteId !== null)) {
+    const duplicate: boolean = error.code === "duplicate_request_id";
+    const existing: Transfer | undefined =
+      duplicate || tried === "lapsed"
+        ? await findTransferByRequestId(client, attempt.requestId)
+        : undefined;
+    if (existing === undefined) {
+      if (!duplicate && !(tried === "retry" && attempt.quoteId !== null)) {
         ledger.failAttempt(attempt.requestId, error.code ?? null);
       }
-      throw error;
-    }
-    const existing: Transfer | undefined = await findTransferByRequestId(
-      client,
-      attempt.requestId,
-    );
-    if (existing === undefined) {
       throw error;
     }
     transfer = existing;
