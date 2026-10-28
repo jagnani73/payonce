@@ -440,7 +440,8 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
   obligations: {
     supplier_domain: "TEXT NOT NULL DEFAULT ''",
     transfer_method: "TEXT NOT NULL DEFAULT 'LOCAL'",
-    // The floor each invoice carried before RESERVE_FLOORS. No longer read or
+    // The floor each invoice carried before RESERVE_FLOORS. Copied into
+    // invoice_floor_minor when that column is added, and otherwise not read or
     // written.
     reserve_floor_minor: "INTEGER NOT NULL DEFAULT 0",
     invoice_floor_minor: "INTEGER NOT NULL DEFAULT 0",
@@ -628,6 +629,13 @@ export class Ledger {
         for (const [name, definition] of Object.entries(columns)) {
           if (!existing.includes(name)) {
             this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+            // An invoice from before RESERVE_FLOORS keeps the floor it carried, so
+            // none is held to a looser floor than it was.
+            if (table === "obligations" && name === "invoice_floor_minor") {
+              this.db.exec(
+                "UPDATE obligations SET invoice_floor_minor = reserve_floor_minor WHERE reserve_floor_minor <> 0",
+              );
+            }
           }
         }
       }
