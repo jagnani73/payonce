@@ -2183,6 +2183,19 @@ export class Ledger {
       .run(reason, invoiceId);
   }
 
+  // Rewords the reason of an invoice that is still escalated with the reason it
+  // was read with, so a close or another change from another process meanwhile
+  // is left alone. True when it changed it.
+  rewordEscalation(invoiceId: string, from: string, to: string): boolean {
+    const result: { changes: number | bigint } = this.db
+      .prepare(
+        `UPDATE obligations SET escalation_reason = ?
+          WHERE invoice_id = ? AND state = 'escalated' AND escalation_reason = ?`,
+      )
+      .run(to, invoiceId, from);
+    return Number(result.changes) === 1;
+  }
+
   // Holds an invoice for a person before anything is paid. duplicateOf lists the
   // invoices it looks like a second bill for, and is empty when it is held for
   // another reason.

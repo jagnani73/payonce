@@ -33,6 +33,7 @@ import {
   CHANGED_BANK_DETAILS_REASON,
   NEW_BANK_DETAILS_REASON,
   NO_FLOOR_CLAUSE,
+  NOT_TO_PAY_CLAUSE,
   ORIGINAL_DEADLINE_REASON,
   OUTSIDE_PAYOUT_REASON,
   UNREADABLE_CASH_REASON,
@@ -215,13 +216,16 @@ function needOf(
   if (review !== undefined) {
     return review.kind === "duplicate" || review.kind === "unpaid" ? "held" : "close";
   }
-  if (DEADLINE_REASONS.includes(base)) {
+  // The ask not to pay stays in the reason, and so in the fingerprint, but does
+  // not change what the person is asked to do.
+  const core: string = base.replace(`, and ${NOT_TO_PAY_CLAUSE}`, "");
+  if (DEADLINE_REASONS.includes(core)) {
     return "bank";
   }
-  if (base.startsWith(OUTSIDE_PAYOUT_REASON)) {
+  if (core.startsWith(OUTSIDE_PAYOUT_REASON)) {
     return "outside";
   }
-  return BANK_DETAILS_REASONS.includes(base) && obligation.supplierPhone !== null ? "callback" : "check";
+  return BANK_DETAILS_REASONS.includes(core) && obligation.supplierPhone !== null ? "callback" : "check";
 }
 
 // True when a person already approved and the agent is using it: the approval is

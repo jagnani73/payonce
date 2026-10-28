@@ -21,6 +21,18 @@ export const ORIGINAL_DEADLINE_REASON: string =
 // email's, because alerts post escalation reasons.
 export const NOT_TO_PAY_REASON: string = "supplier asked to hold, cancel or not pay this invoice";
 export const PARTLY_UNREAD_REASON: string = "part of a supplier email could not be read";
+// How the ask not to pay reads when it is added to another reason.
+export const NOT_TO_PAY_CLAUSE: string = "the supplier asks to hold, cancel or not pay this invoice";
+
+// The reason with the ask not to pay added, while that finding is on file and the
+// reason does not already name it. A person can still approve paying the invoice.
+// Without the finding the reason is returned as it is, so the approval terms of
+// every other invoice keep their binding.
+export function namingNotToPay(reason: string, asksNotToPay: boolean): string {
+  return !asksNotToPay || reason.startsWith(NOT_TO_PAY_REASON) || reason.includes(`, and ${NOT_TO_PAY_CLAUSE}`)
+    ? reason
+    : `${reason}, and ${NOT_TO_PAY_CLAUSE}`;
+}
 
 // Why the cash keeps a replacement from being sent unprompted, or null when it
 // and its fee leave the wallet above its floor. The policy and the check before

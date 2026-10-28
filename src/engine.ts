@@ -73,6 +73,7 @@ import { deadlineMinutes, deadlineOf, describeDeadline, isOverdue } from "./dead
 import {
   decide,
   floorReason,
+  namingNotToPay,
   NO_FLOOR_CLAUSE,
   NO_FLOOR_REASON,
   OUTSIDE_PAYOUT_REASON,
@@ -1565,9 +1566,23 @@ function namingPaidDuplicate(assessment: Assessment): Assessment {
   };
 }
 
-// namingFloor and namingPaidDuplicate, and a line on the timeline once the floor
-// stops applying after a line said it applied. The line says an approval still
-// counts only when an open request or approval named the floor.
+// The policy escalates for a supplier who asks not to pay, unless a payout sent
+// outside PayOnce or new bank details come first. Then the reason names the ask
+// as well, last, so the request, the alert and the card say it. Nothing is added
+// without the finding, so every other invoice keeps its terms and its binding.
+function namingNotToPayIn(assessment: Assessment): Assessment {
+  const decision: Decision = assessment.decision;
+  if (decision.action !== "escalate") {
+    return assessment;
+  }
+  const reason: string = namingNotToPay(decision.reason, assessment.incident.supplierAsksNotToPay);
+  return reason === decision.reason ? assessment : { ...assessment, decision: { action: "escalate", reason } };
+}
+
+// namingFloor, namingPaidDuplicate and namingNotToPayIn, and a line on the
+// timeline once the floor stops applying after a line said it applied. The line
+// says an approval still counts only when an open request or approval named the
+// floor.
 function withFloorReason(
   engine: Engine,
   obligation: Obligation,
@@ -1590,7 +1605,7 @@ function withFloorReason(
       "floor",
     );
   }
-  return namingPaidDuplicate(namingFloor(assessment));
+  return namingNotToPayIn(namingPaidDuplicate(namingFloor(assessment)));
 }
 
 // The decision an open request or approval was made under, when the floor applied
@@ -1612,8 +1627,10 @@ function requestedDecision(
   }
   for (const floorMinor of [Number.MAX_SAFE_INTEGER, Number.NaN, null]) {
     const incident: Incident = { ...assessment.incident, reserveFloorMinor: floorMinor };
-    const requested: Assessment = namingPaidDuplicate(
-      namingFloor({ ...assessment, incident, decision: secondBill(decide(incident), assessment.paidDuplicate) }),
+    const requested: Assessment = namingNotToPayIn(
+      namingPaidDuplicate(
+        namingFloor({ ...assessment, incident, decision: secondBill(decide(incident), assessment.paidDuplicate) }),
+      ),
     );
     if (bindingOf(termsOf(obligation, requested)) === approval.binding) {
       return requested.decision;
@@ -2064,6 +2081,12 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
     invoiceId,
     emails,
   );
+  // A supplier who asks to hold, cancel or not pay the invoice is named in the
+  // reason it is held for, so the alert, the request and the card say so.
+  const reason: string = namingNotToPay(obligation.escalationReason, findings.asksNotToPay === true);
+  if (reason !== obligation.escalationReason && engine.ledger.rewordEscalation(invoiceId, obligation.escalationReason, reason)) {
+    note(engine.ledger, invoiceId, "decision", `Escalate: ${reason}`, "decision");
+  }
   if (emailsNotRead(findings, stored, emails)) {
     waitWithoutPaying(
       engine,
@@ -2080,7 +2103,11 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
   const added: string[] = likelyDuplicates(engine.ledger, obligation)
     .map((other: Obligation): string => other.invoiceId)
     .filter((other: string): boolean => !obligation.duplicateOf.includes(other));
-  const held: Obligation = { ...obligation, duplicateOf: [...obligation.duplicateOf, ...added] };
+  const held: Obligation = {
+    ...obligation,
+    escalationReason: reason,
+    duplicateOf: [...obligation.duplicateOf, ...added],
+  };
   if (added.length > 0) {
     engine.ledger.setDuplicateOf(invoiceId, held.duplicateOf);
     note(
