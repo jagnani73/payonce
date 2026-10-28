@@ -1,10 +1,12 @@
 import { policyFromEnv, type ApprovalPolicy } from "./approvers.js";
+import { outageHolding } from "./incident-board.js";
 import { Ledger, LEDGER_PATH } from "./ledger.js";
 import {
   describeOutageRule,
   endOutage,
   outageRuleFromEnv,
   outagesReport,
+  sendsText,
   type CountedPayout,
   type EndedOutage,
   type HeldItem,
@@ -35,6 +37,9 @@ function show(view: OutageView): void {
   for (const item of view.held) {
     console.log(`  held     ${describeHeld(item)}`);
   }
+  if (view.state === "active") {
+    console.log(`  ending   sends ${sendsText(view.sends)}`);
+  }
   if (view.state === "ended") {
     console.log(`  ended    by ${view.endedBy ?? ""} at ${view.endedAt ?? ""}: ${view.endNote ?? ""}`);
   }
@@ -59,7 +64,7 @@ function main(): void {
   const policy: ApprovalPolicy = policyFromEnv();
   const ledger: Ledger = new Ledger(LEDGER_PATH);
   if (command === undefined) {
-    const report: OutagesReport = outagesReport(ledger, policy);
+    const report: OutagesReport = outagesReport(ledger, policy, outageHolding(ledger));
     console.log(describeOutageRule(outageRuleFromEnv()));
     if (report.active.length === 0) {
       console.log("No outage is active");
@@ -83,7 +88,7 @@ function main(): void {
     return;
   }
   try {
-    const ended: EndedOutage = endOutage(ledger, policy, id, name, note);
+    const ended: EndedOutage = endOutage(ledger, policy, id, name, note, outageHolding(ledger));
     console.log(
       `Ended. The server's watcher picks up the ${ended.holds.length} ${ended.holds.length === 1 ? "invoice or run" : "invoices and runs"} it held on its next check, or the next pnpm ui or pnpm recover does`,
     );

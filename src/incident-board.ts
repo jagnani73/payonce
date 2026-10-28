@@ -26,13 +26,22 @@ import {
   type Obligation,
   type ObligationState,
   type Outage,
+  type OutageHoldKind,
   type OutsidePayout,
   type Run,
   type RunApproval,
   type RunRow,
   type Upload,
 } from "./ledger.js";
-import { outageView, railOf, type OutageCode, type OutageView } from "./outages.js";
+import {
+  outageView,
+  railOf,
+  type HoldingOf,
+  type OutageCode,
+  type OutageHolding,
+  type OutageSend,
+  type OutageView,
+} from "./outages.js";
 import { debitCurrency } from "./reserve.js";
 import { runStatus, type RunStatus } from "./runs.js";
 
@@ -182,6 +191,9 @@ export interface BoardOutage {
   // Pay runs whose release it holds.
   runs: number[];
   atRisk: BoardMoney[];
+  // What ending it sends, per currency: the first payments, approved payments and
+  // pay run rows above, from the same cash lines as atRisk.
+  sends: OutageSend[];
 }
 
 export interface BoardTotal {
@@ -763,24 +775,86 @@ function rankedBoard(ledger: Ledger, now: number): Board {
   return { ranked: ranked.sort(compare), invoices: obligations.length, outages };
 }
 
+// The entries an active outage holds now, before any filter. An entry whose
+// touch is approval is not held yet.
+function heldBy(outage: Outage, ranked: Ranked[]): Ranked[] {
+  return ranked.filter(
+    (item: Ranked): boolean => item.entry.outage?.id === outage.id && item.entry.outage.touch !== "approval",
+  );
+}
+
+function invoicesHeld(held: Ranked[], touch: OutageTouch): string[] {
+  return held
+    .filter((item: Ranked): boolean => item.entry.kind === "invoice" && item.entry.outage?.touch === touch)
+    .map((item: Ranked): string => item.entry.invoiceId);
+}
+
+function runsHeld(held: Ranked[]): number[] {
+  const runs: Set<number> = new Set<number>();
+  for (const item of held) {
+    if (item.entry.outage?.touch === "run" && item.entry.runId !== null) {
+      runs.add(item.entry.runId);
+    }
+  }
+  return [...runs];
+}
+
+// Ending an outage sends each first payment, approved payment and pay run row it
+// holds, one payment each. A replacement it escalated still waits for approval.
+const SENT_AT_END: ReadonlySet<OutageTouch> = new Set<OutageTouch>(["original", "approved", "run"]);
+
+function sendsOf(held: Ranked[]): OutageSend[] {
+  const byCurrency: Map<string, OutageSend> = new Map<string, OutageSend>();
+  for (const item of held) {
+    if (item.entry.outage === null || !SENT_AT_END.has(item.entry.outage.touch)) {
+      continue;
+    }
+    for (const money of moneyOf(item.lines)) {
+      const send: OutageSend = byCurrency.get(money.currency) ?? {
+        currency: money.currency,
+        payments: 0,
+        minor: 0,
+        estimated: false,
+      };
+      send.payments += 1;
+      send.minor += money.minor;
+      send.estimated = send.estimated || money.estimated || money.feeUnknown > 0;
+      byCurrency.set(money.currency, send);
+    }
+  }
+  return [...byCurrency.values()].sort((a: OutageSend, b: OutageSend): number => a.currency.localeCompare(b.currency));
+}
+
+function holdingOf(outage: Outage, ranked: Ranked[]): OutageHolding {
+  const held: Ranked[] = heldBy(outage, ranked);
+  return {
+    invoices: held
+      .filter((item: Ranked): boolean => item.entry.kind === "invoice" && item.entry.outage !== null)
+      .map((item: Ranked): { invoiceId: string; what: OutageHoldKind } => ({
+        invoiceId: item.entry.invoiceId,
+        what: item.entry.outage?.touch as OutageHoldKind,
+      })),
+    runs: runsHeld(held),
+    sends: sendsOf(held),
+  };
+}
+
+// What each active outage holds now, as the board lists it, for the Outages card
+// and for the end of an outage. The board is read once, on the first call.
+export function outageHolding(ledger: Ledger, now: number = Date.now()): HoldingOf {
+  let ranked: Ranked[] | undefined;
+  return (outage: Outage): OutageHolding => {
+    ranked ??= rankedBoard(ledger, now).ranked;
+    return holdingOf(outage, ranked);
+  };
+}
+
 // Each active outage with what it holds now, from the board's entries before any
 // filter, and their money at risk from the same cash lines.
 function boardOutages(ledger: Ledger, outages: Outage[], ranked: Ranked[]): BoardOutage[] {
   return outages.map((outage: Outage): BoardOutage => {
     const view: OutageView = outageView(ledger, outage);
-    const held: Ranked[] = ranked.filter(
-      (item: Ranked): boolean => item.entry.outage?.id === outage.id && item.entry.outage.touch !== "approval",
-    );
-    const invoices = (touch: OutageTouch): string[] =>
-      held
-        .filter((item: Ranked): boolean => item.entry.kind === "invoice" && item.entry.outage?.touch === touch)
-        .map((item: Ranked): string => item.entry.invoiceId);
-    const runs: Set<number> = new Set<number>();
-    for (const item of held) {
-      if (item.entry.outage?.touch === "run" && item.entry.runId !== null) {
-        runs.add(item.entry.runId);
-      }
-    }
+    const held: Ranked[] = heldBy(outage, ranked);
     return {
       id: view.id,
       rail: view.rail,
@@ -791,11 +865,12 @@ function boardOutages(ledger: Ledger, outages: Outage[], ranked: Ranked[]): Boar
       windowMinutes: view.windowMinutes,
       declaredAt: view.declaredAt,
       text: view.text,
-      originals: invoices("original"),
-      replacements: invoices("replacement"),
-      approved: invoices("approved"),
-      runs: [...runs],
+      originals: invoicesHeld(held, "original"),
+      replacements: invoicesHeld(held, "replacement"),
+      approved: invoicesHeld(held, "approved"),
+      runs: runsHeld(held),
       atRisk: moneyOf(held.flatMap((item: Ranked): CashLine[] => item.lines)),
+      sends: sendsOf(held),
     };
   });
 }

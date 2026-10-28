@@ -1533,6 +1533,12 @@ export type OutageHoldKind = "counted" | "original" | "replacement" | "approved"
 
 export type OutageSubject = { invoiceId: string } | { runId: number };
 
+// An invoice or run an outage holds, with what of it.
+export interface OutageSubjectHeld {
+  subject: OutageSubject;
+  what: OutageHoldKind;
+}
+
 export interface OutageHold {
   outageId: number;
   invoiceId: string | null;
@@ -1918,25 +1924,10 @@ export class Ledger {
       if (this.db.prepare("SELECT 1 FROM outages WHERE id = ? AND state = 'active'").get(outageId) === undefined) {
         return false;
       }
-      const at: string = new Date().toISOString();
-      if ("invoiceId" in subject) {
-        const held: { changes: number | bigint } = this.db
-          .prepare(
-            `INSERT OR IGNORE INTO outage_holds (outage_id, invoice_id, what, held_at)
-             VALUES (?, ?, ?, ?)`,
-          )
-          .run(outageId, subject.invoiceId, what, at);
-        if (Number(held.changes) === 1) {
+      if (this.insertHold(outageId, subject, what, new Date().toISOString())) {
+        if ("invoiceId" in subject) {
           this.appendEvent(subject.invoiceId, "outage", line, null);
-        }
-      } else {
-        const held: { changes: number | bigint } = this.db
-          .prepare(
-            `INSERT OR IGNORE INTO outage_holds (outage_id, run_id, what, held_at)
-             VALUES (?, ?, ?, ?)`,
-          )
-          .run(outageId, subject.runId, what, at);
-        if (Number(held.changes) === 1) {
+        } else {
           this.addRunEventRow(subject.runId, "outage", line, null);
         }
       }
@@ -1944,9 +1935,31 @@ export class Ledger {
     });
   }
 
-  // A person ends an active outage. One transaction writes who and why, puts the
-  // end line on every invoice and run it held, and makes each held invoice's
-  // next look due now, so a watcher in any process picks it up. Undefined, with
+  // One hold per outage per invoice or run. True when this one is new. The caller
+  // holds the write transaction.
+  private insertHold(outageId: number, subject: OutageSubject, what: OutageHoldKind, at: string): boolean {
+    const held: { changes: number | bigint } =
+      "invoiceId" in subject
+        ? this.db
+            .prepare(
+              `INSERT OR IGNORE INTO outage_holds (outage_id, invoice_id, what, held_at)
+               VALUES (?, ?, ?, ?)`,
+            )
+            .run(outageId, subject.invoiceId, what, at)
+        : this.db
+            .prepare(
+              `INSERT OR IGNORE INTO outage_holds (outage_id, run_id, what, held_at)
+               VALUES (?, ?, ?, ?)`,
+            )
+            .run(outageId, subject.runId, what, at);
+    return Number(held.changes) === 1;
+  }
+
+  // A person ends an active outage. One transaction records a hold for each
+  // invoice and run listed (what the board shows as held, read while the outage
+  // is still active and under the write lock), writes who and why, puts the end
+  // line on every invoice and run it held, and makes each held invoice's next
+  // look due now, so a watcher in any process picks it up. Undefined, with
   // nothing changed, when the outage is not active.
   endOutage(
     id: number,
@@ -1954,9 +1967,17 @@ export class Ledger {
     note: string,
     invoiceLine: (outage: Outage) => string,
     runLine: (outage: Outage) => string,
+    listed: (outage: Outage) => OutageSubjectHeld[] = (): OutageSubjectHeld[] => [],
   ): OutageHold[] | undefined {
     return this.transaction((): OutageHold[] | undefined => {
       const now: string = new Date().toISOString();
+      const active: Outage | undefined = this.outage(id);
+      if (active?.state !== "active") {
+        return undefined;
+      }
+      for (const held of listed(active)) {
+        this.insertHold(id, held.subject, held.what, now);
+      }
       const ended: { changes: number | bigint } = this.db
         .prepare(
           `UPDATE outages SET state = 'ended', ended_at = ?, ended_by = ?, end_note = ?

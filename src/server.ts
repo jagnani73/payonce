@@ -69,6 +69,7 @@ import {
   CURRENCY_PATTERN,
   isBoardGroup,
   isBoardOrigin,
+  outageHolding,
   type BoardGroupOf,
   type BoardReport,
 } from "./incident-board.js";
@@ -946,7 +947,14 @@ async function endOutageByPerson(request: IncomingMessage, raw: string): Promise
   const body: Record<string, unknown> = await readJson(request);
   let ended: EndedOutage;
   try {
-    ended = endOutage(engine.ledger, engine.approvals, Number(raw), text(body, "endedBy"), text(body, "note"));
+    ended = endOutage(
+      engine.ledger,
+      engine.approvals,
+      Number(raw),
+      text(body, "endedBy"),
+      text(body, "note"),
+      outageHolding(engine.ledger),
+    );
   } catch (error: unknown) {
     if (!(error instanceof EndRefusedError)) {
       throw error;
@@ -1471,7 +1479,7 @@ async function route(
   } else if (method === "GET" && pathname === "/api/alerts") {
     sendJson(response, 200, recentAlerts());
   } else if (method === "GET" && pathname === "/api/outages") {
-    sendJson(response, 200, outagesReport(engine.ledger, engine.approvals));
+    sendJson(response, 200, outagesReport(engine.ledger, engine.approvals, outageHolding(engine.ledger)));
   } else if (
     method === "POST" &&
     parts[1] === "outages" &&

@@ -14,7 +14,7 @@ import {
 } from "./incident-board.js";
 import { Ledger, LEDGER_PATH } from "./ledger.js";
 import { formatMoney } from "./money.js";
-import type { OutageCode } from "./outages.js";
+import { sendsText, type OutageCode } from "./outages.js";
 
 // The incident board in the terminal, ranked as the page ranks it. It reads only
 // the ledger, with no Airwallex call, and loads .env only if there is one, for the
@@ -151,6 +151,7 @@ function outageLines(outage: BoardOutage): string[] {
     heldLine("Approved payments waiting", outage.approved.map(printable)),
     heldLine("Pay runs waiting", outage.runs.map((id: number): string => `pay run ${id}`)),
     `${INDENT}${outage.atRisk.length === 0 ? "Nothing at risk" : `At risk ${outage.atRisk.map(moneyText).join(", ")}`}`,
+    `${INDENT}Ending it sends ${sendsText(outage.sends)}, each after the checks PayOnce makes before any payment`,
     `${INDENT}End it with pnpm outage end ${outage.id} NAME NOTE, or with the form on the board in pnpm ui`,
   ];
 }

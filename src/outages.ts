@@ -4,6 +4,7 @@ import { sameName, type ApprovalPolicy, type Approver } from "./approvers.js";
 import { originalStateOf } from "./assess.js";
 import { deadlineMinutes } from "./deadlines.js";
 import { cleanLine } from "./eml.js";
+import { formatMoney } from "./money.js";
 import {
   type Approval,
   type Attempt,
@@ -16,6 +17,7 @@ import {
   type OutageHold,
   type OutageHoldKind,
   type OutageState,
+  type OutageSubjectHeld,
   type RailFailure,
 } from "./ledger.js";
 
@@ -274,15 +276,54 @@ export interface EndedOutage {
   holds: OutageHold[];
 }
 
+// What ending an outage sends in one currency: one payment for each first
+// payment, approved payment and pay run row it holds, and their total from the
+// board's cash lines, amount and fee.
+export interface OutageSend {
+  currency: string;
+  payments: number;
+  minor: number;
+  estimated: boolean;
+}
+
+// What an active outage holds now, as the incident board lists it: the invoices,
+// with what of each it holds, the pay runs, and what ending it sends.
+export interface OutageHolding {
+  invoices: { invoiceId: string; what: OutageHoldKind }[];
+  runs: number[];
+  sends: OutageSend[];
+}
+
+// "2 payments totalling 1,700.00 USD and 1 payment totalling 400.00 EUR", or "no
+// payment" when the outage holds none that ending it sends.
+export function sendsText(sends: OutageSend[]): string {
+  const parts: string[] = sends.map(
+    (send: OutageSend): string =>
+      `${send.payments} ${send.payments === 1 ? "payment" : "payments"} totalling ${formatMoney(send.minor, send.currency)}${send.estimated ? " (estimated)" : ""}`,
+  );
+  return parts.length === 0
+    ? "no payment"
+    : parts.length === 1
+      ? (parts[0] ?? "")
+      : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1) ?? ""}`;
+}
+
+// Works out an active outage's holding. The board provides it (incident-board.ts
+// outageHolding), so this file needs no board code.
+export type HoldingOf = (outage: Outage) => OutageHolding;
+
 // A person ends an outage with their name and a note. It moves no money and calls
 // no bank: it changes the outage, writes the end on every timeline it held and
-// makes their looks due, and the watcher then picks them up.
+// makes their looks due, and the watcher then picks them up. holdingOf gives what
+// the board lists as held, read in the same transaction before the end, so every
+// invoice and run the board showed gets its hold and its end line.
 export function endOutage(
   ledger: Ledger,
   policy: ApprovalPolicy,
   id: number,
   name: string,
   note: string,
+  holdingOf: HoldingOf | null = null,
 ): EndedOutage {
   const who: string = cleanLine(name, MAX_NAME_LENGTH + 1);
   const why: string = cleanLine(note, MAX_NOTE_LENGTH + 1);
@@ -316,6 +357,20 @@ export function endOutage(
     why,
     (ended: Outage): string => endLine(ended, unlisted),
     (ended: Outage): string => runEndLine(ended, unlisted),
+    (active: Outage): OutageSubjectHeld[] => {
+      const holding: OutageHolding | undefined = holdingOf?.(active);
+      return holding === undefined
+        ? []
+        : [
+            ...holding.invoices.map(
+              (item: { invoiceId: string; what: OutageHoldKind }): OutageSubjectHeld => ({
+                subject: { invoiceId: item.invoiceId },
+                what: item.what,
+              }),
+            ),
+            ...holding.runs.map((runId: number): OutageSubjectHeld => ({ subject: { runId }, what: "run" })),
+          ];
+    },
   );
   const after: Outage = ledger.outage(id) ?? outage;
   if (holds === undefined) {
@@ -360,7 +415,12 @@ export interface OutageView {
   threshold: number;
   windowMinutes: number;
   counted: CountedPayout[];
+  // For an active outage given a holding, what the board lists as held now.
+  // Otherwise the hold rows.
   held: HeldItem[];
+  // What ending it sends, per currency. Empty for an ended outage and when no
+  // holding was given.
+  sends: OutageSend[];
   endedAt: string | null;
   endedBy: string | null;
   endNote: string | null;
@@ -371,7 +431,11 @@ function codesOf(codes: string[]): OutageCode[] {
   return codes.map((code: string): OutageCode => ({ code, label: RAIL_FAILURE_CODES[code] ?? "rail failure" }));
 }
 
-export function outageView(ledger: Ledger, outage: Outage): OutageView {
+function invoiceState(ledger: Ledger, invoiceId: string): string | null {
+  return ledger.obligation(invoiceId)?.state ?? null;
+}
+
+export function outageView(ledger: Ledger, outage: Outage, holding: OutageHolding | null = null): OutageView {
   const counted: CountedPayout[] = outage.counted
     .map((transferId: string): RailFailure | undefined => ledger.railFailure(transferId))
     .filter((failure: RailFailure | undefined): failure is RailFailure => failure !== undefined)
@@ -384,19 +448,35 @@ export function outageView(ledger: Ledger, outage: Outage): OutageView {
         seenAt: failure.seenAt,
       }),
     );
-  const held: HeldItem[] = ledger.outageHolds(outage.id).map(
-    (hold: OutageHold): HeldItem => ({
-      invoiceId: hold.invoiceId,
-      runId: hold.runId,
-      what: hold.what,
-      state:
-        hold.invoiceId !== null
-          ? (ledger.obligation(hold.invoiceId)?.state ?? null)
-          : hold.runId !== null
-            ? (ledger.run(hold.runId)?.state ?? null)
-            : null,
-    }),
-  );
+  const listed: OutageHolding | null = outage.state === "active" ? holding : null;
+  const held: HeldItem[] =
+    listed !== null
+      ? [
+          ...listed.invoices.map(
+            (item: { invoiceId: string; what: OutageHoldKind }): HeldItem => ({
+              invoiceId: item.invoiceId,
+              runId: null,
+              what: item.what,
+              state: invoiceState(ledger, item.invoiceId),
+            }),
+          ),
+          ...listed.runs.map(
+            (runId: number): HeldItem => ({ invoiceId: null, runId, what: "run", state: ledger.run(runId)?.state ?? null }),
+          ),
+        ]
+      : ledger.outageHolds(outage.id).map(
+          (hold: OutageHold): HeldItem => ({
+            invoiceId: hold.invoiceId,
+            runId: hold.runId,
+            what: hold.what,
+            state:
+              hold.invoiceId !== null
+                ? invoiceState(ledger, hold.invoiceId)
+                : hold.runId !== null
+                  ? (ledger.run(hold.runId)?.state ?? null)
+                  : null,
+          }),
+        );
   const text: string =
     outage.state === "active"
       ? `Outage ${outage.id} on ${railOf(outage)} since ${clock(outage.declaredAt)}: payouts to ${outage.payees} payees failed with ${codesText(outage.codes)} within ${outage.windowMinutes} minutes. PayOnce opens no new payment on ${railOf(outage)} until a person ends it`
@@ -414,6 +494,7 @@ export function outageView(ledger: Ledger, outage: Outage): OutageView {
     windowMinutes: outage.windowMinutes,
     counted,
     held,
+    sends: listed?.sends ?? [],
     endedAt: outage.endedAt,
     endedBy: outage.endedBy,
     endNote: outage.endNote,
@@ -431,8 +512,13 @@ export interface OutagesReport {
   recent: OutageView[];
 }
 
-// GET /api/outages and pnpm outage. Ledger reads only, no Airwallex call.
-export function outagesReport(ledger: Ledger, policy: ApprovalPolicy): OutagesReport {
+// GET /api/outages and pnpm outage. Ledger reads only, no Airwallex call. Given
+// holdingOf, an active outage lists what the board lists as held.
+export function outagesReport(
+  ledger: Ledger,
+  policy: ApprovalPolicy,
+  holdingOf: HoldingOf | null = null,
+): OutagesReport {
   const rule: OutageRule = outageRuleFromEnv();
   const all: Outage[] = ledger.outages();
   return {
@@ -446,7 +532,7 @@ export function outagesReport(ledger: Ledger, policy: ApprovalPolicy): OutagesRe
     active: all
       .filter((outage: Outage): boolean => outage.state === "active")
       .reverse()
-      .map((outage: Outage): OutageView => outageView(ledger, outage)),
+      .map((outage: Outage): OutageView => outageView(ledger, outage, holdingOf?.(outage) ?? null)),
     recent: all
       .filter((outage: Outage): boolean => outage.state === "ended")
       .slice(0, ENDED_SHOWN)

@@ -5289,6 +5289,24 @@ function listNodes(items, build) {
   return items.flatMap((item, index) => (index === 0 ? [build(item)] : [", ", build(item)]));
 }
 
+// What ending an outage sends, per currency, from the figures the board slot
+// shows: "2 payments totalling 1,700.00 USD and 1 payment totalling 400.00 EUR".
+function sendsText(sends) {
+  const parts = (Array.isArray(sends) ? sends : []).map(
+    (send) =>
+      `${send.payments} ${send.payments === 1 ? "payment" : "payments"} totalling ${formatMoney(send.minor, send.currency)}${send.estimated === true ? " (estimated)" : ""}`,
+  );
+  return parts.length <= 1 ? (parts[0] ?? null) : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
+}
+
+// What ending it does, in the end form.
+function endEffect(view) {
+  const sends = sendsText(view.sends);
+  return sends === null
+    ? `Ending it lets PayOnce open payments on ${view.rail} again. It holds no first payment or approved payment, so ending it sends nothing by itself.`
+    : `Ending it sends ${sends} and lets PayOnce open payments on ${view.rail} again. A first payment goes out after the checks made before any payment, and an approved payment if its approval still counts.`;
+}
+
 // The form a person ends an outage with: a name from the approver list, or any
 // name when no list is set, and a note.
 function buildEndForm(view, enders, place) {
@@ -5335,11 +5353,7 @@ function buildEndForm(view, enders, place) {
         ? "No approver list is set, so any named person may end it. Nothing ends an outage by itself."
         : "Only a name on the approver list may end it. Nothing ends an outage by itself.",
     ),
-    h(
-      "p",
-      { class: "hint" },
-      `Ending it lets PayOnce open payments on ${view.rail} again. First payments held by it go out after the checks made before any payment, and approved payments go out if their approval still counts.`,
-    ),
+    h("p", { class: "hint" }, endEffect(view)),
   );
   form.addEventListener("submit", (event) => {
     event.preventDefault();
