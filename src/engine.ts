@@ -579,6 +579,15 @@ function arrivalClause(assessment: Assessment): string {
     : `. ${replacementArrivalText(ifSentOn(assessment.arrival, today()))}`;
 }
 
+// The terms a new request opens on. Terms that kept an open request's arrival
+// estimate, counted from a day that is not today, count from today. Only the
+// dates change.
+function countedFromToday<T extends ApprovalTerms>(terms: T): T {
+  return terms.arrival !== undefined && terms.arrival.from !== today()
+    ? withArrival(terms, ifSentOn(terms.arrival, today()))
+    : terms;
+}
+
 // The email evidence a person sees and approves against.
 function evidenceSummary(assessment: Assessment): string {
   return assessment.unverified.length === 0
@@ -1165,10 +1174,8 @@ function awaitApproval(
     }
     return Date.now();
   }
-  // Terms that kept an open request's arrival estimate, counted from a day that is
-  // not today, count from today in a new request. Only the dates change.
-  if (opening && terms.arrival !== undefined && terms.arrival.from !== today()) {
-    terms = withArrival(terms, ifSentOn(terms.arrival, today()));
+  if (opening) {
+    terms = countedFromToday(terms);
     binding = bindingOf(terms);
   }
   const previous: FxTerms | undefined =
@@ -1320,10 +1327,13 @@ function escalate(
     assessment.rate,
   );
   // No request is open when nobody on the approver list could approve it, or when
-  // a request on an old quote was withdrawn so the next look takes a fresh one.
+  // a request on an old quote was withdrawn so the next look takes a fresh one. A
+  // request awaitApproval opened just now counts its arrival from today.
   const latest: Approval | undefined = engine.ledger.latestApproval(obligation.invoiceId);
   const requested: boolean =
-    latest?.state === "requested" && latest.binding === bindingOf(terms) && !isExpired(latest);
+    latest?.state === "requested" &&
+    !isExpired(latest) &&
+    (latest.binding === bindingOf(terms) || latest.binding === bindingOf(countedFromToday(terms)));
   noteFloor(engine, obligation, assessment, requested);
   noteSecondBill(engine, obligation, assessment, requested);
   return next;
