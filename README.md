@@ -122,6 +122,22 @@ PayOnce never pays at a rate nobody has seen, so every payment from another wall
 
 In the sandbox, Airwallex creates the converting transfer on the approved quote and takes the USD and a 15.60 USD SWIFT fee out of available at once. Its simulator does not move such a transfer past `PROCESSING`, so this demo ends at the bank deadline, where the incident goes to a person. A failed converting payment and its replacement cannot be shown in this sandbox.
 
+## Route advisory
+
+An invoice can have a due date, written like 2026-11-02: the "Due date" field on the start form, `dueDate` in `POST /api/incidents`, or a `due_date` column in a pay run file. PayOnce then says when a payment usually arrives and whether it may miss that date. A date in the past is accepted, and the advice says it has passed.
+
+The advice is for people. It never holds, sends, replaces or blocks a payment, and the policy decides without it. A payment that may arrive late goes out like any other.
+
+- Every pay run row shows its route and arrival on the rows card and in `pnpm payrun show`, such as "SWIFT, usually 0 to 3 business days, by 2026-11-02 if sent on 2026-10-28; due 2026-10-30; may arrive late", followed by the fee PayOnce last saw for that currency and method. A row with a due date carries the same estimate in the run's terms, so the approval card and `pnpm payrun approve` show it to the approvers.
+- When PayOnce sends a payment, the timeline gives the days it usually arrives between and, with a due date, whether it should arrive in time. The line is a warning when the payment may be late.
+- When the original fails, the decision line says when a replacement sent that day usually arrives, against the due date. The replacement's approval terms carry the same estimate. So do the terms for paying a held invoice, such as one paid from another currency's wallet, and `pnpm approve` prints it.
+
+The estimates come from Airwallex's published payout network tables for the United States and Germany: ACH 0 to 2 business days, Next Day ACH 1 to 2, FedNow and Fedwire 0 to 1, SEPA 0 to 2 and SWIFT 0 to 3. Airwallex sends ACH as Next Day ACH above 1,000,000 USD or for a payer outside the US, which moves the earliest day but not the latest. For any other country the advice says the arrival is not known. Airwallex has no API that quotes one transfer's arrival or fee. Business days skip Saturdays and Sundays only. Public holidays are not counted, because Airwallex's list of non-trading days needs an admin key, and the advice says so. The fee is the last one PayOnce recorded for that currency and method, labelled as last seen, or "no fee seen yet".
+
+PayOnce does not switch a payment to a faster route. Each Airwallex beneficiary record holds one transfer method, so paying another way takes another record, and PayOnce treats another record as another account, with a callback and two approvers like any change of bank details. When a route may be too slow, the advice says so and a person decides what to do.
+
+An estimate in approval terms counts from the day its request opened, so an approval given just before midnight still matches after it. A new request counts from the day it opens. An invoice without a due date has the same approval terms as before, and so does a pay run file without due dates.
+
 ## Changed bank details
 
 PayOnce never takes new bank details from an email or from the model that reads emails. When a supplier says it has moved banks, or the supplier's record no longer matches the account the original went to, PayOnce pays the new account only after a person has called the supplier back.
@@ -189,18 +205,18 @@ PayOnce reads each transfer's fee and keeps it in the ledger, and fills in older
 A pay run pays a batch of invoices from one CSV file on one approval. Upload the file on the page under "Pay run", or with `pnpm payrun upload <FILE> <NAME>`.
 
 ```csv
-invoice,supplier,beneficiary_id,amount,currency,method,sandbox_outcome
-INV-RUN-1001,Example Supplier LLC,6170b987-3840-4825-8da6-c27671bd26ad,40.00,USD,LOCAL,PAID
-INV-RUN-1002,Example Supplier LLC,6170b987-3840-4825-8da6-c27671bd26ad,41.00,USD,LOCAL,ACCOUNT_CLOSED
+invoice,supplier,beneficiary_id,amount,currency,method,due_date,sandbox_outcome
+INV-RUN-1001,Example Supplier LLC,6170b987-3840-4825-8da6-c27671bd26ad,40.00,USD,LOCAL,2026-11-02,PAID
+INV-RUN-1002,Example Supplier LLC,6170b987-3840-4825-8da6-c27671bd26ad,41.00,USD,LOCAL,,ACCOUNT_CLOSED
 ```
 
 `fixtures/pay-run-example.csv` is a sample. Its beneficiary ids belong to the sandbox account PayOnce was built on, so use your own.
 
-Each row names the beneficiary by its Airwallex id and gives the supplier's name, the amount and the currency. The amount is in major units with a dot, at most two decimals and no thousands separator. `method` is optional. `sandbox_outcome` tells the sandbox bank what to do with the row's payment: `PAID` by default, or a failure type as in `pnpm recover`. PayOnce never reads bank details, phone numbers or email domains from a file. It pays the account on the beneficiary record. Every row pays in its own currency from that currency's wallet. PayOnce refuses a file with a column naming another wallet to pay from, such as `source_currency`. Pay such an invoice on its own. A file holds 50 rows at most. A file PayOnce cannot read is refused with every problem found. A problem in the header, such as a missing or unknown column, gives the header's line, and a quote that never closes gives the line it opened on. A problem with the whole file has no line: no name, an empty file, no rows after the header, more than 50 rows, or more than 40,000 characters.
+Each row names the beneficiary by its Airwallex id and gives the supplier's name, the amount and the currency. The amount is in major units with a dot, at most two decimals and no thousands separator. `method` is optional, and so is `due_date`, written like 2026-11-02 (see [Route advisory](#route-advisory)). `sandbox_outcome` tells the sandbox bank what to do with the row's payment: `PAID` by default, or a failure type as in `pnpm recover`. PayOnce never reads bank details, phone numbers or email domains from a file. It pays the account on the beneficiary record. Every row pays in its own currency from that currency's wallet. PayOnce refuses a file with a column naming another wallet to pay from, such as `source_currency`. Pay such an invoice on its own. A file holds 50 rows at most. A file PayOnce cannot read is refused with every problem found. A problem in the header, such as a missing or unknown column, gives the header's line, and a quote that never closes gives the line it opened on. A problem with the whole file has no line: no name, an empty file, no rows after the header, more than 50 rows, or more than 40,000 characters.
 
 PayOnce checks every row with GETs only. It skips a row that:
 
-- has a cell it cannot read, such as `4,000.00`, `40.005` or a currency without two decimals;
+- has a cell it cannot read, such as `4,000.00`, `40.005`, a currency without two decimals or a due date that is not a day on the calendar;
 - has an invoice number the ledger already has, or the same number for the same supplier apart from case, spacing or leading zeros;
 - repeats an earlier row's number, or looks like a second bill for an earlier row of the file;
 - names a beneficiary Airwallex does not have, or one whose account name, currency or transfer method does not match the row (names are compared without case, spacing or punctuation);
@@ -320,6 +336,7 @@ In the fifth, `inv-05002` has the same supplier, amount and number as INV-5002, 
 | `src/dispatcher.ts` | Runs the agent's steps one invoice at a time |
 | `src/watcher.ts` | Status checks on payments in flight, the fallback for webhooks. It also wakes an incident at its deadline and runs the sweep |
 | `src/deadlines.ts` | How long the bank has to pay or fail a transfer |
+| `src/arrival.ts` | The route advisory: how many business days each route usually takes, the arrival against a due date, and the fee last seen |
 | `src/sweep.ts` | Finds payouts PayOnce did not send |
 | `src/duplicates.ts` | Finds invoices that look like a second bill, and the invoice a payout sent outside PayOnce is for |
 | `src/webhooks.ts`, `src/tunnel.ts` | The webhook receiver and its signature check, and the cloudflared tunnel |
@@ -363,5 +380,8 @@ The code holds amounts in minor units and converts at the Airwallex boundary. Th
 - Pay run rows paid from another currency's wallet. Each row pays in its own currency from that currency's wallet.
 - Paying a replacement from the currency a failed converting payment is refunded in. By Airwallex's docs that refund lands in the transfer currency by default, so a replacement from that wallet would need no new rate. The sandbox simulator cannot fail a converting payment, so the refund cannot be seen and the replacement pays from the original's wallet again, on a new quote.
 - A fee estimate for the first payment of an invoice paid from another wallet. The card says the fee is charged when it is sent.
+- Choosing or switching a payment's route. The route advisory says when a payment usually arrives and whether it may be late, and a person decides what to do.
+- Public holidays in arrival estimates, and arrival figures for countries other than the United States and Germany.
+- A due date for `pnpm recover`. Give one on the page or in `POST /api/incidents`.
 - A webhook delivered by the sandbox. The receiver, the tunnel and the subscription work, and Airwallex records the events, but the sandbox has not sent one.
 - Real bank outcomes. The run uses the sandbox simulator to send, fail and pay transfers.
