@@ -238,9 +238,19 @@ export function stillSays(events: LedgerEvent[], topic: string, message: string)
   return false;
 }
 
-// Adds a line to the incident's timeline and prints it. A line identical to the
-// previous one is skipped. So is a standing line the timeline still says, which
-// keeps a check that finds nothing new from repeating the decision.
+// False for a line identical to the timeline's last one, and for a standing line
+// the timeline still says. A pay run's timeline uses it too.
+export function lineWanted(events: LedgerEvent[], kind: EventKind, message: string, topic: string | null): boolean {
+  const last: LedgerEvent | undefined = events.at(-1);
+  if (last?.kind === kind && last.message === message) {
+    return false;
+  }
+  return topic === null || !stillSays(events, topic, message);
+}
+
+// Adds a line to the incident's timeline and prints it, unless lineWanted says
+// the timeline has it already, which keeps a check that finds nothing new from
+// repeating the decision.
 export function note(
   ledger: Ledger,
   invoiceId: string,
@@ -248,12 +258,7 @@ export function note(
   message: string,
   topic: Topic | null = null,
 ): void {
-  const events: LedgerEvent[] = ledger.events(invoiceId);
-  const last: LedgerEvent | undefined = events.at(-1);
-  if (last?.kind === kind && last.message === message) {
-    return;
-  }
-  if (topic !== null && stillSays(events, topic, message)) {
+  if (!lineWanted(ledger.events(invoiceId), kind, message, topic)) {
     return;
   }
   ledger.addEvent(invoiceId, kind, message, topic);
@@ -2464,27 +2469,28 @@ function escalateForOutage(
 }
 
 // An invoice whose payment an outage held waits for a person to end it. The hold
-// line goes on its timeline once, and a standing line says what it waits on. The
-// look is tried again a minute later, which costs a ledger read while the outage
-// lasts. If the outage has ended meanwhile, the next look is due at once.
+// line goes on its timeline once, and a standing line says what it waits on, both
+// in the transaction that finds the outage still active, so neither lands after
+// the end line. The look is tried again a minute later, which costs a ledger read
+// while the outage lasts. If the outage has ended meanwhile, the next look is due
+// at once.
 export function waitOnOutage(engine: Engine, invoiceId: string, error: RailOutageError): void {
   const outage: Outage | undefined = engine.ledger.outage(error.outageId);
-  if (
-    outage?.state !== "active" ||
-    !engine.ledger.holdForOutage(outage.id, { invoiceId }, error.what, holdLine(outage, error.what))
-  ) {
-    engine.ledger.lookAt(invoiceId, Date.now());
-    return;
-  }
   const approval: Approval | undefined =
     error.what === "approved" ? engine.ledger.latestApproval(invoiceId) : undefined;
-  note(
-    engine.ledger,
-    invoiceId,
-    "outage",
-    waitingLine(outage, approval?.state === "approved" ? approval : undefined),
-    "waiting",
-  );
+  const waiting: string =
+    outage === undefined ? "" : waitingLine(outage, approval?.state === "approved" ? approval : undefined);
+  if (
+    outage?.state !== "active" ||
+    !engine.ledger.holdForOutage(outage.id, { invoiceId }, error.what, holdLine(outage, error.what), {
+      kind: "outage",
+      message: waiting,
+      topic: "waiting",
+      wanted: (events: LedgerEvent[]): boolean => lineWanted(events, "outage", waiting, "waiting"),
+    })
+  ) {
+    engine.ledger.lookAt(invoiceId, Date.now());
+  }
 }
 
 // Carries out a decision: replace, close, hand over to a person, or wait for the

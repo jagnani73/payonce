@@ -12,6 +12,7 @@ import {
   type Ledger,
   type Obligation,
   type ObligationOrigin,
+  type ObligationState,
   type Outage,
   type OutageCount,
   type OutageHold,
@@ -232,8 +233,11 @@ function endedLead(outage: Outage, unlisted: boolean): string {
   return `Outage ${outage.id} on ${railOf(outage)} ended by ${outage.endedBy ?? ""}: ${outage.endNote ?? ""}. It was declared at ${clock(outage.declaredAt)}.${anyone}`;
 }
 
-function endLine(outage: Outage, unlisted: boolean): string {
-  return `${endedLead(outage, unlisted)} PayOnce opens payments on ${railOf(outage)} again and looks at this invoice now`;
+// An invoice closed by the time the outage ends gets no look.
+function endLine(outage: Outage, unlisted: boolean, state: ObligationState | null): string {
+  return state === "open" || state === "escalated"
+    ? `${endedLead(outage, unlisted)} PayOnce opens payments on ${railOf(outage)} again and looks at this invoice now`
+    : `${endedLead(outage, unlisted)} PayOnce opens payments on ${railOf(outage)} again. This invoice is already closed, so PayOnce sends nothing for it`;
 }
 
 function runEndLine(outage: Outage, unlisted: boolean): string {
@@ -355,7 +359,7 @@ export function endOutage(
     id,
     ender,
     why,
-    (ended: Outage): string => endLine(ended, unlisted),
+    (ended: Outage, state: ObligationState | null): string => endLine(ended, unlisted, state),
     (ended: Outage): string => runEndLine(ended, unlisted),
     (active: Outage): OutageSubjectHeld[] => {
       const holding: OutageHolding | undefined = holdingOf?.(active);

@@ -1533,6 +1533,16 @@ export type OutageHoldKind = "counted" | "original" | "replacement" | "approved"
 
 export type OutageSubject = { invoiceId: string } | { runId: number };
 
+// A standing line written in the same transaction as an outage hold, so it never
+// lands after the end line. wanted reads the timeline as it is then and says
+// whether the line is still to be written.
+export interface StandingLine {
+  kind: EventKind;
+  message: string;
+  topic: string;
+  wanted: (events: LedgerEvent[]) => boolean;
+}
+
 // An invoice or run an outage holds, with what of it.
 export interface OutageSubjectHeld {
   subject: OutageSubject;
@@ -1917,26 +1927,44 @@ export class Ledger {
   }
 
   // Records that an active outage held an invoice or a run, and puts line on its
-  // timeline the first time, in one transaction. False when the outage has ended
-  // meanwhile, so a hold never lands after the end.
-  holdForOutage(outageId: number, subject: OutageSubject, what: OutageHoldKind, line: string): boolean {
+  // timeline the first time, then standing, if given and wanted, in one
+  // transaction. False when the outage has ended meanwhile, so neither line ever
+  // lands after the end.
+  holdForOutage(
+    outageId: number,
+    subject: OutageSubject,
+    what: OutageHoldKind,
+    line: string,
+    standing: StandingLine | null = null,
+  ): boolean {
     return this.transaction((): boolean => {
       if (this.db.prepare("SELECT 1 FROM outages WHERE id = ? AND state = 'active'").get(outageId) === undefined) {
         return false;
       }
-      if (this.insertHold(outageId, subject, what, new Date().toISOString())) {
-        if ("invoiceId" in subject) {
+      const held: boolean = this.insertHold(outageId, subject, what, new Date().toISOString());
+      if ("invoiceId" in subject) {
+        if (held) {
           this.appendEvent(subject.invoiceId, "outage", line, null);
-        } else {
+        }
+        if (standing !== null && standing.wanted(this.events(subject.invoiceId))) {
+          this.appendEvent(subject.invoiceId, standing.kind, standing.message, standing.topic);
+        }
+      } else {
+        if (held) {
           this.addRunEventRow(subject.runId, "outage", line, null);
+        }
+        if (standing !== null && standing.wanted(this.runEvents(subject.runId))) {
+          this.addRunEventRow(subject.runId, standing.kind, standing.message, standing.topic);
         }
       }
       return true;
     });
   }
 
-  // One hold per outage per invoice or run. True when this one is new. The caller
-  // holds the write transaction.
+  // One hold per outage per invoice or run. True when this one is new, or when it
+  // turns an invoice's counted hold (its own failure was counted) into what the
+  // outage now holds of it, so that hold's line is written too. The caller holds
+  // the write transaction.
   private insertHold(outageId: number, subject: OutageSubject, what: OutageHoldKind, at: string): boolean {
     const held: { changes: number | bigint } =
       "invoiceId" in subject
@@ -1952,7 +1980,19 @@ export class Ledger {
                VALUES (?, ?, ?, ?)`,
             )
             .run(outageId, subject.runId, what, at);
-    return Number(held.changes) === 1;
+    if (Number(held.changes) === 1) {
+      return true;
+    }
+    if (what === "counted" || !("invoiceId" in subject)) {
+      return false;
+    }
+    const upgraded: { changes: number | bigint } = this.db
+      .prepare(
+        `UPDATE outage_holds SET what = ?, held_at = ?
+          WHERE outage_id = ? AND invoice_id = ? AND what = 'counted'`,
+      )
+      .run(what, at, outageId, subject.invoiceId);
+    return Number(upgraded.changes) === 1;
   }
 
   // A person ends an active outage. One transaction records a hold for each
@@ -1965,7 +2005,7 @@ export class Ledger {
     id: number,
     endedBy: string,
     note: string,
-    invoiceLine: (outage: Outage) => string,
+    invoiceLine: (outage: Outage, state: ObligationState | null) => string,
     runLine: (outage: Outage) => string,
     listed: (outage: Outage) => OutageSubjectHeld[] = (): OutageSubjectHeld[] => [],
   ): OutageHold[] | undefined {
@@ -1991,7 +2031,12 @@ export class Ledger {
       const holds: OutageHold[] = this.outageHolds(id);
       for (const hold of holds) {
         if (hold.invoiceId !== null) {
-          this.appendEvent(hold.invoiceId, "outage", invoiceLine(outage), null);
+          this.appendEvent(
+            hold.invoiceId,
+            "outage",
+            invoiceLine(outage, this.obligation(hold.invoiceId)?.state ?? null),
+            null,
+          );
           this.db
             .prepare(
               `UPDATE obligations SET look_at = ?

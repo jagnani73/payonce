@@ -29,7 +29,7 @@ import { committedAcross, committedByInvoice, type CommittedExcept } from "./cas
 import { withCurrencyLocks } from "./currency-lock.js";
 import type { Dispatcher } from "./dispatcher.js";
 import { likelyDuplicates, sameBillAndNumber, sameNumberExactly, type Bill } from "./duplicates.js";
-import { stillSays, type Engine } from "./engine.js";
+import { lineWanted, type Engine } from "./engine.js";
 import {
   alreadyInLedger,
   isExpired,
@@ -710,12 +710,7 @@ export function runNote(
   message: string,
   topic: string | null = null,
 ): void {
-  const events: LedgerEvent[] = ledger.runEvents(runId);
-  const last: LedgerEvent | undefined = events.at(-1);
-  if (last?.kind === kind && last.message === message) {
-    return;
-  }
-  if (topic !== null && stillSays(events, topic, message)) {
+  if (!lineWanted(ledger.runEvents(runId), kind, message, topic)) {
     return;
   }
   ledger.addRunEvent(runId, kind, message, topic);
@@ -1241,9 +1236,14 @@ function holdRun(ledger: Ledger, runId: number, outage: Outage, approval: RunApp
     )
     .map((row: RunRowTerms): number => row.line);
   const line: string = runHoldLine(outage, lines, approval.approver ?? "", approval.expiresAt);
-  if (ledger.holdForOutage(outage.id, { runId }, "run", line)) {
-    runNote(ledger, runId, "outage", runWaitingLine(outage), "release");
-  }
+  const waiting: string = runWaitingLine(outage);
+  // The waiting line is written with the hold, so it never lands after the end.
+  ledger.holdForOutage(outage.id, { runId }, "run", line, {
+    kind: "outage",
+    message: waiting,
+    topic: "release",
+    wanted: (events: LedgerEvent[]): boolean => lineWanted(events, "outage", waiting, "release"),
+  });
 }
 
 // The release once every check passed: under the lock of every currency the run

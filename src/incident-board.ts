@@ -412,8 +412,8 @@ function otherSituation(
 }
 
 // The invoices each active outage held, as "outage-id invoice-id". An invoice has
-// one hold per outage, the first: an invoice whose own failure the outage counted
-// keeps "counted" when the outage later holds its replacement.
+// one hold per outage. A counted one becomes the hold of what the outage later
+// holds of the invoice, such as its replacement.
 function outageHeld(ledger: Ledger, outages: Outage[]): Set<string> {
   const held: Set<string> = new Set<string>();
   for (const outage of outages) {
