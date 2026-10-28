@@ -38,16 +38,18 @@ import {
 import {
   attemptStateOf,
   bankDetailsKey,
+  debitOf,
   feeOf,
   originalStateOf,
   resendCanFix,
   sameBankDetails,
+  type Debit,
   type Fee,
 } from "./assess.js";
-import { committedMinor } from "./cash-position.js";
+import { committedAcross, committedByInvoice, committedMinor } from "./cash-position.js";
 import { withCurrencyLock } from "./currency-lock.js";
 import { deadlineOf, describeDeadline, isOverdue } from "./deadlines.js";
-import { decide, OUTSIDE_PAYOUT_REASON } from "./decide.js";
+import { decide, floorReason, OUTSIDE_PAYOUT_REASON } from "./decide.js";
 import { likelyDuplicates, nearlyPays } from "./duplicates.js";
 import {
   unverifiedSenders,
@@ -77,7 +79,7 @@ import {
   type RunRow,
   type Signoff,
 } from "./ledger.js";
-import { formatMoney, readMinor, toMinor } from "./money.js";
+import { formatMoney, toMinor } from "./money.js";
 import { sendAttempt, syncTransfer, wasRejected } from "./payments.js";
 import { debitCurrency, floorFor, type ReservePolicy } from "./reserve.js";
 
@@ -136,7 +138,7 @@ function messageOf(error: unknown): string {
 // What a standing line is about. A standing line says how things are now and is
 // written again on every check. A line with no topic records something that
 // happened.
-export type Topic = "decision" | "waiting" | "approval" | "cost" | "bank-details";
+export type Topic = "decision" | "waiting" | "approval" | "cost" | "bank-details" | "floor";
 
 // True when the timeline's last word on a topic is this message and nothing has
 // happened since. A pay run's timeline uses it too.
@@ -218,13 +220,14 @@ export function payoutSummary(transfer: Transfer): string {
   return `${formatMoney(toMinor(transfer.transfer_amount), transfer.transfer_currency)} to ${payee}, ${transfer.status}${failure}`;
 }
 
-// A payout's amount and fee for the ledger. One that cannot be read is null, so
-// tying the payout never fails on it.
+// A payout's amount and fee for the ledger, each in the currency it was taken in.
+// One that cannot be read is null, so tying the payout never fails on it.
 function payoutMoney(transfer: Transfer): PayoutMoney {
   const fee: Fee | null = feeOf(transfer);
+  const debit: Debit | null = debitOf(transfer);
   return {
-    amountMinor: readMinor(transfer.transfer_amount),
-    currency: transfer.transfer_currency ?? null,
+    amountMinor: debit?.minor ?? null,
+    currency: debit?.currency ?? null,
     feeMinor: fee?.minor ?? null,
     feeCurrency: fee?.currency ?? null,
   };
@@ -426,11 +429,13 @@ async function assess(
   const feeMinor: number = toMinor(original.fee_amount);
   // Read fresh on every look. The cash panel's cached balance never feeds a decision.
   const wallet: string = debitCurrency(obligation);
-  const availableMinor: number = await getAvailableMinor(engine.client, wallet);
-  const floorMinor: number | null = floorFor(engine.reserve, obligation);
+  // Counted before the balance is read, so a payment that gets its transfer in
+  // between is counted twice, as committed and as debited, and never not at all.
   const committed: number = committedMinor(engine.ledger, wallet, {
     invoiceId: obligation.invoiceId,
   });
+  const availableMinor: number = await getAvailableMinor(engine.client, wallet);
+  const floorMinor: number | null = floorFor(engine.reserve, obligation);
   const originalState: OriginalTransferState = originalStateOf(original);
   const incident: Incident = {
     invoiceId: obligation.invoiceId,
@@ -549,22 +554,6 @@ async function requireAccount(
   }
 }
 
-// Sends a payment a person approved, holding the currency lock from the account
-// check to the recorded transfer. accountKey is the account it was approved for.
-async function pay(
-  engine: Engine,
-  obligation: Obligation,
-  kind: AttemptKind,
-  accountKey: string,
-): Promise<Transfer> {
-  return withCurrencyLock(engine.ledger, debitCurrency(obligation), async (): Promise<Transfer> => {
-    await requireAccount(engine, obligation, accountKey, "decision");
-    // Opening the attempt takes the duplicate lock, so this throws if the invoice
-    // already has a live payment.
-    return send(engine, obligation, engine.ledger.openAttempt(obligation.invoiceId, kind), accountKey);
-  });
-}
-
 // Sends an attempt already written to the ledger.
 async function send(
   engine: Engine,
@@ -650,8 +639,12 @@ function waitForBank(
       : `Waiting for the bank to pay or fail original ${transfer.short_reference_id}. If it has done neither within ${describeDeadline(transfer)} of sending, a person hears about it`,
     "waiting",
   );
-  // A deadline that cannot be read is due now, and the look then finds the
-  // transfer overdue.
+  return deadlineLook(transfer);
+}
+
+// The look at a transfer's deadline. A deadline that cannot be read is due now,
+// and the look then finds the transfer overdue.
+function deadlineLook(transfer: Transfer): number {
   const deadline: number = deadlineOf(transfer);
   return Number.isFinite(deadline) ? deadline : Date.now();
 }
@@ -674,17 +667,6 @@ function replacementOverdue(
     "waiting",
   );
   return null;
-}
-
-// The bank pays the replacement later. The agent hears about it the way it heard
-// about the original, and closes the incident then.
-async function replace(
-  engine: Engine,
-  obligation: Obligation,
-  accountKey: string,
-): Promise<NextLook> {
-  const replacement: Transfer = await pay(engine, obligation, "replacement", accountKey);
-  return waitForBank(engine, obligation.invoiceId, "replacement", replacement);
 }
 
 function termsOf(obligation: Obligation, assessment: Assessment): ReplacementTerms {
@@ -975,6 +957,39 @@ function escalate(
   );
 }
 
+// A replacement that takes cash below its floor, or that no floor can be checked
+// for, is paid only on an approval whose request said so. The policy checks some
+// reasons before the cash, such as a payment sent outside PayOnce, so when one of
+// those sent the invoice to a person the floor reason is added to it. The request
+// then names both, and an approval of terms that did not is void.
+function withFloorReason(
+  engine: Engine,
+  obligation: Obligation,
+  assessment: Assessment,
+): Assessment {
+  const decision: Decision = assessment.decision;
+  const incident: Incident = assessment.incident;
+  if (
+    decision.action !== "escalate" ||
+    incident.originalState !== "failed" ||
+    incident.outsidePayoutLive
+  ) {
+    return assessment;
+  }
+  const floor: string | null = floorReason(incident);
+  if (floor === null || floor === decision.reason) {
+    return assessment;
+  }
+  note(
+    engine.ledger,
+    obligation.invoiceId,
+    "warning",
+    `Also, ${floor}. The approval request says this too, and only an approval of that request releases a replacement`,
+    "floor",
+  );
+  return { ...assessment, decision: { action: "escalate", reason: `${decision.reason}, and ${floor}` } };
+}
+
 async function continueEscalated(
   engine: Engine,
   obligation: Obligation,
@@ -982,7 +997,11 @@ async function continueEscalated(
 ): Promise<NextLook> {
   // Once an invoice has gone to a person, only an approval releases a payment and
   // only a person closes it, even if the policy would now do either unprompted.
-  const assessment: Assessment = await assess(engine, obligation, originalId);
+  const assessment: Assessment = withFloorReason(
+    engine,
+    obligation,
+    await assess(engine, obligation, originalId),
+  );
   const approval: Approval | undefined = engine.ledger.latestApproval(
     obligation.invoiceId,
   );
@@ -1003,18 +1022,25 @@ async function continueEscalated(
   ) {
     return Date.now();
   }
-  // One approval covers one attempt, so it is spent before the payment is tried.
-  // Another process may have voided it since it was read.
-  if (!engine.ledger.useApproval(approval.id)) {
-    return Date.now();
-  }
-  note(
-    engine.ledger,
-    obligation.invoiceId,
-    "approval",
-    `Approval by ${approval.approver} matches the current terms`,
-  );
-  return replace(engine, obligation, current.accountKey);
+  // The currency lock is held from the account check to the recorded transfer.
+  return withCurrencyLock(engine.ledger, debitCurrency(obligation), async (): Promise<NextLook> => {
+    // Checked before the approval is spent, so a failed check leaves it unspent.
+    await requireAccount(engine, obligation, current.accountKey, "replacement was approved");
+    // One approval covers one attempt, so it is spent as the attempt is opened.
+    // Another process may have voided it since it was read.
+    const attempt: Attempt | undefined = engine.ledger.useApproval(obligation.invoiceId, approval.id);
+    if (attempt === undefined) {
+      return Date.now();
+    }
+    note(
+      engine.ledger,
+      obligation.invoiceId,
+      "approval",
+      `Approval by ${approval.approver} matches the current terms`,
+    );
+    const replacement: Transfer = await send(engine, obligation, attempt, current.accountKey);
+    return waitForBank(engine, obligation.invoiceId, "replacement", replacement);
+  });
 }
 
 // The invoices a held one looks like a second bill for, as they stand now, and
@@ -1161,6 +1187,9 @@ export async function startPayment(
       }
     }
     // A pay run's row is held to the floor. A single incident's original is not.
+    // The money committed elsewhere is counted before the balance read and again
+    // in the transaction.
+    const before: Map<string, number> = committedByInvoice(engine.ledger, wallet, { invoiceId });
     const availableMinor: number | null =
       obligation.runRowId === null ? null : await getAvailableMinor(engine.client, wallet);
     await linkUnseenPayouts(engine, invoiceId);
@@ -1182,7 +1211,7 @@ export async function startPayment(
         return { kind: "held", duplicateOf, reason, detail: null };
       }
       if (availableMinor !== null) {
-        const short: string | null = floorBreach(engine, now, availableMinor);
+        const short: string | null = floorBreach(engine, now, availableMinor, before);
         if (short !== null) {
           engine.ledger.holdBeforePaying(invoiceId, [], CASH_HOLD_REASON);
           return { kind: "held", duplicateOf: [], reason: CASH_HOLD_REASON, detail: short };
@@ -1195,10 +1224,19 @@ export async function startPayment(
       return null;
     }
     try {
-      return await send(engine, first.obligation, first.attempt, accountKey);
+      const original: Transfer = await send(engine, first.obligation, first.attempt, accountKey);
+      // The look at its deadline is planned as soon as it is with the bank, so it
+      // comes even if nothing wakes the invoice before, for example when the
+      // sandbox bank's script fails.
+      engine.ledger.lookAt(invoiceId, deadlineLook(original));
+      return original;
     } catch (error: unknown) {
       const refused: Attempt | undefined = engine.ledger.attempts(invoiceId).at(-1);
       if (refused?.state !== "failed" || refused.transferId !== null) {
+        // The transfer may exist, so a look tries again a minute later, as after a
+        // look that failed.
+        const at: number = Date.now();
+        engine.ledger.postponeDueLook(invoiceId, at, at + RETRY_FAILED_LOOK_MS);
         throw error;
       }
       note(engine.ledger, invoiceId, "error", messageOf(error));
@@ -1212,7 +1250,12 @@ export async function startPayment(
 // currency, or null when it fits. Money promised elsewhere is taken off,
 // including the run's other rows not sent yet. A currency with no floor set does
 // not stop a row, because a person approved the run.
-function floorBreach(engine: Engine, obligation: Obligation, availableMinor: number): string | null {
+function floorBreach(
+  engine: Engine,
+  obligation: Obligation,
+  availableMinor: number,
+  committedBefore: Map<string, number>,
+): string | null {
   const wallet: string = debitCurrency(obligation);
   const floorMinor: number | null = floorFor(engine.reserve, obligation);
   if (floorMinor === null) {
@@ -1224,7 +1267,10 @@ function floorBreach(engine: Engine, obligation: Obligation, availableMinor: num
   const feeMinor: number = engine.ledger.latestFee(wallet, obligation.transferMethod) ?? 0;
   const afterMinor: number =
     availableMinor -
-    committedMinor(engine.ledger, wallet, { invoiceId: obligation.invoiceId }) -
+    committedAcross(
+      committedBefore,
+      committedByInvoice(engine.ledger, wallet, { invoiceId: obligation.invoiceId }),
+    ) -
     obligation.amountMinor -
     feeMinor;
   return afterMinor >= floorMinor
@@ -1430,6 +1476,7 @@ async function replaceUnderLock(
   const accountKey: string = accountKeyOf(assessment.bankDetails);
   await requireAccount(engine, obligation, accountKey, "decision");
   const wallet: string = debitCurrency(obligation);
+  const before: Map<string, number> = committedByInvoice(engine.ledger, wallet, { invoiceId });
   const availableMinor: number = await getAvailableMinor(engine.client, wallet);
 
   // A replacement for what looks like a second bill of a paid invoice goes to a
@@ -1448,7 +1495,10 @@ async function replaceUnderLock(
   const decision: Decision = decide({
     ...assessment.incident,
     availableBalanceMinor: availableMinor,
-    committedMinor: committedMinor(engine.ledger, wallet, { invoiceId }),
+    committedMinor: committedAcross(
+      before,
+      committedByInvoice(engine.ledger, wallet, { invoiceId }),
+    ),
   });
   if (decision.action !== "replace") {
     note(engine.ledger, invoiceId, "decision", `Escalate: ${decision.reason}`, "decision");

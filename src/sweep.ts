@@ -1,5 +1,5 @@
 import { listTransfersSince, type Transfer } from "./airwallex/transfers.js";
-import { feeOf, originalStateOf, type Fee } from "./assess.js";
+import { debitOf, feeOf, originalStateOf, type Debit, type Fee } from "./assess.js";
 import { isOverdue } from "./deadlines.js";
 import type { Dispatcher } from "./dispatcher.js";
 import { invoiceForPayout, type PayoutMatch } from "./duplicates.js";
@@ -49,6 +49,7 @@ function adopt(engine: Engine, transfer: Transfer, state: FoundState): string | 
     return undefined;
   }
   const fee: Fee | null = feeOf(transfer);
+  const debit: Debit | null = debitOf(transfer);
   engine.ledger.adoptPayout(
     {
       invoiceId,
@@ -74,6 +75,8 @@ function adopt(engine: Engine, transfer: Transfer, state: FoundState): string | 
       failureCode: transfer.failure?.code ?? null,
       feeMinor: fee?.minor ?? null,
       feeCurrency: fee?.currency ?? null,
+      amountMinor: debit?.minor ?? null,
+      currency: debit?.currency ?? null,
     },
   );
   note(

@@ -5,16 +5,19 @@ import {
   getTransfer,
   type Transfer,
 } from "./airwallex/transfers.js";
-import { attemptStateOf, feeOf, type Fee } from "./assess.js";
+import { attemptStateOf, debitOf, feeOf, type Debit, type Fee } from "./assess.js";
 import type { Attempt, Ledger, Obligation } from "./ledger.js";
 import { toMajor } from "./money.js";
 
 // Failed transfers whose fee is read from Airwallex in one go, when the ledger
 // has none for them.
 const MISSING_FEES_PER_READ: number = 5;
+// How long a transfer whose fee could not be recorded waits before it is read again.
+const MISSING_FEE_RETRY_MS: number = 10 * 60_000;
 
 function record(ledger: Ledger, transfer: Transfer): void {
   const fee: Fee | null = feeOf(transfer);
+  const debit: Debit | null = debitOf(transfer);
   ledger.record(
     transfer.request_id,
     transfer.id,
@@ -23,6 +26,8 @@ function record(ledger: Ledger, transfer: Transfer): void {
     transfer.failure?.code ?? null,
     fee?.minor ?? null,
     fee?.currency ?? null,
+    debit?.minor ?? null,
+    debit?.currency ?? null,
   );
 }
 
@@ -93,15 +98,18 @@ export async function syncTransfer(
 
 // Reads the fee of failed transfers the ledger has none for, such as those on
 // invoices closed before fees were kept, which no look reads again. It writes the
-// fee and nothing else. Returns how many it recorded. A transfer that cannot be
-// read is tried again on the next call.
+// fee and nothing else. Returns how many it recorded. It reads at most limit
+// transfers. One whose fee could not be recorded is read again only after
+// MISSING_FEE_RETRY_MS, and behind those not tried since.
 export async function recordMissingFees(
   client: AirwallexClient,
   ledger: Ledger,
   limit: number = MISSING_FEES_PER_READ,
 ): Promise<number> {
   let recorded: number = 0;
-  for (const transferId of ledger.failedWithoutFee(limit)) {
+  const now: number = Date.now();
+  for (const transferId of ledger.failedWithoutFee(limit, now - MISSING_FEE_RETRY_MS)) {
+    ledger.feeTried(transferId, now);
     try {
       const fee: Fee | null = feeOf(await getTransfer(client, transferId));
       if (fee !== null) {

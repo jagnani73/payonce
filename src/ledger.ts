@@ -273,14 +273,20 @@ export interface Attempt {
   // until a transfer has been read.
   feeMinor: number | null;
   feeCurrency: string | null;
+  // What the transfer took from the wallet, before the fee, as last read from it.
+  // Null until a transfer has been read since PayOnce started keeping it.
+  amountMinor: number | null;
+  currency: string | null;
 }
 
 // What the bank last did with a payout sent outside PayOnce. unknown is a status
 // PayOnce does not recognise.
 export type PayoutState = "in_flight" | "paid" | "failed" | "unknown";
 
-// A payout's amount and fee as last read from the transfer. Null when it has not
-// been read since PayOnce started keeping them.
+// A payout's amount and fee as last read from the transfer. The amount and
+// currency are what it took from the wallet, before the fee: the source amount
+// when it was paid from another currency. Null when it has not been read since
+// PayOnce started keeping them.
 export interface PayoutMoney {
   amountMinor: number | null;
   currency: string | null;
@@ -305,6 +311,8 @@ export interface FoundPayout {
   failureCode: string | null;
   feeMinor: number | null;
   feeCurrency: string | null;
+  amountMinor: number | null;
+  currency: string | null;
 }
 
 // One approver's approval of a request, with the binding of the terms they saw.
@@ -519,7 +527,8 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
   obligations: {
     supplier_domain: "TEXT NOT NULL DEFAULT ''",
     transfer_method: "TEXT NOT NULL DEFAULT 'LOCAL'",
-    // The floor each invoice carried before RESERVE_FLOORS. No longer read or
+    // The floor each invoice carried before RESERVE_FLOORS. Copied into
+    // invoice_floor_minor when that column is added, and otherwise not read or
     // written.
     reserve_floor_minor: "INTEGER NOT NULL DEFAULT 0",
     invoice_floor_minor: "INTEGER NOT NULL DEFAULT 0",
@@ -549,6 +558,11 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     // 1 when the transfer went to other bank details than the ones it was
     // approved or decided for, so it never counts as the account PayOnce last paid.
     misdirected: "INTEGER NOT NULL DEFAULT 0",
+    // When recordMissingFees last tried to read the fee, as an ISO time.
+    fee_tried_at: "TEXT",
+    // What the transfer took from the wallet, before the fee, as on outside_payouts.
+    amount_minor: "INTEGER",
+    currency: "TEXT",
   },
   events: {
     topic: "TEXT",
@@ -563,6 +577,7 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     currency: "TEXT",
     fee_minor: "INTEGER",
     fee_currency: "TEXT",
+    fee_tried_at: "TEXT",
   },
 };
 
@@ -576,6 +591,8 @@ interface AttemptRow {
   failure_code: string | null;
   fee_minor: number | null;
   fee_currency: string | null;
+  amount_minor: number | null;
+  currency: string | null;
 }
 
 export class DuplicatePaymentError extends Error {
@@ -641,6 +658,8 @@ function toAttempt(row: AttemptRow): Attempt {
     failureCode: row.failure_code,
     feeMinor: row.fee_minor,
     feeCurrency: row.fee_currency,
+    amountMinor: row.amount_minor,
+    currency: row.currency,
   };
 }
 
@@ -977,6 +996,13 @@ export class Ledger {
         for (const [name, definition] of Object.entries(columns)) {
           if (!existing.includes(name)) {
             this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+            // An invoice from before RESERVE_FLOORS keeps the floor it carried, so
+            // none is held to a looser floor than it was.
+            if (table === "obligations" && name === "invoice_floor_minor") {
+              this.db.exec(
+                "UPDATE obligations SET invoice_floor_minor = reserve_floor_minor WHERE reserve_floor_minor <> 0",
+              );
+            }
           }
         }
       }
@@ -1245,6 +1271,8 @@ export class Ledger {
       failureCode: null,
       feeMinor: null,
       feeCurrency: null,
+      amountMinor: null,
+      currency: null,
     };
   }
 
@@ -1315,8 +1343,8 @@ export class Ledger {
         .prepare(
           `INSERT INTO attempts
              (request_id, invoice_id, kind, transfer_id, reference, state, failure_code,
-              fee_minor, fee_currency)
-           VALUES (?, ?, 'original', ?, ?, ?, ?, ?, ?)`,
+              fee_minor, fee_currency, amount_minor, currency)
+           VALUES (?, ?, 'original', ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           found.requestId,
@@ -1327,6 +1355,8 @@ export class Ledger {
           found.failureCode,
           found.feeMinor,
           found.feeCurrency,
+          found.amountMinor,
+          found.currency,
         );
       this.db.exec("COMMIT");
     } catch (error: unknown) {
@@ -1478,7 +1508,8 @@ export class Ledger {
     return Number(result.changes) === 1;
   }
 
-  // A null state leaves the stored state as it is, and a null fee the stored fee.
+  // A null state leaves the stored state as it is, and a null fee or amount the
+  // stored one.
   record(
     requestId: string,
     transferId: string,
@@ -1487,36 +1518,65 @@ export class Ledger {
     failureCode: string | null,
     feeMinor: number | null,
     feeCurrency: string | null,
+    amountMinor: number | null,
+    currency: string | null,
   ): void {
     const result: { changes: number | bigint } = this.db
       .prepare(
         `UPDATE attempts
             SET transfer_id = ?, reference = ?, state = COALESCE(?, state),
                 failure_code = ?, fee_minor = COALESCE(?, fee_minor),
-                fee_currency = COALESCE(?, fee_currency)
+                fee_currency = COALESCE(?, fee_currency),
+                amount_minor = COALESCE(?, amount_minor), currency = COALESCE(?, currency)
           WHERE request_id = ?`,
       )
-      .run(transferId, reference, state, failureCode, feeMinor, feeCurrency, requestId);
+      .run(
+        transferId,
+        reference,
+        state,
+        failureCode,
+        feeMinor,
+        feeCurrency,
+        amountMinor,
+        currency,
+        requestId,
+      );
     if (Number(result.changes) !== 1) {
       throw new Error(`No payment attempt has request_id ${requestId}`);
     }
   }
 
   // Failed transfers, PayOnce's and payouts sent outside it, whose fee has not
-  // been recorded, such as those failed before fees were kept.
-  failedWithoutFee(limit: number): string[] {
+  // been recorded, such as those failed before fees were kept. Only those never
+  // tried, or last tried at triedBefore or earlier, and the least recently tried
+  // first, so a transfer that cannot be read does not keep the others waiting.
+  failedWithoutFee(limit: number, triedBefore: number): string[] {
+    const before: string = new Date(triedBefore).toISOString();
     return (
       this.db
         .prepare(
-          `SELECT transfer_id FROM attempts
+          `SELECT transfer_id, fee_tried_at FROM attempts
             WHERE state = 'failed' AND transfer_id IS NOT NULL AND fee_minor IS NULL
+              AND (fee_tried_at IS NULL OR fee_tried_at <= ?)
            UNION
-           SELECT transfer_id FROM outside_payouts
+           SELECT transfer_id, fee_tried_at FROM outside_payouts
             WHERE state = 'failed' AND fee_minor IS NULL
+              AND (fee_tried_at IS NULL OR fee_tried_at <= ?)
+           ORDER BY fee_tried_at, transfer_id
            LIMIT ?`,
         )
-        .all(limit) as unknown as TransferRow[]
+        .all(before, before, limit) as unknown as TransferRow[]
     ).map((row: TransferRow): string => row.transfer_id);
+  }
+
+  // Notes that the fee of a transfer is being read, so it goes to the back of
+  // failedWithoutFee's list whether or not the read works.
+  feeTried(transferId: string, at: number): void {
+    for (const table of ["attempts", "outside_payouts"]) {
+      this.db
+        .prepare(`UPDATE ${table} SET fee_tried_at = ? WHERE transfer_id = ?`)
+        .run(new Date(at).toISOString(), transferId);
+    }
   }
 
   // Writes only the fee of a transfer that has none on file, so it never changes
@@ -1806,16 +1866,35 @@ export class Ledger {
     return toApproval(row, this.signoffs(approvalId));
   }
 
-  // Spends an approval on one payment. False when it is no longer approved, for
-  // example because another process voided it in the meantime, or when it has
-  // expired since the look checked it.
-  useApproval(id: number): boolean {
-    const result: { changes: number | bigint } = this.db
-      .prepare(
-        "UPDATE approvals SET state = 'used' WHERE id = ? AND state = 'approved' AND expires_at > ?",
-      )
-      .run(id, new Date().toISOString());
-    return Number(result.changes) === 1;
+  // Spends an approval on one replacement and opens its attempt, in one
+  // transaction, so the money is counted as approved or as being sent at every
+  // moment and never as neither. Undefined, with nothing changed, when it is no
+  // longer approved, for example because another process voided it in the
+  // meantime, or when it has expired since the look checked it. Also when the
+  // invoice is no longer escalated, as when a person closed it, or a payout for
+  // it sent outside PayOnce is live.
+  useApproval(invoiceId: string, approvalId: number): Attempt | undefined {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const result: { changes: number | bigint } = this.db
+        .prepare(
+          `UPDATE approvals SET state = 'used'
+            WHERE id = ? AND invoice_id = ? AND state = 'approved' AND expires_at > ?
+              AND EXISTS (SELECT 1 FROM obligations WHERE invoice_id = ? AND state = 'escalated')
+              AND NOT EXISTS (${LIVE_OUTSIDE_PAYOUT})`,
+        )
+        .run(approvalId, invoiceId, new Date().toISOString(), invoiceId, invoiceId);
+      if (Number(result.changes) !== 1) {
+        this.db.exec("ROLLBACK");
+        return undefined;
+      }
+      const attempt: Attempt = this.openAttempt(invoiceId, "replacement");
+      this.db.exec("COMMIT");
+      return attempt;
+    } catch (error: unknown) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   setApprovalState(

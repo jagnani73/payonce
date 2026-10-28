@@ -70,12 +70,12 @@ interface FeeEstimate {
   feeKnown: boolean;
 }
 
-// The fee a payment not sent yet should cost: the invoice's latest recorded fee,
-// else the latest the ledger recorded in the same currency by the same transfer
-// method, else 0 and not known.
+// The fee a payment not sent yet should cost: the invoice's latest fee recorded in
+// the wallet the payment leaves, else the latest the ledger recorded in that
+// currency by the same transfer method, else 0 and not known.
 function feeEstimate(ledger: Ledger, obligation: Obligation, attempts: Attempt[]): FeeEstimate {
   for (const attempt of [...attempts].reverse()) {
-    if (attempt.feeMinor !== null) {
+    if (attempt.feeMinor !== null && attempt.feeCurrency === debitCurrency(obligation)) {
       return { feeMinor: attempt.feeMinor, feeKnown: true };
     }
   }
@@ -117,6 +117,19 @@ function feeLost(
   };
 }
 
+// A transfer's money, booked to the wallet it left. Its fee is added only when it
+// was taken in that currency. A fee in another currency gets a line of its own in
+// that currency, so no figure adds two currencies together.
+function sentLines(line: CashLine, feeMinor: number | null, feeCurrency: string | null): CashLine[] {
+  if (feeMinor === null || feeCurrency === null || feeCurrency === line.currency) {
+    return [{ ...line, feeMinor: feeMinor ?? 0, feeKnown: feeMinor !== null }];
+  }
+  return [
+    { ...line, feeMinor: 0, feeKnown: true },
+    { ...line, currency: feeCurrency, amountMinor: 0, feeMinor, feeKnown: true, estimated: false },
+  ];
+}
+
 // Every line of money the ledger knows about, in every currency. Closed invoices
 // add only the fees their failed transfers kept.
 export function cashLines(ledger: Ledger, now: number = Date.now()): CashLine[] {
@@ -155,33 +168,50 @@ export function cashLines(ledger: Ledger, now: number = Date.now()): CashLine[] 
           runId: null,
         });
       } else if (attempt.state === "pending" || attempt.state === "in_flight") {
-        // A found invoice's original is a payout someone sent outside PayOnce.
-        lines.push({
-          kind: obligation.origin === "outside" && attempt.kind === "original" ? "outside" : "with-bank",
-          invoiceId,
-          currency: wallet,
-          amountMinor: obligation.amountMinor,
-          feeMinor: attempt.feeMinor ?? 0,
-          feeKnown: attempt.feeMinor !== null,
-          reference: attempt.reference,
-          estimated: false,
-          runId: null,
-        });
+        // A found invoice's original is a payout someone sent outside PayOnce. The
+        // money is booked where the transfer took it, which for a payout paid from
+        // another currency is not the invoice's. PayOnce pays the invoice's amount,
+        // so its own payment from the invoice's currency is exact even when it was
+        // sent before amounts were stored.
+        const found: boolean = obligation.origin === "outside" && attempt.kind === "original";
+        lines.push(
+          ...sentLines(
+            {
+              kind: found ? "outside" : "with-bank",
+              invoiceId,
+              currency: attempt.currency ?? wallet,
+              amountMinor: attempt.amountMinor ?? obligation.amountMinor,
+              feeMinor: 0,
+              feeKnown: false,
+              reference: attempt.reference,
+              estimated: attempt.amountMinor === null && (found || wallet !== obligation.currency),
+              runId: null,
+            },
+            attempt.feeMinor,
+            attempt.feeCurrency,
+          ),
+        );
       }
     }
     for (const payout of payouts) {
       if (payout.state === "in_flight" || payout.state === "unknown") {
-        lines.push({
-          kind: "outside",
-          invoiceId,
-          currency: payout.currency ?? wallet,
-          amountMinor: payout.amountMinor ?? obligation.amountMinor,
-          feeMinor: payout.feeMinor ?? 0,
-          feeKnown: payout.feeMinor !== null,
-          reference: payout.reference === "" ? null : payout.reference,
-          estimated: payout.amountMinor === null,
-          runId: null,
-        });
+        lines.push(
+          ...sentLines(
+            {
+              kind: "outside",
+              invoiceId,
+              currency: payout.currency ?? wallet,
+              amountMinor: payout.amountMinor ?? obligation.amountMinor,
+              feeMinor: 0,
+              feeKnown: false,
+              reference: payout.reference === "" ? null : payout.reference,
+              estimated: payout.amountMinor === null,
+              runId: null,
+            },
+            payout.feeMinor,
+            payout.feeCurrency,
+          ),
+        );
       }
     }
 
@@ -243,21 +273,49 @@ export interface CommittedExcept {
 // with no transfer yet, approvals not used or expired, and pay-run rows approved or
 // released and not sent. The policy takes it off before an automatic replacement
 // and a pay run's checks do the same, and the panel's headroom takes off the same
-// lines, so they always agree.
+// lines. The two can still differ: the panel's balance is cached, its floor is the
+// currency's, and it counts every invoice and run.
 export function committedMinor(
   ledger: Ledger,
   currency: string,
   except: CommittedExcept,
 ): number {
-  return [...cashLines(ledger), ...payRunLines(ledger)]
-    .filter(
-      (line: CashLine): boolean =>
-        FIRM_KINDS.has(line.kind) &&
-        line.currency === currency &&
-        line.invoiceId !== except.invoiceId &&
-        (except.runId === undefined || line.runId !== except.runId),
-    )
-    .reduce((sum: number, line: CashLine): number => sum + line.amountMinor + line.feeMinor, 0);
+  return [...committedByInvoice(ledger, currency, except).values()].reduce(
+    (sum: number, minor: number): number => sum + minor,
+    0,
+  );
+}
+
+// committedMinor's money, by invoice.
+export function committedByInvoice(
+  ledger: Ledger,
+  currency: string,
+  except: CommittedExcept,
+): Map<string, number> {
+  const byInvoice: Map<string, number> = new Map<string, number>();
+  for (const line of [...cashLines(ledger), ...payRunLines(ledger)]) {
+    if (
+      FIRM_KINDS.has(line.kind) &&
+      line.currency === currency &&
+      line.invoiceId !== except.invoiceId &&
+      (except.runId === undefined || line.runId !== except.runId)
+    ) {
+      byInvoice.set(line.invoiceId, (byInvoice.get(line.invoiceId) ?? 0) + line.amountMinor + line.feeMinor);
+    }
+  }
+  return byInvoice;
+}
+
+// The money committed in either of two counts, one taken before a balance read
+// and one after it, each invoice at the larger of its two amounts. A payment that
+// got its transfer in between is counted twice, as committed and as debited, and
+// one promised in between is counted too, so neither is missed.
+export function committedAcross(before: Map<string, number>, after: Map<string, number>): number {
+  let total: number = 0;
+  for (const invoiceId of new Set<string>([...before.keys(), ...after.keys()])) {
+    total += Math.max(before.get(invoiceId) ?? 0, after.get(invoiceId) ?? 0);
+  }
+  return total;
 }
 
 export interface KindTotal {

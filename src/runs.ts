@@ -22,7 +22,7 @@ import {
   type SignoffRule,
 } from "./approvers.js";
 import { bankDetailsKey } from "./assess.js";
-import { committedMinor } from "./cash-position.js";
+import { committedAcross, committedByInvoice, type CommittedExcept } from "./cash-position.js";
 import { withCurrencyLocks } from "./currency-lock.js";
 import type { Dispatcher } from "./dispatcher.js";
 import { likelyDuplicates, sameBillAndNumber, sameNumberExactly, type Bill } from "./duplicates.js";
@@ -386,10 +386,19 @@ async function cashCheck(engine: Engine, rows: CheckedRow[], runId: number | nul
   if (pay.length === 0) {
     return [];
   }
-  const balances: Balance[] = await getBalances(engine.client);
   const currencies: string[] = [...new Set(pay.map((row: PayRow): string => row.currency))].sort(
     (a: string, b: string): number => a.localeCompare(b),
   );
+  const except: CommittedExcept = runId === null ? {} : { runId };
+  // Counted before the balance read and again after it, so a payment that gets
+  // its transfer in between, or is promised in between, is never missed.
+  const before: Map<string, Map<string, number>> = new Map(
+    currencies.map((currency: string): [string, Map<string, number>] => [
+      currency,
+      committedByInvoice(engine.ledger, currency, except),
+    ]),
+  );
+  const balances: Balance[] = await getBalances(engine.client);
   return currencies.map((currency: string): RunCash => {
     const own: PayRow[] = pay.filter((row: PayRow): boolean => row.currency === currency);
     const payMinor: number = own.reduce((sum: number, row: PayRow): number => sum + row.amountMinor, 0);
@@ -402,10 +411,9 @@ async function cashCheck(engine: Engine, rows: CheckedRow[], runId: number | nul
     const availableMinor: number | null =
       balances.find((balance: Balance): boolean => balance.currency === currency)?.availableMinor ??
       null;
-    const committed: number = committedMinor(
-      engine.ledger,
-      currency,
-      runId === null ? {} : { runId },
+    const committed: number = committedAcross(
+      before.get(currency) ?? new Map<string, number>(),
+      committedByInvoice(engine.ledger, currency, except),
     );
     const afterMinor: number | null =
       availableMinor === null ? null : availableMinor - committed - payMinor - feeMinor;

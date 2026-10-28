@@ -597,8 +597,9 @@ function expectsWork() {
   if ((state.runs ?? []).some((entry) => entry.busy === true || entry.watching === true)) {
     return true;
   }
-  // The server's first balance read shows up as soon as it lands.
-  if (state.cash?.airwallex.refreshing === true && state.cash.airwallex.readAt === null) {
+  // A balance read under way shows up as soon as it lands, so an old read is not
+  // left on screen for a whole idle poll.
+  if (state.cash?.airwallex.refreshing === true) {
     return true;
   }
   // A payment with the bank can change at any moment, by webhook or status check.
@@ -3313,7 +3314,9 @@ function cashFreshness(cash) {
       ? airwallex.refreshing
         ? "Reading balances from Airwallex."
         : "Airwallex balances not read yet."
-      : `Airwallex balances read ${since(airwallex.readAt, cash.generatedAt)}, kept for up to ${airwallex.maxAgeSeconds} s.`;
+      : airwallex.refreshing
+        ? `Airwallex balances read ${since(airwallex.readAt, cash.generatedAt)}, reading them again now.`
+        : `Airwallex balances read ${since(airwallex.readAt, cash.generatedAt)}, read again at most every ${airwallex.maxAgeSeconds} s while this page is open.`;
   const checked = since(cash.ledger.statesCheckedAt, cash.generatedAt);
   return `${read} ${checked === null ? "Payment states not checked yet." : `Payment states checked ${checked}.`}`;
 }
@@ -3599,7 +3602,7 @@ function buildCurrency(currency, cash) {
             { class: "cash-note" },
             `${feesUnknown} failed ${feesUnknown === 1 ? "transfer has" : "transfers have"} no fee recorded yet.`,
           ),
-        h("p", { class: "cash-note" }, "The sandbox keeps the fee when a transfer fails."),
+        feesKnown > 0 && h("p", { class: "cash-note" }, "The sandbox keeps the fee when a transfer fails."),
       ),
     ),
   );
@@ -3623,7 +3626,7 @@ function renderCashAges(cash) {
       ? airwallex.refreshing
         ? "reading now"
         : "not read yet"
-      : `read ${since(airwallex.readAt, cash.generatedAt)}`;
+      : `read ${since(airwallex.readAt, cash.generatedAt)}${airwallex.refreshing ? ", reading again now" : ""}`;
   const checked = since(cash.ledger.statesCheckedAt, cash.generatedAt);
   const ledger = checked === null ? "as of now" : `as of now, payment states checked ${checked}`;
   for (const node of els.cashCurrencies.querySelectorAll("[data-cash-age]")) {

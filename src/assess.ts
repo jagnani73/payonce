@@ -8,6 +8,11 @@ export interface Fee {
   currency: string;
 }
 
+export interface Debit {
+  minor: number;
+  currency: string;
+}
+
 const IN_FLIGHT_STATUSES: ReadonlySet<string> = new Set<string>([
   "SCHEDULED",
   "PROCESSING",
@@ -57,6 +62,19 @@ export function feeOf(transfer: Transfer): Fee | null {
   }
   const minor: number | null = readMinor(transfer.fee_amount);
   return minor === null ? null : { minor, currency };
+}
+
+// What a transfer took from the wallet, before its fee: the source amount in the
+// source currency when it was paid from another currency, and otherwise the
+// transfer amount. Null when that cannot be read.
+export function debitOf(transfer: Transfer): Debit | null {
+  const source: string | undefined = transfer.source_currency;
+  if (source !== undefined && source !== transfer.transfer_currency) {
+    const minor: number | null = readMinor(transfer.source_amount);
+    return minor === null ? null : { minor, currency: source };
+  }
+  const minor: number | null = readMinor(transfer.transfer_amount);
+  return minor === null ? null : { minor, currency: transfer.transfer_currency };
 }
 
 // The bank details as one string, the same whatever order Airwallex sends the
