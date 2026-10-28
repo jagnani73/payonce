@@ -2,8 +2,9 @@ import { describeRate, markupOf, type ApprovalTerms, type DuplicateEvidence } fr
 import { arrivalAdvice, type ArrivalAdvice } from "./arrival.js";
 import { describePolicy, policyFromEnv, type ApprovalPolicy } from "./approvers.js";
 import { approvePayment, pendingApproval, type PendingApproval } from "./engine.js";
-import { Ledger, LEDGER_PATH, signersOf, type Approval } from "./ledger.js";
+import { Ledger, LEDGER_PATH, signersOf, type Approval, type Obligation, type Outage } from "./ledger.js";
 import { formatMoney } from "./money.js";
+import { railOf } from "./outages.js";
 
 function describeDuplicate(duplicate: DuplicateEvidence): string {
   const paid: string = duplicate.paidBy === null ? "" : `, paid by ${duplicate.paidBy}`;
@@ -91,6 +92,14 @@ function main(): void {
   }
 
   show(pending);
+  const obligation: Obligation | undefined = ledger.obligation(invoiceId);
+  const outage: Outage | undefined =
+    obligation === undefined ? undefined : ledger.activeOutage(obligation.currency, obligation.transferMethod);
+  if (outage !== undefined) {
+    console.log(
+      `  outage   Outage ${outage.id} on ${railOf(outage)} is active. An approval given now is kept until a person ends it and still expires when it would`,
+    );
+  }
   console.log(describePolicy(policy));
   if (approver === undefined) {
     console.log(`To approve these terms: pnpm approve ${invoiceId} ${pending.approval.id} <NAME>`);

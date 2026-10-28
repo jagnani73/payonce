@@ -71,7 +71,16 @@ const EVENT_KINDS = {
   closed: "Closed",
   error: "Error",
   outbox: "Message draft",
+  outage: "Outage",
 };
+
+const OUTAGE_STATES = {
+  active: { label: "Active", tone: "failed" },
+  ended: { label: "Ended", tone: "neutral" },
+};
+
+// How long an ended outage stays on the page.
+const OUTAGE_ENDED_SHOWN_MS = 24 * 60 * 60 * 1000;
 
 const AUDIENCES = {
   supplier: "Supplier",
@@ -138,6 +147,7 @@ const els = {
   payAgainResult: byId("pay-again-result"),
   emails: byId("emails"),
   findings: byId("findings"),
+  outages: byId("outages"),
   cashFresh: byId("cash-fresh"),
   cashProblem: byId("cash-problem"),
   cashCurrencies: byId("cash-currencies"),
@@ -213,6 +223,13 @@ const state = {
   // The cash panel as /api/cash last returned it, kept when a later load fails.
   cash: null,
   cashError: null,
+  // Outages as /api/outages last returned them, the outage being ended, what that
+  // came back with, and the names and notes typed on each end form.
+  outages: null,
+  outagesError: null,
+  outageEnding: null,
+  outageError: null,
+  outageDrafts: new Map(),
   // Pay runs: the list, the run on screen, and what the last action on one came back with.
   runs: null,
   runsError: null,
@@ -553,6 +570,19 @@ async function loadCash() {
   }
 }
 
+async function loadOutages() {
+  try {
+    const report = await api("/api/outages");
+    if (!Array.isArray(report.active) || !Array.isArray(report.recent)) {
+      throw new Error("The server sent outages this page could not read.");
+    }
+    state.outages = report;
+    state.outagesError = null;
+  } catch (error) {
+    state.outagesError = `Could not refresh the outages. ${error.message}`;
+  }
+}
+
 async function loadRuns() {
   try {
     const data = await api("/api/runs");
@@ -718,7 +748,15 @@ function refresh() {
   refreshing = (async () => {
     do {
       refreshAgain = false;
-      await Promise.all([loadOptions(), loadList(), loadRuns(), loadInbox(), loadDetail(), loadCash()]);
+      await Promise.all([
+        loadOptions(),
+        loadList(),
+        loadRuns(),
+        loadInbox(),
+        loadDetail(),
+        loadCash(),
+        loadOutages(),
+      ]);
       if (state.selectedId === null && (state.incidents ?? []).length > 0) {
         setSelected(state.incidents[0].invoiceId);
         refreshAgain = true;
@@ -1731,7 +1769,7 @@ function duplicateNode(duplicate) {
   );
 }
 
-function buildApproval(invoiceId, approval) {
+function buildApproval(invoiceId, approval, outage) {
   const terms = approval.terms ?? {};
   const evidence = terms.evidence ?? {};
   const requested = approval.state === "requested";
@@ -1797,6 +1835,7 @@ function buildApproval(invoiceId, approval) {
       badge(expired ? EXPIRED_REQUEST : APPROVAL_STATES[approval.state], approval.state, false),
     ),
     h("p", { class: "approval__lead" }, approvalLead(approval)),
+    ...[outageNote(approval, outage)].filter((note) => note !== null),
     h(
       "dl",
       { class: "terms" },
@@ -2023,19 +2062,35 @@ function syncApprovalControls() {
 function renderApproval(detail) {
   const invoiceId = detail.obligation.invoiceId;
   const approval = detail.approval ?? null;
+  const outage = detail.outage ?? null;
   // Who may approve comes with the options, which can arrive after the incident.
   const policy =
     state.options === null ? null : [state.options.approvers, state.options.approvalProblem];
-  if (changed("approval", [invoiceId, approval, policy])) {
+  if (changed("approval", [invoiceId, approval, policy, outage?.id ?? null])) {
     if (approval === null) {
       approvalRefs = null;
       els.approval.hidden = true;
       els.approval.replaceChildren();
     } else {
-      buildApproval(invoiceId, approval);
+      buildApproval(invoiceId, approval, outage);
     }
   }
   syncApprovalControls();
+}
+
+// Said on a request or an approval while an outage is active on the rail the
+// payment would go out on.
+function outageNote(approval, outage) {
+  if (outage === null || (approval.state !== "requested" && approval.state !== "approved")) {
+    return null;
+  }
+  const until = parseDate(approval.expiresAt);
+  const counts = until === null ? "" : ` and counts until ${minuteFormat.format(until)}`;
+  return caution(
+    approval.state === "approved"
+      ? `Outage ${outage.id} on ${outage.rail} is active, so this approved payment waits until a person ends it. The approval is kept${counts}.`
+      : `Outage ${outage.id} on ${outage.rail} is active. An approval given now waits until a person ends it. It is kept until then${counts}.`,
+  );
 }
 
 async function submitApproval(invoiceId) {
@@ -4654,6 +4709,7 @@ function cashCounts(currency) {
     [count(["sending"]), "being sent"],
     [count(["approved"]), "approved"],
     [count(WAITING_KINDS), "waiting"],
+    [count(["waiting-outage"]), "waiting on an outage"],
     [count(["with-bank"]), "with the bank"],
     [count(["outside"]), "sent outside PayOnce"],
   ]
@@ -4672,7 +4728,7 @@ function cashOpen(currency) {
   }
   const below = (minor) => typeof minor === "number" && minor < 0;
   return (
-    cashLinesOf(currency, ["sending", "approved", "pay-run", ...WAITING_KINDS]).length > 0 ||
+    cashLinesOf(currency, ["sending", "approved", "pay-run", "waiting-outage", ...WAITING_KINDS]).length > 0 ||
     below(currency.headroomMinor) ||
     below(currency.headroomIfApprovedMinor)
   );
@@ -4755,6 +4811,7 @@ function buildCurrency(currency, cash) {
       : moneyRow(currency, "Approved pay runs not sent yet", ["pay-run"], true),
     cashRow("= Headroom", null, cashAmount(currency.headroomMinor), `is-total ${headroomTone(currency.headroomMinor) ?? ""}`.trim()),
     moneyRow(currency, "Waiting on a person", WAITING_KINDS, true),
+    moneyRow(currency, "Waiting on an outage, sent once it ends", ["waiting-outage"], true),
     cashRow(
       "= Headroom if every waiting payment is approved",
       null,
@@ -4864,6 +4921,214 @@ function renderCash() {
   renderCashAges(cash);
 }
 
+// ---------- outages ----------
+
+let outageRefs = new Map();
+
+function recentlyEnded(view, now) {
+  const ended = parseDate(view.endedAt);
+  return ended !== null && now - ended.getTime() < OUTAGE_ENDED_SHOWN_MS;
+}
+
+function outageLink(invoiceId, runId) {
+  return invoiceId !== null && invoiceId !== undefined
+    ? h("a", { href: `#${encodeURIComponent(invoiceId)}` }, invoiceId)
+    : h("a", { href: `#run/${runId}` }, `pay run ${runId}`);
+}
+
+function listNodes(items, build) {
+  return items.flatMap((item, index) => (index === 0 ? [build(item)] : [", ", build(item)]));
+}
+
+// The form a person ends an outage with: a name from the approver list, or any
+// name when no list is set, and a note.
+function buildEndForm(view, enders) {
+  const draft = state.outageDrafts.get(view.id) ?? {};
+  const remember = () => {
+    state.outageDrafts.set(view.id, { name: name.value, note: note.value });
+    if (state.outageError !== null) {
+      state.outageError = null;
+      syncOutages();
+    }
+  };
+  const name =
+    enders === null
+      ? h("input", { type: "text", id: `outage-${view.id}-name`, autocomplete: "name", maxlength: "80" })
+      : h(
+          "select",
+          { id: `outage-${view.id}-name` },
+          h("option", { value: "" }, "Choose your name"),
+          enders.map((ender) => h("option", { value: ender }, ender)),
+        );
+  name.value =
+    enders === null
+      ? (draft.name ?? readStoredName())
+      : (enders.find((ender) => sameName(ender, draft.name ?? readStoredName())) ?? "");
+  name.addEventListener(enders === null ? "input" : "change", remember);
+  const note = h("input", { type: "text", id: `outage-${view.id}-note`, autocomplete: "off", maxlength: "200" });
+  note.value = draft.note ?? "";
+  note.addEventListener("input", remember);
+  const label = `End outage on ${view.rail}`;
+  const button = h("button", { class: "button button--primary", type: "submit" }, label);
+  const error = h("p", { class: "form-error", role: "alert", hidden: true });
+  const form = h(
+    "form",
+    { class: "close-form", novalidate: true },
+    h("label", { class: "field" }, h("span", { class: "field__label" }, "Your name"), name),
+    h("label", { class: "field" }, h("span", { class: "field__label" }, "Why it is over"), note),
+    button,
+    error,
+    h(
+      "p",
+      { class: "hint" },
+      enders === null
+        ? "No approver list is set, so any named person may end it. Nothing ends an outage by itself."
+        : "Only a name on the approver list may end it. Nothing ends an outage by itself.",
+    ),
+    h(
+      "p",
+      { class: "hint" },
+      `Ending it lets PayOnce open payments on ${view.rail} again. First payments held by it go out after the checks made before any payment, and approved payments go out if their approval still counts.`,
+    ),
+  );
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitEndOutage(view.id);
+  });
+  outageRefs.set(view.id, { name, note, button, error, label });
+  return form;
+}
+
+function buildOutage(view, enders) {
+  const codes = (Array.isArray(view.codes) ? view.codes : [])
+    .map((entry) => `${entry.code} (${entry.label})`)
+    .join(", ");
+  const counted = Array.isArray(view.counted) ? view.counted : [];
+  const held = (Array.isArray(view.held) ? view.held : []).filter((item) => item.what !== "counted");
+  const active = view.state === "active";
+  const ended = parseDate(view.endedAt);
+  return h(
+    "div",
+    { class: "outage" },
+    h(
+      "div",
+      { class: "approval__head" },
+      h("h3", { class: "outage__title" }, `Outage ${view.id} on ${view.rail}`),
+      badge(OUTAGE_STATES[view.state], view.state, false),
+    ),
+    h("p", { class: "outage__text" }, withPeriod(view.text)),
+    h(
+      "dl",
+      { class: "facts approval__status" },
+      h("dt", null, "Failure codes"),
+      h("dd", null, codes),
+      h("dt", null, "Payouts counted"),
+      h(
+        "dd",
+        null,
+        listNodes(counted, (payout) =>
+          payout.invoiceId === null
+            ? payout.reference
+            : h("span", null, `${payout.reference} (`, outageLink(payout.invoiceId, null), ")"),
+        ),
+      ),
+      held.length > 0 && [
+        h("dt", null, "Holds"),
+        h("dd", null, listNodes(held, (item) => outageLink(item.invoiceId, item.runId))),
+      ],
+      !active && [
+        h("dt", null, "Ended"),
+        h(
+          "dd",
+          null,
+          `By ${view.endedBy ?? ""}`,
+          ended !== null && [" at ", timeNode(view.endedAt)],
+          `: ${view.endNote ?? ""}`,
+        ),
+      ],
+    ),
+    active && buildEndForm(view, enders),
+  );
+}
+
+// Active outages, and those ended in the last day, above the cash panel. The
+// board reads the same GET /api/outages.
+function renderOutages() {
+  const report = state.outages;
+  const now = Date.now();
+  const shown =
+    report === null
+      ? []
+      : [...report.active, ...report.recent.filter((view) => recentlyEnded(view, now))];
+  const enders = report === null || !Array.isArray(report.enders) ? null : report.enders;
+  if (changed("outages", [shown, enders])) {
+    const focus = focusedControl(els.outages);
+    outageRefs = new Map();
+    els.outages.replaceChildren(
+      h("h2", { id: "outages-title" }, "Outages"),
+      ...shown.map((view) => buildOutage(view, enders)),
+    );
+    els.outages.hidden = shown.length === 0;
+    restoreFocus(focus);
+  }
+  syncOutages();
+}
+
+function syncOutages() {
+  if (liveMessage("outages", state.outageError?.error ?? null) === null) {
+    state.outageError = null;
+  }
+  for (const [id, refs] of outageRefs) {
+    const busy = state.outageEnding === id;
+    refs.button.disabled = state.outageEnding !== null;
+    refs.name.disabled = busy;
+    refs.note.readOnly = busy;
+    setText(refs.button, busy ? "Ending" : refs.label);
+    showMessage(refs.error, state.outageError?.id === id ? state.outageError.error.message : null);
+  }
+}
+
+async function submitEndOutage(id) {
+  const refs = outageRefs.get(id);
+  if (state.outageEnding !== null || refs === undefined) {
+    return;
+  }
+  const endedBy = refs.name.value.trim();
+  const note = refs.note.value.trim();
+  const missing =
+    endedBy === ""
+      ? { field: refs.name, message: "Enter your name to end the outage." }
+      : note === ""
+        ? { field: refs.note, message: "Say why the outage is over." }
+        : null;
+  if (missing !== null) {
+    state.outageError = { id, error: actionError("outages", missing.message) };
+    syncOutages();
+    missing.field.focus();
+    return;
+  }
+  state.outageEnding = id;
+  state.outageError = null;
+  syncOutages();
+  let failure = null;
+  try {
+    await api(`/api/outages/${id}/end`, { method: "POST", body: { endedBy, note } });
+    state.outageDrafts.delete(id);
+    state.fastUntil = Date.now() + EXPECT_WORK_MS;
+  } catch (error) {
+    failure = error.message;
+  }
+  try {
+    await refresh();
+  } finally {
+    state.outageEnding = null;
+    if (failure !== null) {
+      state.outageError = { id, error: actionError("outages", failure) };
+    }
+    syncOutages();
+  }
+}
+
 function render() {
   renderForm();
   renderRunForm();
@@ -4871,6 +5136,7 @@ function render() {
   renderRunList();
   renderEmailForm();
   renderInboxList();
+  renderOutages();
   renderCash();
   renderMain();
 }

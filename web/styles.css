@@ -659,6 +659,38 @@ input:read-only {
   color: var(--amber);
 }
 
+/* Outages */
+
+.outages {
+  margin-bottom: 20px;
+  border-color: var(--amber-line);
+}
+
+.outage + .outage {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.outage__title {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.outage__text {
+  font-size: 14.5px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.outage .facts dd {
+  overflow-wrap: anywhere;
+}
+
+.outage .facts a {
+  color: var(--accent);
+}
+
 /* Cash */
 
 .cash {
@@ -984,6 +1016,7 @@ input:read-only {
 
 .event--decision .event__body,
 .event--warning .event__body,
+.event--outage .event__body,
 .event--error .event__body,
 .event--lock .event__body {
   padding: 8px 14px 10px;
@@ -1008,19 +1041,22 @@ input:read-only {
   line-height: 1.4;
 }
 
-.event--warning .event__marker {
+.event--warning .event__marker,
+.event--outage .event__marker {
   border-color: var(--amber-line);
   background: var(--amber-soft);
   color: var(--amber);
 }
 
-.event--warning .event__body {
+.event--warning .event__body,
+.event--outage .event__body {
   border-color: var(--amber-line);
   border-left-color: var(--amber);
   background: var(--amber-soft);
 }
 
-.event--warning .event__kind {
+.event--warning .event__kind,
+.event--outage .event__kind {
   color: var(--amber);
 }
 

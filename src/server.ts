@@ -85,6 +85,16 @@ import {
   type Engine,
   type PayAgainResult,
 } from "./engine.js";
+import {
+  describeOutageRule,
+  endOutage,
+  EndRefusedError,
+  outageEnders,
+  outageRuleFromEnv,
+  outagesReport,
+  outageView,
+  type EndedOutage,
+} from "./outages.js";
 import { recordMissingFees } from "./payments.js";
 import { readerFromEnv } from "./reader.js";
 import { describeFloors, reserveFromEnv } from "./reserve.js";
@@ -106,6 +116,7 @@ import {
   type DraftMove,
   type LedgerEvent,
   type Obligation,
+  type Outage,
   type OutsidePayout,
   type Run,
   type RunApproval,
@@ -597,9 +608,12 @@ function incidentDetail(invoiceId: string): unknown {
   const row: RunRow | undefined = engine.ledger.runRowOf(invoiceId);
   const terms: ApprovalTerms | undefined =
     approval === undefined ? undefined : (JSON.parse(approval.terms) as ApprovalTerms);
+  const outage: Outage | undefined = engine.ledger.activeOutage(obligation.currency, obligation.transferMethod);
   return {
     obligation,
     run: row === undefined ? null : { id: row.runId, line: row.line },
+    // The active outage on the rail this invoice pays on, or null.
+    outage: outage === undefined ? null : outageView(engine.ledger, outage),
     attempts: engine.ledger.attempts(invoiceId),
     emails: engine.ledger.emails(invoiceId).map((email: SupplierEmail) =>
       email.uploadId === undefined
@@ -884,6 +898,51 @@ function recentAlerts(): unknown {
       sentAt: alert.sentAt,
     })),
   };
+}
+
+// A person ends an outage with their name and a note. It runs in no invoice's
+// turn: it changes the outage and the looks of what it held, and moves no money.
+// The held invoices are then looked at, and the held runs released, at once. A
+// released pay run row that has not sent is left to the watcher, which gives it
+// the run's turn.
+async function endOutageByPerson(request: IncomingMessage, raw: string): Promise<unknown> {
+  if (!RUN_ID_PATTERN.test(raw)) {
+    throw new HttpError(404, `Outage ${raw.slice(0, 20)} is not in the ledger`);
+  }
+  const body: Record<string, unknown> = await readJson(request);
+  let ended: EndedOutage;
+  try {
+    ended = endOutage(engine.ledger, engine.approvals, Number(raw), text(body, "endedBy"), text(body, "note"));
+  } catch (error: unknown) {
+    if (!(error instanceof EndRefusedError)) {
+      throw error;
+    }
+    const status: number = { input: 400, approver: 403, unknown: 404, ended: 409 }[error.why];
+    throw new HttpError(
+      status,
+      error.message,
+      error.why === "ended" && error.outage !== null
+        ? { endedBy: error.outage.endedBy, endedAt: error.outage.endedAt }
+        : {},
+    );
+  }
+  const unsent: ReadonlySet<string> = new Set<string>(
+    engine.ledger.unsentRunInvoices().map((row: { invoiceId: string }): string => row.invoiceId),
+  );
+  const invoices: string[] = [];
+  const runs: number[] = [];
+  for (const hold of ended.holds) {
+    if (hold.invoiceId !== null) {
+      invoices.push(hold.invoiceId);
+      if (!unsent.has(hold.invoiceId)) {
+        agent.wake(hold.invoiceId);
+      }
+    } else if (hold.runId !== null) {
+      runs.push(hold.runId);
+      startRelease(hold.runId);
+    }
+  }
+  return { ok: true, invoices, runs };
 }
 
 // Has the agent look at an incident again. It cannot send a second live payment,
@@ -1372,9 +1431,21 @@ async function route(
         label: scenario.label,
       })),
       alerts: alertsStatus(),
+      // Who may end an outage: these names, or anyone with a name when null.
+      outageEnders: outageEnders(engine.approvals),
     });
   } else if (method === "GET" && pathname === "/api/alerts") {
     sendJson(response, 200, recentAlerts());
+  } else if (method === "GET" && pathname === "/api/outages") {
+    sendJson(response, 200, outagesReport(engine.ledger, engine.approvals));
+  } else if (
+    method === "POST" &&
+    parts[1] === "outages" &&
+    parts[2] !== undefined &&
+    parts[3] === "end" &&
+    parts.length === 4
+  ) {
+    sendJson(response, 200, await endOutageByPerson(request, parts[2]));
   } else if (method === "GET" && pathname === "/api/cash") {
     sendJson(response, 200, cash());
   } else if (method === "GET" && pathname === "/api/inbox") {
@@ -1544,6 +1615,7 @@ server.listen(PORT, HOST, (): void => {
   console.log(describePolicy(engine.approvals));
   console.log(describeFloors(engine.reserve));
   console.log(describeQuotes());
+  console.log(describeOutageRule(outageRuleFromEnv()));
   console.log(describeAlerts(alertSetting));
   // The first page load then has balances to show.
   balances.refreshIfOld();

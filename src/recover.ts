@@ -5,6 +5,7 @@ import { Dispatcher } from "./dispatcher.js";
 import { noteError, type Engine } from "./engine.js";
 import { describeQuotes } from "./fx.js";
 import { Ledger, LEDGER_PATH, type Obligation, type RunRow } from "./ledger.js";
+import { describeOutageRule, outageRuleFromEnv } from "./outages.js";
 import { readerFromEnv } from "./reader.js";
 import { describeFloors, reserveFromEnv } from "./reserve.js";
 import { SandboxBank } from "./sandbox-bank.js";
@@ -41,6 +42,7 @@ async function main(): Promise<void> {
   };
   console.log(describeFloors(engine.reserve));
   console.log(describeQuotes());
+  console.log(describeOutageRule(outageRuleFromEnv()));
   const agent: Dispatcher = new Dispatcher(engine);
   const watcher: Watcher = new Watcher(engine, agent, CHECK_EVERY_MS);
   const invoiceId: string = process.argv[3] ?? newInvoiceId(ledger);
