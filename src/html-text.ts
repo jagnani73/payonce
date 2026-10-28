@@ -298,6 +298,9 @@ export function htmlToText(html: string): HtmlText {
   let preDepth: number = 0;
   // How deep in <svg> or <math> the scan is.
   let foreign: number = 0;
+  // Where the last style or script read inside <svg> or <math> ends. One that
+  // opens before it is nested in it.
+  let covered: number = 0;
   const text = (chunk: string): void => {
     if (chunk === "") {
       return;
@@ -372,6 +375,14 @@ export function htmlToText(html: string): HtmlText {
       styles.unreadable = true;
     }
     if (DROPPED.has(name)) {
+      // Inside <svg> or <math>, a style or script that opens inside one already
+      // read is nested in it, and a client reads each as a sheet of its own.
+      // PayOnce does not follow that, so the email is partly unread, and no
+      // content is read twice.
+      if (foreign > 0 && index < covered) {
+        styles.unreadable = true;
+        continue;
+      }
       // With no closing tag the content is read as text, which shows more.
       const close: Span | null = closeOf(html, index, name, missing);
       if (close !== null) {
@@ -389,6 +400,8 @@ export function htmlToText(html: string): HtmlText {
         // goes on through their content as body text too.
         if (foreign === 0) {
           index = close.end;
+        } else {
+          covered = close.end;
         }
       }
       continue;
