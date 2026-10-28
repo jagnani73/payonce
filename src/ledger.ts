@@ -1224,6 +1224,11 @@ export class Ledger {
     );
   }
 
+  // False for a file opened read-only from before pay runs, which has no runs table.
+  hasRunTable(): boolean {
+    return (this.db.prepare("PRAGMA table_info(runs)").all() as unknown as ColumnRow[]).length > 0;
+  }
+
   // True when the file has a run_events table with any line in it.
   hasRunLines(): boolean {
     const table: boolean =
