@@ -303,16 +303,17 @@ function pickUpInterrupted(): void {
     ) {
       continue;
     }
-    const latest: Approval | undefined = engine.ledger.latestApproval(obligation.invoiceId);
-    const released: boolean =
-      obligation.runRowId !== null ||
-      (latest?.state === "used" && (JSON.parse(latest.terms) as ApprovalTerms).action === "pay");
     for (const attempt of engine.ledger.attempts(obligation.invoiceId)) {
-      if (
-        (attempt.kind === "replacement" || released) &&
-        attempt.state === "in_flight" &&
-        attempt.transferId !== null
-      ) {
+      if (attempt.state !== "in_flight" || attempt.transferId === null) {
+        continue;
+      }
+      // The approval this attempt was opened on, so a request opened since does
+      // not decide it.
+      const approval: Approval | undefined = engine.ledger.approvalOf(attempt);
+      const released: boolean =
+        obligation.runRowId !== null ||
+        (approval?.state === "used" && (JSON.parse(approval.terms) as ApprovalTerms).action === "pay");
+      if (attempt.kind === "replacement" || released) {
         bank.sent(obligation.invoiceId, attempt.kind, attempt.transferId);
       }
     }
