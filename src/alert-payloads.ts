@@ -414,7 +414,9 @@ function capFor(item: AlertField): number {
 
 // An incoming webhook message: text is the notification and holds only the
 // title, and the blocks are the message. Incoming webhooks cannot set the
-// channel, name or icon.
+// channel, name or icon. Every mrkdwn object is verbatim, so Slack links no bare
+// URL, domain or channel name and parses no mention; the <url|text> link to the
+// local page still works.
 export function slackPayload(message: AlertMessage): unknown {
   return {
     text: capped(oneLine(message.title), SLACK_HEADER_MAX, slackChar),
@@ -428,6 +430,7 @@ export function slackPayload(message: AlertMessage): unknown {
         text: {
           type: "mrkdwn",
           text: message.line.map((part: AlertText): string => slackSpan(part, MAX_SUPPLIER)).join(" "),
+          verbatim: true,
         },
       },
       {
@@ -435,6 +438,7 @@ export function slackPayload(message: AlertMessage): unknown {
         fields: message.fields.slice(0, SLACK_FIELDS_MAX).map((item: AlertField) => ({
           type: "mrkdwn",
           text: `*${slackText(item.name)}*\n${slackSpan(item.value, capFor(item))}`,
+          verbatim: true,
         })),
       },
       {
@@ -443,6 +447,7 @@ export function slackPayload(message: AlertMessage): unknown {
           {
             type: "mrkdwn",
             text: `<${message.link}|${slackText(message.linkText)}> on the machine running it. ${FOOTNOTE}`,
+            verbatim: true,
           },
         ],
       },
