@@ -217,7 +217,8 @@ export type Topic =
   | "cost"
   | "bank-details"
   | "floor"
-  | "second-bill";
+  | "second-bill"
+  | "retry";
 
 // True when the timeline's last word on a topic is this message and nothing has
 // happened since. A pay run's timeline uses it too.
@@ -1208,6 +1209,22 @@ function holdForOutsidePayout(engine: Engine, invoiceId: string): NextLook {
     "waiting",
   );
   return null;
+}
+
+// A pending attempt is not sent again while a payout for the invoice sent outside
+// PayOnce is live. It stays pending under its request id, which keeps the
+// duplicate lock, so PayOnce opens no other payment for the invoice either. It is
+// tried again on a look after that payout has failed.
+function holdRetryForOutsidePayout(engine: Engine, invoiceId: string, attempt: Attempt): NextLook {
+  engine.ledger.escalate(invoiceId, OUTSIDE_PAYOUT_REASON);
+  note(
+    engine.ledger,
+    invoiceId,
+    "warning",
+    `${capitalise(attempt.kind)} payment not sent again: a payout for this invoice was sent outside PayOnce and may already pay it. The ${attempt.kind} stays open under its request id, and a later look sends it only if that payout fails`,
+    "retry",
+  );
+  return holdForOutsidePayout(engine, invoiceId);
 }
 
 // When a request opened now on this quote stops covering a payment: its TTL, or
@@ -2533,6 +2550,15 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
       checkRate(engine, obligation, attempt, transfer);
       engine.bank?.sent(invoiceId, attempt.kind, transfer.id);
     } else if (attempt.transferId === null) {
+      // A payout sent outside PayOnce since the attempt was opened, for example in
+      // the Airwallex web app while its create call went unanswered, may already
+      // pay the invoice, so the attempt is not sent again while one is live.
+      if (
+        (await linkUnseenPayouts(engine, invoiceId)) ||
+        anyLive(await syncOutsidePayouts(engine, invoiceId))
+      ) {
+        return holdRetryForOutsidePayout(engine, invoiceId, attempt);
+      }
       const paying: Obligation = obligation;
       const sent: Transfer | null = await withCurrencyLock(
         engine.ledger,
