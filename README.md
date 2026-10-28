@@ -81,7 +81,7 @@ A person then either pays the held invoice or closes it without paying. Paying i
 
 Payouts sent outside PayOnce get the same check. A payout whose reference nearly matches an invoice number, to the same supplier for the same amount, is tied to that invoice as if its reference were the number itself. The check before every payment does this too, so a payout made in the Airwallex web app under a near-identical number holds the invoice. A failed payout that only nearly matches an invoice already closed may be a bill of its own, so it becomes an incident, with a warning that names the closed invoice.
 
-If Airwallex refuses an invoice's payment outright, the invoice is held the same way. A person approves paying it again or closes it without paying. PayOnce never replaces a payment by itself when it looks like a second bill for an invoice that is already paid.
+If Airwallex refuses an invoice's payment outright, the invoice is held the same way. A person approves paying it again or closes it without paying. PayOnce never replaces a payment by itself when it looks like a second bill for an invoice that is already paid. When a replacement goes to a person for any reason, its approval request names that paid invoice too, so nobody approves it without seeing the match.
 
 The invoice number on the start form is optional. An invoice number already in the ledger is refused.
 
