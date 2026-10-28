@@ -98,34 +98,35 @@ export class Watcher {
     const now: number = Date.now();
     let readFailed: boolean = false;
     const due: ReadonlySet<string> = new Set<string>(this.engine.ledger.dueLooks(now));
-    // Released rows that have not sent their first payment. Only the release, or
-    // this check in the server once the release has stopped, sends them.
-    const unsent: Map<string, number> = new Map(
-      this.engine.ledger
-        .unsentRunInvoices()
-        .map((row: { invoiceId: string; runId: number }): [string, number] => [row.invoiceId, row.runId]),
-    );
-    const runsWoken: Set<number> = new Set<number>();
-    for (const obligation of this.engine.ledger.obligations()) {
-      const invoiceId: string = obligation.invoiceId;
-      if (
-        obligation.state === "settled" ||
-        obligation.state === "rejected" ||
-        this.agent.isBusy(invoiceId)
-      ) {
-        continue;
-      }
-      const runId: number | undefined = unsent.get(invoiceId);
-      if (runId !== undefined) {
+    // Released rows that have not sent their first payment, in file order. Only
+    // the release, or this check in the server once the release has stopped,
+    // sends them: each check wakes the first due row of each run, with its turn.
+    const unsent: { invoiceId: string; runId: number }[] = this.engine.ledger.unsentRunInvoices();
+    if (this.release !== null) {
+      const runsWoken: Set<number> = new Set<number>();
+      for (const { invoiceId, runId } of unsent) {
         if (
-          this.release !== null &&
           due.has(invoiceId) &&
           !runsWoken.has(runId) &&
+          !this.agent.isBusy(invoiceId) &&
           !this.agent.isBusy(runKey(runId))
         ) {
           runsWoken.add(runId);
           this.agent.wake(invoiceId, true);
         }
+      }
+    }
+    const unsentIds: ReadonlySet<string> = new Set<string>(
+      unsent.map((row: { invoiceId: string; runId: number }): string => row.invoiceId),
+    );
+    for (const obligation of this.engine.ledger.obligations()) {
+      const invoiceId: string = obligation.invoiceId;
+      if (
+        obligation.state === "settled" ||
+        obligation.state === "rejected" ||
+        unsentIds.has(invoiceId) ||
+        this.agent.isBusy(invoiceId)
+      ) {
         continue;
       }
       // An approval nobody has acted on yet, or a request that expired with no
