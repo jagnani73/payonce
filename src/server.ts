@@ -52,6 +52,7 @@ import { CurrencyBusyError } from "./currency-lock.js";
 import { Dispatcher } from "./dispatcher.js";
 import {
   createDraft,
+  DraftMoveError,
   DraftNotFitError,
   isTemplate,
   markDraft,
@@ -901,7 +902,9 @@ const DRAFT_MOVES: Record<string, DraftMove> = {
   dismiss: "dismissed",
 };
 
-// A person's step on a draft waits its turn on the invoice like any other.
+// A person's step on a draft waits its turn on the invoice like any other. The
+// known refusals answer 409 or 422. Anything else is PayOnce's own failure and
+// answers 500.
 async function inOutboxTurn<T>(invoiceId: string, step: () => T): Promise<T> {
   try {
     return await agent.run(invoiceId, step);
@@ -912,7 +915,10 @@ async function inOutboxTurn<T>(invoiceId: string, step: () => T): Promise<T> {
     if (error instanceof DraftNotFitError) {
       throw new HttpError(422, error.message);
     }
-    throw new HttpError(409, error instanceof Error ? error.message : String(error));
+    if (error instanceof DraftMoveError) {
+      throw new HttpError(409, error.message);
+    }
+    throw error;
   }
 }
 
