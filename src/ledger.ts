@@ -3564,10 +3564,11 @@ export class Ledger {
   // transaction, so two processes on the file queue each alert once, and writes
   // only the rows that changed. A new condition, a changed one, or one back after
   // more than clearAfterMs queues an alert. A change to a fingerprint whose alert was skipped in this episode
-  // queues that alert again. When both alert tables are empty, as when alerts are
-  // first turned on, the conditions standing are recorded without an alert each,
-  // and only the summary is queued. A stored condition whose key starts with one
-  // of unknownPrefixes is not cleared, because the evaluation could not look.
+  // queues that alert again. On the first evaluation after alerts are turned on,
+  // the conditions standing are recorded without an alert each, and only the
+  // summary is queued, and only when any condition stands. A stored condition
+  // whose key starts with one of unknownPrefixes is not cleared, because the
+  // evaluation could not look.
   recordConditions(
     found: FoundCondition[],
     summary: FoundCondition,
@@ -3626,15 +3627,17 @@ export class Ledger {
           )
           .run(condition.key, condition.fingerprint, at);
       };
-      const empty: boolean =
-        this.db.prepare("SELECT 1 FROM alert_conditions LIMIT 1").get() === undefined &&
-        this.db.prepare("SELECT 1 FROM alerts LIMIT 1").get() === undefined;
-      if (empty) {
+      if (this.firstAlertCheck()) {
         conditions.forEach(insert);
         this.db
           .prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('alerts_started_at', ?)")
           .run(at);
-        return { first: true, queued: queue(summary, 1), standing: conditions.length };
+        // A summary of nothing would only say that nothing is waiting.
+        return {
+          first: true,
+          queued: conditions.length === 0 ? 0 : queue(summary, 1),
+          standing: conditions.length,
+        };
       }
       const stored: Map<string, ConditionRow> = new Map(
         (this.db.prepare("SELECT * FROM alert_conditions").all() as unknown as ConditionRow[]).map(
@@ -3685,18 +3688,28 @@ export class Ledger {
     });
   }
 
-  // True when recordConditions has something to write: both alert tables are
-  // empty, or a condition is new, changed, back or gone. It only reads, so a
+  // The first evaluation since alerts were turned on: both alert tables are empty
+  // and no evaluation has recorded when alerts started.
+  private firstAlertCheck(): boolean {
+    return (
+      this.db.prepare("SELECT 1 FROM alert_conditions LIMIT 1").get() === undefined &&
+      this.db.prepare("SELECT 1 FROM alerts LIMIT 1").get() === undefined &&
+      this.db.prepare("SELECT 1 FROM meta WHERE key = 'alerts_started_at'").get() === undefined
+    );
+  }
+
+  // True when recordConditions has something to write: it is the first
+  // evaluation, or a condition is new, changed, back or gone. It only reads, so a
   // check that finds nothing new never waits for the write lock.
   private conditionsChanged(conditions: FoundCondition[], unknownPrefixes: string[]): boolean {
+    if (this.firstAlertCheck()) {
+      return true;
+    }
     const stored: Map<string, ConditionRow> = new Map(
       (this.db.prepare("SELECT * FROM alert_conditions").all() as unknown as ConditionRow[]).map(
         (row: ConditionRow): [string, ConditionRow] => [row.alert_key, row],
       ),
     );
-    if (stored.size === 0 && this.db.prepare("SELECT 1 FROM alerts LIMIT 1").get() === undefined) {
-      return true;
-    }
     for (const condition of conditions) {
       const row: ConditionRow | undefined = stored.get(condition.key);
       if (row === undefined || row.fingerprint !== condition.fingerprint || row.cleared_at !== null) {

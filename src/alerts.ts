@@ -641,7 +641,9 @@ export class Alerts {
     );
     if (recorded.first) {
       console.log(
-        `  alert    Alerts on: ${recorded.standing} ${recorded.standing === 1 ? "condition" : "conditions"} already standing recorded without an alert each, and one summary queued`,
+        recorded.standing === 0
+          ? "  alert    Alerts on: nothing is waiting on a person, so no summary is queued"
+          : `  alert    Alerts on: ${recorded.standing} ${recorded.standing === 1 ? "condition" : "conditions"} already standing recorded without an alert each, and one summary queued`,
       );
     }
     return recorded;
