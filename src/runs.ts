@@ -33,10 +33,12 @@ import {
   NothingToPayError,
   SameFileError,
   signersOf,
+  skipRow,
   WaitingRunError,
   type BankChange,
   type CheckedRow,
   type EventKind,
+  type Lease,
   type Ledger,
   type LedgerEvent,
   type Obligation,
@@ -472,7 +474,7 @@ export async function checkRows(
     rows: checked.map(
       (row: CheckedRow): CheckedRow =>
         row.action === "pay" && row.currency !== null && short.has(row.currency)
-          ? { ...row, action: "skip", reasons: [short.get(row.currency) ?? ""], heldFor: [] }
+          ? skipRow(row, [short.get(row.currency) ?? ""])
           : row,
     ),
     cash,
@@ -658,30 +660,48 @@ function noteCheck(ledger: Ledger, runId: number, rows: CheckedRow[], cash: RunC
   );
 }
 
-// Asks the approvers to approve the run's terms under the approval policy, and
-// says what the run is waiting on. A request still open, or approved, for the
-// same terms is kept. None is opened when nothing is left to pay, or when too few
-// approvers could sign.
-export function openRunRequest(
+// A line for a run's timeline, written once the transaction that decided it has
+// committed.
+interface RunLine {
+  kind: EventKind;
+  message: string;
+  topic: string | null;
+}
+
+function writeLines(ledger: Ledger, runId: number, lines: RunLine[]): void {
+  for (const line of lines) {
+    runNote(ledger, runId, line.kind, line.message, line.topic);
+  }
+}
+
+// Settles the run's request after a check: keeps a request still open, or
+// approved, for the same terms, or opens a new one for the approvers under the
+// approval policy. None is opened when nothing is left to pay, or when too few
+// approvers could sign, and any open one is withdrawn. It only writes to the
+// ledger, so it runs inside the transaction that wrote the check's rows, and it
+// returns the timeline lines that say what the run waits on.
+function settleRunRequest(
   ledger: Ledger,
   policy: ApprovalPolicy,
   run: Run,
   rows: CheckedRow[],
   cash: RunCash[],
-): void {
+): RunLine[] {
+  const lines: RunLine[] = [];
+  const say = (kind: EventKind, message: string, topic: string | null = null): void => {
+    lines.push({ kind, message, topic });
+  };
   const terms: RunTerms = termsOf(run, rows, cash);
   if (terms.rows.length === 0) {
     if (ledger.voidOpenRunApprovals(run.id)) {
-      runNote(ledger, run.id, "approval", "Approval request withdrawn: every row is skipped now");
+      say("approval", "Approval request withdrawn: every row is skipped now");
     }
-    runNote(
-      ledger,
-      run.id,
+    say(
       "approval",
       "Waiting on a person. Every row is skipped, so there is nothing to approve. Cancel the run and upload a corrected file",
       "waiting",
     );
-    return;
+    return lines;
   }
   const binding: string = bindingOf(terms);
   const rule: SignoffRule = runRule(policy, rows, terms.totals);
@@ -689,27 +709,20 @@ export function openRunRequest(
   const eligible: Approver[] = eligibleApprovers(policy, largest.amountMinor, runBarred(ledger, terms));
   if (policy.problem !== null || eligible.length < rule.needed) {
     if (ledger.voidOpenRunApprovals(run.id)) {
-      runNote(
-        ledger,
-        run.id,
-        "approval",
-        "Approval request withdrawn: nobody on the approver list can approve it",
-      );
+      say("approval", "Approval request withdrawn: nobody on the approver list can approve it");
     }
     const able: string =
       eligible.length === 0
         ? "nobody on the approver list can"
         : `only ${listOf(eligible.map((approver: Approver): string => approver.name))} can`;
-    runNote(
-      ledger,
-      run.id,
+    say(
       "approval",
       policy.problem !== null
         ? `Waiting on a person. Approvals are refused: ${policy.problem}`
         : `Waiting on a person. The run needs ${rule.needed === 1 ? "one approver" : `${rule.needed} approvers, because ${rule.why},`} and ${able} approve it. Change APPROVERS, restart and check again`,
       "waiting",
     );
-    return;
+    return lines;
   }
 
   let latest: RunApproval | undefined = ledger.latestRunApproval(run.id);
@@ -721,9 +734,7 @@ export function openRunRequest(
     !isExpired(latest);
   if (!same) {
     if (latest?.state === "requested" && isExpired(latest)) {
-      runNote(
-        ledger,
-        run.id,
+      say(
         "approval",
         `Approval request expired before ${latest.signoffs.length === 0 ? "anyone approved it" : "enough people approved it"}, so PayOnce opened a new one`,
       );
@@ -731,14 +742,12 @@ export function openRunRequest(
       (latest?.state === "requested" || latest?.state === "approved") &&
       latest.signoffs.length > 0
     ) {
-      runNote(
-        ledger,
-        run.id,
+      say(
         "approval",
         `Approval by ${signersOf(latest.signoffs)} no longer counts: the checks changed, so PayOnce opened a new request`,
       );
     }
-    const opened: boolean = ledger.requestRunApproval(run.id, {
+    const opened: boolean = ledger.addRunApproval(run.id, {
       binding,
       terms: JSON.stringify(terms),
       needed: rule.needed,
@@ -747,16 +756,14 @@ export function openRunRequest(
     });
     // Another process released or cancelled the run meanwhile.
     if (!opened) {
-      return;
+      return lines;
     }
     latest = ledger.latestRunApproval(run.id);
   }
   if (latest === undefined) {
-    return;
+    return lines;
   }
-  runNote(
-    ledger,
-    run.id,
+  say(
     "approval",
     latest.state === "approved"
       ? `Approved by ${latest.approver ?? ""}. pnpm ui releases the run on its next check`
@@ -765,6 +772,7 @@ export function openRunRequest(
         : `Waiting on ${latest.needed} approvers for ${totalsText(terms.totals)}, because ${latest.neededWhy}`,
     "waiting",
   );
+  return lines;
 }
 
 // Reads a run's rows again from the cells the ledger stored.
@@ -812,24 +820,39 @@ export async function uploadRun(engine: Engine, file: RunFile, uploadedBy: strin
   );
   // createRun may have skipped a row whose number reached the ledger meanwhile.
   const rows: CheckedRow[] = engine.ledger.runRows(runId);
+  const lines: RunLine[] = engine.ledger.transaction((): RunLine[] =>
+    settleRunRequest(engine.ledger, engine.approvals, run, rows, check.cash),
+  );
   noteCheck(engine.ledger, runId, rows, check.cash);
-  openRunRequest(engine.ledger, engine.approvals, run, rows, check.cash);
+  writeLines(engine.ledger, runId, lines);
   return runId;
 }
 
-// Runs every check again, rewrites the rows and opens a new request if the terms
-// changed or the old one expired. Airwallex GETs only.
+// Runs every check again, and in one transaction rewrites the rows and opens a
+// new request if the terms changed or the old one expired. Refused while the run
+// is approved and waits for its release. Airwallex GETs only.
 export async function recheckRun(engine: Engine, runId: number): Promise<void> {
   const run: Run | undefined = engine.ledger.run(runId);
   if (run?.state !== "waiting") {
     throw new Error(`Run ${runId} is not waiting for approval, so there is nothing to check`);
   }
   const check: RunCheck = await checkRows(engine, fileRowsOf(engine.ledger, run), runId);
-  if (!engine.ledger.setRunRows(runId, check.rows, JSON.stringify(check.cash))) {
-    throw new Error(`Run ${runId} is not waiting for approval, so there is nothing to check`);
+  const lines: RunLine[] | undefined = engine.ledger.setRunRows(
+    runId,
+    check.rows,
+    JSON.stringify(check.cash),
+    null,
+    (): RunLine[] => settleRunRequest(engine.ledger, engine.approvals, run, check.rows, check.cash),
+  );
+  if (lines === undefined) {
+    throw new Error(
+      engine.ledger.run(runId)?.state === "waiting"
+        ? `Run ${runId} is approved, and pnpm ui releases it on its next check, so it is not checked again`
+        : `Run ${runId} is not waiting for approval, so there is nothing to check`,
+    );
   }
   noteCheck(engine.ledger, runId, check.rows, check.cash);
-  openRunRequest(engine.ledger, engine.approvals, run, check.rows, check.cash);
+  writeLines(engine.ledger, runId, lines);
 }
 
 export interface PendingRunApproval {
@@ -920,9 +943,10 @@ export function cancelRun(ledger: Ledger, runId: number, cancelledBy: string, no
 // holding the lock of every currency the run pays, the cash check runs again on
 // a fresh balance: if any currency would now go below its floor, the approval is
 // void and the run waits too. Otherwise one transaction spends the approval and
-// writes each pay row as an invoice. After the commit, each invoice is woken in
-// its own turn, one at a time, and sends its original. Never awaits a run step,
-// so it can run in the run's turn without waiting on itself.
+// writes each pay row as an invoice, with the account the approved terms name.
+// After the commit, each invoice is woken in its own turn, one at a time, and
+// allowed to send its original. Never awaits a run step, so it can run in the
+// run's turn without waiting on itself.
 export async function releaseRun(engine: Engine, agent: Dispatcher, runId: number): Promise<void> {
   const ledger: Ledger = engine.ledger;
   const run: Run | undefined = ledger.run(runId);
@@ -950,8 +974,10 @@ export async function releaseRun(engine: Engine, agent: Dispatcher, runId: numbe
     why = problem === null ? null : `is void: ${problem}`;
   }
   if (why !== null) {
-    ledger.setRunApprovalState(approval.id, "void");
-    ledger.setRunRows(runId, check.rows, JSON.stringify(check.cash));
+    // Another process may have released the run, or checked it again, since.
+    if (ledger.setRunRows(runId, check.rows, JSON.stringify(check.cash), approval.id, (): boolean => true) === undefined) {
+      return;
+    }
     noteCheck(ledger, runId, check.rows, check.cash);
     runNote(
       ledger,
@@ -962,37 +988,45 @@ export async function releaseRun(engine: Engine, agent: Dispatcher, runId: numbe
     return;
   }
 
-  const pay: PayRow[] = payRows(check.rows);
+  // The rows are released as the approved terms have them, whatever a check in
+  // another process has written on them since. The binding matched, so they are
+  // the rows this release checked.
+  const approved: RunTerms = JSON.parse(approval.terms) as RunTerms;
+  const payees: Map<number, string> = new Map(
+    payRows(check.rows).map((row: PayRow): [number, string] => [row.line, row.payee]),
+  );
   const stored: RunRow[] = ledger.runRows(runId);
-  const releaseRows: ReleaseRow[] = pay.map((row: PayRow): ReleaseRow => ({
+  const releaseRows: ReleaseRow[] = approved.rows.map((row: RunRowTerms): ReleaseRow => ({
     rowId: stored.find((entry: RunRow): boolean => entry.line === row.line)?.id ?? 0,
     line: row.line,
     invoiceId: row.invoiceId,
-    payee: row.payee,
+    payee: payees.get(row.line) ?? row.payTo,
     beneficiaryId: row.beneficiaryId,
     currency: row.currency,
     amountMinor: row.amountMinor,
     transferMethod: row.transferMethod,
+    accountKey: row.accountKey,
+    payTo: row.payTo,
     firstLine: `Opened from pay run ${runId}, row ${row.line} (${run.fileName}, file ${run.fileHash.slice(0, 8)}), uploaded by ${run.uploadedBy} and approved by ${approval.approver ?? ""} on request ${approval.id} (binding ${approval.binding.slice(0, 8)}): ${formatMoney(row.amountMinor, row.currency)} to ${row.payTo}`,
   }));
 
   const released: ReleasedRun | undefined = await withCurrencyLocks(
     ledger,
-    terms.totals.map((total: RunTotal): string => total.currency),
-    async (): Promise<ReleasedRun | undefined> => {
+    approved.totals.map((total: RunTotal): string => total.currency),
+    async (leases: Lease[]): Promise<ReleasedRun | undefined> => {
       // Read again under the locks, so no payment opened since the check is
       // missed.
       const fresh: RunCash[] = await cashCheck(engine, check.rows, runId);
       const short: RunCash | undefined = fresh.find((entry: RunCash): boolean => entry.problem !== null);
       if (short !== undefined) {
-        ledger.setRunApprovalState(approval.id, "void");
-        ledger.setRunRows(runId, check.rows, JSON.stringify(fresh));
-        runNote(
-          ledger,
-          runId,
-          "warning",
-          `Not released: ${short.problem ?? ""}. The approval by ${approval.approver ?? ""} is void. Check the run again once there is cash for it`,
-        );
+        if (ledger.setRunRows(runId, check.rows, JSON.stringify(fresh), approval.id, (): boolean => true) !== undefined) {
+          runNote(
+            ledger,
+            runId,
+            "warning",
+            `Not released: ${short.problem ?? ""}. The approval by ${approval.approver ?? ""} is void. Check the run again once there is cash for it`,
+          );
+        }
         return undefined;
       }
       return ledger.releaseRun(
@@ -1000,7 +1034,8 @@ export async function releaseRun(engine: Engine, agent: Dispatcher, runId: numbe
         approval.id,
         run.uploadedBy,
         releaseRows,
-        `Released on the approval of ${approval.approver ?? ""}: ${plural(releaseRows.length, "invoice")} to pay, ${totalsText(terms.totals)}`,
+        `Released on the approval of ${approval.approver ?? ""}: ${plural(releaseRows.length, "invoice")} to pay, ${totalsText(approved.totals)}`,
+        leases,
       );
     },
   );
@@ -1015,9 +1050,11 @@ export async function releaseRun(engine: Engine, agent: Dispatcher, runId: numbe
       `Row ${dropped.line} (${dropped.invoiceId}) was not released: PayOnce already had ${dropped.invoiceId} when the run was released`,
     );
   }
-  // One at a time, in file order, so a run never sends a burst of payments.
+  // One at a time, in file order, so a run never sends a burst of payments. Only
+  // these wakes, and the server's watcher once the release has stopped, may send
+  // a row's first payment.
   for (const invoiceId of released.released) {
-    agent.wake(invoiceId);
+    agent.wake(invoiceId, true);
     await agent.whenIdle(invoiceId);
   }
   const sent: number = released.released.filter(

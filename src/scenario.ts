@@ -229,11 +229,19 @@ export async function runScenario(
     await untilAtRest(engine.ledger, agent, bank, invoiceId);
     return;
   }
-  const original: Transfer | null = await agent.run(
-    invoiceId,
-    (): Promise<Transfer | null> =>
-      bank.scripting(invoiceId, (): Promise<Transfer | null> => startPayment(engine, obligation)),
-  );
+  let original: Transfer | null;
+  try {
+    original = await agent.run(
+      invoiceId,
+      (): Promise<Transfer | null> =>
+        bank.scripting(invoiceId, (): Promise<Transfer | null> => startPayment(engine, obligation)),
+    );
+  } catch (error: unknown) {
+    // startPayment planned a look to try again, and the bank gives the original
+    // that look sends the scenario's outcome.
+    bank.expectOriginal(invoiceId, scenario.bankOutcome);
+    throw error;
+  }
   if (original === null) {
     bank.expectOriginal(invoiceId, scenario.bankOutcome);
     agent.wake(invoiceId);

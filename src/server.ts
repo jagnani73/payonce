@@ -38,6 +38,7 @@ import {
   type CallbackInput,
 } from "./bank-change.js";
 import { cashReport, payRunLines, type CashReport } from "./cash-position.js";
+import { CurrencyBusyError } from "./currency-lock.js";
 import { Dispatcher } from "./dispatcher.js";
 import type { EmailFindings } from "./emails.js";
 import {
@@ -57,6 +58,7 @@ import { describeFloors, reserveFromEnv } from "./reserve.js";
 import {
   INVOICE_ID_PATTERN,
   isExpired,
+  LeaseLostError,
   Ledger,
   LEDGER_PATH,
   NothingToPayError,
@@ -176,11 +178,15 @@ function startRelease(runId: number): void {
   agent
     .run(runKey(runId), (): Promise<void> => releaseRun(engine, agent, runId))
     .catch((error: unknown): void => {
+      // Those two say already that PayOnce tries again in a minute.
+      const lock: boolean = error instanceof CurrencyBusyError || error instanceof LeaseLostError;
       runNoteError(
         engine.ledger,
         runId,
         error,
-        "The run could not be released, and PayOnce tries again in a minute: ",
+        lock
+          ? "The run could not be released: "
+          : "The run could not be released, and PayOnce tries again in a minute: ",
       );
     });
 }

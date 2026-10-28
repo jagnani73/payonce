@@ -7,9 +7,10 @@ export class Dispatcher {
   private readonly engine: Engine;
   // The end of each invoice's queue. An invoice with nothing queued has none.
   private readonly tails: Map<string, Promise<void>> = new Map<string, Promise<void>>();
-  // Invoices with a look queued that has not started yet. Another wake would only
-  // repeat it, because the queued look will see whatever woke the agent.
-  private readonly queued: Set<string> = new Set<string>();
+  // Invoices with a look queued that has not started yet, and whether it may send
+  // a pay run row's first payment. Another wake would only repeat it, because the
+  // queued look will see whatever woke the agent.
+  private readonly queued: Map<string, boolean> = new Map<string, boolean>();
 
   constructor(engine: Engine) {
     this.engine = engine;
@@ -42,14 +43,21 @@ export class Dispatcher {
 
   // Has the agent look at an invoice again: sync its payments with Airwallex,
   // read new emails, then decide and act. A failure goes on its timeline.
-  wake(invoiceId: string): void {
-    if (this.queued.has(invoiceId)) {
+  // sendRunRow lets the look send a pay run row's first payment. Only the release
+  // and the server's watcher pass it, so no other wake sends a row out of turn.
+  wake(invoiceId: string, sendRunRow: boolean = false): void {
+    const queued: boolean | undefined = this.queued.get(invoiceId);
+    if (queued !== undefined) {
+      if (sendRunRow && !queued) {
+        this.queued.set(invoiceId, true);
+      }
       return;
     }
-    this.queued.add(invoiceId);
+    this.queued.set(invoiceId, sendRunRow);
     this.run(invoiceId, (): Promise<void> => {
+      const send: boolean = this.queued.get(invoiceId) ?? false;
       this.queued.delete(invoiceId);
-      return resumeIncident(this.engine, invoiceId);
+      return resumeIncident(this.engine, invoiceId, send);
     }).catch((error: unknown): void => {
       noteError(this.engine.ledger, invoiceId, error);
     });

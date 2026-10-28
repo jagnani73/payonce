@@ -194,6 +194,13 @@ const SCHEMA: string = `
     holder TEXT NOT NULL,
     expires_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS currency_lock_waiters (
+    currency TEXT NOT NULL,
+    holder TEXT NOT NULL,
+    since TEXT NOT NULL,
+    seen_at TEXT NOT NULL,
+    PRIMARY KEY (currency, holder)
+  );
 `;
 
 // rejected is an invoice a person closed without paying, because it was a second
@@ -539,6 +546,11 @@ const RUN_HEAD_KEY: string = "run_events_head";
 const RUN_CHAIN_STARTED_KEY: string = "run_chain_started_at";
 const RUN_BACKFILLED_THROUGH_KEY: string = "run_chain_backfilled_through";
 
+// A waiter for a currency lock that has not asked again for this long has gone,
+// for example because its process stopped, and loses its place. It asks every
+// 200 ms, and a write can wait up to BUSY_TIMEOUT_MS for another process.
+const WAITER_GONE_MS: number = 10_000;
+
 interface OutsideRow {
   transfer_id: string;
   reference: string;
@@ -834,7 +846,7 @@ export interface RunApproval {
   signoffs: Signoff[];
 }
 
-// A pay row the release writes as an invoice.
+// A pay row the release writes as an invoice, as the approved terms have it.
 export interface ReleaseRow {
   rowId: number;
   line: number;
@@ -844,8 +856,36 @@ export interface ReleaseRow {
   currency: string;
   amountMinor: number;
   transferMethod: TransferMethod;
+  // The account the approvers approved. The release writes it on the row, and
+  // every payment of the row is sent only while the record still holds it.
+  accountKey: string;
+  payTo: string;
   // The invoice's first timeline line, chained like any other.
   firstLine: string;
+}
+
+// A currency lock held for one payment or one release. The ledger opens an
+// attempt, or releases a run, only while the lock is still held.
+export interface Lease {
+  currency: string;
+  holder: string;
+}
+
+// The lease ran out before the step that needed it, and someone else may hold
+// the lock now, so nothing was written.
+export class LeaseLostError extends Error {
+  constructor(currency: string) {
+    super(
+      `The ${currency} lock ran out before the payment was recorded, so PayOnce sent nothing. It tries again in a minute`,
+    );
+    this.name = "LeaseLostError";
+  }
+}
+
+// A pay row with the fields a skipped row keeps: the reasons, and no hold, new
+// payee or callback, since those only matter for a row that pays.
+export function skipRow(row: CheckedRow, reasons: string[]): CheckedRow {
+  return { ...row, action: "skip", reasons, heldFor: [], newPayee: false, bankChangeId: null };
 }
 
 export interface ReleasedRun {
@@ -1360,7 +1400,28 @@ export class Ledger {
     }
   }
 
-  openAttempt(invoiceId: string, kind: AttemptKind): Attempt {
+  // Throws LeaseLostError unless lease still holds its currency's lock. Run
+  // inside the write transaction that writes what the lock guards, so the lock
+  // cannot be lost between the check and the write.
+  private requireLease(lease: Lease): void {
+    const held: unknown = this.db
+      .prepare(
+        "SELECT 1 FROM currency_locks WHERE currency = ? AND holder = ? AND expires_at > ?",
+      )
+      .get(lease.currency, lease.holder, new Date().toISOString());
+    if (held === undefined) {
+      throw new LeaseLostError(lease.currency);
+    }
+  }
+
+  // Opens a payment's attempt, which counts its money as committed. Only inside a
+  // write transaction, and only while lease holds the lock of the currency the
+  // payment leaves, so a holder that lost its lease opens nothing.
+  openAttempt(invoiceId: string, kind: AttemptKind, lease: Lease): Attempt {
+    if (!this.db.isTransaction) {
+      throw new Error("An attempt is opened only inside a ledger transaction");
+    }
+    this.requireLease(lease);
     const requestId: string = randomUUID();
     this.insertAttempt(requestId, invoiceId, kind);
     return {
@@ -1746,7 +1807,7 @@ export class Ledger {
   // changed, when the approval is no longer approved or has expired, or the
   // invoice is no longer held: a person closed it, it has sent something, or a
   // payout for it sent outside PayOnce is live.
-  releaseFor(invoiceId: string, approvalId: number): Attempt | undefined {
+  releaseFor(invoiceId: string, approvalId: number, lease: Lease): Attempt | undefined {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const used: { changes: number | bigint } = this.db
@@ -1766,7 +1827,7 @@ export class Ledger {
         this.db.exec("ROLLBACK");
         return undefined;
       }
-      const attempt: Attempt = this.openAttempt(invoiceId, "original");
+      const attempt: Attempt = this.openAttempt(invoiceId, "original", lease);
       this.db.exec("COMMIT");
       return attempt;
     } catch (error: unknown) {
@@ -1975,7 +2036,7 @@ export class Ledger {
   // meantime, or when it has expired since the look checked it. Also when the
   // invoice is no longer escalated, as when a person closed it, or a payout for
   // it sent outside PayOnce is live.
-  useApproval(invoiceId: string, approvalId: number): Attempt | undefined {
+  useApproval(invoiceId: string, approvalId: number, lease: Lease): Attempt | undefined {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const result: { changes: number | bigint } = this.db
@@ -1990,7 +2051,7 @@ export class Ledger {
         this.db.exec("ROLLBACK");
         return undefined;
       }
-      const attempt: Attempt = this.openAttempt(invoiceId, "replacement");
+      const attempt: Attempt = this.openAttempt(invoiceId, "replacement", lease);
       this.db.exec("COMMIT");
       return attempt;
     } catch (error: unknown) {
@@ -2269,7 +2330,7 @@ export class Ledger {
       }
       const checked: CheckedRow[] = rows.map((row: CheckedRow): CheckedRow =>
         row.action === "pay" && row.invoiceId !== null && this.obligation(row.invoiceId) !== undefined
-          ? { ...row, action: "skip", reasons: [alreadyInLedger(row.invoiceId)], heldFor: [] }
+          ? skipRow(row, [alreadyInLedger(row.invoiceId)])
           : row,
       );
       if (!checked.some((row: CheckedRow): boolean => row.action === "pay")) {
@@ -2298,16 +2359,40 @@ export class Ledger {
     });
   }
 
-  // What a check found, written over the rows of a run still waiting. False when
-  // the run is no longer waiting.
-  setRunRows(runId: number, rows: CheckedRow[], cash: string): boolean {
-    return this.transaction((): boolean => {
-      const updated: { changes: number | bigint } = this.db
-        .prepare("UPDATE runs SET checked_at = ?, cash = ? WHERE id = ? AND state = 'waiting'")
-        .run(new Date().toISOString(), cash, runId);
-      if (Number(updated.changes) !== 1) {
-        return false;
+  // What a check found, written over the rows of a run still waiting, and then
+  // settle, which settles the run's request, all in one write transaction. So the
+  // rows never change under an approval without the approval changing with them.
+  // voiding is the approved request a release found void, which is voided here.
+  // Undefined, with nothing changed, when the run is no longer waiting, when
+  // voiding is not the run's latest request, or, with no voiding, when the latest
+  // request is approved and has not expired: those rows are the ones the release
+  // pays.
+  setRunRows<T>(
+    runId: number,
+    rows: CheckedRow[],
+    cash: string,
+    voiding: number | null,
+    settle: () => T,
+  ): T | undefined {
+    return this.transaction((): T | undefined => {
+      if (this.run(runId)?.state !== "waiting") {
+        return undefined;
       }
+      const latest: RunApprovalRow | undefined = this.db
+        .prepare("SELECT * FROM run_approvals WHERE run_id = ? ORDER BY id DESC LIMIT 1")
+        .get(runId) as unknown as RunApprovalRow | undefined;
+      if (voiding === null) {
+        if (latest?.state === "approved" && Date.parse(latest.expires_at) > Date.now()) {
+          return undefined;
+        }
+      } else if (latest?.id !== voiding) {
+        return undefined;
+      } else if (latest.state === "approved") {
+        this.db.prepare("UPDATE run_approvals SET state = 'void' WHERE id = ?").run(latest.id);
+      }
+      this.db
+        .prepare("UPDATE runs SET checked_at = ?, cash = ? WHERE id = ?")
+        .run(new Date().toISOString(), cash, runId);
       const update: StatementSync = this.db.prepare(
         `UPDATE run_rows SET invoice_id = ?, supplier = ?, beneficiary_id = ?, currency = ?,
                 amount_minor = ?, transfer_method = ?, sandbox_outcome = ?, action = ?,
@@ -2336,7 +2421,7 @@ export class Ledger {
           row.line,
         );
       }
-      return true;
+      return settle();
     });
   }
 
@@ -2367,17 +2452,29 @@ export class Ledger {
   // Spends the run's approval, marks the run released and writes each pay row as
   // an invoice with its first chained timeline line, all in one write
   // transaction, so a run is never half released and an approval is never spent
-  // twice. A row whose invoice number another invoice took since the check is
-  // dropped and not released. Undefined, with nothing changed, when the approval
-  // is no longer approved or has expired, or the run is no longer waiting.
+  // twice. Each released row gets the account the approved terms name, which is
+  // the one every payment of the row checks the record against. A row whose
+  // invoice number another invoice took since the check is dropped and not
+  // released. Undefined, with nothing changed, when the approval is no longer
+  // approved or has expired, or the run is no longer waiting. Throws
+  // LeaseLostError unless leases still hold the lock of every currency the rows
+  // pay.
   releaseRun(
     runId: number,
     approvalId: number,
     uploadedBy: string,
     rows: ReleaseRow[],
     runLine: string,
+    leases: Lease[],
   ): ReleasedRun | undefined {
     return this.transaction((): ReleasedRun | undefined => {
+      for (const currency of new Set(rows.map((row: ReleaseRow): string => row.currency))) {
+        const lease: Lease | undefined = leases.find((entry: Lease): boolean => entry.currency === currency);
+        if (lease === undefined) {
+          throw new Error(`Run ${runId} pays ${currency}, and its release does not hold the ${currency} lock`);
+        }
+        this.requireLease(lease);
+      }
       const now: string = new Date().toISOString();
       // Read under the write lock, so nothing can change between this and the
       // updates.
@@ -2421,9 +2518,15 @@ export class Ledger {
               row.rowId,
               now,
             );
-          this.db
-            .prepare("UPDATE run_rows SET state = 'released' WHERE id = ? AND state = 'waiting'")
-            .run(row.rowId);
+          const marked: { changes: number | bigint } = this.db
+            .prepare(
+              `UPDATE run_rows SET state = 'released', account_key = ?, pay_to = ?
+                WHERE id = ? AND run_id = ? AND state = 'waiting'`,
+            )
+            .run(row.accountKey, row.payTo, row.rowId, runId);
+          if (Number(marked.changes) !== 1) {
+            throw new Error(`Row ${row.line} of run ${runId} is not waiting to be released`);
+          }
           this.appendEvent(row.invoiceId, "approval", row.firstLine, null);
           this.db.exec("RELEASE release_row");
           result.released.push(row.invoiceId);
@@ -2540,27 +2643,34 @@ export class Ledger {
   // A new request voids any earlier one for the run that is still open. Only a
   // run still waiting gets one. False when none was opened.
   requestRunApproval(runId: number, request: ApprovalRequest): boolean {
-    return this.transaction((): boolean => {
-      this.voidOpenRunApprovals(runId);
-      const result: { changes: number | bigint } = this.db
-        .prepare(
-          `INSERT INTO run_approvals
-             (run_id, binding, terms, requested_at, expires_at, needed, needed_why)
-           SELECT ?, ?, ?, ?, ?, ?, ?
-            WHERE EXISTS (SELECT 1 FROM runs WHERE id = ? AND state = 'waiting')`,
-        )
-        .run(
-          runId,
-          request.binding,
-          request.terms,
-          new Date().toISOString(),
-          new Date(request.expiresAt).toISOString(),
-          request.needed,
-          request.neededWhy,
-          runId,
-        );
-      return Number(result.changes) === 1;
-    });
+    return this.transaction((): boolean => this.addRunApproval(runId, request));
+  }
+
+  // requestRunApproval inside a transaction the caller holds, such as the one
+  // setRunRows opens, so a check's rows and its request are written together.
+  addRunApproval(runId: number, request: ApprovalRequest): boolean {
+    if (!this.db.isTransaction) {
+      throw new Error("A run's request is opened only inside a ledger transaction");
+    }
+    this.voidOpenRunApprovals(runId);
+    const result: { changes: number | bigint } = this.db
+      .prepare(
+        `INSERT INTO run_approvals
+           (run_id, binding, terms, requested_at, expires_at, needed, needed_why)
+         SELECT ?, ?, ?, ?, ?, ?, ?
+          WHERE EXISTS (SELECT 1 FROM runs WHERE id = ? AND state = 'waiting')`,
+      )
+      .run(
+        runId,
+        request.binding,
+        request.terms,
+        new Date().toISOString(),
+        new Date(request.expiresAt).toISOString(),
+        request.needed,
+        request.neededWhy,
+        runId,
+      );
+    return Number(result.changes) === 1;
   }
 
   private runSignoffs(approvalId: number): Signoff[] {
@@ -2645,10 +2755,6 @@ export class Ledger {
     return this.toRunApproval(row);
   }
 
-  setRunApprovalState(id: number, state: ApprovalState): void {
-    this.db.prepare("UPDATE run_approvals SET state = ? WHERE id = ?").run(state, id);
-  }
-
   // Waiting runs whose latest request is approved, for the server to release.
   approvedRuns(): number[] {
     return (
@@ -2717,20 +2823,51 @@ export class Ledger {
   // ---------- the per-currency lock ----------
 
   // Takes the lease on a currency for holder until the given time, if nobody
-  // holds it or the last holder's lease has run out. True when taken.
+  // holds it or the last holder's lease has run out, and nobody has been waiting
+  // longer. True when taken. Otherwise holder joins the queue, or keeps its place
+  // in it, so the holders waiting take the lock in the order they asked, across
+  // processes. A holder that stops asking for WAITER_GONE_MS loses its place.
   takeCurrencyLock(currency: string, holder: string, until: number): boolean {
     return this.transaction((): boolean => {
-      const now: string = new Date().toISOString();
-      const result: { changes: number | bigint } = this.db
+      const at: number = Date.now();
+      const now: string = new Date(at).toISOString();
+      this.db
+        .prepare("DELETE FROM currency_lock_waiters WHERE currency = ? AND seen_at <= ?")
+        .run(currency, new Date(at - WAITER_GONE_MS).toISOString());
+      const first: { holder: string } | undefined = this.db
         .prepare(
-          `INSERT INTO currency_locks (currency, holder, expires_at) VALUES (?, ?, ?)
-           ON CONFLICT(currency) DO UPDATE SET holder = excluded.holder,
-                                               expires_at = excluded.expires_at
-            WHERE currency_locks.expires_at <= ?`,
+          "SELECT holder FROM currency_lock_waiters WHERE currency = ? ORDER BY since, rowid LIMIT 1",
         )
-        .run(currency, holder, new Date(until).toISOString(), now);
-      return Number(result.changes) === 1;
+        .get(currency) as unknown as { holder: string } | undefined;
+      if (first === undefined || first.holder === holder) {
+        const result: { changes: number | bigint } = this.db
+          .prepare(
+            `INSERT INTO currency_locks (currency, holder, expires_at) VALUES (?, ?, ?)
+             ON CONFLICT(currency) DO UPDATE SET holder = excluded.holder,
+                                                 expires_at = excluded.expires_at
+              WHERE currency_locks.expires_at <= ?`,
+          )
+          .run(currency, holder, new Date(until).toISOString(), now);
+        if (Number(result.changes) === 1) {
+          this.leaveCurrencyQueue(currency, holder);
+          return true;
+        }
+      }
+      this.db
+        .prepare(
+          `INSERT INTO currency_lock_waiters (currency, holder, since, seen_at) VALUES (?, ?, ?, ?)
+           ON CONFLICT(currency, holder) DO UPDATE SET seen_at = excluded.seen_at`,
+        )
+        .run(currency, holder, now, now);
+      return false;
     });
+  }
+
+  // Gives up a place in the queue, for a holder that stopped waiting.
+  leaveCurrencyQueue(currency: string, holder: string): void {
+    this.db
+      .prepare("DELETE FROM currency_lock_waiters WHERE currency = ? AND holder = ?")
+      .run(currency, holder);
   }
 
   // False when holder no longer holds it, because the lease ran out and someone

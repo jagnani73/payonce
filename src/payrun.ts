@@ -138,6 +138,12 @@ function printApproval(pending: PendingRunApproval): void {
   console.log(
     `Request ${approval.id}: pay ${totalsText(totals)} in ${payments} ${payments === 1 ? "payment" : "payments"}`,
   );
+  // As on the page's card, so an approver sees a currency with no floor.
+  for (const total of totals) {
+    console.log(
+      `  ${total.currency.padEnd(8)} ${formatMoney(total.amountMinor, total.currency)} in ${total.payments} ${total.payments === 1 ? "payment" : "payments"}, ${total.reserveFloorMinor === null ? `no reserve floor is set for ${total.currency}` : `reserve floor ${formatMoney(total.reserveFloorMinor, total.currency)}`}`,
+    );
+  }
   console.log(
     `  needs    ${approval.needed === 1 ? "one approver" : `${approval.needed} approvers, because ${approval.neededWhy}`}`,
   );

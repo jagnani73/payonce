@@ -100,6 +100,25 @@ export function likelyDuplicates(ledger: Ledger, obligation: Obligation): Obliga
     .reverse();
 }
 
+// The other invoices to the same supplier, by beneficiary or by name, whose
+// number sameInvoiceNumber matches this one's, whatever their amount and
+// currency, oldest first. PayOnce pays an invoice number once, so a payment for
+// such an invoice waits for a person. Rejected invoices are left out, as in
+// likelyDuplicates.
+export function sameNumberForSupplier(ledger: Ledger, obligation: Obligation): Obligation[] {
+  return ledger
+    .obligations()
+    .filter(
+      (other: Obligation): boolean =>
+        other.invoiceId !== obligation.invoiceId &&
+        other.state !== "rejected" &&
+        (other.beneficiaryId === obligation.beneficiaryId ||
+          sameName(other.supplier, obligation.supplier)) &&
+        numbersOf(obligation).some((number: string): boolean => knownAs(other, number)),
+    )
+    .reverse();
+}
+
 function billOf(transfer: Transfer): Bill | undefined {
   const beneficiaryId: string | undefined = transfer.beneficiary_id;
   if (beneficiaryId === undefined || !Number.isFinite(transfer.transfer_amount)) {

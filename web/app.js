@@ -2771,10 +2771,13 @@ function buildRunRow(row, columns) {
       ? formatMoney(row.amountMinor, row.currency)
       : `${cellOf(columns, row, "amount")} ${cellOf(columns, row, "currency")}`.trim();
   const tags = [];
-  if (row.newPayee === true) {
+  // Only a row that pays has a payee to flag. Rows skipped before the flag was
+  // cleared on a skip can still carry it.
+  const pays = row.action === "pay" && row.state !== "dropped";
+  if (pays && row.newPayee === true) {
     tags.push(h("span", { class: "tag tag--caution" }, "New payee"));
   }
-  if (row.bankChangeId !== null && row.bankChangeId !== undefined) {
+  if (pays && row.bankChangeId !== null && row.bankChangeId !== undefined) {
     tags.push(h("span", { class: "tag tag--caution" }, "Account verified by a callback"));
   }
   if (typeof row.sandboxOutcome === "string" && row.sandboxOutcome !== "PAID") {
