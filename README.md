@@ -119,7 +119,7 @@ A failed SWIFT transfer gets its amount back but not its fee, so a replacement p
 
 An event counts only if its signature checks out with the subscription's secret, and an event already seen is ignored. A paid or failed event only tells PayOnce to look again. PayOnce reads the transfer from Airwallex and decides on what it reads. An event for a transfer PayOnce does not know starts a sweep.
 
-A status check runs every 15 seconds in case an event is late or lost, and every 3 seconds when webhooks are off. In runs on 28 October 2026 the sandbox delivered no events to the receiver, so the status check found every change.
+A status check runs every 15 seconds in case an event is late or lost, and every 3 seconds when webhooks are off. In the sandbox, Airwallex records an event for every status change but leaves each one queued and never sends it, even a test event sent from its own web app, so the status check finds every change. A request from outside through the tunnel does reach the receiver.
 
 Install cloudflared with `winget install --id Cloudflare.cloudflared`, or set `CLOUDFLARED` to the path of `cloudflared.exe`. Set `WEBHOOK_URL` to use a public address you already have, or `WEBHOOKS=off` to skip webhooks.
 
@@ -220,5 +220,5 @@ The code holds amounts in minor units and converts at the Airwallex boundary. Th
 - A model's explanation of each decision. The reasons on the timeline come from the policy.
 - Closing an incident without a payment. A person can close one only when the bank reports a payment for the invoice as paid.
 - Chasing the bank. When a payment passes its deadline, PayOnce tells a person and does nothing else.
-- A webhook delivered by the sandbox. The receiver, the tunnel and the subscription work, but no event from Airwallex has reached them yet.
+- A webhook delivered by the sandbox. The receiver, the tunnel and the subscription work, and Airwallex records the events, but the sandbox has not sent one.
 - Real bank outcomes. The run uses the sandbox simulator to send, fail and pay transfers.

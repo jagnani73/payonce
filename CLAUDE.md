@@ -152,6 +152,7 @@ Found by running it on 2026-10-28:
 - A webhook `request_id` is limited to 50 characters.
 - The list call returns each subscription's secret. The update call moved PayOnce's subscription to a new tunnel address and kept its id.
 - In three incidents, with about ten transfer status changes, Airwallex delivered no event within 12 minutes. The tunnel answered a request from outside, and the subscription listed the right address and events. The watcher caught every change. Delivery status per event is under Settings > Developer > Events in the web app, which needs the account owner's login.
+- Checked in the web app later the same day: Airwallex creates an event for every status change (`scheduled`, `processing`, `sent`, `paid`, `failed`), with the transfer directly under `data` and `version` `2025-06-30`, addressed to the subscription's URL. Every event stayed `Queued` with no HTTP status, so none was ever attempted. With a fresh tunnel and the subscription moved to it, "Send test event" and "Re-trigger" in the web app delivered nothing either, while a POST from outside through the tunnel reached the receiver and got its 401. The sandbox records events but does not deliver them to this account.
 - The scripted incidents with the watcher on: a replaced payment from start to close in 11 seconds through `pnpm recover`, and about 50 seconds for each escalation on the page while the watcher checked every 60 seconds.
 - `winget install Cloudflare.cloudflared` waits on a UAC prompt. The standalone `cloudflared-windows-amd64.exe` from the GitHub release runs without admin rights.
 
@@ -171,7 +172,7 @@ Found by running it on 2026-10-28:
 - The scenarios share one beneficiary per currency, so a bank change on one would reach the others. Each `usd-local-bank-change` run creates a beneficiary of its own, nicknamed `PayOnce demo supplier (bank change)` plus the invoice number.
 - LOCAL USD transfers carry no fee in the sandbox.
 - The client sends no `x-api-version` header. The account default returns the newer status set (`FAILED` exists) with a nested `failure` object.
-- Airwallex emails the account owner for every sent and cancelled transfer unless transfer notifications are turned off under Settings > User settings > Notifications.
+- Airwallex emails the account owner for every sent and cancelled transfer unless transfer notifications are turned off under Settings > User settings > Notifications. On 2026-10-28 the email for cancelled transfers was turned off there. Sent, overdue reminders and the daily summary of scheduled transfers were already off.
 - `GET /api/v1/transfers` takes `from_created_at` as an ISO time with milliseconds and `Z`, and takes `status`. It lists newest first and pages with `page_size` and a `page` cursor taken from `page_after`.
 - A transfer's `beneficiary` has `bank_details`, `address`, `entity_type` and `type`. `bank_details.account_name` is the only name on it.
 - `created_at` reads like `2026-10-27T19:48:09+0000`, which `Date.parse` accepts.
