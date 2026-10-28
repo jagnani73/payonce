@@ -43,7 +43,13 @@ import {
 } from "./assess.js";
 import { committedMinor } from "./cash-position.js";
 import { deadlineOf, describeDeadline, isOverdue } from "./deadlines.js";
-import { decide, floorReason, OUTSIDE_PAYOUT_REASON } from "./decide.js";
+import {
+  decide,
+  floorReason,
+  NO_FLOOR_CLAUSE,
+  NO_FLOOR_REASON,
+  OUTSIDE_PAYOUT_REASON,
+} from "./decide.js";
 import { likelyDuplicates, nearlyPays } from "./duplicates.js";
 import {
   unverifiedSenders,
@@ -1000,14 +1006,15 @@ function withFloorReason(
   if (floor === null || floor === decision.reason) {
     return assessment;
   }
+  const clause: string = floor === NO_FLOOR_REASON ? NO_FLOOR_CLAUSE : floor;
   note(
     engine.ledger,
     obligation.invoiceId,
     "warning",
-    `Also, ${floor}. The approval request says this too, and only an approval of that request releases a replacement`,
+    `Also, ${clause}. The approval request says this too, and only an approval of that request releases a replacement`,
     "floor",
   );
-  return { ...assessment, decision: { action: "escalate", reason: `${decision.reason}, and ${floor}` } };
+  return { ...assessment, decision: { action: "escalate", reason: `${decision.reason}, and ${clause}` } };
 }
 
 async function continueEscalated(
