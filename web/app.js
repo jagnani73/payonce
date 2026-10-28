@@ -807,9 +807,18 @@ function select(id) {
   if (id === state.selectedId) {
     return;
   }
+  if (id === null) {
+    // The board is not loaded while it is off screen, so the one held is old.
+    state.board = null;
+    state.boardError = null;
+  }
   setSelected(id);
   render();
   window.setTimeout(render, LOADING_DELAY_MS + 20);
+  if (id === null && refreshing !== null) {
+    // The refresh under way skipped the board, so it is loaded now, not after it.
+    loadBoard().then(render);
+  }
   refresh();
 }
 
@@ -2725,21 +2734,33 @@ async function submitBankChange(invoiceId) {
 
 function renderMain() {
   const id = state.selectedId;
-  els.board.hidden = id !== null;
   if (id === null) {
     els.boardButton.setAttribute("aria-current", "true");
   } else {
     els.boardButton.removeAttribute("aria-current");
   }
   if (id === null) {
+    // Coming back to the board, the view left stays a moment while a fresh board loads.
+    if (state.board === null && state.boardError === null && Date.now() - state.selectedAt < LOADING_DELAY_MS) {
+      return;
+    }
     els.detail.hidden = true;
     els.runDetail.hidden = true;
     els.inboxDetail.hidden = true;
     els.placeholder.hidden = true;
+    els.board.hidden = false;
     showMessage(els.connection, null);
     renderBoard();
     return;
   }
+  renderSelected(id);
+  // Leaving the board, it stays on screen until what was picked can be shown.
+  if (!els.detail.hidden || !els.runDetail.hidden || !els.inboxDetail.hidden || !els.placeholder.hidden) {
+    els.board.hidden = true;
+  }
+}
+
+function renderSelected(id) {
   if (inboxIdOf(id) !== null) {
     els.detail.hidden = true;
     els.runDetail.hidden = true;
@@ -2754,17 +2775,11 @@ function renderMain() {
   }
   els.runDetail.hidden = true;
   const detail = currentDetail();
-  if (
-    id !== null &&
-    detail === null &&
-    state.detailError === null &&
-    Date.now() - state.selectedAt < LOADING_DELAY_MS
-  ) {
-    // Leave the previous incident on screen for a moment so switching does not flash.
+  if (detail === null && state.detailError === null && Date.now() - state.selectedAt < LOADING_DELAY_MS) {
+    // Leave the previous incident, or the board, on screen for a moment so switching does not flash.
     return;
   }
-  const showDetail = id !== null && detail !== null;
-  if (!showDetail) {
+  if (detail === null) {
     renderPlaceholder();
     els.detail.hidden = true;
     els.placeholder.hidden = false;
