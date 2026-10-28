@@ -11,7 +11,7 @@ import {
 import { CHANGED_BANK_DETAILS_REASON, NEW_BANK_DETAILS_REASON, ORIGINAL_DEADLINE_REASON } from "./decide.js";
 import { deadlineMinutes } from "./deadlines.js";
 import { heldBeforePaying, pendingClose, REPLACEMENT_DEADLINE_REASON } from "./engine.js";
-import { candidatesFor, invoiceIndex, type InvoiceIndex } from "./intake.js";
+import { candidatesFor, invoiceIndex, type InvoiceIndex, type Match } from "./intake.js";
 import {
   isExpired,
   type Approval,
@@ -200,10 +200,27 @@ function progress(approval: { signoffs: unknown[]; needed: number }): string {
   return `${approval.signoffs.length} of ${approval.needed} ${approval.needed === 1 ? "approval" : "approvals"}`;
 }
 
-function inboxText(count: number): string {
+// Waiting uploads that name an invoice. offered: those the inbox offers it to
+// first, because it is the one invoice they name, not only among other digits,
+// and it is open or escalated. named: those that name it any weaker way, beside
+// other invoices, only nearly or among other digits.
+interface InboxNames {
+  offered: number;
+  named: number;
+}
+
+const NO_NAMES: InboxNames = { offered: 0, named: 0 };
+
+function offeredText(count: number): string {
   return count === 1
-    ? "An email waiting in the inbox names this invoice"
-    : `${count} emails waiting in the inbox name this invoice`;
+    ? "An email waiting in the inbox names only this invoice"
+    : `${count} emails waiting in the inbox name only this invoice`;
+}
+
+function namedText(count: number): string {
+  return count === 1
+    ? "An email waiting in the inbox may be about this invoice"
+    : `${count} emails waiting in the inbox may be about this invoice`;
 }
 
 function deadlineText(obligation: Obligation, attempt: Attempt): Situation {
@@ -254,7 +271,7 @@ function personSituation(
   ledger: Ledger,
   obligation: Obligation,
   kinds: ReadonlySet<CashKind>,
-  inbox: number,
+  inbox: InboxNames,
   now: number,
 ): Situation | null {
   const latest: Approval | undefined = ledger.latestApproval(obligation.invoiceId);
@@ -279,8 +296,8 @@ function personSituation(
     }
     return situation("person", "with-person", "Its payments failed, and no approval request is open");
   }
-  if (inbox > 0 && kinds.size > 0) {
-    return situation("person", "inbox", inboxText(inbox));
+  if (inbox.offered > 0 && kinds.size > 0) {
+    return situation("person", "inbox", offeredText(inbox.offered));
   }
   return null;
 }
@@ -339,7 +356,7 @@ function invoiceEntry(
   ledger: Ledger,
   obligation: Obligation,
   lines: CashLine[],
-  inbox: number,
+  inbox: InboxNames,
   now: number,
 ): Ranked {
   const invoiceId: string = obligation.invoiceId;
@@ -370,8 +387,11 @@ function invoiceEntry(
   } else {
     found = otherSituation(ledger, obligation, lines);
   }
-  if (inbox > 0 && found.reason !== "inbox") {
-    also.push(inboxText(inbox));
+  if (inbox.offered > 0 && found.reason !== "inbox") {
+    also.push(offeredText(inbox.offered));
+  }
+  if (inbox.named > 0) {
+    also.push(namedText(inbox.named));
   }
   const atRisk: BoardMoney[] = moneyOf(lines);
   const first: LedgerEvent | undefined = ledger.firstEvent(invoiceId);
@@ -441,22 +461,29 @@ function add(map: Map<string, CashLine[]>, key: string, line: CashLine): void {
   map.set(key, list);
 }
 
-// How many waiting uploads name each invoice, exactly or nearly, as the inbox's
-// match card lists them. The invoices are indexed once for every upload.
-function inboxCounts(ledger: Ledger): Map<string, number> {
-  const counts: Map<string, number> = new Map<string, number>();
+// How many waiting uploads name each invoice, split as the inbox's match card
+// offers them. The invoices are indexed once for every upload.
+function inboxNames(ledger: Ledger): Map<string, InboxNames> {
+  const names: Map<string, InboxNames> = new Map<string, InboxNames>();
   const waiting: Upload[] = ledger.uploads(0).filter((upload: Upload): boolean => upload.state === "waiting");
   if (waiting.length === 0) {
-    return counts;
+    return names;
   }
   const index: InvoiceIndex = invoiceIndex(ledger);
   for (const upload of waiting) {
-    for (const candidate of candidatesFor(ledger, upload, index).candidates) {
+    const match: Match = candidatesFor(ledger, upload, index);
+    for (const candidate of match.candidates) {
       const id: string = candidate.invoiceId;
-      counts.set(id, (counts.get(id) ?? 0) + 1);
+      const counted: InboxNames = names.get(id) ?? { ...NO_NAMES };
+      if (match.suggested === id) {
+        counted.offered += 1;
+      } else {
+        counted.named += 1;
+      }
+      names.set(id, counted);
     }
   }
-  return counts;
+  return names;
 }
 
 const GROUP_ORDER: Record<BoardGroup, number> = { person: 0, deadline: 1, bank: 2, open: 3 };
@@ -494,14 +521,14 @@ function rankedBoard(ledger: Ledger, now: number): Ranked[] {
     add(run !== undefined && line.runId === run.id ? byRow : byInvoice, line.invoiceId, line);
   }
 
-  const inbox: Map<string, number> = inboxCounts(ledger);
+  const inbox: Map<string, InboxNames> = inboxNames(ledger);
   const ranked: Ranked[] = [];
   for (const obligation of ledger.obligations()) {
     if (obligation.state === "settled" || obligation.state === "rejected") {
       continue;
     }
     const id: string = obligation.invoiceId;
-    ranked.push(invoiceEntry(ledger, obligation, byInvoice.get(id) ?? [], inbox.get(id) ?? 0, now));
+    ranked.push(invoiceEntry(ledger, obligation, byInvoice.get(id) ?? [], inbox.get(id) ?? NO_NAMES, now));
   }
   if (run !== undefined) {
     const found: Situation = runSituation(run, runStatus(ledger, run), ledger.latestRunApproval(run.id));
