@@ -1,5 +1,6 @@
+import { Worker } from "node:worker_threads";
 import { numberOf, numbersOf, type InvoiceNumber } from "./duplicates.js";
-import { noteTexts, parseEmail, PARTIAL_NOTES, type EmailNote, type ParsedUpload, type UploadSource } from "./eml.js";
+import { noteTexts, PARTIAL_NOTES, type EmailNote, type ParsedEmail, type ParsedUpload, type UploadSource } from "./eml.js";
 import { unverifiedSenders, type SupplierEmail } from "./emails.js";
 import { note, noteSenders } from "./engine.js";
 import {
@@ -32,20 +33,88 @@ export class EmailRefusedError extends Error {
   }
 }
 
-// Parses an upload and stores it, waiting. Throws EmailRefusedError for an email
-// PayOnce cannot read, and DuplicateUploadError for one already in the inbox.
+// How long one parse may run once the worker has started, and how much memory it
+// may take. parseEmail is linear and its 2 MiB worst cases take a few hundred
+// milliseconds at most, so a parse past either limit is a slow path nobody has
+// found yet. It then refuses one upload instead of stalling the dispatcher, the
+// watcher and the page.
+const PARSE_BUDGET_MS: number = 2_000;
+const PARSE_HEAP_MB: number = 256;
+// Starting a worker takes about a tenth of a second, and longer the first time
+// tsx compiles the parser.
+const WORKER_START_MS: number = 15_000;
+
+const TOO_SLOW: string = `PayOnce stopped reading this email after ${PARSE_BUDGET_MS / 1000} seconds and did not keep it. Read it in your own mail client, and report the email, because no email should take this long`;
+const TOO_MUCH_MEMORY: string = "PayOnce stopped reading this email because it needed more memory than any email should, and did not keep it. Read it in your own mail client, and report the email";
+
+// One parse at a time, so uploads arriving together cost one worker's memory.
+let parsing: Promise<unknown> = Promise.resolve();
+
+// Parses an upload in a worker thread, off the thread that runs the agent and
+// the page. Throws EmailRefusedError for an email PayOnce cannot read, or one
+// that took longer than PARSE_BUDGET_MS or more than PARSE_HEAP_MB to read.
+export function parseUpload(raw: Buffer, source: UploadSource): Promise<ParsedEmail> {
+  const next: Promise<ParsedEmail> = parsing.then((): Promise<ParsedEmail> => parseInWorker(raw, source));
+  parsing = next.catch((): void => undefined);
+  return next;
+}
+
+function parseInWorker(raw: Buffer, source: UploadSource): Promise<ParsedEmail> {
+  return new Promise<ParsedEmail>((resolve, reject): void => {
+    const worker: Worker = new Worker(new URL("./parse-worker.ts", import.meta.url), {
+      resourceLimits: { maxOldGenerationSizeMb: PARSE_HEAP_MB, maxYoungGenerationSizeMb: 32, stackSizeMb: 4 },
+    });
+    let settled: boolean = false;
+    let timer: NodeJS.Timeout;
+    const finish = (outcome: ParsedUpload | Error): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      void worker.terminate();
+      if (outcome instanceof Error) {
+        reject(outcome);
+      } else if (outcome.ok) {
+        resolve(outcome.email);
+      } else {
+        reject(new EmailRefusedError(outcome.error, outcome.tooLarge));
+      }
+    };
+    timer = setTimeout((): void => finish(new Error("The email parser did not start")), WORKER_START_MS);
+    worker.on("message", (message: unknown): void => {
+      if (message !== "ready") {
+        finish(message as ParsedUpload);
+        return;
+      }
+      // The budget starts with the parse, not with the worker.
+      clearTimeout(timer);
+      timer = setTimeout((): void => finish(new EmailRefusedError(TOO_SLOW, false)), PARSE_BUDGET_MS);
+      // A copy of its own, so moving it to the worker detaches nothing else.
+      const bytes: Uint8Array<ArrayBuffer> = new Uint8Array(raw.length);
+      bytes.set(raw);
+      worker.postMessage({ raw: bytes, source }, [bytes.buffer]);
+    });
+    worker.on("error", (error: Error): void => {
+      finish(
+        (error as NodeJS.ErrnoException).code === "ERR_WORKER_OUT_OF_MEMORY"
+          ? new EmailRefusedError(TOO_MUCH_MEMORY, false)
+          : error,
+      );
+    });
+    worker.on("exit", (): void => finish(new Error("The email parser stopped before it answered")));
+  });
+}
+
+// Stores a parsed upload, waiting. Throws DuplicateUploadError for one already in
+// the inbox.
 export function storeUpload(
   ledger: Ledger,
-  raw: Buffer,
+  email: ParsedEmail,
   uploadedBy: string,
   source: UploadSource,
   fileName: string | null,
 ): Upload {
-  const parsed: ParsedUpload = parseEmail(raw, source);
-  if (!parsed.ok) {
-    throw new EmailRefusedError(parsed.error, parsed.tooLarge);
-  }
-  const email = parsed.email;
   return ledger.addUpload({
     uploadedBy,
     source,

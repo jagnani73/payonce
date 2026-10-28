@@ -40,13 +40,14 @@ import {
 import { cashReport, payRunLines, type CashReport } from "./cash-position.js";
 import { CurrencyBusyError } from "./currency-lock.js";
 import { Dispatcher } from "./dispatcher.js";
-import { MAX_EMAIL_BYTES, noteTexts } from "./eml.js";
+import { MAX_EMAIL_BYTES, noteTexts, type ParsedEmail } from "./eml.js";
 import type { EmailFindings, SupplierEmail } from "./emails.js";
 import { describeQuotes } from "./fx.js";
 import {
   candidatesFor,
   deliverUpload,
   EmailRefusedError,
+  parseUpload,
   storeUpload,
   UploadNotWaitingError,
   type Match,
@@ -1045,7 +1046,10 @@ async function addUpload(request: IncomingMessage): Promise<unknown> {
   const fileName: string | null =
     source === "file" && typeof body["fileName"] === "string" ? cleanFileName(body["fileName"]) || null : null;
   try {
-    const upload: Upload = storeUpload(engine.ledger, Buffer.from(eml, "base64"), uploadedBy, source, fileName);
+    // Parsed in a worker thread. What follows on this thread is one insert and
+    // matching over at most 32,000 characters.
+    const email: ParsedEmail = await parseUpload(Buffer.from(eml, "base64"), source);
+    const upload: Upload = storeUpload(engine.ledger, email, uploadedBy, source, fileName);
     const match: Match = candidatesFor(engine.ledger, upload);
     return { id: upload.id, candidates: match.candidates, suggested: match.suggested };
   } catch (error: unknown) {
