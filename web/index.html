@@ -59,6 +59,7 @@
         </svg>
         <span class="brand__name">PayOnce</span>
         <span class="brand__what">Payment incident agent</span>
+        <button id="board-button" class="board-nav" type="button">Incident board</button>
       </div>
       <p class="sandbox-note">Sandbox only. No real money.</p>
     </header>
@@ -184,6 +185,40 @@
           <h1 id="placeholder-title">Loading</h1>
           <p id="placeholder-text"></p>
         </section>
+
+        <article id="board" class="board" aria-labelledby="board-title" hidden>
+          <!-- Slot for active rail outages, above everything else on the board. Empty and hidden until outage detection exists. -->
+          <section id="board-outages" class="board__outages" aria-label="Rail outages" hidden></section>
+
+          <header class="board__head">
+            <div>
+              <h1 id="board-title">Incident board</h1>
+              <p class="board__lead">Every invoice that is not closed, most urgent first. Within a group, the most money comes first, then the oldest.</p>
+            </div>
+            <div class="board__filters">
+              <label class="field">
+                <span class="field__label">Group</span>
+                <select id="board-group"></select>
+              </label>
+              <label class="field">
+                <span class="field__label">Wallet</span>
+                <select id="board-currency"></select>
+              </label>
+              <label class="field">
+                <span class="field__label">Origin</span>
+                <select id="board-origin"></select>
+              </label>
+            </div>
+          </header>
+
+          <p id="board-error" class="banner" role="status" hidden></p>
+          <section class="card board__totals" aria-labelledby="board-totals-title">
+            <h2 id="board-totals-title">Money that could still leave a wallet</h2>
+            <div id="board-totals"></div>
+          </section>
+          <div id="board-groups" class="board__groups"></div>
+          <p class="hint board__foot">These are the cash panel's figures. PayOnce has no exchange rates, so amounts in different currencies are ranked as plain numbers. "Waiting" counts from when PayOnce took the invoice on, or from when the pay run was uploaded.</p>
+        </article>
 
         <article id="detail" class="detail" hidden>
           <header id="detail-header" class="detail__header"></header>
