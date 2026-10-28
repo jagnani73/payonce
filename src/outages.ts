@@ -143,15 +143,22 @@ export function railFailureSeen(
     }
     const rule: OutageRule = outageRuleFromEnv();
     const method: string = transfer.transfer_method.toUpperCase();
-    // PayOnce dates a failure by when it first sees it. A transfer created before
-    // outages were counted, or one first seen long after it could have failed, as
-    // after PayOnce was down, is left out. One whose creation time cannot be read
-    // counts.
+    // A failure is dated by the transfer's updated_at, when Airwallex last changed
+    // it, which for a failed transfer is when it failed or was cancelled after.
+    // One already older than the window cannot count, so it is left out. Without
+    // an updated_at PayOnce can read, it is dated by when PayOnce first sees it,
+    // and left out once the transfer's creation time plus the bank deadline plus
+    // the window has passed, as after PayOnce was down. Either way a transfer
+    // created before outages were counted is left out, and one whose creation time
+    // cannot be read counts.
     const created: number = Date.parse(transfer.created_at);
+    const updated: number = Date.parse(transfer.updated_at ?? "");
+    const dated: boolean = Number.isFinite(updated);
     if (
-      Number.isFinite(created) &&
-      (created < Date.parse(ledger.outagesSince()) ||
-        now > created + (deadlineMinutes(method) + rule.windowMinutes) * MINUTE_MS)
+      (Number.isFinite(created) && created < Date.parse(ledger.outagesSince())) ||
+      (dated
+        ? updated <= now - rule.windowMinutes * MINUTE_MS
+        : Number.isFinite(created) && now > created + (deadlineMinutes(method) + rule.windowMinutes) * MINUTE_MS)
     ) {
       return undefined;
     }
@@ -174,6 +181,7 @@ export function railFailureSeen(
         origin,
         createdAt: transfer.created_at ?? "",
         seenBy,
+        failedAt: new Date(dated ? updated : now).toISOString(),
       },
       rule,
       declaredLine,
@@ -394,6 +402,8 @@ export interface CountedPayout {
   invoiceId: string | null;
   origin: ObligationOrigin;
   code: string;
+  // When it failed (Airwallex's updated_at, or when PayOnce first read it).
+  failedAt: string;
   seenAt: string;
 }
 
@@ -449,6 +459,7 @@ export function outageView(ledger: Ledger, outage: Outage, holding: OutageHoldin
         invoiceId: failure.invoiceId,
         origin: failure.origin,
         code: failure.code,
+        failedAt: failure.failedAt,
         seenAt: failure.seenAt,
       }),
     );

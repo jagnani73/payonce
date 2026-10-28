@@ -924,6 +924,12 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     // before the column and on a found payout's.
     opened_at: "TEXT",
   },
+  rail_failures: {
+    // When the transfer failed by Airwallex's updated_at, or when PayOnce first
+    // read it as failed when Airwallex gave no readable updated_at. Null on rows
+    // from before the column, which count by seen_at.
+    failed_at: "TEXT",
+  },
   events: {
     topic: "TEXT",
     // The hash of the invoice's line before this one, and this line's own.
@@ -1489,6 +1495,9 @@ export interface NewRailFailure {
   origin: ObligationOrigin;
   createdAt: string;
   seenBy: FailureSeenBy;
+  // When it failed, as an ISO time: the transfer's updated_at when Airwallex
+  // gives one PayOnce can read, otherwise when PayOnce first read it as failed.
+  failedAt: string;
 }
 
 export interface RailFailure extends NewRailFailure {
@@ -1508,6 +1517,7 @@ interface RailFailureRow {
   created_at: string;
   seen_at: string;
   seen_by: FailureSeenBy;
+  failed_at: string | null;
 }
 
 function toRailFailure(row: RailFailureRow): RailFailure {
@@ -1523,6 +1533,7 @@ function toRailFailure(row: RailFailureRow): RailFailure {
     createdAt: row.created_at,
     seenAt: row.seen_at,
     seenBy: row.seen_by,
+    failedAt: row.failed_at ?? row.seen_at,
   };
 }
 
@@ -1832,7 +1843,8 @@ export class Ledger {
   }
 
   // Records a failure on a rail, once per transfer, and declares an outage on the
-  // rail when count.failures different payees failed in the window, counted
+  // rail when count.failures different payees failed in the window (dated by
+  // failed_at, or seen_at on rows from before that column), counted
   // from the end of the rail's last outage at the earliest, so the failures one
   // outage counted never declare the next. One write transaction, so two
   // processes that read the same failures declare one outage between them. The
@@ -1852,8 +1864,8 @@ export class Ledger {
         .prepare(
           `INSERT OR IGNORE INTO rail_failures
              (transfer_id, currency, method, code, payee, reference, invoice_id, origin,
-              created_at, seen_at, seen_by)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              created_at, seen_at, seen_by, failed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           failure.transferId,
@@ -1867,6 +1879,7 @@ export class Ledger {
           failure.createdAt,
           new Date(now).toISOString(),
           failure.seenBy,
+          failure.failedAt,
         );
       if (Number(inserted.changes) !== 1 || this.activeOutage(currency, method) !== undefined) {
         return undefined;
@@ -1879,8 +1892,9 @@ export class Ledger {
       const counted: RailFailure[] = (
         this.db
           .prepare(
-            `SELECT * FROM rail_failures WHERE currency = ? AND method = ? AND seen_at > ?
-              ORDER BY seen_at, rowid`,
+            `SELECT * FROM rail_failures
+              WHERE currency = ? AND method = ? AND COALESCE(failed_at, seen_at) > ?
+              ORDER BY COALESCE(failed_at, seen_at), rowid`,
           )
           .all(currency, method, since) as unknown as RailFailureRow[]
       ).map(toRailFailure);

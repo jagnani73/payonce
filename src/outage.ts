@@ -48,7 +48,7 @@ function show(view: OutageView): void {
 
 function describeCounted(payout: CountedPayout): string {
   const invoice: string = payout.invoiceId === null ? "no invoice" : payout.invoiceId;
-  return `${payout.reference} (${invoice}, ${payout.origin === "payonce" ? "sent by PayOnce" : "sent outside PayOnce"}), ${payout.code}, seen ${payout.seenAt}`;
+  return `${payout.reference} (${invoice}, ${payout.origin === "payonce" ? "sent by PayOnce" : "sent outside PayOnce"}), ${payout.code}, failed ${payout.failedAt}, seen ${payout.seenAt}`;
 }
 
 function describeHeld(item: HeldItem): string {

@@ -26,6 +26,9 @@ export interface Transfer {
   reference: string;
   short_reference_id: string;
   created_at: string;
+  // When Airwallex last changed the transfer, such as to FAILED, in the same form
+  // as created_at.
+  updated_at?: string;
   transfer_method: string;
   transfer_amount: number;
   transfer_currency: string;
