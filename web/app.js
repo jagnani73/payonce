@@ -3602,7 +3602,7 @@ async function submitEmail(event) {
     // A file goes as its bytes, so mail in another character set is decoded once, on the server.
     const bytes = file !== null ? new Uint8Array(await file.arrayBuffer()) : new TextEncoder().encode(pasted);
     if (bytes.length > limit) {
-      throw new Error("The email is larger than 2 MB. Forward it without attachments, or paste its source without the attachment parts.");
+      throw new Error("The email is larger than 2 MB. Paste its source without the attachment parts. Use the supplier's own email, not a forward.");
     }
     const created = await api("/api/inbox", {
       method: "POST",

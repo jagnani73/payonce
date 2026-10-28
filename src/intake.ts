@@ -44,8 +44,8 @@ const PARSE_HEAP_MB: number = 256;
 // tsx compiles the parser.
 const WORKER_START_MS: number = 15_000;
 
-const TOO_SLOW: string = `PayOnce stopped reading this email after ${PARSE_BUDGET_MS / 1000} seconds and did not keep it. Read it in your own mail client, and report the email, because no email should take this long`;
-const TOO_MUCH_MEMORY: string = "PayOnce stopped reading this email because it needed more memory than any email should, and did not keep it. Read it in your own mail client, and report the email";
+const TOO_SLOW: string = `PayOnce gave up reading this email because it took more than ${PARSE_BUDGET_MS / 1000} seconds, and did not keep it. Read it in your mail client instead, and report it, because no email should take this long`;
+const TOO_MUCH_MEMORY: string = `PayOnce gave up reading this email because it needed more than ${PARSE_HEAP_MB} MB of memory, and did not keep it. Read it in your mail client instead, and report it, because no email should need this much`;
 
 // One parse at a time, so uploads arriving together cost one worker's memory.
 let parsing: Promise<unknown> = Promise.resolve();

@@ -1154,7 +1154,7 @@ function messageIdOf(fields: Map<string, string[]>, walk: Walk): string | null {
 // Reads an uploaded email, or says why it cannot.
 export function parseEmail(raw: Buffer, source: UploadSource): ParsedUpload {
   if (raw.length > MAX_EMAIL_BYTES) {
-    return refused("The email is larger than 2 MB. Forward it without attachments, or paste its source without the attachment parts", true);
+    return refused("The email is larger than 2 MB. Paste its source without the attachment parts. Use the supplier's own email, not a forward", true);
   }
   if (raw.length >= 4 && raw[0] === 0xd0 && raw[1] === 0xcf && raw[2] === 0x11 && raw[3] === 0xe0) {
     return refused("This is an Outlook .msg file. Save the email as .eml, or paste its source");
