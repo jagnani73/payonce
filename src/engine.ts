@@ -596,8 +596,12 @@ async function assess(
       bankDetails,
     ),
     emailFromUnverifiedSender: unverified.length > 0,
+    // An email delivered after the findings were saved, for example by another
+    // process during this look, has not been read.
     emailsUnread:
-      findings.unread === true || (emails.length > 0 && stored === undefined),
+      findings.unread === true ||
+      (emails.length > 0 && stored === undefined) ||
+      (findings.emailsRead ?? emails.length) < emails.length,
     availableBalanceMinor: availableMinor,
     committedMinor: committed,
     reserveFloorMinor: floorMinor,
