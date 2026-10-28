@@ -38,17 +38,30 @@ export interface EmailReader {
   read(emails: SupplierEmail[]): Promise<EmailFindings>;
 }
 
+// Lowercases A to Z only. toLowerCase also folds some letters outside ASCII into
+// it: the Kelvin sign U+212A becomes k, which would let K-raft.test pass as
+// kraft.test.
+function asciiLower(text: string): string {
+  return text.replace(/[A-Z]/g, (letter: string): string => letter.toLowerCase());
+}
+
+// An address of printable ASCII only. Anything else never matches a domain.
+const PRINTABLE_ASCII: RegExp = /^[\x21-\x7e]+$/;
+
 // Senders whose domain is not the one on file for the supplier. This is a plain
-// comparison in code, so it holds whatever the reader makes of the text.
+// comparison in code, so it holds whatever the reader makes of the text. An
+// address with any character outside printable ASCII is flagged, and the rest is
+// compared with only A to Z lowercased.
 export function unverifiedSenders(
   emails: SupplierEmail[],
   domainOnFile: string,
 ): string[] {
-  const expected: string = domainOnFile.toLowerCase();
+  const expected: string = asciiLower(domainOnFile.trim());
   const senders: string[] = emails
-    .map((email: SupplierEmail): string => email.from.trim().toLowerCase())
+    .map((email: SupplierEmail): string => asciiLower(email.from.trim()))
     .filter(
-      (from: string): boolean => from.slice(from.lastIndexOf("@") + 1) !== expected,
+      (from: string): boolean =>
+        !PRINTABLE_ASCII.test(from) || from.slice(from.lastIndexOf("@") + 1) !== expected,
     );
   return [...new Set<string>(senders)];
 }
