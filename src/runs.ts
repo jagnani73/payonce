@@ -23,7 +23,7 @@ import {
   type Barred,
   type SignoffRule,
 } from "./approvers.js";
-import { arrivalFor, today } from "./arrival.js";
+import { arrivalFor, ifSentOn, today } from "./arrival.js";
 import { bankDetailsKey } from "./assess.js";
 import { committedAcross, committedByInvoice, type CommittedExcept } from "./cash-position.js";
 import { withCurrencyLocks } from "./currency-lock.js";
@@ -522,6 +522,32 @@ export function termsOf(run: Run, rows: CheckedRow[], cash: RunCash[]): RunTerms
   return runTermsFor(run.id, run.fileHash, run.uploadedBy, payRows(rows), totalsOf(rows, cash));
 }
 
+// The day the estimates in a run's terms count from, or null when no row has one.
+function termsDay(terms: RunTerms): string | null {
+  return terms.rows.find((row: RunRowTerms): boolean => row.arrival !== undefined)?.arrival?.from ?? null;
+}
+
+// The day a check counts arrival estimates from: the day of the run's request
+// while it is requested or approved and has not expired, so a check after
+// midnight keeps its binding and its signoffs. Otherwise today.
+function checkDay(ledger: Ledger, runId: number): string {
+  const latest: RunApproval | undefined = ledger.latestRunApproval(runId);
+  return latest !== undefined &&
+    (latest.state === "requested" || latest.state === "approved") &&
+    !isExpired(latest)
+    ? (termsDay(JSON.parse(latest.terms) as RunTerms) ?? today())
+    : today();
+}
+
+// The rows with every pay row's estimate counted from the day. Only the dates
+// change, so nothing is read again.
+function countedFrom(rows: CheckedRow[], day: string): CheckedRow[] {
+  return rows.map(
+    (row: CheckedRow): CheckedRow =>
+      row.arrival === null || row.arrival.from === day ? row : { ...row, arrival: ifSentOn(row.arrival, day) },
+  );
+}
+
 // The largest currency total, which approver limits are checked against, as the
 // page and pnpm payrun show it.
 export function largestTotal(terms: RunTerms): { amountMinor: number; currency: string } {
@@ -697,14 +723,15 @@ function settleRunRequest(
   ledger: Ledger,
   policy: ApprovalPolicy,
   run: Run,
-  rows: CheckedRow[],
+  checked: CheckedRow[],
   cash: RunCash[],
 ): RunLine[] {
   const lines: RunLine[] = [];
   const say = (kind: EventKind, message: string, topic: string | null = null): void => {
     lines.push({ kind, message, topic });
   };
-  const terms: RunTerms = termsOf(run, rows, cash);
+  let rows: CheckedRow[] = checked;
+  let terms: RunTerms = termsOf(run, rows, cash);
   if (terms.rows.length === 0) {
     if (ledger.voidOpenRunApprovals(run.id)) {
       say("approval", "Approval request withdrawn: every row is skipped now");
@@ -716,7 +743,7 @@ function settleRunRequest(
     );
     return lines;
   }
-  const binding: string = bindingOf(terms);
+  let binding: string = bindingOf(terms);
   const amount: PaymentAmount = runAmount(terms);
   const rule: SignoffRule = runRule(policy, rows, amount);
   const eligible: Approver[] = eligibleApprovers(policy, amount, runBarred(ledger, terms));
@@ -746,6 +773,15 @@ function settleRunRequest(
     latest.needed >= rule.needed &&
     !isExpired(latest);
   if (!same) {
+    // A new request counts from today, even when the check counted from the open
+    // request's day to keep it. The stored rows count from today too.
+    const day: string = today();
+    if (rows.some((row: CheckedRow): boolean => row.arrival !== null && row.arrival.from !== day)) {
+      rows = countedFrom(rows, day);
+      ledger.setRunArrivals(run.id, rows);
+      terms = termsOf(run, rows, cash);
+      binding = bindingOf(terms);
+    }
     if (latest?.state === "requested" && isExpired(latest)) {
       say(
         "approval",
@@ -849,7 +885,12 @@ export async function recheckRun(engine: Engine, runId: number): Promise<void> {
   if (run?.state !== "waiting") {
     throw new Error(`Run ${runId} is not waiting for approval, so there is nothing to check`);
   }
-  const check: RunCheck = await checkRows(engine, fileRowsOf(engine.ledger, run), runId);
+  const check: RunCheck = await checkRows(
+    engine,
+    fileRowsOf(engine.ledger, run),
+    runId,
+    checkDay(engine.ledger, runId),
+  );
   const lines: RunLine[] | undefined = engine.ledger.setRunRows(
     runId,
     check.rows,
@@ -967,13 +1008,7 @@ export async function releaseRun(engine: Engine, agent: Dispatcher, runId: numbe
     return;
   }
   const approved: RunTerms = JSON.parse(approval.terms) as RunTerms;
-  const check: RunCheck = await checkRows(
-    engine,
-    fileRowsOf(ledger, run),
-    runId,
-    approved.rows.find((row: RunRowTerms): boolean => row.arrival !== undefined)?.arrival?.from ??
-      today(),
-  );
+  const check: RunCheck = await checkRows(engine, fileRowsOf(ledger, run), runId, termsDay(approved) ?? today());
   const terms: RunTerms = termsOf(run, check.rows, check.cash);
   const amount: PaymentAmount = runAmount(terms);
   let why: string | null = null;
@@ -991,9 +1026,11 @@ export async function releaseRun(engine: Engine, agent: Dispatcher, runId: numbe
     );
     why = problem === null ? null : `is void: ${problem}`;
   }
+  // Rows left waiting for a person count from today, as the next check does.
+  const waiting: CheckedRow[] = countedFrom(check.rows, today());
   if (why !== null) {
     // Another process may have released the run, or checked it again, since.
-    if (ledger.setRunRows(runId, check.rows, JSON.stringify(check.cash), approval.id, (): boolean => true) === undefined) {
+    if (ledger.setRunRows(runId, waiting, JSON.stringify(check.cash), approval.id, (): boolean => true) === undefined) {
       return;
     }
     noteCheck(ledger, runId, check.rows, check.cash);
@@ -1037,7 +1074,7 @@ export async function releaseRun(engine: Engine, agent: Dispatcher, runId: numbe
       const fresh: RunCash[] = await cashCheck(engine, check.rows, runId);
       const short: RunCash | undefined = fresh.find((entry: RunCash): boolean => entry.problem !== null);
       if (short !== undefined) {
-        if (ledger.setRunRows(runId, check.rows, JSON.stringify(fresh), approval.id, (): boolean => true) !== undefined) {
+        if (ledger.setRunRows(runId, waiting, JSON.stringify(fresh), approval.id, (): boolean => true) !== undefined) {
           runNote(
             ledger,
             runId,

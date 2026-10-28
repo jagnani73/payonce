@@ -248,6 +248,17 @@ export function arrivalText(arrival: ArrivalTerms): string {
     : `${routeText(arrival)}${by}; due ${arrival.dueDate ?? ""}; ${RISK_WORDS[risk]}`;
 }
 
+// The same estimate as if the payment were sent on another day. Only the dates
+// change, so nothing is read again.
+export function ifSentOn(arrival: ArrivalTerms, day: string): ArrivalTerms {
+  return arrivalBlock({
+    ...arrival,
+    from: day,
+    earliest: arrival.minDays === null ? null : addBusinessDays(day, arrival.minDays),
+    latest: arrival.maxDays === null ? null : addBusinessDays(day, arrival.maxDays),
+  });
+}
+
 // The timeline line for a payment just sent, such as "Original P261028-ABC usually
 // arrives between 2026-10-28 and 2026-10-30. ACH takes 0 to 2 business days. Due
 // 2026-11-02, so it should arrive in time. ..."

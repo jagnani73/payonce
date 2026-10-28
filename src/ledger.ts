@@ -2612,6 +2612,20 @@ export class Ledger {
     });
   }
 
+  // Rewrites the arrival estimates of a run's rows, inside the transaction of a
+  // check that opens a request counting from another day than the check did.
+  setRunArrivals(runId: number, rows: CheckedRow[]): void {
+    if (!this.db.isTransaction) {
+      throw new Error("A run's arrival estimates are rewritten only inside a ledger transaction");
+    }
+    const update: StatementSync = this.db.prepare(
+      "UPDATE run_rows SET arrival = ? WHERE run_id = ? AND line = ?",
+    );
+    for (const row of rows) {
+      update.run(row.arrival === null ? null : JSON.stringify(row.arrival), runId, row.line);
+    }
+  }
+
   // Cancels a run still waiting, voids its open request and drops its rows, so
   // their invoice numbers are free again. False when it is not waiting.
   cancelRun(runId: number, cancelledBy: string, note: string): boolean {
