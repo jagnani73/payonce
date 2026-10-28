@@ -1275,11 +1275,12 @@ export class Ledger {
   }
 
   // For an attempt Airwallex refused to create. It never became a transfer, so
-  // it releases the lock.
+  // it releases the lock. One a look has since found a transfer for is kept.
   failAttempt(requestId: string, failureCode: string | null): void {
     this.db
       .prepare(
-        "UPDATE attempts SET state = 'failed', failure_code = ? WHERE request_id = ?",
+        `UPDATE attempts SET state = 'failed', failure_code = ?
+          WHERE request_id = ? AND state = 'pending' AND transfer_id IS NULL`,
       )
       .run(failureCode, requestId);
   }

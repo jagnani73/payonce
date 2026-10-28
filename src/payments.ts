@@ -36,6 +36,10 @@ export function wasRejected(error: unknown): error is AirwallexError {
 // have been. lapsed: it may have been, and its quote ran out a bank deadline ago.
 export type SendTry = "first" | "retry" | "lapsed";
 
+// The codes Airwallex documents for a quote it will not create a transfer on. The
+// sandbox has not shown its own: it checks the request_id first.
+const QUOTE_REFUSALS: string[] = ["quote_expired", "quote_id_invalid"];
+
 // Safe to call again for the same attempt: the request_id is reused, so Airwallex
 // either creates the transfer once or answers duplicate_request_id, which it
 // checks before anything else, the quote included, and the transfer with that
@@ -44,8 +48,9 @@ export type SendTry = "first" | "retry" | "lapsed";
 // and releases the lock, with one exception: a retry of a payment from another
 // currency's wallet stays pending until its quote ran out a bank deadline ago,
 // so a slow first try or a passing refusal cannot release the lock while the
-// quote could still pay. Then one last try goes out under the same request_id,
-// and a refusal fails the attempt if Airwallex also lists no transfer with it.
+// quote could still pay. Then one last try goes out under the same request_id.
+// Only a quote refusal fails it then, and only if Airwallex also lists no
+// transfer with it. Any other error, the listing's included, leaves it pending.
 export async function sendAttempt(
   client: AirwallexClient,
   ledger: Ledger,
@@ -76,12 +81,16 @@ export async function sendAttempt(
       throw error;
     }
     const duplicate: boolean = error.code === "duplicate_request_id";
+    const quoteRefused: boolean = tried === "lapsed" && QUOTE_REFUSALS.includes(error.code ?? "");
     const existing: Transfer | undefined =
-      duplicate || tried === "lapsed"
+      duplicate || quoteRefused
         ? await findTransferByRequestId(client, attempt.requestId)
         : undefined;
     if (existing === undefined) {
-      if (!duplicate && !(tried === "retry" && attempt.quoteId !== null)) {
+      if (
+        !duplicate &&
+        (tried === "lapsed" ? quoteRefused : tried === "first" || attempt.quoteId === null)
+      ) {
         ledger.failAttempt(attempt.requestId, error.code ?? null);
       }
       throw error;

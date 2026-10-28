@@ -1610,8 +1610,8 @@ async function look(engine: Engine, invoiceId: string): Promise<NextLook> {
         await requireAccount(engine, obligation, approved.accountKey, "payment was approved");
       }
       // Once its quote has run out a bank deadline ago, a payment from another
-      // currency's wallet has one last try, which fails it if Airwallex refuses it
-      // and lists no transfer for it. A person then approves it on a new quote.
+      // currency's wallet has one last try, which fails it if Airwallex refuses its
+      // quote and lists no transfer for it. A person then approves it on a new quote.
       const lapsed: boolean = quoteLapsed(obligation, attempt);
       try {
         transfer = await sendAttempt(
@@ -1622,7 +1622,15 @@ async function look(engine: Engine, invoiceId: string): Promise<NextLook> {
           lapsed ? "lapsed" : "retry",
         );
       } catch (error: unknown) {
-        if (!lapsed || !wasRejected(error) || error.code === "duplicate_request_id") {
+        // Nothing was sent only if the last try failed the attempt on a refusal.
+        // Anything else, such as a failed listing, fails the look, which is retried.
+        const failed: boolean = engine.ledger
+          .attempts(invoiceId)
+          .some(
+            (current: Attempt): boolean =>
+              current.requestId === attempt.requestId && current.state === "failed",
+          );
+        if (!lapsed || !wasRejected(error) || !failed) {
           throw error;
         }
         note(
