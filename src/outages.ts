@@ -1,0 +1,455 @@
+import type { Transfer, TransferBankDetails } from "./airwallex/transfers.js";
+import { keyHash } from "./approval.js";
+import { sameName, type ApprovalPolicy, type Approver } from "./approvers.js";
+import { originalStateOf } from "./assess.js";
+import { deadlineMinutes } from "./deadlines.js";
+import { cleanLine } from "./eml.js";
+import {
+  type Approval,
+  type Attempt,
+  type FailureSeenBy,
+  type Ledger,
+  type Obligation,
+  type ObligationOrigin,
+  type Outage,
+  type OutageCount,
+  type OutageHold,
+  type OutageHoldKind,
+  type OutageState,
+  type RailFailure,
+} from "./ledger.js";
+
+// The failure codes that say the rail failed, not the payee's account. Each has
+// PayOnce's own label. Account codes (account closed, invalid account,
+// beneficiary bank returned, recall, duplication return), unknown codes and a
+// transfer with no code never count.
+export const RAIL_FAILURE_CODES: Readonly<Record<string, string>> = {
+  "91401": "system error",
+  "91402": "channel timeout",
+  "99901": "unable to apply",
+  "99902": "other",
+};
+
+const DEFAULT_FAILURES: number = 3;
+const DEFAULT_WINDOW_MINUTES: number = 30;
+const MAX_NAME_LENGTH: number = 80;
+const MAX_NOTE_LENGTH: number = 200;
+const MINUTE_MS: number = 60_000;
+const ENDED_SHOWN: number = 20;
+
+// The fields that say which account a payment reaches. A payee is the account,
+// so two beneficiary records for one account are one payee, and a bank name
+// Airwallex rewrote does not make another.
+const PAYEE_FIELDS: readonly string[] = [
+  "bank_country_code",
+  "account_currency",
+  "account_number",
+  "account_routing_value1",
+  "iban",
+  "swift_code",
+];
+const ACCOUNT_FIELDS: readonly string[] = ["account_number", "account_routing_value1", "iban", "swift_code"];
+
+export interface OutageRule extends OutageCount {
+  // Why a setting was not used, or null when both were read.
+  problem: string | null;
+}
+
+// OUTAGE_FAILURES, a whole number from 2 to 100, and OUTAGE_WINDOW_MINUTES, from
+// 1 to 1440. A value outside the range falls back to the default, and the
+// start-up line says so. Read when a failure is counted, as the bank deadlines
+// are.
+export function outageRuleFromEnv(env: NodeJS.ProcessEnv = process.env): OutageRule {
+  const problems: string[] = [];
+  const read = (name: string, min: number, max: number, fallback: number): number => {
+    const raw: string = (env[name] ?? "").trim();
+    if (raw === "") {
+      return fallback;
+    }
+    const value: number = /^[0-9]{1,6}$/.test(raw) ? Number(raw) : Number.NaN;
+    if (value >= min && value <= max) {
+      return value;
+    }
+    problems.push(`${name} is not a whole number from ${min} to ${max}, so ${fallback} is used`);
+    return fallback;
+  };
+  return {
+    failures: read("OUTAGE_FAILURES", 2, 100, DEFAULT_FAILURES),
+    windowMinutes: read("OUTAGE_WINDOW_MINUTES", 1, 1440, DEFAULT_WINDOW_MINUTES),
+    problem: problems.length === 0 ? null : problems.join(". "),
+  };
+}
+
+export function describeOutageRule(rule: OutageRule): string {
+  return `Outages: PayOnce opens no new payment on a currency and transfer method once payouts to ${rule.failures} different payees fail there with a rail-level code (${Object.keys(RAIL_FAILURE_CODES).join(", ")}) within ${rule.windowMinutes} minutes, until a person ends the outage${rule.problem === null ? "" : `. ${rule.problem}`}`;
+}
+
+export function railOf(outage: { currency: string; method: string }): string {
+  return `${outage.currency} ${outage.method}`;
+}
+
+// "91402 (channel timeout) and 91401 (system error)"
+export function codesText(codes: string[]): string {
+  const named: string[] = codes.map((code: string): string => `${code} (${RAIL_FAILURE_CODES[code] ?? "rail failure"})`);
+  return named.length <= 1 ? (named[0] ?? "") : `${named.slice(0, -1).join(", ")} and ${named.at(-1)}`;
+}
+
+// HH:MM of an ISO time PayOnce wrote, which is UTC.
+function clock(iso: string | null): string {
+  return iso === null ? "" : `${iso.slice(11, 16)} UTC`;
+}
+
+// The account a payout went to, as one key, or its beneficiary when the payout
+// carries no account fields.
+export function payeeOf(transfer: Transfer): string {
+  const details: TransferBankDetails = transfer.beneficiary?.bank_details ?? {};
+  const value = (field: string): string => {
+    const raw: unknown = details[field];
+    return typeof raw === "string" ? raw.replace(/\s+/g, "").toUpperCase() : "";
+  };
+  if (ACCOUNT_FIELDS.every((field: string): boolean => value(field) === "")) {
+    return `beneficiary:${transfer.beneficiary_id ?? transfer.id}`;
+  }
+  return keyHash(JSON.stringify(PAYEE_FIELDS.map((field: string): string[] => [field, value(field)])));
+}
+
+function declaredLine(outage: Outage, counted: RailFailure[]): string {
+  const references: string = counted.map((failure: RailFailure): string => failure.reference).join(", ");
+  return `Outage ${outage.id} declared on ${railOf(outage)}: payouts to ${outage.payees} payees failed with ${codesText(outage.codes)} within ${outage.windowMinutes} minutes (${references}). PayOnce opens no new payment on ${railOf(outage)} until a person ends the outage`;
+}
+
+// Records a payout PayOnce read as failed, when its code is a rail-level one and
+// it is fresh enough to date by when PayOnce saw it, and declares an outage when
+// that makes enough payees. Called by a look and by the sweep. It never throws:
+// a failure it could not record is recorded by the next look or sweep, because
+// the transfer id makes the record idempotent.
+export function railFailureSeen(
+  ledger: Ledger,
+  transfer: Transfer,
+  seenBy: FailureSeenBy,
+  now: number = Date.now(),
+): Outage | undefined {
+  try {
+    const code: string = transfer.failure?.code ?? "";
+    if (
+      originalStateOf(transfer) !== "failed" ||
+      !Object.hasOwn(RAIL_FAILURE_CODES, code) ||
+      ledger.railFailure(transfer.id) !== undefined
+    ) {
+      return undefined;
+    }
+    const rule: OutageRule = outageRuleFromEnv();
+    const method: string = transfer.transfer_method.toUpperCase();
+    // PayOnce dates a failure by when it first sees it. A transfer created before
+    // outages were counted, or one first seen long after it could have failed, as
+    // after PayOnce was down, is left out. One whose creation time cannot be read
+    // counts.
+    const created: number = Date.parse(transfer.created_at);
+    if (
+      Number.isFinite(created) &&
+      (created < Date.parse(ledger.outagesSince()) ||
+        now > created + (deadlineMinutes(method) + rule.windowMinutes) * MINUTE_MS)
+    ) {
+      return undefined;
+    }
+    const attempt: Attempt | undefined = ledger.attemptOf(transfer.request_id ?? "", transfer.id);
+    const invoiceId: string | null = attempt?.invoiceId ?? ledger.outsideInvoiceOf(transfer.id) ?? null;
+    const obligation: Obligation | undefined = invoiceId === null ? undefined : ledger.obligation(invoiceId);
+    const origin: ObligationOrigin =
+      attempt !== undefined && !(obligation?.origin === "outside" && attempt.kind === "original")
+        ? "payonce"
+        : "outside";
+    const outage: Outage | undefined = ledger.recordRailFailure(
+      {
+        transferId: transfer.id,
+        currency: transfer.transfer_currency,
+        method,
+        code,
+        payee: payeeOf(transfer),
+        reference: transfer.short_reference_id ?? transfer.id,
+        invoiceId,
+        origin,
+        createdAt: transfer.created_at ?? "",
+        seenBy,
+      },
+      rule,
+      declaredLine,
+    );
+    if (outage !== undefined) {
+      console.log(
+        `  outage   Outage ${outage.id} declared on ${railOf(outage)}: payouts to ${outage.payees} payees failed with ${codesText(outage.codes)}`,
+      );
+    }
+    return outage;
+  } catch (error: unknown) {
+    console.warn(
+      `  outage   ${transfer.short_reference_id ?? transfer.id}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return undefined;
+  }
+}
+
+// The first line an outage puts on an invoice it holds, one per outage.
+export function holdLine(outage: Outage, what: OutageHoldKind): string {
+  const lead: string = `Outage ${outage.id} on ${railOf(outage)}, declared at ${clock(outage.declaredAt)}`;
+  switch (what) {
+    case "original":
+      return `${lead}, holds this invoice's first payment. PayOnce sends it once a person ends the outage, after the checks it makes before any payment`;
+    case "replacement":
+      return `${lead}: PayOnce does not send a replacement by itself while it lasts, so a person approves it. An approval given now is kept until the outage ends and still expires when it would`;
+    case "approved":
+      return `${lead}, holds the approved payment. The approval stays approved and unspent, and PayOnce sends the payment once a person ends the outage, if the approval has not expired by then`;
+    case "counted":
+    case "run":
+      return `${lead}, holds this invoice's payments`;
+  }
+}
+
+// The standing line while an invoice waits on an outage. An approval kept for it
+// is named with when it stops counting.
+export function waitingLine(outage: Outage, approval: Approval | undefined): string {
+  const kept: string =
+    approval === undefined
+      ? ""
+      : `. The approval by ${approval.approver ?? ""} is kept and counts until ${clock(approval.expiresAt)}`;
+  return `Waiting on a person to end outage ${outage.id} on ${railOf(outage)}. PayOnce checks again every minute${kept}`;
+}
+
+// The first line an outage puts on a pay run whose release it holds.
+export function runHoldLine(outage: Outage, lines: number[], approver: string, expiresAt: string | null): string {
+  const rows: string = lines.length === 1 ? `row ${lines[0]} pays` : `rows ${lines.join(", ")} pay`;
+  return `Outage ${outage.id} on ${railOf(outage)}, declared at ${clock(outage.declaredAt)}, holds the release: ${rows} on it, and the run is released whole. The approval by ${approver} is kept and counts until ${clock(expiresAt)}. PayOnce releases the run once a person ends the outage. Another pay run cannot be uploaded until this one is released or cancelled`;
+}
+
+export function runWaitingLine(outage: Outage): string {
+  return `Waiting on a person to end outage ${outage.id} on ${railOf(outage)}. PayOnce tries the release again every minute`;
+}
+
+function endedLead(outage: Outage, unlisted: boolean): string {
+  const anyone: string = unlisted ? " No approver list was set, so any named person could end it." : "";
+  return `Outage ${outage.id} on ${railOf(outage)} ended by ${outage.endedBy ?? ""}: ${outage.endNote ?? ""}. It was declared at ${clock(outage.declaredAt)}.${anyone}`;
+}
+
+function endLine(outage: Outage, unlisted: boolean): string {
+  return `${endedLead(outage, unlisted)} PayOnce opens payments on ${railOf(outage)} again and looks at this invoice now`;
+}
+
+function runEndLine(outage: Outage, unlisted: boolean): string {
+  return `${endedLead(outage, unlisted)} PayOnce releases the run on its next check if the approval still counts`;
+}
+
+// Who may end an outage: the names in APPROVERS, since ending one lets payments
+// go out on the rail again. Null when the list is unset or cannot be read, and
+// then any named person may, so an outage can always be ended.
+export function outageEnders(policy: ApprovalPolicy): string[] | null {
+  return policy.problem === null && policy.approvers.length > 0
+    ? policy.approvers.map((approver: Approver): string => approver.name)
+    : null;
+}
+
+export type EndRefusal = "input" | "approver" | "unknown" | "ended";
+
+export class EndRefusedError extends Error {
+  readonly why: EndRefusal;
+  readonly outage: Outage | null;
+
+  constructor(why: EndRefusal, message: string, outage: Outage | null = null) {
+    super(message);
+    this.name = "EndRefusedError";
+    this.why = why;
+    this.outage = outage;
+  }
+}
+
+function alreadyEnded(outage: Outage): EndRefusedError {
+  return new EndRefusedError(
+    "ended",
+    `Outage ${outage.id} on ${railOf(outage)} was already ended by ${outage.endedBy ?? "someone"} at ${clock(outage.endedAt)}`,
+    outage,
+  );
+}
+
+export interface EndedOutage {
+  outage: Outage;
+  holds: OutageHold[];
+}
+
+// A person ends an outage with their name and a note. It moves no money and calls
+// no bank: it changes the outage, writes the end on every timeline it held and
+// makes their looks due, and the watcher then picks them up.
+export function endOutage(
+  ledger: Ledger,
+  policy: ApprovalPolicy,
+  id: number,
+  name: string,
+  note: string,
+): EndedOutage {
+  const who: string = cleanLine(name, MAX_NAME_LENGTH + 1);
+  const why: string = cleanLine(note, MAX_NOTE_LENGTH + 1);
+  if (who === "" || who.length > MAX_NAME_LENGTH) {
+    throw new EndRefusedError("input", "Enter your name, in up to 80 characters");
+  }
+  if (why === "" || why.length > MAX_NOTE_LENGTH) {
+    throw new EndRefusedError("input", "Say why the outage is over, in up to 200 characters");
+  }
+  const outage: Outage | undefined = ledger.outage(id);
+  if (outage === undefined) {
+    throw new EndRefusedError("unknown", `Outage ${id} is not in the ledger`);
+  }
+  if (outage.state !== "active") {
+    throw alreadyEnded(outage);
+  }
+  const enders: string[] | null = outageEnders(policy);
+  const ender: string | undefined =
+    enders === null ? who : enders.find((listed: string): boolean => sameName(listed, who));
+  if (ender === undefined) {
+    throw new EndRefusedError(
+      "approver",
+      `Only a name in APPROVERS may end an outage, because ending it lets PayOnce pay on ${railOf(outage)} again: ${(enders ?? []).join(", ")}`,
+      outage,
+    );
+  }
+  const unlisted: boolean = enders === null;
+  const holds: OutageHold[] | undefined = ledger.endOutage(
+    id,
+    ender,
+    why,
+    (ended: Outage): string => endLine(ended, unlisted),
+    (ended: Outage): string => runEndLine(ended, unlisted),
+  );
+  const after: Outage = ledger.outage(id) ?? outage;
+  if (holds === undefined) {
+    throw alreadyEnded(after);
+  }
+  console.log(`  outage   Outage ${id} on ${railOf(after)} ended by ${ender}: ${why}`);
+  return { outage: after, holds };
+}
+
+export interface OutageCode {
+  code: string;
+  label: string;
+}
+
+export interface CountedPayout {
+  reference: string;
+  invoiceId: string | null;
+  origin: ObligationOrigin;
+  code: string;
+  seenAt: string;
+}
+
+export interface HeldItem {
+  invoiceId: string | null;
+  runId: number | null;
+  what: OutageHoldKind;
+  // The invoice's or the run's state now. Null when it is no longer in the ledger.
+  state: string | null;
+}
+
+// An outage as the page, the CLI and the board show it, from the ledger only.
+// text is PayOnce's own sentence about it.
+export interface OutageView {
+  id: number;
+  rail: string;
+  currency: string;
+  method: string;
+  state: OutageState;
+  codes: OutageCode[];
+  declaredAt: string;
+  payees: number;
+  threshold: number;
+  windowMinutes: number;
+  counted: CountedPayout[];
+  held: HeldItem[];
+  endedAt: string | null;
+  endedBy: string | null;
+  endNote: string | null;
+  text: string;
+}
+
+function codesOf(codes: string[]): OutageCode[] {
+  return codes.map((code: string): OutageCode => ({ code, label: RAIL_FAILURE_CODES[code] ?? "rail failure" }));
+}
+
+export function outageView(ledger: Ledger, outage: Outage): OutageView {
+  const counted: CountedPayout[] = outage.counted
+    .map((transferId: string): RailFailure | undefined => ledger.railFailure(transferId))
+    .filter((failure: RailFailure | undefined): failure is RailFailure => failure !== undefined)
+    .map(
+      (failure: RailFailure): CountedPayout => ({
+        reference: failure.reference,
+        invoiceId: failure.invoiceId,
+        origin: failure.origin,
+        code: failure.code,
+        seenAt: failure.seenAt,
+      }),
+    );
+  const held: HeldItem[] = ledger.outageHolds(outage.id).map(
+    (hold: OutageHold): HeldItem => ({
+      invoiceId: hold.invoiceId,
+      runId: hold.runId,
+      what: hold.what,
+      state:
+        hold.invoiceId !== null
+          ? (ledger.obligation(hold.invoiceId)?.state ?? null)
+          : hold.runId !== null
+            ? (ledger.run(hold.runId)?.state ?? null)
+            : null,
+    }),
+  );
+  const text: string =
+    outage.state === "active"
+      ? `Outage ${outage.id} on ${railOf(outage)} since ${clock(outage.declaredAt)}: payouts to ${outage.payees} payees failed with ${codesText(outage.codes)} within ${outage.windowMinutes} minutes. PayOnce opens no new payment on ${railOf(outage)} until a person ends it`
+      : `Outage ${outage.id} on ${railOf(outage)}, declared at ${clock(outage.declaredAt)}, ended at ${clock(outage.endedAt)} by ${outage.endedBy ?? ""}`;
+  return {
+    id: outage.id,
+    rail: railOf(outage),
+    currency: outage.currency,
+    method: outage.method,
+    state: outage.state,
+    codes: codesOf(outage.codes),
+    declaredAt: outage.declaredAt,
+    payees: outage.payees,
+    threshold: outage.threshold,
+    windowMinutes: outage.windowMinutes,
+    counted,
+    held,
+    endedAt: outage.endedAt,
+    endedBy: outage.endedBy,
+    endNote: outage.endNote,
+    text,
+  };
+}
+
+export interface OutagesReport {
+  rule: { failures: number; windowMinutes: number; codes: OutageCode[]; problem: string | null };
+  // The names that may end an outage, or null when any named person may.
+  enders: string[] | null;
+  // Oldest first.
+  active: OutageView[];
+  // The latest ended outages, newest first.
+  recent: OutageView[];
+}
+
+// GET /api/outages and pnpm outage. Ledger reads only, no Airwallex call.
+export function outagesReport(ledger: Ledger, policy: ApprovalPolicy): OutagesReport {
+  const rule: OutageRule = outageRuleFromEnv();
+  const all: Outage[] = ledger.outages();
+  return {
+    rule: {
+      failures: rule.failures,
+      windowMinutes: rule.windowMinutes,
+      codes: codesOf(Object.keys(RAIL_FAILURE_CODES)),
+      problem: rule.problem,
+    },
+    enders: outageEnders(policy),
+    active: all
+      .filter((outage: Outage): boolean => outage.state === "active")
+      .reverse()
+      .map((outage: Outage): OutageView => outageView(ledger, outage)),
+    recent: all
+      .filter((outage: Outage): boolean => outage.state === "ended")
+      .slice(0, ENDED_SHOWN)
+      .map((outage: Outage): OutageView => outageView(ledger, outage)),
+  };
+}

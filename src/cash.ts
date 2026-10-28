@@ -104,6 +104,7 @@ function printCurrency(currency: CurrencyCash, report: CashReport): void {
   );
   console.log(row("= Headroom", "", amount(currency.headroomMinor)));
   console.log(moneyRow(currency, "Waiting on a person", ["awaiting-approval", "awaiting-person"], "- "));
+  console.log(moneyRow(currency, "Waiting on an outage", ["waiting-outage"], "- "));
   console.log(
     row("= Headroom if every waiting payment is approved", "", amount(currency.headroomIfApprovedMinor)),
   );

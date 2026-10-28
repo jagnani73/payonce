@@ -7,6 +7,7 @@ import { linkOutsidePayout, note, payoutSummary, type Engine } from "./engine.js
 import type { OriginalTransferState } from "./incident.js";
 import { INVOICE_ID_PATTERN, type TransferMethod } from "./ledger.js";
 import { toMinor } from "./money.js";
+import { railFailureSeen } from "./outages.js";
 
 const METHODS: ReadonlySet<string> = new Set<string>(["LOCAL", "SWIFT"]);
 
@@ -134,7 +135,8 @@ async function sweepOne(engine: Engine, agent: Dispatcher, transfer: Transfer): 
 // invoice in the ledger is tied to it, and so is one whose reference nearly
 // matches an invoice to the same supplier for the same amount. Any other becomes an incident once it has
 // failed, or once the bank has sat on it past its deadline. A payout that cannot
-// be handled is reported and skipped, so it does not stop the rest.
+// be handled is reported and skipped, so it does not stop the rest. Every payout
+// listed that failed with a rail-level code counts toward an outage.
 export async function sweep(engine: Engine, agent: Dispatcher): Promise<void> {
   const transfers: Transfer[] = await listTransfersSince(
     engine.client,
@@ -146,5 +148,8 @@ export async function sweep(engine: Engine, agent: Dispatcher): Promise<void> {
     } catch (error: unknown) {
       reportOnce(transfer, error instanceof Error ? error.message : String(error));
     }
+    // After the payout was tied or taken on, so the failure names its invoice.
+    // PayOnce's own failures count here too, when no look has seen them yet.
+    railFailureSeen(engine.ledger, transfer, "sweep");
   }
 }

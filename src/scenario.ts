@@ -16,10 +16,11 @@ import {
   heldBeforePaying,
   payAgain,
   startPayment,
+  waitOnOutage,
   type Engine,
   type PayAgainResult,
 } from "./engine.js";
-import type { Attempt, Ledger, Obligation, TransferMethod } from "./ledger.js";
+import { RailOutageError, type Attempt, type Ledger, type Obligation, type TransferMethod } from "./ledger.js";
 import type { SandboxBank } from "./sandbox-bank.js";
 
 const SUPPLIER_DOMAIN: string = "example-supplier.test";
@@ -259,6 +260,12 @@ export async function runScenario(
     // startPayment planned a look to try again, and the bank gives the original
     // that look sends the scenario's outcome.
     bank.expectOriginal(invoiceId, scenario.bankOutcome);
+    // An outage on its rail holds the first payment until a person ends it. No
+    // supplier emails arrive for it.
+    if (error instanceof RailOutageError) {
+      waitOnOutage(engine, invoiceId, error);
+      return;
+    }
     throw error;
   }
   if (original === null) {

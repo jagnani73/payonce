@@ -34,6 +34,7 @@ import {
   alreadyInLedger,
   isExpired,
   NothingToPayError,
+  RailOutageError,
   SameFileError,
   signersOf,
   skipRow,
@@ -45,6 +46,7 @@ import {
   type Ledger,
   type LedgerEvent,
   type Obligation,
+  type Outage,
   type ReleasedRun,
   type ReleaseRow,
   type Run,
@@ -54,6 +56,7 @@ import {
   type TransferMethod,
 } from "./ledger.js";
 import { formatMoney } from "./money.js";
+import { runHoldLine, runWaitingLine } from "./outages.js";
 import { currencyFloor, type CurrencyFloor, type FloorSource } from "./reserve.js";
 import { rowFromCells, type RunFile, type RunFileRow } from "./run-file.js";
 
@@ -1102,6 +1105,13 @@ export async function releaseRun(engine: Engine, agent: Dispatcher, runId: numbe
     return;
   }
   const approved: RunTerms = JSON.parse(approval.terms) as RunTerms;
+  // Read first, so a run held by an outage costs a ledger read and no Airwallex
+  // call each time the watcher tries it.
+  const outage: Outage | undefined = runOutage(ledger, approved);
+  if (outage !== undefined) {
+    holdRun(ledger, runId, outage, approval, approved);
+    return;
+  }
   const check: RunCheck = await checkRows(engine, fileRowsOf(ledger, run), runId, termsDay(approved) ?? today());
   const terms: RunTerms = termsOf(run, check.rows, check.cash);
   const amount: PaymentAmount = runAmount(terms);
@@ -1161,35 +1171,21 @@ export async function releaseRun(engine: Engine, agent: Dispatcher, runId: numbe
     firstLine: `Opened from pay run ${runId}, row ${row.line} (${run.fileName}, file ${run.fileHash.slice(0, 8)}), uploaded by ${run.uploadedBy} and approved by ${approval.approver ?? ""} on request ${approval.id} (binding ${approval.binding.slice(0, 8)}): ${formatMoney(row.amountMinor, row.currency)} to ${row.payTo}`,
   }));
 
-  const released: ReleasedRun | undefined = await withCurrencyLocks(
-    ledger,
-    approved.totals.map((total: RunTotal): string => total.currency),
-    async (leases: Lease[]): Promise<ReleasedRun | undefined> => {
-      // Read again under the locks, so no payment opened since the check is
-      // missed.
-      const fresh: RunCash[] = await cashCheck(engine, check.rows, runId);
-      const short: RunCash | undefined = fresh.find((entry: RunCash): boolean => entry.problem !== null);
-      if (short !== undefined) {
-        if (ledger.setRunRows(runId, waiting, JSON.stringify(fresh), approval.id, (): boolean => true) !== undefined) {
-          runNote(
-            ledger,
-            runId,
-            "warning",
-            `Not released: ${short.problem ?? ""}. The approval by ${approval.approver ?? ""} is void. Check the run again once there is cash for it`,
-          );
-        }
-        return undefined;
-      }
-      return ledger.releaseRun(
-        runId,
-        approval.id,
-        run.uploadedBy,
-        releaseRows,
-        `Released on the approval of ${approval.approver ?? ""}: ${plural(releaseRows.length, "invoice")} to pay, ${totalsText(approved.totals)}`,
-        leases,
-      );
-    },
-  );
+  let released: ReleasedRun | undefined;
+  try {
+    released = await releaseUnderLocks(engine, run, approval, approved, check, waiting, releaseRows);
+  } catch (error: unknown) {
+    // An outage declared since the read above: Ledger.releaseRun changed nothing.
+    const declared: Outage | undefined =
+      error instanceof RailOutageError ? ledger.outage(error.outageId) : undefined;
+    if (declared === undefined) {
+      throw error;
+    }
+    if (declared.state === "active") {
+      holdRun(ledger, runId, declared, approval, approved);
+    }
+    return;
+  }
   if (released === undefined) {
     return;
   }
@@ -1220,6 +1216,78 @@ export async function releaseRun(engine: Engine, agent: Dispatcher, runId: numbe
     runId,
     "payment",
     `First payments: ${sent} sent${held === 0 ? "" : `, ${held} held for a person`}${failed === 0 ? "" : `, ${failed} not sent yet and tried again in a minute`}. Each invoice carries on as an incident of its own`,
+  );
+}
+
+// The first active outage on a rail any approved row pays on.
+function runOutage(ledger: Ledger, terms: RunTerms): Outage | undefined {
+  for (const row of terms.rows) {
+    const outage: Outage | undefined = ledger.activeOutage(row.currency, row.transferMethod);
+    if (outage !== undefined) {
+      return outage;
+    }
+  }
+  return undefined;
+}
+
+// A run with any row on a rail with an outage waits whole, with its approval
+// neither spent nor void, and the watcher tries the release again every minute.
+// The approval still expires when it would.
+function holdRun(ledger: Ledger, runId: number, outage: Outage, approval: RunApproval, terms: RunTerms): void {
+  const lines: number[] = terms.rows
+    .filter(
+      (row: RunRowTerms): boolean =>
+        row.currency.toUpperCase() === outage.currency && row.transferMethod.toUpperCase() === outage.method,
+    )
+    .map((row: RunRowTerms): number => row.line);
+  const line: string = runHoldLine(outage, lines, approval.approver ?? "", approval.expiresAt);
+  if (ledger.holdForOutage(outage.id, { runId }, "run", line)) {
+    runNote(ledger, runId, "outage", runWaitingLine(outage), "release");
+  }
+}
+
+// The release once every check passed: under the lock of every currency the run
+// pays, the cash check again on a fresh balance, then the one transaction that
+// spends the approval and writes the rows as invoices.
+async function releaseUnderLocks(
+  engine: Engine,
+  run: Run,
+  approval: RunApproval,
+  approved: RunTerms,
+  check: RunCheck,
+  waiting: CheckedRow[],
+  releaseRows: ReleaseRow[],
+): Promise<ReleasedRun | undefined> {
+  const ledger: Ledger = engine.ledger;
+  const runId: number = run.id;
+  return withCurrencyLocks(
+    ledger,
+    approved.totals.map((total: RunTotal): string => total.currency),
+    async (leases: Lease[]): Promise<ReleasedRun | undefined> => {
+      // Read again under the locks, so no payment opened since the check is
+      // missed.
+      const fresh: RunCash[] = await cashCheck(engine, check.rows, runId);
+      const short: RunCash | undefined = fresh.find((entry: RunCash): boolean => entry.problem !== null);
+      if (short !== undefined) {
+        if (ledger.setRunRows(runId, waiting, JSON.stringify(fresh), approval.id, (): boolean => true) !== undefined) {
+          runNote(
+            ledger,
+            runId,
+            "warning",
+            `Not released: ${short.problem ?? ""}. The approval by ${approval.approver ?? ""} is void. Check the run again once there is cash for it`,
+          );
+        }
+        return undefined;
+      }
+      return ledger.releaseRun(
+        runId,
+        approval.id,
+        run.uploadedBy,
+        releaseRows,
+        `Released on the approval of ${approval.approver ?? ""}: ${plural(releaseRows.length, "invoice")} to pay, ${totalsText(approved.totals)}`,
+        leases,
+      );
+    },
   );
 }
 

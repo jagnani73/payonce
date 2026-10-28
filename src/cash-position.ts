@@ -21,13 +21,17 @@ import {
 // What a line of money is. sending, approved and pay-run are promised and still in
 // the available balance, so headroom takes them off. awaiting-approval and
 // awaiting-person wait on a person and only the second headroom figure takes them
-// off. with-bank, outside and fee-lost have already left the available balance.
+// off. waiting-outage is a single incident's first payment held by an outage,
+// which goes out by itself once a person ends it: only the second figure takes
+// it off too, because originals are not checked against the floor. with-bank,
+// outside and fee-lost have already left the available balance.
 export type CashKind =
   | "sending"
   | "approved"
   | "pay-run"
   | "awaiting-approval"
   | "awaiting-person"
+  | "waiting-outage"
   | "with-bank"
   | "outside"
   | "fee-lost";
@@ -38,6 +42,7 @@ export const CASH_KINDS: CashKind[] = [
   "pay-run",
   "awaiting-approval",
   "awaiting-person",
+  "waiting-outage",
   "with-bank",
   "outside",
   "fee-lost",
@@ -47,6 +52,7 @@ const FIRM_KINDS: ReadonlySet<CashKind> = new Set<CashKind>(["sending", "approve
 const WAITING_KINDS: ReadonlySet<CashKind> = new Set<CashKind>([
   "awaiting-approval",
   "awaiting-person",
+  "waiting-outage",
 ]);
 
 export interface CashLine {
@@ -265,6 +271,26 @@ export function cashLines(ledger: Ledger, now: number = Date.now()): CashLine[] 
       }
     }
 
+    // A pay run's row waiting for its first payment is a pay-run line already.
+    if (
+      obligation.state === "open" &&
+      obligation.runRowId === null &&
+      attempts.length === 0 &&
+      ledger.activeOutage(obligation.currency, obligation.transferMethod) !== undefined
+    ) {
+      const amount: LineAmount = lineAmount(ledger, obligation, null, now);
+      lines.push({
+        kind: "waiting-outage",
+        invoiceId,
+        currency: wallet,
+        amountMinor: amount.amountMinor,
+        ...feeEstimate(ledger, obligation, attempts),
+        reference: null,
+        estimated: amount.estimated,
+        fromQuote: amount.fromQuote,
+        runId: null,
+      });
+    }
     if (couldStillPay(obligation, attempts, payouts)) {
       const approval: Approval | undefined = ledger.latestApproval(invoiceId);
       const open: boolean = approval !== undefined && !isExpired(approval, now);

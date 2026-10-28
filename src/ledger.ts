@@ -281,6 +281,48 @@ const SCHEMA: string = `
   );
   CREATE UNIQUE INDEX IF NOT EXISTS one_open_draft_per_template
     ON outbox(invoice_id, template) WHERE state IN ('draft', 'copied');
+  CREATE TABLE IF NOT EXISTS rail_failures (
+    transfer_id TEXT PRIMARY KEY,
+    currency TEXT NOT NULL,
+    method TEXT NOT NULL,
+    code TEXT NOT NULL,
+    payee TEXT NOT NULL,
+    reference TEXT NOT NULL,
+    invoice_id TEXT,
+    origin TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    seen_at TEXT NOT NULL,
+    seen_by TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS rail_failures_by_rail ON rail_failures(currency, method, seen_at);
+  CREATE TABLE IF NOT EXISTS outages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    currency TEXT NOT NULL,
+    method TEXT NOT NULL,
+    codes TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'active',
+    declared_at TEXT NOT NULL,
+    payees INTEGER NOT NULL,
+    threshold INTEGER NOT NULL,
+    window_minutes INTEGER NOT NULL,
+    counted TEXT NOT NULL,
+    ended_at TEXT,
+    ended_by TEXT,
+    end_note TEXT
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS one_active_outage_per_rail
+    ON outages(currency, method) WHERE state = 'active';
+  CREATE TABLE IF NOT EXISTS outage_holds (
+    outage_id INTEGER NOT NULL REFERENCES outages(id),
+    invoice_id TEXT REFERENCES obligations(invoice_id),
+    run_id INTEGER REFERENCES runs(id),
+    what TEXT NOT NULL,
+    held_at TEXT NOT NULL
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS one_hold_per_invoice
+    ON outage_holds(outage_id, invoice_id) WHERE invoice_id IS NOT NULL;
+  CREATE UNIQUE INDEX IF NOT EXISTS one_hold_per_run
+    ON outage_holds(outage_id, run_id) WHERE run_id IS NOT NULL;
 `;
 
 // rejected is an invoice a person closed without paying, because it was a second
@@ -303,7 +345,8 @@ export type EventKind =
   | "closed"
   | "callback"
   | "error"
-  | "outbox";
+  | "outbox"
+  | "outage";
 
 // One line of an incident's timeline.
 export interface LedgerEvent {
@@ -1364,6 +1407,163 @@ export class NothingToPayError extends Error {
   }
 }
 
+// active until a person ends it. Nothing ends an outage by itself.
+export type OutageState = "active" | "ended";
+
+// A rail is a currency and a transfer method, upper-cased, such as USD LOCAL.
+// codes are the rail-level failure codes the counted payouts failed with.
+export interface Outage {
+  id: number;
+  currency: string;
+  method: string;
+  codes: string[];
+  state: OutageState;
+  declaredAt: string;
+  // The different payees counted, and the rule the outage was declared under.
+  payees: number;
+  threshold: number;
+  windowMinutes: number;
+  // The transfer ids of the failures counted.
+  counted: string[];
+  endedAt: string | null;
+  endedBy: string | null;
+  endNote: string | null;
+}
+
+interface OutageRow {
+  id: number;
+  currency: string;
+  method: string;
+  codes: string;
+  state: OutageState;
+  declared_at: string;
+  payees: number;
+  threshold: number;
+  window_minutes: number;
+  counted: string;
+  ended_at: string | null;
+  ended_by: string | null;
+  end_note: string | null;
+}
+
+function toOutage(row: OutageRow): Outage {
+  return {
+    id: row.id,
+    currency: row.currency,
+    method: row.method,
+    codes: JSON.parse(row.codes) as string[],
+    state: row.state,
+    declaredAt: row.declared_at,
+    payees: row.payees,
+    threshold: row.threshold,
+    windowMinutes: row.window_minutes,
+    counted: JSON.parse(row.counted) as string[],
+    endedAt: row.ended_at,
+    endedBy: row.ended_by,
+    endNote: row.end_note,
+  };
+}
+
+// Who read the failure: a look at an invoice, or the sweep.
+export type FailureSeenBy = "look" | "sweep";
+
+// A payout PayOnce read as failed with a rail-level code. payee stands for the
+// account it paid, so two beneficiary records for one account are one payee.
+// origin is outside for a payout PayOnce did not send.
+export interface NewRailFailure {
+  transferId: string;
+  currency: string;
+  method: string;
+  code: string;
+  payee: string;
+  reference: string;
+  invoiceId: string | null;
+  origin: ObligationOrigin;
+  createdAt: string;
+  seenBy: FailureSeenBy;
+}
+
+export interface RailFailure extends NewRailFailure {
+  // When PayOnce first read it as failed, by its own clock.
+  seenAt: string;
+}
+
+interface RailFailureRow {
+  transfer_id: string;
+  currency: string;
+  method: string;
+  code: string;
+  payee: string;
+  reference: string;
+  invoice_id: string | null;
+  origin: ObligationOrigin;
+  created_at: string;
+  seen_at: string;
+  seen_by: FailureSeenBy;
+}
+
+function toRailFailure(row: RailFailureRow): RailFailure {
+  return {
+    transferId: row.transfer_id,
+    currency: row.currency,
+    method: row.method,
+    code: row.code,
+    payee: row.payee,
+    reference: row.reference,
+    invoiceId: row.invoice_id,
+    origin: row.origin,
+    createdAt: row.created_at,
+    seenAt: row.seen_at,
+    seenBy: row.seen_by,
+  };
+}
+
+// What an outage held: an invoice whose own failure it counted, a new invoice's
+// first payment, an automatic replacement, a payment a person approved, or a pay
+// run's release.
+export type OutageHoldKind = "counted" | "original" | "replacement" | "approved" | "run";
+
+export type OutageSubject = { invoiceId: string } | { runId: number };
+
+export interface OutageHold {
+  outageId: number;
+  invoiceId: string | null;
+  runId: number | null;
+  what: OutageHoldKind;
+  heldAt: string;
+}
+
+interface OutageHoldRow {
+  outage_id: number;
+  invoice_id: string | null;
+  run_id: number | null;
+  what: OutageHoldKind;
+  held_at: string;
+}
+
+// When an outage is declared: this many different payees failed within the
+// window.
+export interface OutageCount {
+  failures: number;
+  windowMinutes: number;
+}
+
+// A payment PayOnce did not open, or a run it did not release, because the rail
+// it pays on has an outage. what says what was held.
+export class RailOutageError extends Error {
+  readonly outageId: number;
+  readonly what: OutageHoldKind;
+
+  constructor(outage: Outage, what: OutageHoldKind) {
+    super(
+      `Outage ${outage.id} on ${outage.currency} ${outage.method} is active, so PayOnce opened no payment on it`,
+    );
+    this.name = "RailOutageError";
+    this.outageId = outage.id;
+    this.what = what;
+  }
+}
+
 export class Ledger {
   private readonly db: DatabaseSync;
 
@@ -1380,6 +1580,11 @@ export class Ledger {
     this.addColumns();
     this.db
       .prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('started_at', ?)")
+      .run(new Date().toISOString());
+    // Failures of transfers created before outages were counted are never
+    // counted, however long the bank deadlines are.
+    this.db
+      .prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('outages_since', ?)")
       .run(new Date().toISOString());
     this.startChain();
     this.startRunChain();
@@ -1549,6 +1754,227 @@ export class Ledger {
       .prepare("SELECT value FROM meta WHERE key = 'started_at'")
       .get() as unknown as MetaRow;
     return row.value;
+  }
+
+  // When this ledger first counted failures toward outages, as an ISO time.
+  outagesSince(): string {
+    return this.metaValue("outages_since") ?? this.startedAt();
+  }
+
+  // The outage on a rail, while it is active. Inside a transaction this reads
+  // under the write lock, so no declaration can land between it and what follows.
+  activeOutage(currency: string, method: string): Outage | undefined {
+    const row: OutageRow | undefined = this.db
+      .prepare("SELECT * FROM outages WHERE currency = ? AND method = ? AND state = 'active'")
+      .get(currency.toUpperCase(), method.toUpperCase()) as unknown as OutageRow | undefined;
+    return row === undefined ? undefined : toOutage(row);
+  }
+
+  outage(id: number): Outage | undefined {
+    const row: OutageRow | undefined = this.db
+      .prepare("SELECT * FROM outages WHERE id = ?")
+      .get(id) as unknown as OutageRow | undefined;
+    return row === undefined ? undefined : toOutage(row);
+  }
+
+  // Newest first.
+  outages(): Outage[] {
+    return (
+      this.db.prepare("SELECT * FROM outages ORDER BY id DESC").all() as unknown as OutageRow[]
+    ).map(toOutage);
+  }
+
+  outageHolds(outageId: number): OutageHold[] {
+    return (
+      this.db
+        .prepare("SELECT * FROM outage_holds WHERE outage_id = ? ORDER BY rowid")
+        .all(outageId) as unknown as OutageHoldRow[]
+    ).map(
+      (row: OutageHoldRow): OutageHold => ({
+        outageId: row.outage_id,
+        invoiceId: row.invoice_id,
+        runId: row.run_id,
+        what: row.what,
+        heldAt: row.held_at,
+      }),
+    );
+  }
+
+  railFailure(transferId: string): RailFailure | undefined {
+    const row: RailFailureRow | undefined = this.db
+      .prepare("SELECT * FROM rail_failures WHERE transfer_id = ?")
+      .get(transferId) as unknown as RailFailureRow | undefined;
+    return row === undefined ? undefined : toRailFailure(row);
+  }
+
+  // Records a failure on a rail, once per transfer, and declares an outage on the
+  // rail when count.failures different payees failed in the window, counted
+  // from the end of the rail's last outage at the earliest, so the failures one
+  // outage counted never declare the next. One write transaction, so two
+  // processes that read the same failures declare one outage between them. The
+  // outage's first line, from line, goes on the timeline of each invoice whose
+  // failure it counted in the same transaction. Returns the outage this failure
+  // declared, if any.
+  recordRailFailure(
+    failure: NewRailFailure,
+    count: OutageCount,
+    line: (outage: Outage, counted: RailFailure[]) => string,
+  ): Outage | undefined {
+    return this.transaction((): Outage | undefined => {
+      const now: number = Date.now();
+      const currency: string = failure.currency.toUpperCase();
+      const method: string = failure.method.toUpperCase();
+      const inserted: { changes: number | bigint } = this.db
+        .prepare(
+          `INSERT OR IGNORE INTO rail_failures
+             (transfer_id, currency, method, code, payee, reference, invoice_id, origin,
+              created_at, seen_at, seen_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          failure.transferId,
+          currency,
+          method,
+          failure.code,
+          failure.payee,
+          failure.reference,
+          failure.invoiceId,
+          failure.origin,
+          failure.createdAt,
+          new Date(now).toISOString(),
+          failure.seenBy,
+        );
+      if (Number(inserted.changes) !== 1 || this.activeOutage(currency, method) !== undefined) {
+        return undefined;
+      }
+      const ended: { at: string | null } = this.db
+        .prepare("SELECT MAX(ended_at) AS at FROM outages WHERE currency = ? AND method = ?")
+        .get(currency, method) as unknown as { at: string | null };
+      const windowStart: string = new Date(now - count.windowMinutes * 60_000).toISOString();
+      const since: string = ended.at !== null && ended.at > windowStart ? ended.at : windowStart;
+      const counted: RailFailure[] = (
+        this.db
+          .prepare(
+            `SELECT * FROM rail_failures WHERE currency = ? AND method = ? AND seen_at > ?
+              ORDER BY seen_at, rowid`,
+          )
+          .all(currency, method, since) as unknown as RailFailureRow[]
+      ).map(toRailFailure);
+      const payees: number = new Set(counted.map((entry: RailFailure): string => entry.payee)).size;
+      if (payees < count.failures) {
+        return undefined;
+      }
+      const codes: string[] = [...new Set(counted.map((entry: RailFailure): string => entry.code))].sort();
+      const declared: { lastInsertRowid: number | bigint } = this.db
+        .prepare(
+          `INSERT INTO outages
+             (currency, method, codes, declared_at, payees, threshold, window_minutes, counted)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          currency,
+          method,
+          JSON.stringify(codes),
+          new Date(now).toISOString(),
+          payees,
+          count.failures,
+          count.windowMinutes,
+          JSON.stringify(counted.map((entry: RailFailure): string => entry.transferId)),
+        );
+      const outage: Outage | undefined = this.outage(Number(declared.lastInsertRowid));
+      if (outage === undefined) {
+        throw new Error("The outage just declared could not be read back");
+      }
+      const text: string = line(outage, counted);
+      for (const invoiceId of new Set(counted.map((entry: RailFailure): string | null => entry.invoiceId))) {
+        if (invoiceId === null || this.obligation(invoiceId) === undefined) {
+          continue;
+        }
+        this.db
+          .prepare(
+            `INSERT OR IGNORE INTO outage_holds (outage_id, invoice_id, what, held_at)
+             VALUES (?, ?, 'counted', ?)`,
+          )
+          .run(outage.id, invoiceId, new Date(now).toISOString());
+        this.appendEvent(invoiceId, "outage", text, null);
+      }
+      return outage;
+    });
+  }
+
+  // Records that an active outage held an invoice or a run, and puts line on its
+  // timeline the first time, in one transaction. False when the outage has ended
+  // meanwhile, so a hold never lands after the end.
+  holdForOutage(outageId: number, subject: OutageSubject, what: OutageHoldKind, line: string): boolean {
+    return this.transaction((): boolean => {
+      if (this.db.prepare("SELECT 1 FROM outages WHERE id = ? AND state = 'active'").get(outageId) === undefined) {
+        return false;
+      }
+      const at: string = new Date().toISOString();
+      if ("invoiceId" in subject) {
+        const held: { changes: number | bigint } = this.db
+          .prepare(
+            `INSERT OR IGNORE INTO outage_holds (outage_id, invoice_id, what, held_at)
+             VALUES (?, ?, ?, ?)`,
+          )
+          .run(outageId, subject.invoiceId, what, at);
+        if (Number(held.changes) === 1) {
+          this.appendEvent(subject.invoiceId, "outage", line, null);
+        }
+      } else {
+        const held: { changes: number | bigint } = this.db
+          .prepare(
+            `INSERT OR IGNORE INTO outage_holds (outage_id, run_id, what, held_at)
+             VALUES (?, ?, ?, ?)`,
+          )
+          .run(outageId, subject.runId, what, at);
+        if (Number(held.changes) === 1) {
+          this.addRunEventRow(subject.runId, "outage", line, null);
+        }
+      }
+      return true;
+    });
+  }
+
+  // A person ends an active outage. One transaction writes who and why, puts the
+  // end line on every invoice and run it held, and makes each held invoice's
+  // next look due now, so a watcher in any process picks it up. Undefined, with
+  // nothing changed, when the outage is not active.
+  endOutage(
+    id: number,
+    endedBy: string,
+    note: string,
+    invoiceLine: (outage: Outage) => string,
+    runLine: (outage: Outage) => string,
+  ): OutageHold[] | undefined {
+    return this.transaction((): OutageHold[] | undefined => {
+      const now: string = new Date().toISOString();
+      const ended: { changes: number | bigint } = this.db
+        .prepare(
+          `UPDATE outages SET state = 'ended', ended_at = ?, ended_by = ?, end_note = ?
+            WHERE id = ? AND state = 'active'`,
+        )
+        .run(now, endedBy, note, id);
+      const outage: Outage | undefined = this.outage(id);
+      if (Number(ended.changes) !== 1 || outage === undefined) {
+        return undefined;
+      }
+      const holds: OutageHold[] = this.outageHolds(id);
+      for (const hold of holds) {
+        if (hold.invoiceId !== null) {
+          this.appendEvent(hold.invoiceId, "outage", invoiceLine(outage), null);
+          this.db
+            .prepare(
+              `UPDATE obligations SET look_at = ?
+                WHERE invoice_id = ? AND state IN ('open', 'escalated')`,
+            )
+            .run(now, hold.invoiceId);
+        } else if (hold.runId !== null) {
+          this.addRunEventRow(hold.runId, "outage", runLine(outage), null);
+        }
+      }
+      return holds;
+    });
   }
 
   openObligation(input: NewObligation): Obligation {
@@ -1760,7 +2186,9 @@ export class Ledger {
   // lock, opens nothing. approvalId is the approval that released the payment:
   // the attempt keeps it, and a payment from another currency's wallet keeps the
   // quote in its terms, so a retry sends the same one. Such a payment is opened
-  // only on an approval with a quote.
+  // only on an approval with a quote. No payment is opened on a rail with an
+  // active outage: RailOutageError rolls the caller's transaction back, so an
+  // approval it would have spent stays approved.
   openAttempt(
     invoiceId: string,
     kind: AttemptKind,
@@ -1776,6 +2204,11 @@ export class Ledger {
       throw new Error(
         `${invoiceId} is paid from ${obligation.sourceCurrency}, and its payment was about to be opened under the ${lease.currency} lock`,
       );
+    }
+    const outage: Outage | undefined =
+      obligation === undefined ? undefined : this.activeOutage(obligation.currency, obligation.transferMethod);
+    if (outage !== undefined) {
+      throw new RailOutageError(outage, approvalId === null ? kind : "approved");
     }
     const quote: AttemptQuote | null = approvalId === null ? null : this.approvedQuote(approvalId);
     if (obligation !== undefined && crossCurrency(obligation) && quote === null) {
@@ -3129,7 +3562,8 @@ export class Ledger {
   // released. Undefined, with nothing changed, when the approval is no longer
   // approved or has expired, or the run is no longer waiting. Throws
   // LeaseLostError unless leases still hold the lock of every currency the rows
-  // pay.
+  // pay, and RailOutageError, with nothing changed, when any row pays on a rail
+  // with an active outage, so the whole run waits with its approval.
   releaseRun(
     runId: number,
     approvalId: number,
@@ -3145,6 +3579,12 @@ export class Ledger {
           throw new Error(`Run ${runId} pays ${currency}, and its release does not hold the ${currency} lock`);
         }
         this.requireLease(lease);
+      }
+      for (const row of rows) {
+        const outage: Outage | undefined = this.activeOutage(row.currency, row.transferMethod);
+        if (outage !== undefined) {
+          throw new RailOutageError(outage, "run");
+        }
       }
       const now: string = new Date().toISOString();
       // Read under the write lock, so nothing can change between this and the

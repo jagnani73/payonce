@@ -17,6 +17,12 @@ export const CHANGED_BANK_DETAILS_REASON: string =
   "the supplier's bank details on file changed after the original payment";
 export const ORIGINAL_DEADLINE_REASON: string =
   "the bank has not paid or failed the original transfer by its deadline";
+// Why the agent sent a replacement it would have sent by itself to a person. It
+// is the invoice's escalation reason only, never in approval terms, which are
+// built from the replace decision, so an outage changes no binding. Past tense,
+// so it stays true once the outage has ended.
+export const OUTAGE_REASON: string =
+  "an outage was declared on this payment's currency and transfer method, so a person approves any replacement";
 // The reasons supplier emails escalate for are PayOnce's own words, never the
 // email's, because alerts post escalation reasons.
 export const NOT_TO_PAY_REASON: string = "supplier asked to hold, cancel or not pay this invoice";

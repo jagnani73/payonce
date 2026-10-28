@@ -76,6 +76,7 @@ import {
   namingNotToPay,
   NO_FLOOR_CLAUSE,
   NO_FLOOR_REASON,
+  OUTAGE_REASON,
   OUTSIDE_PAYOUT_REASON,
 } from "./decide.js";
 import { likelyDuplicates, nearlyPays, sameNumberForSupplier } from "./duplicates.js";
@@ -94,6 +95,7 @@ import {
   DuplicatePaymentError,
   expiryOf,
   isExpired,
+  RailOutageError,
   signersOf,
   type Approval,
   type Attempt,
@@ -106,6 +108,7 @@ import {
   type LedgerEvent,
   type Obligation,
   type ObligationState,
+  type Outage,
   type OutsidePayout,
   type PayoutMoney,
   type PayoutState,
@@ -113,6 +116,7 @@ import {
   type Signoff,
 } from "./ledger.js";
 import { formatMoney, toMajor, toMinor } from "./money.js";
+import { holdLine, railFailureSeen, waitingLine } from "./outages.js";
 import { sendAttempt, syncTransfer, wasRejected } from "./payments.js";
 import { debitCurrency, floorFor, type ReservePolicy } from "./reserve.js";
 
@@ -446,6 +450,9 @@ async function syncOutsidePayouts(
     }
     if (state === "paid" || state === "failed") {
       note(engine.ledger, invoiceId, "bank", `Payout sent outside PayOnce ${describe(transfer)}`);
+    }
+    if (state === "failed") {
+      railFailureSeen(engine.ledger, transfer, "look");
     }
   }
   return engine.ledger.outsidePayouts(invoiceId);
@@ -1401,18 +1408,23 @@ function awaitApproval(
 // the incident. Any other escalation has no payment a person could approve yet.
 // Returns when to look again: when an open request expires, so a new one can be
 // opened.
+// reason, when given, is the invoice's escalation reason in place of the
+// decision's. Only an outage gives one, for a replacement the policy would send:
+// the terms still come from that replace decision.
 function escalate(
   engine: Engine,
   obligation: Obligation,
   assessment: Assessment,
+  reason: string | null = null,
 ): NextLook {
   // An invoice that is already with a person keeps the reason it went there for
   // when the policy would now do something else.
   engine.ledger.escalate(
     obligation.invoiceId,
-    assessment.decision.action === "escalate"
-      ? assessment.decision.reason
-      : obligation.escalationReason,
+    reason ??
+      (assessment.decision.action === "escalate"
+        ? assessment.decision.reason
+        : obligation.escalationReason),
   );
   if (assessment.incident.outsidePayoutLive) {
     return holdForOutsidePayout(engine, obligation.invoiceId);
@@ -1701,6 +1713,12 @@ async function continueEscalated(
   if (voidIfStale(engine, obligation, approval, current, rule)) {
     return escalate(engine, obligation, assessed);
   }
+  // An approved payment on a rail with an outage waits with its approval, which
+  // is neither spent nor void. useApproval refuses it too.
+  const outage: Outage | undefined = engine.ledger.activeOutage(obligation.currency, obligation.transferMethod);
+  if (outage !== undefined) {
+    throw new RailOutageError(outage, "approved");
+  }
 
   // A payout tied to the invoice now is looked at before anything is sent, and the
   // approval is left as it is until then. Another process may have tied one while
@@ -1944,6 +1962,12 @@ export async function startPayment(
   }
   const wallet: string = debitCurrency(obligation);
   try {
+    // A first payment on a rail with an outage waits, unsent and with no attempt,
+    // and every check runs once the outage has ended. openAttempt refuses it too.
+    const outage: Outage | undefined = engine.ledger.activeOutage(obligation.currency, obligation.transferMethod);
+    if (outage !== undefined) {
+      throw new RailOutageError(outage, "original");
+    }
     return await withCurrencyLock(engine.ledger, wallet, async (lease: Lease): Promise<Transfer | null> => {
       // A pay run's row is held to the floor. A single incident's original is not.
       // The money committed elsewhere is counted before the balance read and again
@@ -2211,6 +2235,12 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
   if (approval?.state !== "approved" || voidIfStale(engine, held, approval, terms, rule)) {
     return awaitApproval(engine, held, terms, rule, rate);
   }
+  // Paying it waits for the end of an outage on its rail, with the approval kept.
+  // releaseFor refuses it too.
+  const outage: Outage | undefined = engine.ledger.activeOutage(obligation.currency, obligation.transferMethod);
+  if (outage !== undefined) {
+    throw new RailOutageError(outage, "approved");
+  }
 
   if (
     (await linkUnseenPayouts(engine, invoiceId)) ||
@@ -2317,7 +2347,7 @@ async function replaceUnderLock(
 
   let incident: Incident = assessment.incident;
   let paid: string | null = assessment.paidDuplicate;
-  const next: Attempt | Decision | null = engine.ledger.transaction((): Attempt | Decision | null => {
+  const next: Attempt | Decision | Outage | null = engine.ledger.transaction((): Attempt | Decision | Outage | null => {
     // An email delivered since assess read the thread is read before anything
     // is sent.
     if (engine.ledger.emailCount(invoiceId) !== assessment.emails.length) {
@@ -2334,14 +2364,23 @@ async function replaceUnderLock(
     // assess makes this check too. Made again here for an invoice paid since.
     paid = paidDuplicate(engine.ledger, obligation);
     const decision: Decision = secondBill(decide(incident), paid);
+    if (decision.action !== "replace") {
+      return decision;
+    }
+    // No replacement is sent by itself on a rail with an outage. Read under the
+    // write lock, so a declaration cannot land between this and the attempt.
     // Opening the attempt takes the duplicate lock, so this throws if the invoice
     // already has a live payment.
-    return decision.action === "replace"
-      ? engine.ledger.openAttempt(invoiceId, "replacement", lease)
-      : decision;
+    return (
+      engine.ledger.activeOutage(obligation.currency, obligation.transferMethod) ??
+      engine.ledger.openAttempt(invoiceId, "replacement", lease)
+    );
   });
   if (next === null) {
     return Date.now();
+  }
+  if ("declaredAt" in next) {
+    return escalateForOutage(engine, obligation, { ...assessment, incident, paidDuplicate: paid }, next);
   }
   if ("action" in next) {
     note(engine.ledger, invoiceId, "decision", `Escalate: ${next.reason}${arrivalClause(assessment)}`, "decision");
@@ -2354,6 +2393,51 @@ async function replaceUnderLock(
   }
   const replacement: Transfer = await send(engine, obligation, next, accountKey);
   return waitForBank(engine, invoiceId, "replacement", replacement);
+}
+
+// A replacement the policy would send by itself, on a rail with an outage, goes
+// to a person. The approval request is built from the replace decision, so its
+// terms, and its binding, say nothing of the outage. If the outage ended in the
+// moment since it was read, the next look, at once, replaces as usual.
+function escalateForOutage(
+  engine: Engine,
+  obligation: Obligation,
+  assessment: Assessment,
+  outage: Outage,
+): NextLook {
+  const invoiceId: string = obligation.invoiceId;
+  if (engine.ledger.outage(outage.id)?.state !== "active") {
+    return Date.now();
+  }
+  note(engine.ledger, invoiceId, "decision", `Escalate: ${OUTAGE_REASON}${arrivalClause(assessment)}`, "decision");
+  if (!engine.ledger.holdForOutage(outage.id, { invoiceId }, "replacement", holdLine(outage, "replacement"))) {
+    return Date.now();
+  }
+  return escalate(engine, obligation, assessment, OUTAGE_REASON);
+}
+
+// An invoice whose payment an outage held waits for a person to end it. The hold
+// line goes on its timeline once, and a standing line says what it waits on. The
+// look is tried again a minute later, which costs a ledger read while the outage
+// lasts. If the outage has ended meanwhile, the next look is due at once.
+export function waitOnOutage(engine: Engine, invoiceId: string, error: RailOutageError): void {
+  const outage: Outage | undefined = engine.ledger.outage(error.outageId);
+  if (
+    outage?.state !== "active" ||
+    !engine.ledger.holdForOutage(outage.id, { invoiceId }, error.what, holdLine(outage, error.what))
+  ) {
+    engine.ledger.lookAt(invoiceId, Date.now());
+    return;
+  }
+  const approval: Approval | undefined =
+    error.what === "approved" ? engine.ledger.latestApproval(invoiceId) : undefined;
+  note(
+    engine.ledger,
+    invoiceId,
+    "outage",
+    waitingLine(outage, approval?.state === "approved" ? approval : undefined),
+    "waiting",
+  );
 }
 
 // Carries out a decision: replace, close, hand over to a person, or wait for the
@@ -2421,6 +2505,11 @@ export async function resumeIncident(
     // again a minute later rather than on every check.
     const now: number = Date.now();
     engine.ledger.postponeDueLook(invoiceId, now, now + RETRY_FAILED_LOOK_MS);
+    // An outage is no failure of the look, so it writes no error line.
+    if (error instanceof RailOutageError) {
+      waitOnOutage(engine, invoiceId, error);
+      return;
+    }
     throw error;
   }
   engine.ledger.lookAt(invoiceId, next);
@@ -2577,6 +2666,10 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
     const state: AttemptState | null = attemptStateOf(transfer);
     if (state !== attempt.state && (state === "paid" || state === "failed")) {
       note(engine.ledger, invoiceId, "bank", `${capitalise(attempt.kind)} ${describe(transfer)}`);
+    }
+    // After the bank line, so an outage this failure declares reads after it.
+    if (state === "failed") {
+      railFailureSeen(engine.ledger, transfer, "look");
     }
     if (attempt.kind === "original") {
       originalId = transfer.id;
