@@ -3340,16 +3340,26 @@ export class Ledger {
     );
   }
 
-  // True while the condition an alert was queued for still stands as it was.
-  conditionHolds(key: string, episode: number, fingerprint: string): boolean {
-    return (
-      this.db
-        .prepare(
-          `SELECT 1 FROM alert_conditions
-            WHERE alert_key = ? AND episode = ? AND fingerprint = ? AND cleared_at IS NULL`,
-        )
-        .get(key, episode, fingerprint) !== undefined
-    );
+  // Marks a claimed alert skipped when the condition it was queued for has
+  // cleared or no longer has its episode and fingerprint. The check is part of
+  // the UPDATE, so a condition another process records back to this fingerprint
+  // either lands first and the alert is not skipped, or finds it skipped and
+  // queues it again. False means the condition holds and the alert is posted.
+  skipStaleAlert(id: number, holder: string): boolean {
+    const result: { changes: number | bigint } = this.db
+      .prepare(
+        `UPDATE alerts
+            SET state = 'skipped', sent_at = NULL, claimed_by = NULL, claim_until = NULL
+          WHERE id = ? AND claimed_by = ?
+            AND NOT EXISTS (
+              SELECT 1 FROM alert_conditions
+               WHERE alert_conditions.alert_key = alerts.alert_key
+                 AND alert_conditions.episode = alerts.episode
+                 AND alert_conditions.fingerprint = alerts.fingerprint
+                 AND alert_conditions.cleared_at IS NULL)`,
+      )
+      .run(id, holder);
+    return Number(result.changes) === 1;
   }
 
   // Takes the oldest alert that is due, or one whose sender's claim ran out, in

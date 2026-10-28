@@ -642,8 +642,7 @@ export class Alerts {
   }
 
   private async send(alert: Alert): Promise<void> {
-    if (alert.kind !== "summary" && !this.ledger.conditionHolds(alert.key, alert.episode, alert.fingerprint)) {
-      this.finish(alert, { state: "skipped", tried: false, nextTryAt: null, error: null });
+    if (alert.kind !== "summary" && this.ledger.skipStaleAlert(alert.id, this.holder)) {
       return;
     }
     const facts: AlertFacts = JSON.parse(alert.facts) as AlertFacts;
