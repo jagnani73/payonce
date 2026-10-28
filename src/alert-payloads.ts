@@ -130,6 +130,9 @@ const AMBER: number = 15105570;
 const RED: number = 15158332;
 const FOOTNOTE: string = "Sandbox, no real money.";
 const CONTROL: RegExp = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
+// Bidi controls and zero-width characters, which could reverse or hide part of
+// a supplier name inside a code span.
+const HIDDEN: RegExp = /[\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
 // An invoice number or a bank reference, as PayOnce accepts them.
 const IDENTIFIER: RegExp = /^[A-Za-z0-9-]{1,40}$/;
 
@@ -185,9 +188,10 @@ function discordChar(char: string): string {
 }
 
 // A link needs ://, or www. on Slack, so neither survives in outside text. A
-// backtick would end the code span, so it becomes an apostrophe.
+// backtick would end the code span, so it becomes an apostrophe. Bidi controls
+// and zero-width characters are dropped.
 export function defanged(text: string): string {
-  return oneLine(text).replace(/:\/\//g, "[:]//").replace(/\bwww\./gi, "www[.]").replace(/`/g, "'");
+  return oneLine(text.replace(HIDDEN, "")).replace(/:\/\//g, "[:]//").replace(/\bwww\./gi, "www[.]").replace(/`/g, "'");
 }
 
 function identifier(value: string | null, fallback: string): string {
