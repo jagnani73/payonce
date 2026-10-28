@@ -4,6 +4,8 @@
 // hold email text, model output, account details or anything secret. The inbox
 // alert is a count: no sender, name, subject or text of an uploaded email.
 
+import { RAIL_FAILURE_CODES } from "./outages.js";
+
 export type AlertFormat = "slack" | "discord";
 
 // What an invoice waits on, first match wins: an approval of paying a held
@@ -80,6 +82,26 @@ export interface InboxAlertFacts {
   waiting: number;
 }
 
+// An outage declared on a rail, or ended by a person. It never names who ended
+// it, their note, an approver, an account or Airwallex's failure message.
+export interface OutageAlertFacts {
+  kind: "outage";
+  outage: number;
+  currency: string;
+  method: string;
+  state: "active" | "ended";
+  // Rail-level codes. The message adds PayOnce's own label to each.
+  codes: string[];
+  payees: number;
+  windowMinutes: number;
+  // The bank's short references of the payouts counted, five at most.
+  references: string[];
+  declaredAt: string;
+  endedAt: string | null;
+  // The invoices and runs it held.
+  held: number;
+}
+
 export interface SummaryAlertFacts {
   kind: "summary";
   invoices: number;
@@ -88,6 +110,8 @@ export interface SummaryAlertFacts {
   cash: number;
   // Emails waiting in the inbox. Absent in a summary queued before inbox alerts.
   inbox?: number;
+  // Active outages. Absent in a summary queued before outages.
+  outages?: number;
 }
 
 export type AlertFacts =
@@ -97,6 +121,7 @@ export type AlertFacts =
   | AuditAlertFacts
   | CashAlertFacts
   | InboxAlertFacts
+  | OutageAlertFacts
   | SummaryAlertFacts;
 
 // Text in a message. outside is text PayOnce did not write itself, such as a
@@ -391,11 +416,70 @@ function inboxMessage(facts: InboxAlertFacts, base: string): AlertMessage {
   };
 }
 
+// "USD LOCAL", from a currency and a method PayOnce checks, so the title holds
+// only its own words.
+function railText(facts: OutageAlertFacts): string {
+  const currency: string = /^[A-Z]{3}$/.test(facts.currency) ? facts.currency : "a currency";
+  const method: string = facts.method === "LOCAL" || facts.method === "SWIFT" ? facts.method : "a transfer method";
+  return `${currency} ${method}`;
+}
+
+function outageCodes(facts: OutageAlertFacts): string {
+  const named: string[] = facts.codes
+    .filter((code: string): boolean => /^[0-9]{5}$/.test(code))
+    .map((code: string): string => `${code} (${RAIL_FAILURE_CODES[code] ?? "rail failure"})`);
+  return named.length <= 1 ? (named[0] ?? "a rail-level code") : `${named.slice(0, -1).join(", ")} and ${named.at(-1)}`;
+}
+
+function outageMessage(facts: OutageAlertFacts, base: string): AlertMessage {
+  const rail: string = railText(facts);
+  const references: string[] = facts.references.filter((reference: string): boolean => /^[A-Z0-9-]{1,30}$/.test(reference));
+  const declared: string = utcText(facts.declaredAt);
+  const counted: string = `payouts to ${plural(facts.payees, "payee", "payees")} failed with ${outageCodes(facts)}`;
+  const fields: AlertField[] = [
+    field("Rail", ours(rail)),
+    field("Failure codes", ours(outageCodes(facts))),
+    field("Payees", ours(String(facts.payees))),
+    field("Window", ours(plural(facts.windowMinutes, "minute", "minutes"))),
+    field("Declared", ours(declared)),
+    ...(references.length === 0 ? [] : [field("Payouts", ours(references.join(", ")), false)]),
+  ];
+  if (facts.state === "active") {
+    return {
+      title: `Outage declared on ${rail}`,
+      line: [ours(`${capitalised(counted)} within ${plural(facts.windowMinutes, "minute", "minutes")}. PayOnce opens no new payment on ${rail} until a person ends the outage`)],
+      fields,
+      link: `${base}/`,
+      linkText: "Open PayOnce",
+      urgent: true,
+    };
+  }
+  const ended: string = facts.endedAt === null ? "not known" : utcText(facts.endedAt);
+  return {
+    title: `Outage on ${rail} ended`,
+    line: [
+      ours(
+        `Declared ${declared} after ${counted}, ended ${ended}. PayOnce opens payments on ${rail} again, and the ${plural(facts.held, "invoice or run", "invoices and runs")} it held carry on`,
+      ),
+    ],
+    fields: [...fields, field("Ended", ours(ended)), field("Held", ours(String(facts.held)))],
+    link: `${base}/`,
+    linkText: "Open PayOnce",
+    urgent: false,
+  };
+}
+
+function capitalised(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 function summaryMessage(facts: SummaryAlertFacts, base: string): AlertMessage {
   const inbox: number = facts.inbox ?? 0;
+  const outages: number = facts.outages ?? 0;
   const parts: string[] = [
     `${plural(facts.invoices, "invoice is", "invoices are")} waiting on a person`,
     `${plural(facts.runs, "pay run waits", "pay runs wait")} for approval`,
+    ...(outages === 0 ? [] : [`${plural(outages, "outage is", "outages are")} active`]),
     ...(inbox === 0 ? [] : [`${plural(inbox, "supplier email waits", "supplier emails wait")} in the inbox`]),
     ...(facts.audit === 0 ? [] : [`${plural(facts.audit, "audit trail does", "audit trails do")} not verify`]),
     ...(facts.cash === 0 ? [] : [`${plural(facts.cash, "currency is", "currencies are")} below 0 headroom`]),
@@ -429,6 +513,8 @@ export function alertMessage(facts: AlertFacts, base: string): AlertMessage {
       return cashMessage(facts, base);
     case "inbox":
       return inboxMessage(facts, base);
+    case "outage":
+      return outageMessage(facts, base);
     case "summary":
       return summaryMessage(facts, base);
   }

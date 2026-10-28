@@ -9,6 +9,7 @@ import {
   type InboxAlertFacts,
   type InvoiceAlertFacts,
   type InvoiceNeed,
+  type OutageAlertFacts,
   type PayoutAlertFacts,
   type RunAlertFacts,
   type SummaryAlertFacts,
@@ -55,6 +56,7 @@ import {
   type InboxWaiting,
   type Ledger,
   type Obligation,
+  type Outage,
   type OutsidePayout,
   type RecordedConditions,
   type Run,
@@ -79,6 +81,11 @@ const CLAIM_MS: number = 60_000;
 const POSTS_PER_FLUSH: number = 4;
 // Slack takes about one message a second from an incoming webhook.
 const POST_GAP_MS: number = 1_100;
+
+// How long an ended outage stays a condition, and how many payouts its alert
+// names.
+const ENDED_OUTAGE_SHOWN_MS: number = 24 * 60 * 60_000;
+const OUTAGE_REFERENCES_SHOWN: number = 5;
 
 const SUMMARY_KEY: string = "summary";
 const INBOX_KEY: string = "inbox";
@@ -412,6 +419,40 @@ function cashConditions(report: CashReport): FoundCondition[] {
     });
 }
 
+// An outage alerts once when it is declared and once when a person ends it: the
+// fingerprint is its state. An ended one stays a condition for a day, so its end
+// alert is not taken for a condition that cleared, and then clears with nothing
+// posted.
+function outageConditions(ledger: Ledger, now: number): FoundCondition[] {
+  return ledger
+    .outages()
+    .filter(
+      (outage: Outage): boolean =>
+        outage.state === "active" ||
+        (outage.endedAt !== null && now - Date.parse(outage.endedAt) < ENDED_OUTAGE_SHOWN_MS),
+    )
+    .map((outage: Outage): FoundCondition => {
+      const facts: OutageAlertFacts = {
+        kind: "outage",
+        outage: outage.id,
+        currency: outage.currency,
+        method: outage.method,
+        state: outage.state,
+        codes: outage.codes,
+        payees: outage.payees,
+        windowMinutes: outage.windowMinutes,
+        references: outage.counted
+          .map((transferId: string): string | undefined => ledger.railFailure(transferId)?.reference)
+          .filter((reference: string | undefined): reference is string => reference !== undefined)
+          .slice(0, OUTAGE_REFERENCES_SHOWN),
+        declaredAt: outage.declaredAt,
+        endedAt: outage.endedAt,
+        held: ledger.outageHolds(outage.id).length,
+      };
+      return condition(`outage:${outage.id}`, { state: outage.state }, facts);
+    });
+}
+
 // Emails waiting in the inbox, by count only. The fingerprint is the newest
 // upload in any state, so a new upload alerts again and a delivery or a dismissal
 // does not.
@@ -425,6 +466,7 @@ function inboxCondition(inbox: InboxWaiting): FoundCondition | null {
 
 function summaryOf(found: FoundCondition[], inbox: InboxWaiting): FoundCondition {
   const count = (kind: string): number => found.filter((item: FoundCondition): boolean => item.kind === kind).length;
+  const active: string = hashOf({ state: "active" });
   const facts: SummaryAlertFacts = {
     kind: "summary",
     invoices: count("invoice"),
@@ -432,6 +474,8 @@ function summaryOf(found: FoundCondition[], inbox: InboxWaiting): FoundCondition
     audit: count("audit"),
     cash: count("cash"),
     inbox: inbox.waiting,
+    outages: found.filter((item: FoundCondition): boolean => item.kind === "outage" && item.fingerprint === active)
+      .length,
   };
   return condition(SUMMARY_KEY, "first", facts);
 }
@@ -622,6 +666,7 @@ export class Alerts {
     if (emails !== null) {
       found.push(emails);
     }
+    found.push(...outageConditions(this.ledger, now));
     found.push(...this.audit);
     // Before the first balance read the cash is not known, so a standing cash
     // condition is neither found nor cleared.
