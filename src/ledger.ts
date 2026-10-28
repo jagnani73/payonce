@@ -76,6 +76,21 @@ const SCHEMA: string = `
   );
   CREATE UNIQUE INDEX IF NOT EXISTS one_signoff_per_approver
     ON signoffs(approval_id, approver);
+  CREATE TABLE IF NOT EXISTS bank_changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    invoice_id TEXT NOT NULL REFERENCES obligations(invoice_id),
+    beneficiary_id TEXT NOT NULL,
+    called_by TEXT NOT NULL,
+    number_called TEXT NOT NULL,
+    called_at TEXT NOT NULL,
+    spoke_to TEXT NOT NULL,
+    confirmed TEXT NOT NULL,
+    old_details TEXT NOT NULL,
+    new_details TEXT NOT NULL,
+    applied_key TEXT,
+    state TEXT NOT NULL DEFAULT 'pending',
+    recorded_at TEXT NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -98,6 +113,7 @@ export type EventKind =
   | "warning"
   | "lock"
   | "closed"
+  | "callback"
   | "error";
 
 // One line of an incident's timeline.
@@ -124,6 +140,9 @@ export interface NewObligation {
   // The name the person who started the incident gave. Null when PayOnce does
   // not know, as for a payout sent outside it.
   startedBy: string | null;
+  // The supplier's phone number from the supplier record, for calling back about
+  // a change of bank details. Null when none is on file.
+  supplierPhone: string | null;
 }
 
 export interface Obligation extends NewObligation {
@@ -237,6 +256,66 @@ interface ObligationRow {
   state: ObligationState;
   escalation_reason: string;
   started_by: string | null;
+  supplier_phone: string | null;
+}
+
+// A person's callback to the supplier on the number on file, and the bank
+// details it confirmed. applied means the supplier's record in Airwallex was
+// read back holding them, and appliedKey is that record's bank details as
+// bankDetailsKey writes them.
+export type BankChangeState = "pending" | "applied" | "failed";
+
+export interface NewBankChange {
+  invoiceId: string;
+  beneficiaryId: string;
+  calledBy: string;
+  numberCalled: string;
+  calledAt: string;
+  spokeTo: string;
+  confirmed: string;
+  oldDetails: string;
+  newDetails: string;
+}
+
+export interface BankChange extends NewBankChange {
+  id: number;
+  appliedKey: string | null;
+  state: BankChangeState;
+  recordedAt: string;
+}
+
+interface BankChangeRow {
+  id: number;
+  invoice_id: string;
+  beneficiary_id: string;
+  called_by: string;
+  number_called: string;
+  called_at: string;
+  spoke_to: string;
+  confirmed: string;
+  old_details: string;
+  new_details: string;
+  applied_key: string | null;
+  state: BankChangeState;
+  recorded_at: string;
+}
+
+function toBankChange(row: BankChangeRow): BankChange {
+  return {
+    id: row.id,
+    invoiceId: row.invoice_id,
+    beneficiaryId: row.beneficiary_id,
+    calledBy: row.called_by,
+    numberCalled: row.number_called,
+    calledAt: row.called_at,
+    spokeTo: row.spoke_to,
+    confirmed: row.confirmed,
+    oldDetails: row.old_details,
+    newDetails: row.new_details,
+    appliedKey: row.applied_key,
+    state: row.state,
+    recordedAt: row.recorded_at,
+  };
 }
 
 interface ColumnRow {
@@ -271,6 +350,7 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     // When the agent next looks at the invoice by itself, as an ISO time.
     look_at: "TEXT",
     started_by: "TEXT",
+    supplier_phone: "TEXT",
   },
   approvals: {
     requested_at: "TEXT",
@@ -333,6 +413,7 @@ function toObligation(row: ObligationRow): Obligation {
     state: row.state,
     escalationReason: row.escalation_reason,
     startedBy: row.started_by,
+    supplierPhone: row.supplier_phone,
   };
 }
 
@@ -410,8 +491,9 @@ export class Ledger {
       .prepare(
         `INSERT OR IGNORE INTO obligations
            (invoice_id, supplier, supplier_domain, beneficiary_id, currency,
-            amount_minor, transfer_method, reserve_floor_minor, started_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            amount_minor, transfer_method, reserve_floor_minor, started_by,
+            supplier_phone)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.invoiceId,
@@ -423,6 +505,7 @@ export class Ledger {
         input.transferMethod,
         input.reserveFloorMinor,
         input.startedBy,
+        input.supplierPhone,
       );
     const row: ObligationRow = this.db
       .prepare("SELECT * FROM obligations WHERE invoice_id = ?")
@@ -543,8 +626,8 @@ export class Ledger {
           `INSERT INTO obligations
              (invoice_id, supplier, supplier_domain, beneficiary_id, currency,
               amount_minor, transfer_method, reserve_floor_minor, origin,
-              payout_reference, started_by)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'outside', ?, ?)`,
+              payout_reference, started_by, supplier_phone)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'outside', ?, ?, ?)`,
         )
         .run(
           input.invoiceId,
@@ -557,6 +640,7 @@ export class Ledger {
           input.reserveFloorMinor,
           payoutReference,
           input.startedBy,
+          input.supplierPhone,
         );
       this.db
         .prepare(
@@ -918,6 +1002,77 @@ export class Ledger {
         "UPDATE approvals SET state = ?, approver = COALESCE(?, approver) WHERE id = ?",
       )
       .run(state, approver, id);
+  }
+
+  // Written before the supplier's record is changed, so a change that fails part
+  // way is still on file.
+  addBankChange(input: NewBankChange): number {
+    const result: { lastInsertRowid: number | bigint } = this.db
+      .prepare(
+        `INSERT INTO bank_changes
+           (invoice_id, beneficiary_id, called_by, number_called, called_at, spoke_to,
+            confirmed, old_details, new_details, recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        input.invoiceId,
+        input.beneficiaryId,
+        input.calledBy,
+        input.numberCalled,
+        input.calledAt,
+        input.spokeTo,
+        input.confirmed,
+        input.oldDetails,
+        input.newDetails,
+        new Date().toISOString(),
+      );
+    return Number(result.lastInsertRowid);
+  }
+
+  finishBankChange(id: number, state: BankChangeState, appliedKey: string | null): void {
+    this.db
+      .prepare("UPDATE bank_changes SET state = ?, applied_key = ? WHERE id = ?")
+      .run(state, appliedKey, id);
+  }
+
+  // The latest callback applied to this beneficiary, from any invoice paid to it,
+  // when it verified exactly the bank details the record holds now. A record
+  // changed since, in PayOnce or outside it, has none, even when it changed back
+  // to details an older callback verified.
+  verifiedBankChange(beneficiaryId: string, detailsKey: string): BankChange | undefined {
+    const row: BankChangeRow | undefined = this.db
+      .prepare(
+        `SELECT * FROM bank_changes WHERE beneficiary_id = ? AND state = 'applied'
+          ORDER BY id DESC LIMIT 1`,
+      )
+      .get(beneficiaryId) as unknown as BankChangeRow | undefined;
+    return row === undefined || row.applied_key !== detailsKey ? undefined : toBankChange(row);
+  }
+
+  // Everyone who recorded an applied callback for these details of this
+  // beneficiary. None of them may approve a payment to them.
+  bankChangeRecorders(beneficiaryId: string, detailsKey: string): string[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT DISTINCT called_by FROM bank_changes
+            WHERE beneficiary_id = ? AND state = 'applied' AND applied_key = ?`,
+        )
+        .all(beneficiaryId, detailsKey) as unknown as { called_by: string }[]
+    ).map((row: { called_by: string }): string => row.called_by);
+  }
+
+  // The applied callback whose record matches an approval's accountKey, keyed by
+  // the hash the terms carry.
+  appliedKeys(beneficiaryId: string): string[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT DISTINCT applied_key FROM bank_changes
+            WHERE beneficiary_id = ? AND state = 'applied' AND applied_key IS NOT NULL`,
+        )
+        .all(beneficiaryId) as unknown as { applied_key: string }[]
+    ).map((row: { applied_key: string }): string => row.applied_key);
   }
 
   // True when one attempt is paid and every other attempt has failed.

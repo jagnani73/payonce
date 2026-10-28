@@ -89,6 +89,20 @@ Approvers are listed in `.env` as names with limits, for example `APPROVERS=Yash
 
 The page has no login, so a name is whatever the person types or picks. The rules stop someone approving their own incident under their own name, and the timeline records who said what. They do not prove who was at the keyboard. That needs a login tied to each name.
 
+## Changed bank details
+
+PayOnce never takes new bank details from an email or from the model that reads emails. When a supplier says it has moved banks, or the supplier's record no longer matches the account the original went to, PayOnce pays the new account only after a person has called the supplier back.
+
+Once every payment for the invoice has failed, the incident page has a "Changed bank details" card. The person calls the supplier on the phone number in the supplier record, then records who called, the number they dialled, when, who they spoke to and what was confirmed. PayOnce refuses the callback if the number is not the one on file. The person then types the new details the supplier read out. PayOnce updates the supplier's beneficiary record in Airwallex, reads it back and keeps the record's details with the callback.
+
+The agent then opens a new approval request for the new account. Its terms carry the callback and a hash of the full bank details, and two approvers must approve it whatever the amount. The person who recorded the callback cannot be one of them, and neither can the person who started the incident. If the record changes again, in PayOnce or in the Airwallex web app, the callback no longer matches it, any open request is withdrawn and nothing is paid until someone calls again.
+
+A callback verifies the record for every invoice paid to that supplier, not just the one it was recorded on, because they all pay the same beneficiary.
+
+Before any replacement goes out, PayOnce reads the supplier's record again and sends nothing if it no longer holds the account the approvers saw. While another invoice to the same supplier is about to be paid, a callback cannot be recorded, because the change would move that payment too.
+
+In the sandbox, the scenarios share one beneficiary per currency, so a change would reach every later incident. Each run of the `usd-local-bank-change` scenario creates a record of its own, with a phone number on file. Try it with the `moved-banks` email thread and the `ACCOUNT_CLOSED` bank outcome.
+
 ## Closing a paid incident
 
 A paid original holds the duplicate lock, so PayOnce cannot send anything more for that invoice. If no supplier email reports the payment missing, the incident closes. If one does, or anything else on file sends it to a person, the incident stays open until a person closes it. The same goes for an invoice paid by a replacement or by a payout sent outside PayOnce that has gone to a person.
@@ -145,8 +159,8 @@ pnpm reset
 | --- | --- | --- |
 | `OUTCOME` | A simulated bank outcome: `PAID`, `STAYS_IN_FLIGHT`, or a failure type such as `CHANNEL_TIMEOUT`, `SYSTEM_ERROR`, `BENEFICIARY_BANK_RETURNED` or `ACCOUNT_CLOSED` | `CHANNEL_TIMEOUT` |
 | `INVOICE` | Any invoice number. A new one starts an incident and an existing one continues it | A random number |
-| `EMAILS` | `nothing-arrived` or `new-account` | `nothing-arrived` |
-| `SCENARIO` | `usd-local`, `eur-swift` or `eur-swift-low-reserve` | `usd-local` |
+| `EMAILS` | `nothing-arrived`, `new-account` or `moved-banks` | `nothing-arrived` |
+| `SCENARIO` | `usd-local`, `eur-swift`, `eur-swift-low-reserve` or `usd-local-bank-change` | `usd-local` |
 | `NAME` | Who is starting the incident. That person cannot approve its replacement | Your login name |
 
 Four runs to try:
@@ -187,6 +201,8 @@ In the fourth, the bank pays the original while the supplier says it never arriv
 | `src/ledger.ts` | Obligations, payment attempts, approvals, emails and the timeline in SQLite |
 | `src/payments.ts` | Sends an attempt under its `request_id` and syncs transfer state into the ledger |
 | `src/approval.ts` | Approval terms and the hash that binds an approval to them |
+| `src/approvers.ts` | The approval policy: who may approve, how many are needed, and when a request expires |
+| `src/bank-change.ts` | Records a callback about new bank details and updates the supplier's record in Airwallex |
 | `src/emails.ts` | The email reader interface, the findings a reader returns, and the sender check |
 | `src/model-reader.ts` | The model reader: one chat completion that returns the findings |
 | `src/reader.ts` | Picks the model reader, or the keyword placeholder when no key is set |
@@ -202,7 +218,6 @@ The code holds amounts in minor units and converts at the Airwallex boundary. Th
 ## Not built yet
 
 - A model's explanation of each decision. The reasons on the timeline come from the policy.
-- Approving payment to new bank details. An approval covers a replacement to the account on file.
 - Closing an incident without a payment. A person can close one only when the bank reports a payment for the invoice as paid.
 - Chasing the bank. When a payment passes its deadline, PayOnce tells a person and does nothing else.
 - A webhook delivered by the sandbox. The receiver, the tunnel and the subscription work, but no event from Airwallex has reached them yet.

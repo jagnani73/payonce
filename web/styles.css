@@ -236,8 +236,17 @@ select {
   color: var(--ink-2);
 }
 
+.field__hint {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
 select,
-input[type="text"] {
+input[type="text"],
+input[type="tel"],
+input[type="datetime-local"] {
   width: 100%;
   height: 38px;
   padding: 0 10px;
@@ -722,7 +731,8 @@ input:read-only {
   color: var(--accent);
 }
 
-.event--approval .event__marker {
+.event--approval .event__marker,
+.event--callback .event__marker {
   border-color: var(--amber-line);
   color: var(--amber);
 }
@@ -1109,6 +1119,11 @@ input:read-only {
   font-size: 14px;
 }
 
+.terms__sub--caution {
+  color: var(--amber);
+  font-weight: 600;
+}
+
 .terms__meta {
   display: flex;
   flex-wrap: wrap;
@@ -1124,10 +1139,38 @@ input:read-only {
 }
 
 .approve-form,
-.close-form {
+.close-form,
+.bank-form {
   margin-top: 16px;
   padding-top: 14px;
   border-top: 1px solid var(--line);
+}
+
+.bank-form__title {
+  margin-top: 16px;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.bank-form .bank-form__intro {
+  margin: 2px 0 10px;
+}
+
+.bank-change__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.bank-form .bank-change__actions {
+  margin-top: 4px;
+}
+
+.bank-change__status {
+  margin-top: 14px;
 }
 
 .close-form .button {

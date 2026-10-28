@@ -64,6 +64,7 @@ function adopt(engine: Engine, transfer: Transfer, state: FoundState): string | 
       reserveFloorMinor: FOUND_RESERVE_FLOOR_MINOR,
       // Airwallex does not say who sent it.
       startedBy: null,
+      supplierPhone: null,
     },
     fits || reference === "" ? null : reference,
     {

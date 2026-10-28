@@ -42,6 +42,7 @@ const EVENT_KINDS = {
   bank: "Bank",
   decision: "Decision",
   approval: "Approval",
+  callback: "Callback",
   warning: "Warning",
   lock: "Duplicate refused",
   closed: "Closed",
@@ -90,6 +91,7 @@ const els = {
   timelineEmpty: byId("timeline-empty"),
   working: byId("working"),
   review: byId("review"),
+  bankChange: byId("bank-change"),
   approval: byId("approval"),
   payments: byId("payments"),
   payAgain: byId("pay-again"),
@@ -124,12 +126,20 @@ const state = {
   fastUntil: 0,
   drafts: new Map(),
   closeDrafts: new Map(),
+  // The callback form: which invoice has it open, what loading it returned, and drafts by invoice.
+  bankOpen: null,
+  bankLoad: null,
+  bankFocusPending: null,
+  bankSaving: false,
+  bankError: null,
+  bankDrafts: new Map(),
 };
 
 // Signatures of what each section last drew, so an unchanged poll touches nothing.
 const painted = new Map();
 let approvalRefs = null;
 let reviewRefs = null;
+let bankRefs = null;
 let headerRefs = null;
 
 // ---------- helpers ----------
@@ -247,6 +257,14 @@ const timeFormat = new Intl.DateTimeFormat(undefined, {
 const dateTimeFormat = new Intl.DateTimeFormat(undefined, {
   dateStyle: "medium",
   timeStyle: "medium",
+});
+
+const dayFormat = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
+
+const minuteFormat = new Intl.DateTimeFormat(undefined, {
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
 });
 
 function parseDate(value) {
@@ -480,7 +498,8 @@ function setSelected(id) {
   state.approveError = null;
   state.closeError = null;
   state.resumeError = null;
-  const hash = id === null ? "" : `#${encodeURIComponent(id)}`;
+  state.bankError = null;
+  const hash =id === null ? "" : `#${encodeURIComponent(id)}`;
   if (window.location.hash !== hash) {
     window.history.replaceState(null, "", hash === "" ? window.location.pathname : hash);
   }
@@ -1166,6 +1185,29 @@ function whyCannotApprove(approver, terms, barred, signoffs) {
   return null;
 }
 
+// "Alex called +1 212 555 0147 (on file) on Oct 28 at 14:20 and spoke to Dana, who confirmed: ..."
+function callbackText(bankChange) {
+  const date = parseDate(bankChange.calledAt);
+  const when =
+    date === null
+      ? []
+      : [
+          " on ",
+          h(
+            "time",
+            { datetime: date.toISOString(), title: dateTimeFormat.format(date) },
+            `${dayFormat.format(date)} at ${minuteFormat.format(date)}`,
+          ),
+        ];
+  return [
+    `${bankChange.calledBy} called `,
+    h("span", { class: "mono" }, bankChange.numberCalled),
+    " (on file)",
+    ...when,
+    ` and spoke to ${bankChange.spokeTo}, who confirmed: ${bankChange.confirmed}`,
+  ];
+}
+
 function caution(message) {
   return h("div", { class: "caution" }, icon("warning"), h("p", { class: "caution__title" }, message));
 }
@@ -1214,6 +1256,11 @@ function buildApproval(invoiceId, approval) {
     typeof evidence.originalReference === "string" && evidence.originalReference !== "";
 
   const expired = requested && approval.expired === true;
+  // Set when the payment goes to bank details a callback verified.
+  const bankChange =
+    evidence.bankChange !== null && typeof evidence.bankChange === "object"
+      ? evidence.bankChange
+      : null;
 
   const previousSelect = approvalRefs?.select ?? null;
   const hadFocus = previousSelect !== null && document.activeElement === previousSelect;
@@ -1241,7 +1288,17 @@ function buildApproval(invoiceId, approval) {
       { class: "terms" },
       h("dt", null, "Amount"),
       h("dd", { class: "terms__amount" }, formatMoney(terms.amountMinor, terms.currency)),
-      term("Pay to", terms.payTo),
+      term(
+        "Pay to",
+        terms.payTo,
+        bankChange !== null &&
+          h(
+            "span",
+            { class: "terms__sub terms__sub--caution" },
+            "Not the account the original payment went to",
+          ),
+      ),
+      term("Callback", bankChange === null ? null : callbackText(bankChange)),
       term("Why it was escalated", sentence(evidence.reason)),
       term(
         "Original payment",
@@ -1652,6 +1709,410 @@ async function submitClose(invoiceId) {
   }
 }
 
+// ---------- callback for new bank details ----------
+
+// Which control in a section has focus, so a rebuilt section can give it back.
+function focusedControl(section) {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || !section.contains(active) || active.id === "") {
+    return null;
+  }
+  const selection =
+    typeof active.selectionStart === "number" ? [active.selectionStart, active.selectionEnd] : null;
+  return { id: active.id, selection };
+}
+
+function restoreFocus(focus) {
+  const node = focus === null ? null : document.getElementById(focus.id);
+  if (node === null || node.disabled) {
+    return;
+  }
+  node.focus();
+  if (focus.selection !== null) {
+    try {
+      node.setSelectionRange(focus.selection[0], focus.selection[1]);
+    } catch {
+      // The control does not take a text selection.
+    }
+  }
+}
+
+// The value a datetime-local input takes, in local time to the minute.
+function localInputValue(date) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+// "Account name" reads as "account name" in a sentence, "SWIFT code" stays as it is.
+function inSentence(label) {
+  return String(label).replace(/\b[A-Z][a-z]+\b/g, (word) => word.toLowerCase());
+}
+
+// A person can record a callback only while the invoice waits on them and every payment has failed.
+function bankChangeShown(detail) {
+  const obligation = detail.obligation;
+  const attempts = Array.isArray(detail.attempts) ? detail.attempts : [];
+  return (
+    obligation.state === "escalated" &&
+    typeof obligation.supplierPhone === "string" &&
+    obligation.supplierPhone.trim() !== "" &&
+    attempts.length > 0 &&
+    attempts.every((attempt) => attempt.state === "failed")
+  );
+}
+
+function readBankForm(data) {
+  const fields = Array.isArray(data.fields)
+    ? data.fields
+        .filter((field) => typeof field?.name === "string" && field.name !== "")
+        .map((field) => ({
+          name: field.name,
+          label: typeof field.label === "string" && field.label !== "" ? field.label : humanize(field.name),
+          current: typeof field.current === "string" ? field.current : "",
+        }))
+    : [];
+  const blocked =
+    typeof data.blocked === "string" && data.blocked.trim() !== "" ? data.blocked.trim() : null;
+  return { fields, blocked };
+}
+
+function bankDraft(invoiceId) {
+  let draft = state.bankDrafts.get(invoiceId);
+  if (draft === undefined) {
+    draft = {
+      calledBy: "",
+      numberCalled: "",
+      calledAt: localInputValue(new Date()),
+      spokeTo: "",
+      confirmed: "",
+      details: {},
+    };
+    state.bankDrafts.set(invoiceId, draft);
+  }
+  return draft;
+}
+
+function bankActions(...buttons) {
+  return h("div", { class: "bank-change__actions" }, buttons);
+}
+
+// A button with no click handler submits its form.
+function bankButton(id, label, className, onClick) {
+  const button = h(
+    "button",
+    { class: className, type: onClick === null ? "submit" : "button", id },
+    label,
+  );
+  if (onClick !== null) {
+    button.addEventListener("click", onClick);
+  }
+  return button;
+}
+
+function buildBankChange(invoiceId, phone, open, load) {
+  const focus = focusedControl(els.bankChange);
+  const refs = { inputs: [], submit: null, cancel: null, error: null, fields: [] };
+  const cancel = () => closeBankForm();
+
+  const children = [
+    h("div", { class: "approval__head" }, h("h2", { id: "bank-change-title" }, "Changed bank details")),
+    h(
+      "p",
+      { class: "approval__lead" },
+      "PayOnce pays new bank details only after someone calls the supplier on the number on file. It never uses a number or an account from an email.",
+    ),
+    h(
+      "dl",
+      { class: "terms" },
+      h("dt", null, "Number on file"),
+      h("dd", null, h("span", { class: "mono" }, phone)),
+    ),
+  ];
+
+  const small = "button button--small";
+  const cancelButton = () => bankButton("bank-change-cancel", "Cancel", small, cancel);
+  if (!open) {
+    children.push(
+      bankActions(
+        bankButton("bank-change-open", "Record a callback", small, () => openBankForm(invoiceId)),
+      ),
+    );
+  } else if (load === null || load.status === "loading") {
+    children.push(h("p", { class: "empty bank-change__status" }, "Loading the bank details on file."));
+  } else if (load.status === "failed") {
+    children.push(
+      h("p", { class: "form-error" }, `Could not load the bank details. ${load.error}`),
+      bankActions(
+        bankButton("bank-change-retry", "Try again", small, () => openBankForm(invoiceId)),
+        cancelButton(),
+      ),
+    );
+  } else if (load.form.blocked !== null) {
+    children.push(caution(withPeriod(load.form.blocked)), bankActions(cancelButton()));
+  } else if (load.form.fields.length === 0) {
+    children.push(
+      caution("The supplier's record in Airwallex has no bank details PayOnce can change."),
+      bankActions(cancelButton()),
+    );
+  } else {
+    children.push(buildBankForm(invoiceId, load.form.fields, refs));
+  }
+  bankRefs = refs;
+
+  els.bankChange.replaceChildren(...children);
+  els.bankChange.hidden = false;
+
+  if (state.bankFocusPending === invoiceId && load !== null && load.status !== "loading") {
+    // The form just opened, so start at its first field, or its first button when it has none.
+    state.bankFocusPending = null;
+    (refs.inputs[0] ?? els.bankChange.querySelector("button"))?.focus();
+  } else {
+    restoreFocus(focus);
+  }
+}
+
+function buildBankForm(invoiceId, fields, refs) {
+  const draft = bankDraft(invoiceId);
+  const clearError = () => {
+    if (state.bankError !== null) {
+      state.bankError = null;
+      syncBankControls();
+    }
+  };
+  const control = (id, label, attrs, read, write, hint) => {
+    const hintId = hint === null ? null : `${id}-hint`;
+    const input = h("input", {
+      type: "text",
+      id,
+      autocomplete: "off",
+      "aria-describedby": hintId,
+      ...attrs,
+    });
+    input.value = read();
+    input.addEventListener("input", () => {
+      write(input.value);
+      clearError();
+    });
+    refs.inputs.push(input);
+    return h(
+      "div",
+      { class: "field" },
+      h("label", { class: "field__label", for: id }, label),
+      input,
+      hint !== null && h("p", { class: "field__hint", id: hintId }, hint),
+    );
+  };
+  const callField = (key, id, label, attrs) =>
+    control(id, label, attrs, () => draft[key], (value) => (draft[key] = value), null);
+
+  refs.fields = fields;
+  const submit = bankButton("bank-change-submit", "Record callback", "button button--primary", null);
+  const cancelButton = bankButton("bank-change-cancel", "Cancel", "button", () => closeBankForm());
+  const error = h("p", { class: "form-error", role: "alert", hidden: true });
+  refs.submit = submit;
+  refs.cancel = cancelButton;
+  refs.error = error;
+
+  const form = h(
+    "form",
+    { class: "bank-form", novalidate: true },
+    callField("calledBy", "callback-by", "Your name", { autocomplete: "name", maxlength: "80" }),
+    callField("numberCalled", "callback-number", "Number you called", { type: "tel", maxlength: "40" }),
+    callField("calledAt", "callback-at", "When you called", { type: "datetime-local" }),
+    callField("spokeTo", "callback-spoke-to", "Who you spoke to", { maxlength: "80" }),
+    callField("confirmed", "callback-confirmed", "What they confirmed", { maxlength: "200" }),
+    h("p", { class: "bank-form__title" }, "New bank details"),
+    h(
+      "p",
+      { class: "hint bank-form__intro" },
+      "Type every field as the supplier confirmed it on the call, including any that did not change.",
+    ),
+    fields.map((field) =>
+      control(
+        `bank-field-${field.name}`,
+        field.label,
+        { maxlength: "70", spellcheck: "false" },
+        () => draft.details[field.name] ?? "",
+        (value) => (draft.details[field.name] = value),
+        field.current === "" ? null : `On file now: ${field.current}`,
+      ),
+    ),
+    bankActions(submit, cancelButton),
+    error,
+    h(
+      "p",
+      { class: "hint" },
+      "Recording the callback updates the supplier's record in Airwallex. Two approvers other than you must then approve the payment to the new account.",
+    ),
+  );
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitBankChange(invoiceId);
+  });
+  return form;
+}
+
+function syncBankControls() {
+  if (bankRefs === null) {
+    return;
+  }
+  for (const input of bankRefs.inputs) {
+    input.readOnly = state.bankSaving;
+  }
+  if (bankRefs.submit !== null) {
+    bankRefs.submit.disabled = state.bankSaving;
+    setText(bankRefs.submit, state.bankSaving ? "Recording" : "Record callback");
+  }
+  if (bankRefs.cancel !== null) {
+    bankRefs.cancel.disabled = state.bankSaving;
+  }
+  if (liveMessage("bankChange", state.bankError) === null) {
+    state.bankError = null;
+  }
+  if (bankRefs.error === null) {
+    return;
+  }
+  const wasHidden = bankRefs.error.hidden;
+  showMessage(bankRefs.error, state.bankError?.message);
+  if (wasHidden && !bankRefs.error.hidden) {
+    bankRefs.error.scrollIntoView({ block: "nearest" });
+  }
+}
+
+function renderBankChange(detail) {
+  const obligation = detail.obligation;
+  const invoiceId = obligation.invoiceId;
+  const shown = bankChangeShown(detail);
+  const open = shown && state.bankOpen === invoiceId;
+  const load = open && state.bankLoad?.invoiceId === invoiceId ? state.bankLoad : null;
+  if (
+    changed("bankChange", [
+      invoiceId,
+      shown,
+      obligation.supplierPhone,
+      open,
+      load === null ? null : [load.status, load.form ?? null, load.error ?? null],
+    ])
+  ) {
+    if (shown) {
+      buildBankChange(invoiceId, obligation.supplierPhone.trim(), open, load);
+    } else {
+      bankRefs = null;
+      els.bankChange.hidden = true;
+      els.bankChange.replaceChildren();
+    }
+  }
+  syncBankControls();
+}
+
+// Opening the form reads the supplier's record again, so the form shows what it holds now.
+async function openBankForm(invoiceId) {
+  const loading = { invoiceId, status: "loading" };
+  state.bankOpen = invoiceId;
+  state.bankLoad = loading;
+  state.bankError = null;
+  state.bankFocusPending = invoiceId;
+  renderMain();
+  let loaded;
+  try {
+    const data = await api(`${incidentPath(invoiceId)}/bank-details`);
+    loaded = { invoiceId, status: "ready", form: readBankForm(data) };
+  } catch (error) {
+    loaded = { invoiceId, status: "failed", error: error.message };
+  }
+  // A cancel or a second open while this one loaded wins.
+  if (state.bankLoad === loading) {
+    state.bankLoad = loaded;
+    renderMain();
+  }
+}
+
+function closeBankForm() {
+  const hadFocus = els.bankChange.contains(document.activeElement);
+  state.bankOpen = null;
+  state.bankLoad = null;
+  state.bankError = null;
+  state.bankFocusPending = null;
+  renderMain();
+  if (hadFocus) {
+    byId("bank-change-open")?.focus();
+  }
+}
+
+function bankProblem(invoiceId, fields) {
+  const draft = bankDraft(invoiceId);
+  const calledAt = Date.parse(draft.calledAt);
+  const now = Date.now();
+  const checks = [
+    ["callback-by", draft.calledBy.trim() !== "", "Enter your name."],
+    ["callback-number", draft.numberCalled.trim() !== "", "Enter the number you called."],
+    ["callback-at", Number.isFinite(calledAt), "Enter when you called."],
+    [
+      "callback-at",
+      calledAt <= now + 5 * 60_000 && calledAt >= now - 7 * 24 * 60 * 60_000,
+      "Enter when you called, within the last seven days.",
+    ],
+    ["callback-spoke-to", draft.spokeTo.trim() !== "", "Enter who you spoke to."],
+    ["callback-confirmed", draft.confirmed.trim() !== "", "Say what they confirmed."],
+    ...fields.map((field) => [
+      `bank-field-${field.name}`,
+      (draft.details[field.name] ?? "").trim() !== "",
+      `Enter the ${inSentence(field.label)} the supplier confirmed.`,
+    ]),
+  ];
+  const failed = checks.find(([, ok]) => !ok);
+  return failed === undefined ? null : { id: failed[0], message: failed[2] };
+}
+
+async function submitBankChange(invoiceId) {
+  if (state.bankSaving || bankRefs === null || bankRefs.submit === null) {
+    return;
+  }
+  const fields = bankRefs.fields;
+  const problem = bankProblem(invoiceId, fields);
+  if (problem !== null) {
+    state.bankError = actionError("bankChange", problem.message);
+    syncBankControls();
+    document.getElementById(problem.id)?.focus();
+    return;
+  }
+  const draft = bankDraft(invoiceId);
+  const body = {
+    calledBy: draft.calledBy.trim(),
+    numberCalled: draft.numberCalled.trim(),
+    calledAt: new Date(Date.parse(draft.calledAt)).toISOString(),
+    spokeTo: draft.spokeTo.trim(),
+    confirmed: draft.confirmed.trim(),
+    details: Object.fromEntries(
+      fields.map((field) => [field.name, (draft.details[field.name] ?? "").trim()]),
+    ),
+  };
+  state.bankSaving = true;
+  state.bankError = null;
+  syncBankControls();
+  let failure = null;
+  try {
+    await api(`${incidentPath(invoiceId)}/bank-change`, { method: "POST", body });
+    state.bankDrafts.delete(invoiceId);
+    if (state.bankOpen === invoiceId) {
+      state.bankOpen = null;
+      state.bankLoad = null;
+    }
+    state.fastUntil = Date.now() + EXPECT_WORK_MS;
+  } catch (error) {
+    failure = error.message;
+  }
+  try {
+    await refresh();
+  } finally {
+    state.bankSaving = false;
+    if (failure !== null && state.selectedId === invoiceId) {
+      state.bankError = actionError("bankChange", failure);
+    }
+    syncBankControls();
+  }
+}
+
 function renderMain() {
   const id = state.selectedId;
   const detail = currentDetail();
@@ -1679,6 +2140,7 @@ function renderMain() {
   renderHeader(detail);
   renderTimeline(detail);
   renderReview(detail);
+  renderBankChange(detail);
   renderApproval(detail);
   renderPayments(detail);
   renderEmails(detail);

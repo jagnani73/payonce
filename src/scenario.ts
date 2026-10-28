@@ -2,6 +2,7 @@ import { randomInt } from "node:crypto";
 import { getAvailableMinor } from "./airwallex/balances.js";
 import {
   DE_SWIFT_SUPPLIER,
+  US_BANK_CHANGE_SUPPLIER,
   US_LOCAL_SUPPLIER,
   findOrCreateBeneficiary,
   type Beneficiary,
@@ -38,6 +39,11 @@ export interface ScenarioDef {
   // The transfer fee the scenario expects. When set, the reserve floor is placed
   // so that one payment fits and a second fee is what breaches it.
   tightReserveFeeMinor: number | null;
+  // The supplier's phone number on file, for a callback about new bank details.
+  supplierPhone: string | null;
+  // Gives each run a beneficiary of its own, so a bank change recorded in one run
+  // reaches no other incident.
+  beneficiaryPerRun: boolean;
 }
 
 export const SCENARIOS: ScenarioDef[] = [
@@ -50,6 +56,8 @@ export const SCENARIOS: ScenarioDef[] = [
     amountMinor: 400_000,
     transferMethod: "LOCAL",
     tightReserveFeeMinor: null,
+    supplierPhone: null,
+    beneficiaryPerRun: false,
   },
   {
     id: "eur-swift",
@@ -60,6 +68,8 @@ export const SCENARIOS: ScenarioDef[] = [
     amountMinor: 400_000,
     transferMethod: "SWIFT",
     tightReserveFeeMinor: null,
+    supplierPhone: null,
+    beneficiaryPerRun: false,
   },
   {
     id: "eur-swift-low-reserve",
@@ -70,6 +80,20 @@ export const SCENARIOS: ScenarioDef[] = [
     amountMinor: 400_000,
     transferMethod: "SWIFT",
     tightReserveFeeMinor: 1_391,
+    supplierPhone: null,
+    beneficiaryPerRun: false,
+  },
+  {
+    id: "usd-local-bank-change",
+    label: "USD, local, supplier changes bank",
+    supplier: "Example Supplier LLC",
+    beneficiary: US_BANK_CHANGE_SUPPLIER,
+    currency: "USD",
+    amountMinor: 400_000,
+    transferMethod: "LOCAL",
+    tightReserveFeeMinor: null,
+    supplierPhone: "+1 212 555 0147",
+    beneficiaryPerRun: true,
   },
 ];
 
@@ -112,7 +136,9 @@ export async function openScenario(
   }
   const beneficiary: Beneficiary = await findOrCreateBeneficiary(
     engine.client,
-    def.beneficiary,
+    def.beneficiaryPerRun
+      ? { ...def.beneficiary, nickname: `${def.beneficiary.nickname} ${invoiceId}` }
+      : def.beneficiary,
   );
   const reserveFloorMinor: number =
     def.tightReserveFeeMinor === null
@@ -130,6 +156,7 @@ export async function openScenario(
     transferMethod: def.transferMethod,
     reserveFloorMinor,
     startedBy,
+    supplierPhone: def.supplierPhone,
   });
 }
 

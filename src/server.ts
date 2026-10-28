@@ -10,6 +10,12 @@ import { AirwallexClient } from "./airwallex/client.js";
 import { subscribe } from "./airwallex/webhooks.js";
 import type { ApprovalTerms } from "./approval.js";
 import { describePolicy, policyFromEnv, type Approver, type Barred } from "./approvers.js";
+import {
+  bankChangeForm,
+  recordBankChange,
+  type BankChangeForm,
+  type CallbackInput,
+} from "./bank-change.js";
 import { Dispatcher } from "./dispatcher.js";
 import type { EmailFindings } from "./emails.js";
 import {
@@ -479,6 +485,53 @@ async function payAgainByPerson(invoiceId: string): Promise<PayAgainResult> {
   return inTurn(invoiceId, (): PayAgainResult => payAgain(engine.ledger, invoiceId));
 }
 
+// What a person needs to record a callback about new bank details: the number on
+// file and the fields the supplier's record has.
+async function bankDetailsForm(invoiceId: string): Promise<BankChangeForm> {
+  return bankChangeForm(engine, requireObligation(invoiceId));
+}
+
+function text(body: Record<string, unknown>, field: string): string {
+  return typeof body[field] === "string" ? body[field].trim() : "";
+}
+
+// A person records calling the supplier back on the number on file, with the new
+// bank details the supplier confirmed. PayOnce updates the supplier's record in
+// Airwallex, and the agent then looks at the invoice again.
+async function bankChangeByPerson(
+  request: IncomingMessage,
+  invoiceId: string,
+): Promise<unknown> {
+  requireObligation(invoiceId);
+  const body: Record<string, unknown> = await readJson(request);
+  const raw: unknown = body["details"];
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new HttpError(400, "Enter the new bank details");
+  }
+  const details: Record<string, string> = {};
+  for (const [name, value] of Object.entries(raw)) {
+    if (typeof value !== "string") {
+      throw new HttpError(400, "Enter the new bank details");
+    }
+    details[name] = value;
+  }
+  const input: CallbackInput = {
+    calledBy: text(body, "calledBy"),
+    numberCalled: text(body, "numberCalled"),
+    calledAt: text(body, "calledAt"),
+    spokeTo: text(body, "spokeTo"),
+    confirmed: text(body, "confirmed"),
+    details,
+  };
+  try {
+    await inTurn(invoiceId, (): Promise<void> => recordBankChange(engine, invoiceId, input));
+  } finally {
+    // A change that failed part way may still have reached the record.
+    agent.wake(invoiceId);
+  }
+  return { ok: true };
+}
+
 // Has the agent look at an incident again. It cannot send a second live payment,
 // and an escalated invoice still needs its approval.
 function resume(invoiceId: string): unknown {
@@ -582,6 +635,22 @@ async function route(
     parts.length === 4
   ) {
     sendJson(response, 200, await payAgainByPerson(invoiceId));
+  } else if (
+    method === "GET" &&
+    parts[1] === "incidents" &&
+    invoiceId !== undefined &&
+    parts[3] === "bank-details" &&
+    parts.length === 4
+  ) {
+    sendJson(response, 200, await bankDetailsForm(invoiceId));
+  } else if (
+    method === "POST" &&
+    parts[1] === "incidents" &&
+    invoiceId !== undefined &&
+    parts[3] === "bank-change" &&
+    parts.length === 4
+  ) {
+    sendJson(response, 200, await bankChangeByPerson(request, invoiceId));
   } else {
     throw new HttpError(404, "Not found");
   }

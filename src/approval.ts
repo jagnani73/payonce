@@ -2,7 +2,19 @@ import { createHash } from "node:crypto";
 import type { Transfer, TransferBankDetails } from "./airwallex/transfers.js";
 import { bankDetailsKey, originalStateOf } from "./assess.js";
 import type { Decision, OriginalTransferState } from "./incident.js";
-import type { Obligation } from "./ledger.js";
+import type { BankChange, Obligation } from "./ledger.js";
+
+// The callback that verified the bank details the payment goes to, when they are
+// not the ones the original went to.
+export interface BankChangeEvidence {
+  id: number;
+  invoiceId: string;
+  calledBy: string;
+  numberCalled: string;
+  calledAt: string;
+  spokeTo: string;
+  confirmed: string;
+}
 
 export interface ApprovalEvidence {
   originalReference: string;
@@ -10,6 +22,7 @@ export interface ApprovalEvidence {
   failureCode: string | null;
   emails: string;
   reason: string;
+  bankChange: BankChangeEvidence | null;
 }
 
 // What a person is shown and what their approval covers. Always build it with
@@ -40,13 +53,15 @@ function payTo(obligation: Obligation, details: TransferBankDetails): string {
 }
 
 // bankDetails is what the beneficiary record holds now, which is where a new
-// transfer would go. It is not taken from the original transfer.
+// transfer would go. It is not taken from the original transfer. bankChange is
+// the callback that verified those details, if they changed.
 export function termsFor(
   obligation: Obligation,
   original: Transfer,
   decision: Decision,
   emailSummary: string,
   bankDetails: TransferBankDetails,
+  bankChange: BankChange | null,
 ): ApprovalTerms {
   return {
     action: "replace",
@@ -62,12 +77,29 @@ export function termsFor(
       failureCode: original.failure?.code ?? null,
       emails: emailSummary,
       reason: decision.reason,
+      bankChange:
+        bankChange === null
+          ? null
+          : {
+              id: bankChange.id,
+              invoiceId: bankChange.invoiceId,
+              calledBy: bankChange.calledBy,
+              numberCalled: bankChange.numberCalled,
+              calledAt: bankChange.calledAt,
+              spokeTo: bankChange.spokeTo,
+              confirmed: bankChange.confirmed,
+            },
     },
   };
 }
 
-export function accountKeyOf(details: TransferBankDetails): string {
-  return createHash("sha256").update(bankDetailsKey(details)).digest("hex").slice(0, 16);
+// The accountKey for bank details already written by bankDetailsKey.
+export function keyHash(detailsKey: string): string {
+  return createHash("sha256").update(detailsKey).digest("hex").slice(0, 16);
+}
+
+export function accountKeyOf(details: TransferBankDetails | undefined): string {
+  return keyHash(bankDetailsKey(details));
 }
 
 export function bindingOf(terms: ApprovalTerms): string {

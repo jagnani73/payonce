@@ -1,0 +1,7 @@
+[
+  {
+    "from": "accounts@example-supplier.test",
+    "subject": "{{invoice}} payment not received",
+    "body": "Hi,\n\nWe have not received the payment for {{invoice}}. Our old account at JPMorgan Chase was closed last week, which may be why it bounced. We have changed our bank details and now bank with Bank of America.\n\nPlease call our accounts team on the number you have on file to confirm the new account before you pay. We will not send account numbers by email.\n\nRegards,\nAccounts, Example Supplier"
+  }
+]

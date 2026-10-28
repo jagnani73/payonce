@@ -34,6 +34,7 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 - `src/ledger.ts`: SQLite tables for obligations, attempts, approvals, emails, findings and events.
 - `src/payments.ts`: idempotent send and status sync between Airwallex and the ledger.
 - `src/approval.ts`: `ApprovalTerms`, `termsFor` and `bindingOf` (SHA-256 of the terms JSON).
+- `src/bank-change.ts`: `bankChangeForm` says what a person needs to record a callback about new bank details, or why one cannot be recorded now. `recordBankChange` checks the callback, writes a `bank_changes` row, updates the beneficiary in Airwallex and reads it back.
 - `src/approvers.ts`: the approval policy. `policyFromEnv` reads `APPROVERS` (name:limit pairs), `TWO_APPROVERS_ABOVE` and `APPROVAL_TTL_MINUTES`. `signoffsNeeded` says how many approvers a payment needs and why, and `checkSigner` says why a person may not approve one.
 - `src/emails.ts`: `EmailReader` interface (a `name` shown on the page, and `read`), `EmailFindings`, `summarise`, `unverifiedSenders` and the fixture loader.
 - `src/model-reader.ts`: `ModelReader` reads the thread with one chat completion over plain `fetch`, with no SDK.
@@ -42,9 +43,9 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 - `src/server.ts`: `node:http` server for `web/` and the JSON API. It runs scenarios in the background, starts the watcher and connects webhooks.
 - `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/reset.ts`, `src/index.ts`: the CLI commands.
 - `docs/demo.md`: the recording script for the four demo incidents, with sandbox times measured on 2026-10-06, before the agent waited for webhooks and status checks.
-- `src/airwallex/`: `client.ts` (login, token refresh, 30 s timeout, refuses non-sandbox hosts), `transfers.ts`, `beneficiaries.ts`, `balances.ts`, `webhooks.ts` (`subscribe`), `simulation.ts` (every sandbox-only call).
+- `src/airwallex/`: `client.ts` (login, token refresh, 30 s timeout, refuses non-sandbox hosts), `transfers.ts`, `beneficiaries.ts` (`getBeneficiary`, `updateBankDetails`), `balances.ts`, `webhooks.ts` (`subscribe`), `simulation.ts` (every sandbox-only call).
 - `web/`: static page (`index.html`, `styles.css`, `app.js`) with no build step and no external requests.
-- `fixtures/emails/`: sample supplier threads. `{{invoice}}` is replaced with the invoice number. `new-account.json` uses a look-alike sender domain on purpose.
+- `fixtures/emails/`: sample supplier threads. `{{invoice}}` is replaced with the invoice number. `new-account.json` uses a look-alike sender domain on purpose. `moved-banks.json` comes from the right domain, says the supplier changed banks and gives no account numbers.
 
 ## Rules the engine keeps
 
@@ -63,6 +64,10 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 - An approval is spent with `useApproval`, which only moves an `approved` row to `used`, so one another process voided meanwhile is not spent. The outside payouts are read again after the last list of transfers.
 - The policy escalates a replacement above `TWO_APPROVERS_ABOVE` instead of sending it unprompted.
 - `ApprovalTerms.accountKey` is a hash of the full bank details the payment goes to, because `payTo` shows only the last four digits.
+- New bank details never come from an email or the reader. A person records a callback with `recordBankChange`: the number they called must match `obligations.supplier_phone` by its digits, with or without the country code, and it is only accepted once the invoice is escalated and every payment for it has failed. The details they type are merged into the beneficiary record, sent with `updateBankDetails`, and read back. The change is `applied` only if the record then holds them, with `applied_key` set to the record's `bankDetailsKey`.
+- When the record's bank details differ from the original's, `escalate` requests an approval only if `verifiedBankChange` finds an applied change for that beneficiary whose `applied_key` equals the record now. Otherwise it opens nothing, withdraws any open request and waits for a callback. The terms carry the callback in `evidence.bankChange`, the request needs two approvers, and the person who recorded the callback is barred.
+- Recording a callback withdraws the open request for the old account. It is refused while another open invoice to the same beneficiary has a pending attempt or an unspent approval, because the change would move that payment's account outside its turn. The fields not on the form must equal the original transfer's, and the call must come after the original was sent. Only the latest applied callback for a beneficiary counts, and everyone who recorded a callback for an account is barred from approving payments to it.
+- Every replacement re-reads the beneficiary before it is sent and refuses if `accountKeyOf` the record differs from the approved terms' `accountKey`, or from the details the automatic decision was made on. After sending, a transfer whose details differ escalates with a warning. A pending replacement is first looked up by `request_id`, and is only sent again if the record still holds the approved account.
 - Before an approval is used, `approvalProblem` checks it against the policy as it is then: every signoff has the request's binding, there are enough of them, and each signer still passes `checkSigner`.
 - A payout PayOnce did not send, whose reference names an invoice in the ledger, is tied to that invoice. While one is in flight, paid or in an unknown status, the policy escalates before any other check, an open approval is withdrawn and nothing is sent. A settled invoice that gains one is reopened as escalated.
 - Before any replacement, automatic or approved, the agent lists the transfers again and ties any new payout that names the invoice. If it finds one, it sends nothing, leaves the approval unspent and looks again at once.
@@ -93,6 +98,8 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 - `events` holds the timeline. A line with a `topic` says how things stand: the decision, what the invoice is waiting on, an approval, the cost of a replacement, or a bank-details mismatch. `note` skips one when the timeline's last line on that topic says the same and nothing has happened since, so checking an invoice again when nothing has changed adds nothing. A line with no topic records an event and is skipped only when it repeats the line before it.
 - On an escalated invoice the decision line says when the policy would now replace or close and why it does not.
 - `meta` holds `started_at`, when the ledger was first opened. The sweep lists transfers from then, so payouts from an earlier ledger are not taken for outside ones.
+- `obligations.supplier_phone` is the phone number on the supplier record, set from the scenario. Only `usd-local-bank-change` has one, so only it offers a callback. Found payouts have none.
+- `bank_changes` holds each callback: who called, the number, when, who they spoke to, what was confirmed, the old record and the typed fields, and `state` `pending`, `applied` or `failed`. The row is written before the Airwallex update.
 - `obligations.origin` is `payonce` or `outside`. `payout_reference` keeps a found payout's reference when it could not be the invoice number, and `obligationForReference` matches either.
 - `adoptPayout` writes a found payout's invoice and attempt in one transaction. Its INSERT is plain, so an invoice written by another process in between makes it fail instead of gaining a second original.
 - `outside_payouts` ties outside payouts to invoices, with the bank's short reference and the last state a look read. `settle(invoiceId, true)` also accepts an invoice whose attempts all failed and whose outside payout is paid. Only `closeIncident` passes it.
@@ -121,7 +128,7 @@ Found by running it on 2026-10-06:
 ## Web server
 
 - It binds to loopback and has no login. `guard` checks the Host header and, for writes, the Origin header and a JSON content type.
-- Routes: `GET /api/options`, `GET /api/incidents`, `GET /api/incidents/:id`, `POST /api/incidents` (takes `bankOutcome`, `emails`, `scenario` and `startedBy`), `POST /api/incidents/:id/approve` (needs `approver` and `approvalId`), `POST /api/incidents/:id/close` (needs `closedBy` and `finding`), `POST /api/incidents/:id/resume`, `POST /api/incidents/:id/pay-again`.
+- Routes: `GET /api/options`, `GET /api/incidents`, `GET /api/incidents/:id`, `POST /api/incidents` (takes `bankOutcome`, `emails`, `scenario` and `startedBy`), `POST /api/incidents/:id/approve` (needs `approver` and `approvalId`), `POST /api/incidents/:id/close` (needs `closedBy` and `finding`), `POST /api/incidents/:id/resume`, `POST /api/incidents/:id/pay-again`, `GET /api/incidents/:id/bank-details`, `POST /api/incidents/:id/bank-change` (takes `calledBy`, `numberCalled`, `calledAt`, `spokeTo`, `confirmed` and `details`).
 - An incident's detail carries `review` when a person can close it, and the page shows the close card from that. `busy` is true while the agent or the sandbox bank is working on it, and `watching` while a payment is with the bank, including an outside payout tied to it. The page polls every 1.5 seconds while either is true.
 - Approve and close wait for any step already running on the invoice, then run. Resume queues a look.
 - The page scrolls to keep the newest timeline line on screen when that line was already visible, and for 15 seconds after an action.
@@ -160,6 +167,8 @@ Found by running it on 2026-10-28:
 - A EUR SWIFT transfer of 4,000 carried a fee of 13.91 or 13.92 EUR. When it failed, the 4,000 came back and the fee did not.
 - The beneficiary record and a transfer's `beneficiary.bank_details` hold the same object. The transfer keeps the details it was sent with: `POST /api/v1/beneficiaries/{id}/update` changes the record and not the transfer, and setting the old values back makes the two equal again.
 - Reusing a `request_id` returns `400 duplicate_request_id` and names the original transfer.
+- Run on 2026-10-28: `POST /api/v1/beneficiaries/{id}/update` with the GET record's `beneficiary` (without `fingerprint`), `nickname`, `payer_entity_type` and `transfer_methods` was accepted. Airwallex rewrote `bank_name` from the routing number ("Bank of America" became "Bank of America, NA"), so the read-back compares only the fields that say where money goes. The next transfer to the beneficiary went to the new account.
+- The scenarios share one beneficiary per currency, so a bank change on one would reach the others. Each `usd-local-bank-change` run creates a beneficiary of its own, nicknamed `PayOnce demo supplier (bank change)` plus the invoice number.
 - LOCAL USD transfers carry no fee in the sandbox.
 - The client sends no `x-api-version` header. The account default returns the newer status set (`FAILED` exists) with a nested `failure` object.
 - Airwallex emails the account owner for every sent and cancelled transfer unless transfer notifications are turned off under Settings > User settings > Notifications.

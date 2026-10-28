@@ -69,8 +69,51 @@ export const DE_SWIFT_SUPPLIER: BeneficiarySpec = {
   },
 };
 
-interface BeneficiaryRecord {
-  beneficiary?: { bank_details?: TransferBankDetails };
+// The same supplier for the bank change scenario. Each run gets a record of its
+// own, under this nickname and the invoice number, so a bank change in one run
+// reaches no other incident.
+export const US_BANK_CHANGE_SUPPLIER: BeneficiarySpec = {
+  ...US_LOCAL_SUPPLIER,
+  nickname: "PayOnce demo supplier (bank change)",
+};
+
+// A beneficiary as Airwallex returns it. Only the fields the code reads are named.
+export interface BeneficiaryRecord {
+  nickname?: string;
+  payer_entity_type?: string;
+  transfer_methods?: string[];
+  beneficiary?: { bank_details?: TransferBankDetails; [field: string]: unknown };
+}
+
+export function getBeneficiary(
+  client: AirwallexClient,
+  beneficiaryId: string,
+): Promise<BeneficiaryRecord> {
+  return client.get<BeneficiaryRecord>(`/api/v1/beneficiaries/${beneficiaryId}`);
+}
+
+// Fields of a beneficiary that a bank transfer's record does not need sent back.
+const NOT_SENT: readonly string[] = ["card", "digital_wallet"];
+
+// Replaces the record's bank details and keeps the rest of it as it is. Airwallex
+// works out the fingerprint of the details itself, so the old one is not sent.
+export function updateBankDetails(
+  client: AirwallexClient,
+  beneficiaryId: string,
+  record: BeneficiaryRecord,
+  bankDetails: TransferBankDetails,
+): Promise<BeneficiaryRecord> {
+  const beneficiary: Record<string, unknown> = { ...record.beneficiary };
+  for (const field of NOT_SENT) {
+    delete beneficiary[field];
+  }
+  const { fingerprint: _fingerprint, ...details } = bankDetails;
+  return client.post<BeneficiaryRecord>(`/api/v1/beneficiaries/${beneficiaryId}/update`, {
+    beneficiary: { ...beneficiary, bank_details: details },
+    nickname: record.nickname,
+    payer_entity_type: record.payer_entity_type,
+    transfer_methods: record.transfer_methods,
+  });
 }
 
 // The bank details a new transfer to this beneficiary would be paid to.
@@ -78,9 +121,7 @@ export async function getBankDetails(
   client: AirwallexClient,
   beneficiaryId: string,
 ): Promise<TransferBankDetails> {
-  const record: BeneficiaryRecord = await client.get<BeneficiaryRecord>(
-    `/api/v1/beneficiaries/${beneficiaryId}`,
-  );
+  const record: BeneficiaryRecord = await getBeneficiary(client, beneficiaryId);
   const details: TransferBankDetails | undefined = record.beneficiary?.bank_details;
   if (details === undefined) {
     throw new Error(`Beneficiary ${beneficiaryId} has no bank details`);

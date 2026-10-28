@@ -2,14 +2,17 @@ import { getAvailableMinor } from "./airwallex/balances.js";
 import { getBankDetails } from "./airwallex/beneficiaries.js";
 import type { AirwallexClient } from "./airwallex/client.js";
 import {
+  findTransferByRequestId,
   getTransfer,
   listTransfersSince,
   type Transfer,
   type TransferBankDetails,
 } from "./airwallex/transfers.js";
 import {
+  accountKeyOf,
   bindingOf,
   changedFields,
+  keyHash,
   termsFor,
   type ApprovalTerms,
 } from "./approval.js";
@@ -25,6 +28,7 @@ import {
 } from "./approvers.js";
 import {
   attemptStateOf,
+  bankDetailsKey,
   originalStateOf,
   resendCanFix,
   sameBankDetails,
@@ -44,6 +48,7 @@ import {
   type Approval,
   type Attempt,
   type AttemptKind,
+  type BankChange,
   type AttemptState,
   type EventKind,
   type Ledger,
@@ -97,6 +102,9 @@ interface Assessment {
   findings: StoredFindings;
   unverified: string[];
   bankDetails: TransferBankDetails;
+  // The callback that verified the bank details on file, when they are not the
+  // ones the original went to. Null when none matches them.
+  bankChange: BankChange | null;
   decision: Decision;
 }
 
@@ -437,16 +445,42 @@ async function assess(
     `${capitalise(decision.action)}: ${decision.reason}${held}`,
     "decision",
   );
-  return { original, incident, findings, unverified, bankDetails, decision };
+  const bankChange: BankChange | null = incident.beneficiaryChanged
+    ? (engine.ledger.verifiedBankChange(obligation.beneficiaryId, bankDetailsKey(bankDetails)) ??
+      null)
+    : null;
+  return { original, incident, findings, unverified, bankDetails, bankChange, decision };
+}
+
+// A transfer is paid to the beneficiary record as it is when it is created, so a
+// replacement first checks that the record still holds the account it was
+// decided or approved for. Throws, sending nothing, when it does not.
+async function requireAccount(
+  engine: Engine,
+  obligation: Obligation,
+  accountKey: string,
+  what: string,
+): Promise<void> {
+  const now: TransferBankDetails = await getBankDetails(engine.client, obligation.beneficiaryId);
+  if (accountKeyOf(now) !== accountKey) {
+    throw new Error(
+      `The supplier's bank details changed after the ${what}, so PayOnce sent nothing. Check again to look at the new details`,
+    );
+  }
 }
 
 // Opening the attempt takes the duplicate lock, so this throws if the invoice
-// already has a live payment.
+// already has a live payment. accountKey is the account a replacement was decided
+// or approved for.
 async function pay(
   engine: Engine,
   obligation: Obligation,
   kind: AttemptKind,
+  accountKey: string | null = null,
 ): Promise<Transfer> {
+  if (accountKey !== null) {
+    await requireAccount(engine, obligation, accountKey, "decision");
+  }
   const attempt: Attempt = engine.ledger.openAttempt(obligation.invoiceId, kind);
   let created: Transfer;
   try {
@@ -471,6 +505,13 @@ async function pay(
     "payment",
     `${capitalise(kind)} ${created.short_reference_id} sent: ${money(obligation)} to ${obligation.supplier}${fee}`,
   );
+  // The record could still change between the check and the transfer.
+  const sentTo: TransferBankDetails | undefined = created.beneficiary?.bank_details;
+  if (accountKey !== null && sentTo !== undefined && accountKeyOf(sentTo) !== accountKey) {
+    const reason: string = `${kind} ${created.short_reference_id} went to bank details that are not the ones it was approved for`;
+    engine.ledger.escalate(obligation.invoiceId, reason);
+    note(engine.ledger, obligation.invoiceId, "warning", capitalise(reason));
+  }
   engine.bank?.sent(obligation.invoiceId, kind, created.id);
   return created;
 }
@@ -548,8 +589,12 @@ function replacementOverdue(
 
 // The bank pays the replacement later. The agent hears about it the way it heard
 // about the original, and closes the incident then.
-async function replace(engine: Engine, obligation: Obligation): Promise<NextLook> {
-  const replacement: Transfer = await pay(engine, obligation, "replacement");
+async function replace(
+  engine: Engine,
+  obligation: Obligation,
+  accountKey: string,
+): Promise<NextLook> {
+  const replacement: Transfer = await pay(engine, obligation, "replacement", accountKey);
   return waitForBank(engine, obligation.invoiceId, "replacement", replacement);
 }
 
@@ -560,14 +605,27 @@ function termsOf(obligation: Obligation, assessment: Assessment): ApprovalTerms 
     assessment.decision,
     evidenceSummary(assessment),
     assessment.bankDetails,
+    assessment.bankChange,
   );
 }
 
-// The people who may not approve this invoice's payment, and why.
-function barredFrom(obligation: Obligation): Barred[] {
-  return obligation.startedBy === null
-    ? []
-    : [{ name: obligation.startedBy, why: "started this incident" }];
+// The people who may not approve a payment of this invoice to the account with
+// this accountKey, and why: whoever started the incident, and everyone who
+// recorded a callback verifying that account.
+function barredFrom(ledger: Ledger, obligation: Obligation, accountKey: string | undefined): Barred[] {
+  const barred: Barred[] = [];
+  if (obligation.startedBy !== null) {
+    barred.push({ name: obligation.startedBy, why: "started this incident" });
+  }
+  for (const detailsKey of ledger.appliedKeys(obligation.beneficiaryId)) {
+    if (accountKey === undefined || keyHash(detailsKey) !== accountKey) {
+      continue;
+    }
+    for (const name of ledger.bankChangeRecorders(obligation.beneficiaryId, detailsKey)) {
+      barred.push({ name, why: "recorded the callback for the new bank details" });
+    }
+  }
+  return barred;
 }
 
 // When a request stops covering a payment, in epoch milliseconds. One recorded
@@ -616,7 +674,7 @@ function approvalProblem(
         signoff.approver,
         obligation.amountMinor,
         obligation.currency,
-        barredFrom(obligation),
+        barredFrom(engine.ledger, obligation, (JSON.parse(approval.terms) as ApprovalTerms).accountKey),
         approval.signoffs
           .filter((other: Signoff): boolean => other !== signoff)
           .map((other: Signoff): string => other.approver),
@@ -690,6 +748,29 @@ function escalate(
     return null;
   }
 
+  // An account the original did not go to is paid only once a person has called
+  // the supplier on the number on file and the record matches what they confirmed.
+  if (assessment.incident.beneficiaryChanged && assessment.bankChange === null) {
+    if (engine.ledger.voidOpenApprovals(obligation.invoiceId)) {
+      note(
+        engine.ledger,
+        obligation.invoiceId,
+        "approval",
+        "Approval request withdrawn: the bank details on file have not been verified by a callback",
+      );
+    }
+    note(
+      engine.ledger,
+      obligation.invoiceId,
+      "approval",
+      obligation.supplierPhone === null
+        ? "Waiting on a person. The bank details on file are not the ones the original went to, and no phone number is on file to verify them by calling the supplier back"
+        : `Waiting on a person to call the supplier on ${obligation.supplierPhone}, the number on file, and record the callback. PayOnce pays an account the original did not go to only after that`,
+      "waiting",
+    );
+    return null;
+  }
+
   const terms: ApprovalTerms = termsOf(obligation, assessment);
   const binding: string = bindingOf(terms);
   const rule: SignoffRule = ruleFor(engine, obligation, assessment);
@@ -699,7 +780,7 @@ function escalate(
   const eligible: Approver[] = eligibleApprovers(
     engine.approvals,
     obligation.amountMinor,
-    barredFrom(obligation),
+    barredFrom(engine.ledger, obligation, terms.accountKey),
   );
   if (engine.approvals.problem !== null || eligible.length < rule.needed) {
     if (engine.ledger.voidOpenApprovals(obligation.invoiceId)) {
@@ -838,7 +919,7 @@ async function continueEscalated(
     "approval",
     `Approval by ${approval.approver} matches the current terms`,
   );
-  return replace(engine, obligation);
+  return replace(engine, obligation, current.accountKey);
 }
 
 // Carries out a decision: replace, close, hand over to a person, or wait for the
@@ -854,7 +935,7 @@ async function act(
       if (await linkUnseenPayouts(engine, obligation.invoiceId)) {
         return Date.now();
       }
-      return replace(engine, obligation);
+      return replace(engine, obligation, accountKeyOf(assessment.bankDetails));
     case "wait":
       return waitForBank(engine, obligation.invoiceId, "original", assessment.original);
     case "escalate":
@@ -903,6 +984,7 @@ async function look(engine: Engine, invoiceId: string): Promise<NextLook> {
   }
 
   let originalId: string | null = null;
+  let original: Transfer | null = null;
   let liveReplacement: Transfer | null = null;
   for (const attempt of engine.ledger.attempts(invoiceId)) {
     // An attempt Airwallex refused never became a transfer. Only one still
@@ -911,7 +993,27 @@ async function look(engine: Engine, invoiceId: string): Promise<NextLook> {
       continue;
     }
     let transfer: Transfer;
-    if (attempt.transferId === null) {
+    const existing: Transfer | undefined =
+      attempt.transferId === null && attempt.kind === "replacement"
+        ? await findTransferByRequestId(engine.client, attempt.requestId)
+        : undefined;
+    if (existing !== undefined) {
+      transfer = await syncTransfer(engine.client, engine.ledger, existing.id);
+      engine.bank?.sent(invoiceId, attempt.kind, transfer.id);
+    } else if (attempt.transferId === null) {
+      // A retry pays the record as it is now, so a replacement goes out only to the
+      // account it was approved or decided for.
+      if (attempt.kind === "replacement") {
+        const latest: Approval | undefined = engine.ledger.latestApproval(invoiceId);
+        const approvedKey: string | undefined =
+          latest?.state === "used" ? (JSON.parse(latest.terms) as ApprovalTerms).accountKey : undefined;
+        await requireAccount(
+          engine,
+          obligation,
+          approvedKey ?? accountKeyOf(original?.beneficiary?.bank_details),
+          "replacement was approved",
+        );
+      }
       transfer = await sendAttempt(engine.client, engine.ledger, obligation, attempt);
       engine.bank?.sent(invoiceId, attempt.kind, transfer.id);
     } else {
@@ -923,6 +1025,7 @@ async function look(engine: Engine, invoiceId: string): Promise<NextLook> {
     }
     if (attempt.kind === "original") {
       originalId = transfer.id;
+      original = transfer;
     } else if (originalStateOf(transfer) === "in_flight") {
       liveReplacement = transfer;
     }
@@ -1082,14 +1185,16 @@ export function pendingApproval(
 ): PendingApproval | undefined {
   const approval: Approval | undefined = ledger.latestApproval(invoiceId);
   const obligation: Obligation | undefined = ledger.obligation(invoiceId);
-  return approval === undefined || approval.state !== "requested" || obligation === undefined
-    ? undefined
-    : {
-        approval,
-        terms: JSON.parse(approval.terms) as ApprovalTerms,
-        barred: barredFrom(obligation),
-        expired: isExpired(approval),
-      };
+  if (approval === undefined || approval.state !== "requested" || obligation === undefined) {
+    return undefined;
+  }
+  const terms: ApprovalTerms = JSON.parse(approval.terms) as ApprovalTerms;
+  return {
+    approval,
+    terms,
+    barred: barredFrom(ledger, obligation, terms.accountKey),
+    expired: isExpired(approval),
+  };
 }
 
 // Records one person's approval under the approval policy. approvalId is the
