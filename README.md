@@ -12,7 +12,7 @@ A supplier says a payment never arrived and their deadline has passed. The trans
 
 ## What it does
 
-PayOnce follows each supplier payment through an incident. It sends the transfer and then reacts to what happens: the bank pays or fails it, the supplier writes in, or a person approves something. An Airwallex webhook or a status check tells it the bank has moved, and it reads the transfer from Airwallex itself before it decides. Each time, it waits, replaces the payment, closes the incident, or hands the decision to a person. A web page shows each incident as a timeline, with the emails, the payments and whatever a person is asked to approve or close.
+PayOnce follows each supplier payment through an incident. It sends the transfer and then reacts to what happens: the bank pays or fails it, the supplier writes in, or a person approves something. An Airwallex webhook or a status check tells it the bank has moved, and it reads the transfer from Airwallex itself before it decides. Each time, it waits, replaces the payment, closes the incident, or hands the decision to a person. A web page shows each incident as a timeline, with the emails, the payments and whatever a person is asked to approve or close. A person can upload a supplier's real email there, and PayOnce reads it as untrusted text that can only add caution.
 
 If the bank sits on a payment past its deadline, a person hears about it. PayOnce also looks through Airwallex for payouts it did not send, such as a resend made in the Airwallex web app, and holds its own payments for an invoice someone else has paid.
 
@@ -22,9 +22,11 @@ If the bank sits on a payment past its deadline, a person hears about it. PayOnc
 | --- | --- |
 | A payout for this invoice was sent outside PayOnce and has not failed | Escalate to a person |
 | The supplier asks for payment to different bank details | Escalate to a person |
+| The supplier asks to hold, cancel or not pay the invoice | Escalate to a person |
 | The supplier's bank details on file changed after the original payment | Escalate to a person |
 | An email came from an address that does not match the supplier on file | Escalate to a person |
 | Supplier emails are on file that could not be read | Escalate to a person |
+| Part of a supplier email could not be read | Escalate to a person |
 | The original is in a status the policy does not recognise | Escalate to a person |
 | The original settled but the supplier reports non-receipt | Escalate to a person |
 | The original settled and no supplier email reports it missing | Close |
@@ -42,11 +44,25 @@ If the bank sits on a payment past its deadline, a person hears about it. PayOnc
 
 `src/decide.ts` checks the rules in that order. A resend can fix a failure only when it happened on the sending side: a system error or a channel timeout. Any other failure, including a return from the beneficiary's bank, goes to a person.
 
-Two of these checks do not depend on how the email text is read. The sender's domain is compared with the one on file. The supplier's bank details are read from Airwallex again and compared with the account the original payment went to. When they differ the timeline says so, whatever reason the policy escalates for.
+Two of these checks do not depend on how the email text is read. The sender's domain, and the Reply-To's, is compared with the one on file, as ASCII only, so a look-alike character such as the Kelvin sign cannot pass for a K. An invoice with no domain on file flags every sender. The supplier's bank details are read from Airwallex again and compared with the account the original payment went to. When they differ the timeline says so, whatever reason the policy escalates for.
 
-A model reads the supplier emails. It holds no credentials and moves no money. It answers two yes-or-no questions, and PayOnce writes the summary a person sees from those answers, so no wording from an email or from the model reaches the approval card. A keyword check reads the same thread, and a finding is yes if either says yes. Both findings lead to more caution, so an email that tricks the model cannot remove a finding the keyword check makes. An email that the keyword check misses and that also tricks the model can still hide a finding, which is why the sender check and the bank-details check are in code. The emails go to the model marked as untrusted text. If the model fails, or its answer is not two yes-or-no values, the thread counts as unread and the incident goes to a person.
+A model reads the supplier emails, one at a time. It holds no credentials and moves no money. It answers three yes-or-no questions: does the supplier say the payment has not arrived, ask for a different account, or ask to hold, cancel or not pay the invoice. PayOnce writes the summary a person sees from those answers, so no wording from an email or from the model reaches the approval card. A keyword check reads the same email, and a finding is yes if either says yes. A finding, once made, stays: a later email cannot clear it. Every finding leads to more caution, so an email that tricks the model cannot remove a finding the keyword check makes. An email that the keyword check misses and that also tricks the model can still hide a finding, which is why the sender check and the bank-details check are in code. The emails go to the model marked as untrusted text. If the model fails, or its answer is not two yes-or-no values, the thread counts as unread and the incident goes to a person.
 
 The reader is Gemini 3.5 Flash by default, with Gemini 3.1 Flash-Lite as a second model if the first does not answer. Both are on Google's free tier and are called through its OpenAI-compatible endpoint, so any service that speaks the same format can replace them. Without a key, a keyword placeholder in `src/keyword-reader.ts` reads the emails. The page names the reader under its findings.
+
+## Supplier emails you upload
+
+Real supplier mail reaches PayOnce through the "Supplier email" card on the page. Choose the `.eml` file, or paste the raw source (Show original or View source in your mail client), and add your name. One email per upload, up to 2 MB. PayOnce refuses an Outlook `.msg` file, and refuses text that is not raw source, so pasting what the mail client shows does not lose the first paragraph to the headers.
+
+PayOnce parses the email itself, with no library. It keeps the sender's address, Reply-To, the subject, every text part (plain and HTML) and a list of attachments by name, type and size. It never opens an attachment, loads an image or follows a link. It treats every byte as hostile. An ambiguous sender becomes "no sender address PayOnce could read", which the sender check flags. PayOnce strips invisible characters and terminal control codes, and keeps its own notes about the email apart from the text, so an email cannot forge one.
+
+PayOnce turns HTML into text in one pass, and when in doubt it reads more than a mail client shows. Script and style content stays out of the text, but every string in it, and any text in it that is not CSS, is shown and read as "text found inside styles". Anything CSS could make a client draw that is not one of those strings, such as a web font, a counter or a reversed run of digits, or a style sheet from outside the email, marks the email partly unread. So does text past 32,000 characters, a text attachment, a forwarded or encrypted email, or a part in a character set PayOnce cannot decode. A partly unread email sends the invoice to a person, who reads it in their own mail client.
+
+PayOnce does not lay out the HTML the way a mail client does. Reordering, list numbering and positioning can show a person the same characters in another order than the reader gets them. That is accepted because no protection depends on it: bank details change only through a callback to the number on file, the sender check works on addresses, approvals bind the account read from Airwallex, and the findings only add caution.
+
+The upload waits in the inbox. PayOnce lists the invoices it names, from invoice numbers in the subject, the text and attachment names, and offers one first when exactly one open invoice matches. A number found only inside other digits, as in a phone number, is never offered first. A person picks the invoice, or types another, and confirms. Nothing is delivered by itself. The agent then reads the email and decides again. A dismissed email stays dismissed, and the same email uploaded twice is refused with where the first one went.
+
+An email on file before an invoice's first payment holds the invoice for a person, pay run rows waiting their turn included. A held invoice reads its emails, and its approval terms carry the findings. Approval terms count the emails on file, and how many could not be read in full or come from flagged senders, so any new email voids an open approval and the approvers look again. Terms never quote a sender's address or text.
 
 ## The duplicate lock
 
@@ -196,7 +212,7 @@ INV-RUN-1002,Example Supplier LLC,6170b987-3840-4825-8da6-c27671bd26ad,41.00,USD
 
 `fixtures/pay-run-example.csv` is a sample. Its beneficiary ids belong to the sandbox account PayOnce was built on, so use your own.
 
-Each row names the beneficiary by its Airwallex id and gives the supplier's name, the amount and the currency. The amount is in major units with a dot, at most two decimals and no thousands separator. `method` is optional. `sandbox_outcome` tells the sandbox bank what to do with the row's payment: `PAID` by default, or a failure type as in `pnpm recover`. PayOnce never reads bank details, phone numbers or email domains from a file. It pays the account on the beneficiary record. Every row pays in its own currency from that currency's wallet. PayOnce refuses a file with a column naming another wallet to pay from, such as `source_currency`. Pay such an invoice on its own. A file holds 50 rows at most. A file PayOnce cannot read is refused with every problem found. A problem in the header, such as a missing or unknown column, gives the header's line, and a quote that never closes gives the line it opened on. A problem with the whole file has no line: no name, an empty file, no rows after the header, more than 50 rows, or more than 40,000 characters.
+Each row names the beneficiary by its Airwallex id and gives the supplier's name, the amount and the currency. The amount is in major units with a dot, at most two decimals and no thousands separator. `method` is optional. `sandbox_outcome` tells the sandbox bank what to do with the row's payment: `PAID` by default, or a failure type as in `pnpm recover`. `supplier_domain` is optional too: the domain the supplier's emails come from, which the sender check trusts for that invoice. It is part of what the approvers approve. A domain other than the one on file for the beneficiary shows a caution and needs two approvers, and a row without one flags every sender. PayOnce never reads bank details or phone numbers from a file. It pays the account on the beneficiary record. Every row pays in its own currency from that currency's wallet. PayOnce refuses a file with a column naming another wallet to pay from, such as `source_currency`. Pay such an invoice on its own. A file holds 50 rows at most. A file PayOnce cannot read is refused with every problem found. A problem in the header, such as a missing or unknown column, gives the header's line, and a quote that never closes gives the line it opened on. A problem with the whole file has no line: no name, an empty file, no rows after the header, more than 50 rows, or more than 40,000 characters.
 
 PayOnce checks every row with GETs only. It skips a row that:
 
@@ -247,7 +263,7 @@ pnpm dev
 
 Everything else talks to the Airwallex sandbox. Copy `.env.example` to `.env` and fill in a sandbox Client ID and API key. Set `RESERVE_FLOORS=USD:1000000,EUR:1000000` as well. Without it no currency has a floor, and every failed payment goes to a person instead of being replaced.
 
-For a model to read the emails, create a Gemini API key in Google AI Studio and set it as `READER_API_KEY`. The free tier needs no billing account. Google may use free-tier content to improve its products, so keep real supplier emails out of it. `READER_MODEL` takes a comma-separated list of models to try in order.
+For a model to read the emails, create a Gemini API key in Google AI Studio and set it as `READER_API_KEY`. The free tier needs no billing account. Google may use free-tier content to improve its products. The "Supplier email" card says so next to the upload: keep confidential mail out, or leave the key unset and let the keyword placeholder read it. `READER_MODEL` takes a comma-separated list of models to try in order.
 
 ### The web page
 
@@ -338,7 +354,9 @@ In the fifth, `inv-05002` has the same supplier, amount and number as INV-5002, 
 | `src/approval.ts` | Approval terms, the exchange rate quote in them, the hash that binds an approval to them, and the amount limits are compared with |
 | `src/approvers.ts` | The approval policy: who may approve, how many are needed, and when a request expires |
 | `src/bank-change.ts` | Records a callback about new bank details and updates the supplier's record in Airwallex |
-| `src/emails.ts` | The email reader interface, the findings a reader returns, and the sender check |
+| `src/emails.ts` | The email reader interface, the findings a reader returns, the sender check and the email evidence in approval terms |
+| `src/eml.ts`, `src/html-text.ts`, `src/css-text.ts` | Read an uploaded email: headers, MIME parts, charsets, HTML to text, and the strings in its styles |
+| `src/intake.ts` | Stores an upload, finds the invoices it names, and delivers it to the one a person picks |
 | `src/model-reader.ts` | The model reader: one chat completion that returns the findings |
 | `src/reader.ts` | Picks the model reader, or the keyword placeholder when no key is set |
 | `src/keyword-reader.ts` | Keyword placeholder that reads the emails when no key is set |
@@ -365,3 +383,7 @@ The code holds amounts in minor units and converts at the Airwallex boundary. Th
 - A fee estimate for the first payment of an invoice paid from another wallet. The card says the fee is charged when it is sent.
 - A webhook delivered by the sandbox. The receiver, the tunnel and the subscription work, and Airwallex records the events, but the sandbox has not sent one.
 - Real bank outcomes. The run uses the sandbox simulator to send, fail and pay transfers.
+- Fetching mail. Emails arrive only as uploads, with no IMAP, Gmail or forwarding address, and there is no terminal command for them.
+- Opening attachments, loading images or following links. A PDF, an image of text or a forwarded email is listed by name, and a forwarded one makes the email partly unread.
+- Checking DKIM, SPF or DMARC. Nothing in an email proves its sender, which is why bank details change only through a callback.
+- A mail client's layout. PayOnce reads every character it can, but not the order a client draws them in.
