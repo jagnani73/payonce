@@ -15,16 +15,18 @@ pnpm close <INVOICE> [NAME] [NOTE]                  # show a paid incident waiti
 pnpm reset                                          # move payonce.db aside so the next run starts an empty ledger
 ```
 
-Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-local`. OUTCOME is a simulator failure type or `PAID`. There is no lint script and there are no tests.
+Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-local`. OUTCOME is a simulator failure type, `PAID`, or `STAYS_IN_FLIGHT`, which leaves the original in `SENT`. There is no lint script and there are no tests.
 
 ## Structure
 
 - `src/decide.ts`: pure decision policy (wait / replace / escalate / close). Rules stay in code; the model never decides amounts or moves money.
 - `src/incident.ts`: `Incident` and `Decision` types. Amounts are minor units.
-- `src/engine.ts`: the agent, shared by the CLI and the server. `resumeIncident` looks at an invoice: it syncs the payments, reads new emails, decides and acts. `deliver` is the inbox. `approveReplacement` records an approval, `closeIncident` records a person closing a paid incident, `note` writes the timeline. `Bank` is the hook told about each payment sent. The engine never simulates a bank outcome.
+- `src/engine.ts`: the agent, shared by the CLI and the server. `resumeIncident` looks at an invoice: it syncs the payments, reads new emails, decides and acts. `deliver` is the inbox. `approveReplacement` records an approval, `closeIncident` records a person closing a paid incident, `note` writes the timeline. `Bank` is the hook told about each payment sent. `linkOutsidePayout` ties a payout sent outside PayOnce to the invoice its reference names. The engine never simulates a bank outcome.
 - `src/dispatcher.ts`: `Dispatcher` runs steps one invoice at a time. `wake` queues a look at an invoice, and a wake that arrives before a queued look has started is dropped.
-- `src/watcher.ts`: the fallback for webhooks. `Watcher` reads every transfer the ledger shows in flight and wakes the invoice when the bank has paid or failed it. It also wakes an invoice with an approval nobody has acted on.
-- `src/sandbox-bank.ts`: `SandboxBank` plays the bank in the sandbox. It sends a new transfer to `SENT`, pays or fails it when the scenario says so, and pays every replacement. `PAID_OUTCOME` lives here.
+- `src/watcher.ts`: the fallback for webhooks. `Watcher` reads every transfer the ledger shows in flight, PayOnce's own and outside payouts tied to its invoices, and wakes the invoice when the bank has paid or failed one. It also wakes an invoice whose next look is due and one with an approval nobody has acted on. Given an interval, it runs the sweep.
+- `src/deadlines.ts`: how long the bank has to pay or fail a transfer, by transfer method, counted from the transfer's `created_at`. `isOverdue` treats a time it cannot read as overdue.
+- `src/sweep.ts`: `sweep` lists the transfers created since the ledger started and deals with the ones PayOnce did not send.
+- `src/sandbox-bank.ts`: `SandboxBank` plays the bank in the sandbox. It sends a new transfer to `SENT`, pays or fails it when the scenario says so, and pays every replacement. `PAID_OUTCOME` and `STAYS_IN_FLIGHT` live here.
 - `src/scenario.ts`: the demo payments (`SCENARIOS`), `openScenario`, `runScenario` (the scripted incident) and `untilAtRest`.
 - `src/webhooks.ts`: `WebhookReceiver` and `verifySignature`.
 - `src/tunnel.ts`: `openTunnel` starts a cloudflared quick tunnel and reads its address from cloudflared's output.
@@ -50,13 +52,19 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 - The engine writes an attempt row, with its `request_id`, before the Airwallex call. A 4xx marks the attempt failed. Any other error leaves it pending, because the transfer may exist, and a later look retries it under the same `request_id`.
 - Once an invoice is escalated, only a matching approval releases a payment, even if the policy would now replace.
 - After sending a replacement the agent waits for the bank. It closes the incident on the look that reads the replacement as paid. A replacement already out is never approved a second time.
+- Waiting on the bank has a deadline: the transfer's `created_at` plus `BANK_DEADLINE_LOCAL_MINUTES` (default 3) or `BANK_DEADLINE_SWIFT_MINUTES` (default 5). The look saves it in `obligations.look_at`, and the watcher wakes the invoice when it comes. An original still in flight then escalates. A replacement still in flight escalates too, with nothing more sent, and the incident still closes if the bank pays it.
+- A look that throws leaves the next look as it was. If that time has passed, it moves a minute on, so a failing look is retried once a minute and not on every check.
 - If a replacement has failed, the policy escalates instead of sending a third payment.
+- A payout PayOnce did not send, whose reference names an invoice in the ledger, is tied to that invoice. While one is in flight, paid or in an unknown status, the policy escalates before any other check, an open approval is withdrawn and nothing is sent. A settled invoice that gains one is reopened as escalated.
+- Before any replacement, automatic or approved, the agent lists the transfers again and ties any new payout that names the invoice. If it finds one, it sends nothing, leaves the approval unspent and looks again at once.
+- Any other payout PayOnce did not send becomes an invoice with origin `outside` once it has failed or is in flight past its deadline. The policy escalates where it would replace, so a person approves the replacement.
+- No approval is requested for an invoice the ledger shows as paid once.
 - A look writes a `bank` line when it finds a payment the ledger had in flight now paid or failed.
 - Approval terms take the pay-to account from the beneficiary record as it is now, and the policy escalates if that differs from the account on the original transfer. The timeline carries a warning whenever they differ, whatever reason the policy escalates for.
 - A reader failure marks the thread unread, which escalates. The next look reads the thread again.
 - A non-finite amount throws in `toMinor`, and the policy escalates if the cash position is not a number.
-- On resume, a paid replacement closes the incident. A paid original goes to the policy, which closes it only if no supplier email reports the payment missing.
-- An escalated invoice whose original is paid is closed by a person through `closeIncident`, never by a resume. `pendingClose` says when that applies. Closing sends nothing and is not bound to terms.
+- On resume, a paid replacement closes the incident unless an outside payout for the invoice is live. A paid original goes to the policy, which closes it only if no supplier email reports the payment missing.
+- An escalated invoice is closed by a person through `closeIncident`, never by a resume, once the bank reports it paid once: by PayOnce's original or replacement, or by an outside payout after every payment PayOnce sent failed. `pendingClose` says when that applies. Closing sends nothing and is not bound to terms.
 - A settled invoice that is still paid once is left alone on resume.
 
 ## Ledger
@@ -74,6 +82,10 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 - Approval evidence includes the email summary, so new emails that change the findings void an approval.
 - `events` holds the timeline. A line with a `topic` says how things stand: the decision, what the invoice is waiting on, an approval, the cost of a replacement, or a bank-details mismatch. `note` skips one when the timeline's last line on that topic says the same and nothing has happened since, so checking an invoice again when nothing has changed adds nothing. A line with no topic records an event and is skipped only when it repeats the line before it.
 - On an escalated invoice the decision line says when the policy would now replace or close and why it does not.
+- `meta` holds `started_at`, when the ledger was first opened. The sweep lists transfers from then, so payouts from an earlier ledger are not taken for outside ones.
+- `obligations.origin` is `payonce` or `outside`. `payout_reference` keeps a found payout's reference when it could not be the invoice number, and `obligationForReference` matches either.
+- `adoptPayout` writes a found payout's invoice and attempt in one transaction. Its INSERT is plain, so an invoice written by another process in between makes it fail instead of gaining a second original.
+- `outside_payouts` ties outside payouts to invoices, with the bank's short reference and the last state a look read. `settle(invoiceId, true)` also accepts an invoice whose attempts all failed and whose outside payout is paid. Only `closeIncident` passes it.
 - Columns added after the first version are listed in `ADDED_COLUMNS` and added when the database is opened.
 
 ## Email reader
@@ -100,10 +112,11 @@ Found by running it on 2026-10-06:
 
 - It binds to loopback and has no login. `guard` checks the Host header and, for writes, the Origin header and a JSON content type.
 - Routes: `GET /api/options`, `GET /api/incidents`, `GET /api/incidents/:id`, `POST /api/incidents` (takes `bankOutcome`, `emails` and `scenario`), `POST /api/incidents/:id/approve` (needs `approver` and `approvalId`), `POST /api/incidents/:id/close` (needs `closedBy` and `finding`), `POST /api/incidents/:id/resume`.
-- An incident's detail carries `review` when a person can close it, and the page shows the close card from that. `busy` is true while the agent or the sandbox bank is working on it, and `watching` while a payment is with the bank. The page polls every 1.5 seconds while either is true.
+- An incident's detail carries `review` when a person can close it, and the page shows the close card from that. `busy` is true while the agent or the sandbox bank is working on it, and `watching` while a payment is with the bank, including an outside payout tied to it. The page polls every 1.5 seconds while either is true.
 - Approve and close wait for any step already running on the invoice, then run. Resume queues a look.
 - The page scrolls to keep the newest timeline line on screen when that line was already visible, and for 15 seconds after an action.
 - On start it wakes every invoice that still has a pending or in-flight attempt, and the sandbox bank goes back to paying any replacement still in flight.
+- The watcher sweeps every 30 seconds. A paid, failed, cancelled or overdue webhook for a transfer the ledger does not know asks for a sweep on the next check. One for an outside payout already tied to an invoice wakes that invoice.
 - `GET /api/options` lists the default email thread first, so the form opens on the incident that is replaced without a person.
 
 ## Webhooks
@@ -140,6 +153,10 @@ Found by running it on 2026-10-28:
 - LOCAL USD transfers carry no fee in the sandbox.
 - The client sends no `x-api-version` header. The account default returns the newer status set (`FAILED` exists) with a nested `failure` object.
 - Airwallex emails the account owner for every sent and cancelled transfer unless transfer notifications are turned off under Settings > User settings > Notifications.
+- `GET /api/v1/transfers` takes `from_created_at` as an ISO time with milliseconds and `Z`, and takes `status`. It lists newest first and pages with `page_size` and a `page` cursor taken from `page_after`.
+- A transfer's `beneficiary` has `bank_details`, `address`, `entity_type` and `type`. `bank_details.account_name` is the only name on it.
+- `created_at` reads like `2026-10-27T19:48:09+0000`, which `Date.parse` accepts.
+- Runs on 2026-10-28. With the local deadline set to 1 minute, an original left in `SENT` escalated 63 seconds after it was sent. A failed payout made outside PayOnce was taken on within 30 seconds, and its approved replacement was paid and the incident closed 6 seconds after the approval. An outside payout made just before an approval was tied by the check before payment one second after the approval: the approval was voided and nothing was sent. When the bank paid that payout, the close card offered it.
 
 ## Conventions
 
