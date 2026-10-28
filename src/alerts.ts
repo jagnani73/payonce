@@ -438,7 +438,9 @@ interface Answer {
   error: string;
 }
 
-// The status and a short code. Nothing else from the answer is kept.
+// The status and a short code: Slack's lower-case code or Discord's numeric one.
+// Nothing else from the answer is kept, not even Discord's message, because
+// PayOnce cannot rule out that an answer repeats part of the address.
 function errorOf(status: number, body: string): string {
   if (/^[a-z_]{1,40}$/.test(body.trim())) {
     return `${status} ${body.trim()}`;
@@ -446,11 +448,8 @@ function errorOf(status: number, body: string): string {
   try {
     const parsedBody: unknown = JSON.parse(body);
     if (typeof parsedBody === "object" && parsedBody !== null) {
-      const record: Record<string, unknown> = parsedBody as Record<string, unknown>;
-      const code: string = typeof record["code"] === "number" ? ` ${record["code"]}` : "";
-      const message: string =
-        typeof record["message"] === "string" ? ` ${record["message"].slice(0, 120)}` : "";
-      return `${status}${code}${message}`;
+      const code: unknown = (parsedBody as Record<string, unknown>)["code"];
+      return Number.isSafeInteger(code) ? `${status} ${String(code)}` : String(status);
     }
   } catch {
     // Not JSON, so only the status is kept.
