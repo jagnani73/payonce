@@ -14,6 +14,7 @@ import {
   type RunEventFields,
 } from "./audit-trail.js";
 import type { ApprovalTerms, FxTerms } from "./approval.js";
+import type { ArrivalTerms } from "./arrival.js";
 import type { EmailAttachment, SupplierEmail } from "./emails.js";
 
 export const LEDGER_PATH: string = "payonce.db";
@@ -233,6 +234,53 @@ const SCHEMA: string = `
   );
   CREATE UNIQUE INDEX IF NOT EXISTS one_upload_per_email ON inbox(content_hash);
   CREATE INDEX IF NOT EXISTS inbox_by_message_id ON inbox(message_id);
+  CREATE TABLE IF NOT EXISTS alert_conditions (
+    alert_key TEXT PRIMARY KEY,
+    fingerprint TEXT NOT NULL,
+    episode INTEGER NOT NULL DEFAULT 1,
+    seen_at TEXT NOT NULL,
+    cleared_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_key TEXT NOT NULL,
+    episode INTEGER NOT NULL,
+    fingerprint TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    facts TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'queued',
+    tries INTEGER NOT NULL DEFAULT 0,
+    next_try_at TEXT NOT NULL,
+    claimed_by TEXT,
+    claim_until TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    sent_at TEXT
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS one_alert_per_change
+    ON alerts(alert_key, episode, fingerprint);
+  CREATE TABLE IF NOT EXISTS outbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    invoice_id TEXT NOT NULL REFERENCES obligations(invoice_id),
+    template TEXT NOT NULL,
+    audience TEXT NOT NULL,
+    facts TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL,
+    text_hash TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'draft',
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    copied_by TEXT,
+    copied_at TEXT,
+    sent_by TEXT,
+    sent_at TEXT,
+    dismissed_by TEXT,
+    dismissed_at TEXT,
+    dismiss_note TEXT
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS one_open_draft_per_template
+    ON outbox(invoice_id, template) WHERE state IN ('draft', 'copied');
 `;
 
 // rejected is an invoice a person closed without paying, because it was a second
@@ -254,7 +302,8 @@ export type EventKind =
   | "lock"
   | "closed"
   | "callback"
-  | "error";
+  | "error"
+  | "outbox";
 
 // One line of an incident's timeline.
 export interface LedgerEvent {
@@ -288,11 +337,15 @@ export interface NewObligation {
   supplierPhone: string | null;
   // The wallet the invoice is paid from, when not its own currency's.
   sourceCurrency?: string;
+  // When the supplier expects the money, as YYYY-MM-DD. Advice for people only:
+  // it never changes a decision or a payment.
+  dueDate?: string | null;
 }
 
 export interface Obligation extends NewObligation {
   // The invoice's own currency when it is not paid from another wallet.
   sourceCurrency: string;
+  dueDate: string | null;
   origin: ObligationOrigin;
   state: ObligationState;
   // Why the invoice last went to a person. Empty if it never has.
@@ -337,6 +390,12 @@ export interface Attempt {
   // Why the transfer did not go out on its approved quote. Null when it did, or
   // has not been checked. Only a person closes an invoice with one.
   rateMismatch: string | null;
+  // The transfer's created_at and status as Airwallex last gave them, and when it
+  // usually arrives as the route advisory worked it out when it was sent. Null
+  // until read, and on payments from before these columns.
+  bankCreatedAt: string | null;
+  bankStatus: string | null;
+  arrival: ArrivalTerms | null;
 }
 
 // The quote an attempt is sent with, from the terms of the approval it was opened
@@ -591,6 +650,7 @@ interface ObligationRow {
   rejected_by: string | null;
   run_row_id: number | null;
   source_currency: string | null;
+  due_date: string | null;
 }
 
 // A person's callback to the supplier on the number on file, and the bank
@@ -784,6 +844,8 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     source_currency: "TEXT",
     // The latest exchange rate quote taken for it, as JSON.
     last_quote: "TEXT",
+    // When the supplier expects the money, as YYYY-MM-DD.
+    due_date: "TEXT",
   },
   approvals: {
     requested_at: "TEXT",
@@ -807,6 +869,11 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     quote_valid_to: "TEXT",
     approval_id: "INTEGER",
     rate_mismatch: "TEXT",
+    // The transfer's created_at and status as last read, and its arrival estimate
+    // as ArrivalTerms JSON.
+    bank_created_at: "TEXT",
+    bank_status: "TEXT",
+    arrival: "TEXT",
   },
   events: {
     topic: "TEXT",
@@ -828,6 +895,12 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     attachments: "TEXT NOT NULL DEFAULT '[]'",
     notes: "TEXT NOT NULL DEFAULT '[]'",
     partial: "INTEGER NOT NULL DEFAULT 0",
+  },
+  run_rows: {
+    // The due date the file gives, as YYYY-MM-DD, and when a pay row usually
+    // arrives, as ArrivalTerms JSON.
+    due_date: "TEXT",
+    arrival: "TEXT",
   },
   outside_payouts: {
     reference: "TEXT NOT NULL DEFAULT ''",
@@ -856,6 +929,9 @@ interface AttemptRow {
   quote_valid_to: string | null;
   approval_id: number | null;
   rate_mismatch: string | null;
+  bank_created_at: string | null;
+  bank_status: string | null;
+  arrival: string | null;
 }
 
 export class DuplicatePaymentError extends Error {
@@ -908,6 +984,7 @@ function toObligation(row: ObligationRow): Obligation {
     duplicateOf: row.duplicate_of === null ? [] : (JSON.parse(row.duplicate_of) as string[]),
     rejectedBy: row.rejected_by,
     runRowId: row.run_row_id,
+    dueDate: row.due_date ?? null,
   };
 }
 
@@ -941,6 +1018,9 @@ function toAttempt(row: AttemptRow): Attempt {
     quoteValidTo: row.quote_valid_to,
     approvalId: row.approval_id,
     rateMismatch: row.rate_mismatch,
+    bankCreatedAt: row.bank_created_at ?? null,
+    bankStatus: row.bank_status ?? null,
+    arrival: row.arrival === null || row.arrival === undefined ? null : (JSON.parse(row.arrival) as ArrivalTerms),
   };
 }
 
@@ -1049,6 +1129,10 @@ export interface CheckedRow {
   payee: string | null;
   payTo: string | null;
   accountKey: string | null;
+  // The due date the file gives, or null.
+  dueDate: string | null;
+  // When a pay row usually arrives, as its approvers see it. Null on a skip row.
+  arrival: ArrivalTerms | null;
 }
 
 export interface RunRow extends CheckedRow {
@@ -1088,6 +1172,7 @@ export interface ReleaseRow {
   // every payment of the row is sent only while the record still holds it.
   accountKey: string;
   payTo: string;
+  dueDate: string | null;
   // The invoice's first timeline line, chained like any other.
   firstLine: string;
   // The domain the supplier's emails come from, from the file. Empty for none.
@@ -1113,9 +1198,9 @@ export class LeaseLostError extends Error {
 }
 
 // A pay row with the fields a skipped row keeps: the reasons, and no hold, new
-// payee or callback, since those only matter for a row that pays.
+// payee, callback or arrival, since those only matter for a row that pays.
 export function skipRow(row: CheckedRow, reasons: string[]): CheckedRow {
-  return { ...row, action: "skip", reasons, heldFor: [], newPayee: false, bankChangeId: null };
+  return { ...row, action: "skip", reasons, heldFor: [], newPayee: false, bankChangeId: null, arrival: null };
 }
 
 export interface ReleasedRun {
@@ -1166,6 +1251,8 @@ interface RunRowRecord {
   account_key: string | null;
   state: RunRowState;
   note: string | null;
+  due_date: string | null;
+  arrival: string | null;
 }
 
 interface RunRecord {
@@ -1234,6 +1321,8 @@ function toRunRow(row: RunRowRecord): RunRow {
     payee: row.payee,
     payTo: row.pay_to,
     accountKey: row.account_key,
+    dueDate: row.due_date ?? null,
+    arrival: typeof row.arrival === "string" ? (JSON.parse(row.arrival) as ArrivalTerms) : null,
     state: row.state,
     note: row.note,
   };
@@ -1468,8 +1557,8 @@ export class Ledger {
         `INSERT OR IGNORE INTO obligations
            (invoice_id, supplier, supplier_domain, beneficiary_id, currency,
             amount_minor, transfer_method, invoice_floor_minor, started_by,
-            supplier_phone, source_currency)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            supplier_phone, source_currency, due_date)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.invoiceId,
@@ -1483,6 +1572,7 @@ export class Ledger {
         input.startedBy,
         input.supplierPhone,
         sourceColumn(input),
+        input.dueDate ?? null,
       );
     const row: ObligationRow = this.db
       .prepare("SELECT * FROM obligations WHERE invoice_id = ?")
@@ -1711,6 +1801,9 @@ export class Ledger {
       quoteValidTo: quote?.validTo ?? null,
       approvalId,
       rateMismatch: null,
+      bankCreatedAt: null,
+      bankStatus: null,
+      arrival: null,
     };
   }
 
@@ -1958,8 +2051,8 @@ export class Ledger {
     return Number(result.changes) === 1;
   }
 
-  // A null state leaves the stored state as it is, and a null fee or amount the
-  // stored one.
+  // A null state leaves the stored state as it is, and a null fee, amount,
+  // creation time or bank status the stored one.
   record(
     requestId: string,
     transferId: string,
@@ -1970,6 +2063,8 @@ export class Ledger {
     feeCurrency: string | null,
     amountMinor: number | null,
     currency: string | null,
+    bankCreatedAt: string | null = null,
+    bankStatus: string | null = null,
   ): void {
     const result: { changes: number | bigint } = this.db
       .prepare(
@@ -1977,7 +2072,9 @@ export class Ledger {
             SET transfer_id = ?, reference = ?, state = COALESCE(?, state),
                 failure_code = ?, fee_minor = COALESCE(?, fee_minor),
                 fee_currency = COALESCE(?, fee_currency),
-                amount_minor = COALESCE(?, amount_minor), currency = COALESCE(?, currency)
+                amount_minor = COALESCE(?, amount_minor), currency = COALESCE(?, currency),
+                bank_created_at = COALESCE(?, bank_created_at),
+                bank_status = COALESCE(?, bank_status)
           WHERE request_id = ?`,
       )
       .run(
@@ -1989,6 +2086,8 @@ export class Ledger {
         feeCurrency,
         amountMinor,
         currency,
+        bankCreatedAt,
+        bankStatus,
         requestId,
       );
     if (Number(result.changes) !== 1) {
@@ -2816,8 +2915,8 @@ export class Ledger {
         `INSERT INTO run_rows
            (run_id, line, cells, invoice_id, supplier, beneficiary_id, currency, amount_minor,
             transfer_method, sandbox_outcome, action, reasons, held_for, new_payee,
-            bank_change_id, payee, pay_to, account_key)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            bank_change_id, payee, pay_to, account_key, due_date, arrival)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         runId,
@@ -2838,6 +2937,8 @@ export class Ledger {
         row.payee,
         row.payTo,
         row.accountKey,
+        row.dueDate,
+        row.arrival === null ? null : JSON.stringify(row.arrival),
       );
   }
 
@@ -2925,7 +3026,7 @@ export class Ledger {
         `UPDATE run_rows SET invoice_id = ?, supplier = ?, beneficiary_id = ?, currency = ?,
                 amount_minor = ?, transfer_method = ?, sandbox_outcome = ?, action = ?,
                 reasons = ?, held_for = ?, new_payee = ?, bank_change_id = ?, payee = ?,
-                pay_to = ?, account_key = ?
+                pay_to = ?, account_key = ?, due_date = ?, arrival = ?
           WHERE run_id = ? AND line = ?`,
       );
       for (const row of rows) {
@@ -2945,12 +3046,28 @@ export class Ledger {
           row.payee,
           row.payTo,
           row.accountKey,
+          row.dueDate,
+          row.arrival === null ? null : JSON.stringify(row.arrival),
           runId,
           row.line,
         );
       }
       return settle();
     });
+  }
+
+  // Rewrites the arrival estimates of a run's rows, inside the transaction of a
+  // check that opens a request counting from another day than the check did.
+  setRunArrivals(runId: number, rows: CheckedRow[]): void {
+    if (!this.db.isTransaction) {
+      throw new Error("A run's arrival estimates are rewritten only inside a ledger transaction");
+    }
+    const update: StatementSync = this.db.prepare(
+      "UPDATE run_rows SET arrival = ? WHERE run_id = ? AND line = ?",
+    );
+    for (const row of rows) {
+      update.run(row.arrival === null ? null : JSON.stringify(row.arrival), runId, row.line);
+    }
   }
 
   // Cancels a run still waiting, voids its open request and drops its rows, so
@@ -3033,8 +3150,8 @@ export class Ledger {
               `INSERT INTO obligations
                  (invoice_id, supplier, supplier_domain, beneficiary_id, currency, amount_minor,
                   transfer_method, invoice_floor_minor, started_by, supplier_phone, run_row_id,
-                  look_at, source_currency)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, ?, ?, NULL)`,
+                  look_at, source_currency, due_date)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, ?, ?, NULL, ?)`,
             )
             .run(
               row.invoiceId,
@@ -3047,6 +3164,7 @@ export class Ledger {
               uploadedBy,
               row.rowId,
               now,
+              row.dueDate,
             );
           const marked: { changes: number | bigint } = this.db
             .prepare(
@@ -3414,4 +3532,487 @@ export class Ledger {
       .prepare("DELETE FROM currency_locks WHERE currency = ? AND holder = ?")
       .run(currency, holder);
   }
+
+  // Compares the conditions an evaluation found with the ones on file. When
+  // nothing changed it writes nothing. Otherwise it compares again in one write
+  // transaction, so two processes on the file queue each alert once, and writes
+  // only the rows that changed. A new condition, a changed one, or one back after
+  // more than clearAfterMs queues an alert. A change to a fingerprint whose alert was skipped in this episode
+  // queues that alert again. When both alert tables are empty, as when alerts are
+  // first turned on, the conditions standing are recorded without an alert each,
+  // and only the summary is queued. A stored condition whose key starts with one
+  // of unknownPrefixes is not cleared, because the evaluation could not look.
+  recordConditions(
+    found: FoundCondition[],
+    summary: FoundCondition,
+    now: number,
+    settleMs: number,
+    clearAfterMs: number,
+    unknownPrefixes: string[],
+  ): RecordedConditions {
+    // The first condition found for each key, so a key found twice cannot fail
+    // the insert and roll the whole check back.
+    const byKey: Map<string, FoundCondition> = new Map();
+    for (const condition of found) {
+      if (!byKey.has(condition.key)) {
+        byKey.set(condition.key, condition);
+      }
+    }
+    const conditions: FoundCondition[] = [...byKey.values()];
+    if (!this.conditionsChanged(conditions, unknownPrefixes)) {
+      return { first: false, queued: 0, standing: conditions.length };
+    }
+    return this.transaction((): RecordedConditions => {
+      const at: string = new Date(now).toISOString();
+      const due: string = new Date(now + settleMs).toISOString();
+      // An alert skipped for this key, episode and fingerprint is queued again
+      // with the facts as they are now. One queued, sending, sent or failed is
+      // left as it is.
+      const requeue = (condition: FoundCondition, episode: number): number =>
+        Number(
+          this.db
+            .prepare(
+              `UPDATE alerts
+                  SET kind = ?, facts = ?, state = 'queued', tries = 0, next_try_at = ?,
+                      last_error = NULL, created_at = ?
+                WHERE alert_key = ? AND episode = ? AND fingerprint = ? AND state = 'skipped'`,
+            )
+            .run(condition.kind, condition.facts, due, at, condition.key, episode, condition.fingerprint)
+            .changes,
+        );
+      const queue = (condition: FoundCondition, episode: number): number => {
+        const inserted: number = Number(
+          this.db
+            .prepare(
+              `INSERT OR IGNORE INTO alerts
+                 (alert_key, episode, fingerprint, kind, facts, next_try_at, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(condition.key, episode, condition.fingerprint, condition.kind, condition.facts, due, at)
+            .changes,
+        );
+        return inserted > 0 ? inserted : requeue(condition, episode);
+      };
+      const insert = (condition: FoundCondition): void => {
+        this.db
+          .prepare(
+            "INSERT INTO alert_conditions (alert_key, fingerprint, episode, seen_at) VALUES (?, ?, 1, ?)",
+          )
+          .run(condition.key, condition.fingerprint, at);
+      };
+      const empty: boolean =
+        this.db.prepare("SELECT 1 FROM alert_conditions LIMIT 1").get() === undefined &&
+        this.db.prepare("SELECT 1 FROM alerts LIMIT 1").get() === undefined;
+      if (empty) {
+        conditions.forEach(insert);
+        this.db
+          .prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('alerts_started_at', ?)")
+          .run(at);
+        return { first: true, queued: queue(summary, 1), standing: conditions.length };
+      }
+      const stored: Map<string, ConditionRow> = new Map(
+        (this.db.prepare("SELECT * FROM alert_conditions").all() as unknown as ConditionRow[]).map(
+          (row: ConditionRow): [string, ConditionRow] => [row.alert_key, row],
+        ),
+      );
+      let queued: number = 0;
+      for (const condition of conditions) {
+        const row: ConditionRow | undefined = stored.get(condition.key);
+        stored.delete(condition.key);
+        if (row === undefined) {
+          insert(condition);
+          queued += queue(condition, 1);
+          continue;
+        }
+        const same: boolean = row.fingerprint === condition.fingerprint;
+        const back: boolean = row.cleared_at !== null;
+        if (same && !back) {
+          continue;
+        }
+        const episode: number =
+          back && now - Date.parse(row.cleared_at ?? "") >= clearAfterMs ? row.episode + 1 : row.episode;
+        this.db
+          .prepare(
+            `UPDATE alert_conditions SET fingerprint = ?, episode = ?, seen_at = ?, cleared_at = NULL
+              WHERE alert_key = ?`,
+          )
+          .run(condition.fingerprint, episode, at, condition.key);
+        if (episode !== row.episode || !same) {
+          queued += queue(condition, episode);
+        } else if (back) {
+          // Back within the clear window as it was. An alert skipped while it was
+          // gone is due again.
+          queued += requeue(condition, episode);
+        }
+      }
+      for (const row of stored.values()) {
+        const unknown: boolean = unknownPrefixes.some((prefix: string): boolean =>
+          row.alert_key.startsWith(prefix),
+        );
+        if (row.cleared_at === null && !unknown) {
+          this.db
+            .prepare("UPDATE alert_conditions SET cleared_at = ? WHERE alert_key = ?")
+            .run(at, row.alert_key);
+        }
+      }
+      return { first: false, queued, standing: conditions.length };
+    });
+  }
+
+  // True when recordConditions has something to write: both alert tables are
+  // empty, or a condition is new, changed, back or gone. It only reads, so a
+  // check that finds nothing new never waits for the write lock.
+  private conditionsChanged(conditions: FoundCondition[], unknownPrefixes: string[]): boolean {
+    const stored: Map<string, ConditionRow> = new Map(
+      (this.db.prepare("SELECT * FROM alert_conditions").all() as unknown as ConditionRow[]).map(
+        (row: ConditionRow): [string, ConditionRow] => [row.alert_key, row],
+      ),
+    );
+    if (stored.size === 0 && this.db.prepare("SELECT 1 FROM alerts LIMIT 1").get() === undefined) {
+      return true;
+    }
+    for (const condition of conditions) {
+      const row: ConditionRow | undefined = stored.get(condition.key);
+      if (row === undefined || row.fingerprint !== condition.fingerprint || row.cleared_at !== null) {
+        return true;
+      }
+      stored.delete(condition.key);
+    }
+    return [...stored.values()].some(
+      (row: ConditionRow): boolean =>
+        row.cleared_at === null &&
+        !unknownPrefixes.some((prefix: string): boolean => row.alert_key.startsWith(prefix)),
+    );
+  }
+
+  // Marks a claimed alert skipped when the condition it was queued for has
+  // cleared or no longer has its episode and fingerprint. The check is part of
+  // the UPDATE, so a condition another process records back to this fingerprint
+  // either lands first and the alert is not skipped, or finds it skipped and
+  // queues it again. False means the condition holds and the alert is posted.
+  skipStaleAlert(id: number, holder: string): boolean {
+    const result: { changes: number | bigint } = this.db
+      .prepare(
+        `UPDATE alerts
+            SET state = 'skipped', sent_at = NULL, claimed_by = NULL, claim_until = NULL
+          WHERE id = ? AND claimed_by = ?
+            AND NOT EXISTS (
+              SELECT 1 FROM alert_conditions
+               WHERE alert_conditions.alert_key = alerts.alert_key
+                 AND alert_conditions.episode = alerts.episode
+                 AND alert_conditions.fingerprint = alerts.fingerprint
+                 AND alert_conditions.cleared_at IS NULL)`,
+      )
+      .run(id, holder);
+    return Number(result.changes) === 1;
+  }
+
+  // Takes the oldest alert that is due, or one whose sender's claim ran out, in
+  // one statement, so two processes never take the same one. A read comes first,
+  // so a check with nothing due never waits for the write lock.
+  claimAlert(holder: string, now: number, claimMs: number): Alert | undefined {
+    const at: string = new Date(now).toISOString();
+    const due: string = "(state = 'queued' AND next_try_at <= ?) OR (state = 'sending' AND claim_until < ?)";
+    if (this.db.prepare(`SELECT 1 FROM alerts WHERE ${due} LIMIT 1`).get(at, at) === undefined) {
+      return undefined;
+    }
+    const row: AlertRow | undefined = this.db
+      .prepare(
+        `UPDATE alerts SET state = 'sending', claimed_by = ?, claim_until = ?
+          WHERE id = (SELECT id FROM alerts WHERE ${due} ORDER BY id LIMIT 1)
+          RETURNING *`,
+      )
+      .get(holder, new Date(now + claimMs).toISOString(), at, at) as unknown as AlertRow | undefined;
+    return row === undefined ? undefined : toAlert(row);
+  }
+
+  // Only the holder of the claim can finish an alert.
+  finishAlert(id: number, holder: string, finish: AlertFinish): boolean {
+    const result: { changes: number | bigint } = this.db
+      .prepare(
+        `UPDATE alerts
+            SET state = ?, tries = tries + ?, next_try_at = COALESCE(?, next_try_at),
+                last_error = COALESCE(?, last_error), sent_at = ?,
+                claimed_by = NULL, claim_until = NULL
+          WHERE id = ? AND claimed_by = ?`,
+      )
+      .run(
+        finish.state,
+        finish.tried ? 1 : 0,
+        finish.nextTryAt === null ? null : new Date(finish.nextTryAt).toISOString(),
+        finish.error,
+        finish.state === "sent" ? new Date().toISOString() : null,
+        id,
+        holder,
+      );
+    return Number(result.changes) === 1;
+  }
+
+  // Newest first.
+  recentAlerts(limit: number): Alert[] {
+    return (
+      this.db.prepare("SELECT * FROM alerts ORDER BY id DESC LIMIT ?").all(limit) as unknown as AlertRow[]
+    ).map(toAlert);
+  }
+
+  // When the payment usually arrives, as the route advisory worked it out when it
+  // was sent. Advice for people only.
+  setArrival(requestId: string, arrival: ArrivalTerms): void {
+    this.db.prepare("UPDATE attempts SET arrival = ? WHERE request_id = ?").run(JSON.stringify(arrival), requestId);
+  }
+
+  // Stores a draft and its chained timeline line in one write transaction, so a
+  // draft never exists without the line that records its hash. A draft of the
+  // same template still open on the invoice refuses it.
+  createDraft(input: NewDraft, line: (id: number) => string): number {
+    try {
+      return this.transaction((): number => {
+        const id: number = Number(
+          this.db
+            .prepare(
+              `INSERT INTO outbox
+                 (invoice_id, template, audience, facts, subject, body, text_hash, created_by, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              input.invoiceId,
+              input.template,
+              input.audience,
+              input.facts,
+              input.subject,
+              input.body,
+              input.textHash,
+              input.createdBy,
+              new Date().toISOString(),
+            ).lastInsertRowid,
+        );
+        this.appendEvent(input.invoiceId, "outbox", line(id), `outbox:${id}`);
+        return id;
+      });
+    } catch (error: unknown) {
+      if (isUniqueViolation(error)) {
+        const open: DraftRow | undefined = this.db
+          .prepare(
+            `SELECT * FROM outbox WHERE invoice_id = ? AND template = ? AND state IN ('draft', 'copied')`,
+          )
+          .get(input.invoiceId, input.template) as unknown as DraftRow | undefined;
+        throw new DraftOpenError(open?.id ?? 0);
+      }
+      throw error;
+    }
+  }
+
+  // Moves a draft on and writes its timeline line in one write transaction. The
+  // move happens only from the states given, so a mark from the page and one
+  // from the CLI cannot both succeed. False when it did not move.
+  markDraft(
+    invoiceId: string,
+    id: number,
+    move: DraftMove,
+    from: DraftState[],
+    by: string | null,
+    note: string | null,
+    line: string,
+  ): boolean {
+    const column: Record<DraftMove, string> = {
+      copied: "copied_by = ?, copied_at = ?",
+      sent: "sent_by = ?, sent_at = ?",
+      dismissed: "dismissed_by = ?, dismissed_at = ?, dismiss_note = ?",
+    };
+    return this.transaction((): boolean => {
+      const values: (string | number | null)[] = [move, by, new Date().toISOString()];
+      if (move === "dismissed") {
+        values.push(note);
+      }
+      const result: { changes: number | bigint } = this.db
+        .prepare(
+          `UPDATE outbox SET state = ?, ${column[move]}
+            WHERE id = ? AND invoice_id = ? AND state IN (${from.map((): string => "?").join(", ")})`,
+        )
+        .run(...values, id, invoiceId, ...from);
+      if (Number(result.changes) !== 1) {
+        return false;
+      }
+      this.appendEvent(invoiceId, "outbox", line, `outbox:${id}`);
+      return true;
+    });
+  }
+
+  drafts(invoiceId: string): Draft[] {
+    return (
+      this.db.prepare("SELECT * FROM outbox WHERE invoice_id = ? ORDER BY id").all(invoiceId) as unknown as DraftRow[]
+    ).map(toDraft);
+  }
+
+  draft(id: number): Draft | undefined {
+    const row: DraftRow | undefined = this.db.prepare("SELECT * FROM outbox WHERE id = ?").get(id) as unknown as
+      | DraftRow
+      | undefined;
+    return row === undefined ? undefined : toDraft(row);
+  }
+}
+
+export type DraftState = "draft" | "copied" | "sent" | "dismissed";
+export type DraftMove = "copied" | "sent" | "dismissed";
+
+// A message for a person to send, never sent by PayOnce. facts is the JSON the
+// text was rendered from, and textHash the SHA-256 of the template, subject and
+// body, as recorded on the timeline when it was drafted.
+export interface NewDraft {
+  invoiceId: string;
+  template: string;
+  audience: string;
+  facts: string;
+  subject: string;
+  body: string;
+  textHash: string;
+  createdBy: string;
+}
+
+export interface Draft extends NewDraft {
+  id: number;
+  state: DraftState;
+  createdAt: string;
+  copiedBy: string | null;
+  copiedAt: string | null;
+  sentBy: string | null;
+  sentAt: string | null;
+  dismissedBy: string | null;
+  dismissedAt: string | null;
+  dismissNote: string | null;
+}
+
+// A draft of the template is already open on the invoice.
+export class DraftOpenError extends Error {
+  readonly draftId: number;
+
+  constructor(draftId: number) {
+    super(`Draft ${draftId} of this message is still open. Mark it sent or dismiss it first`);
+    this.name = "DraftOpenError";
+    this.draftId = draftId;
+  }
+}
+
+interface DraftRow {
+  id: number;
+  invoice_id: string;
+  template: string;
+  audience: string;
+  facts: string;
+  subject: string;
+  body: string;
+  text_hash: string;
+  state: DraftState;
+  created_by: string;
+  created_at: string;
+  copied_by: string | null;
+  copied_at: string | null;
+  sent_by: string | null;
+  sent_at: string | null;
+  dismissed_by: string | null;
+  dismissed_at: string | null;
+  dismiss_note: string | null;
+}
+
+function toDraft(row: DraftRow): Draft {
+  return {
+    id: row.id,
+    invoiceId: row.invoice_id,
+    template: row.template,
+    audience: row.audience,
+    facts: row.facts,
+    subject: row.subject,
+    body: row.body,
+    textHash: row.text_hash,
+    createdBy: row.created_by,
+    state: row.state,
+    createdAt: row.created_at,
+    copiedBy: row.copied_by,
+    copiedAt: row.copied_at,
+    sentBy: row.sent_by,
+    sentAt: row.sent_at,
+    dismissedBy: row.dismissed_by,
+    dismissedAt: row.dismissed_at,
+    dismissNote: row.dismiss_note,
+  };
+}
+
+// A condition that needs a person, as an alert evaluation found it. facts is
+// the JSON an alert about it is built from.
+export interface FoundCondition {
+  key: string;
+  kind: string;
+  fingerprint: string;
+  facts: string;
+}
+
+export interface RecordedConditions {
+  first: boolean;
+  queued: number;
+  standing: number;
+}
+
+export type AlertState = "queued" | "sending" | "sent" | "failed" | "skipped";
+
+export interface Alert {
+  id: number;
+  key: string;
+  episode: number;
+  fingerprint: string;
+  kind: string;
+  facts: string;
+  state: AlertState;
+  tries: number;
+  nextTryAt: string;
+  lastError: string | null;
+  createdAt: string;
+  sentAt: string | null;
+}
+
+// How a sender leaves an alert. nextTryAt is when a queued one is due again.
+export interface AlertFinish {
+  state: AlertState;
+  tried: boolean;
+  nextTryAt: number | null;
+  error: string | null;
+}
+
+interface ConditionRow {
+  alert_key: string;
+  fingerprint: string;
+  episode: number;
+  seen_at: string;
+  cleared_at: string | null;
+}
+
+interface AlertRow {
+  id: number;
+  alert_key: string;
+  episode: number;
+  fingerprint: string;
+  kind: string;
+  facts: string;
+  state: AlertState;
+  tries: number;
+  next_try_at: string;
+  last_error: string | null;
+  created_at: string;
+  sent_at: string | null;
+}
+
+function toAlert(row: AlertRow): Alert {
+  return {
+    id: row.id,
+    key: row.alert_key,
+    episode: row.episode,
+    fingerprint: row.fingerprint,
+    kind: row.kind,
+    facts: row.facts,
+    state: row.state,
+    tries: row.tries,
+    nextTryAt: row.next_try_at,
+    lastError: row.last_error,
+    createdAt: row.created_at,
+    sentAt: row.sent_at,
+  };
 }

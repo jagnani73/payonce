@@ -138,6 +138,22 @@ PayOnce never pays at a rate nobody has seen, so every payment from another wall
 
 In the sandbox, Airwallex creates the converting transfer on the approved quote and takes the USD and a SWIFT fee of about 15.60 USD out of available at once. Its simulator does not move such a transfer past `PROCESSING`, so this demo ends at the bank deadline, where the incident goes to a person. A failed converting payment and its replacement cannot be shown in this sandbox.
 
+## Route advisory
+
+An invoice can have a due date, written like 2026-11-02: the "Due date" field on the start form, `dueDate` in `POST /api/incidents`, or a `due_date` column in a pay run file. PayOnce then says when a payment usually arrives and whether it may miss that date. A date in the past is accepted, and the advice says it has passed.
+
+The advice is for people. It never holds, sends, replaces or blocks a payment, and the policy decides without it. A payment that may arrive late goes out like any other.
+
+- Every pay run row shows its route and arrival on the rows card and in `pnpm payrun show`, such as "SWIFT, usually 0 to 3 business days, by 2026-11-02 if sent on 2026-10-28; due 2026-10-30; may arrive late", followed by the fee PayOnce last saw for that currency and method. A row with a due date carries the same estimate in the run's terms, so the approval card and `pnpm payrun approve` show it to the approvers.
+- When PayOnce sends a payment, the timeline gives the days it usually arrives between and, with a due date, whether it should arrive in time. The line is a warning when the payment may be late.
+- When the original fails, the decision line says when a replacement sent that day usually arrives, against the due date. The replacement's approval terms carry the same estimate. So do the terms for paying a held invoice, such as one paid from another currency's wallet, and `pnpm approve` prints it.
+
+The estimates come from Airwallex's published payout network tables for the United States and Germany: ACH 0 to 2 business days, Next Day ACH 1 to 2, FedNow and Fedwire 0 to 1, SEPA 0 to 2 and SWIFT 0 to 3. PayOnce shows every ACH payment as 0 to 2 days. Airwallex says it sends ACH as Next Day ACH, 1 to 2 days, above 1,000,000 USD or when the payer is outside the US, and this sandbox account's payer is in Singapore. For those payments the earliest day shown is a day early, so a payment shown as "may arrive late" may arrive late even at its fastest. The latest day is right either way. For any other country the advice says the arrival is not known. Airwallex has no API that quotes one transfer's arrival or fee. Business days skip Saturdays and Sundays only. Airwallex's list of non-trading days needs an admin key, so a public holiday counts as a working day and a payment may arrive a day or more later than shown. The advice says so wherever it gives a date. The fee is the last one PayOnce recorded for that currency and method, labelled as last seen, or "no fee seen yet".
+
+PayOnce does not switch a payment to a faster route. Each Airwallex beneficiary record holds one transfer method, so paying another way takes another record, and PayOnce treats another record as another account, with a callback and two approvers like any change of bank details. When a route may be too slow, the advice says so and a person decides what to do.
+
+An estimate in approval terms counts from the day its request opened, so an approval given just before midnight still matches after it. The same goes for a pay run checked again after midnight: the approvals it already has still count. A new request counts from the day it opens. While the day in the terms is before today, the approval card and `pnpm approve` also say when the payment usually arrives if it is sent today. That line is advice and is not part of what is approved. An invoice without a due date has the same approval terms as before, and so does a pay run file without due dates.
+
 ## Changed bank details
 
 PayOnce never takes new bank details from an email or from the model that reads emails. When a supplier says it has moved banks, or the supplier's record no longer matches the account the original went to, PayOnce pays the new account only after a person has called the supplier back.
@@ -190,7 +206,7 @@ The balance comes from Airwallex, with the age of the read. Money held for outgo
 
 Below that the panel lists payments already with the bank, payouts sent outside PayOnce and the fees kept on failed transfers. Airwallex takes a transfer out of available as soon as it is created, so the panel does not take these off again. Each is listed under the wallet the money left. A payout paid from another currency counts in the currency it was paid from, and a fee counts in the currency it was charged in.
 
-The panel reads the balance from Airwallex when the page asks for it and the last read is 30 seconds old or more, so it reads nothing while no page is open. After a quiet spell the first answer can show a read several minutes old, with its age, while a new read runs. The page says so and picks up the new read a moment later.
+The panel reads the balance from Airwallex when the page asks for it and the last read is 30 seconds old or more, so it reads nothing while no page is open, unless alerts are on. Then the server also reads it every 5 minutes (see Alerts). After a quiet spell the first answer can show a read several minutes old, with its age, while a new read runs. The page says so and picks up the new read a moment later.
 
 That read is for display. Before an automatic replacement, PayOnce reads the balance fresh and takes off the same committed money the panel does. The panel's headroom can still differ from what that check sees. The panel's balance may be older, and the panel takes off the currency's floor, while an invoice with a stricter floor of its own is held to that floor (the panel lists such invoices under the floor). The check for one invoice also leaves that invoice's own committed money out.
 
@@ -205,18 +221,18 @@ PayOnce reads each transfer's fee and keeps it in the ledger, and fills in older
 A pay run pays a batch of invoices from one CSV file on one approval. Upload the file on the page under "Pay run", or with `pnpm payrun upload <FILE> <NAME>`.
 
 ```csv
-invoice,supplier,beneficiary_id,amount,currency,method,sandbox_outcome
-INV-RUN-1001,Example Supplier LLC,6170b987-3840-4825-8da6-c27671bd26ad,40.00,USD,LOCAL,PAID
-INV-RUN-1002,Example Supplier LLC,6170b987-3840-4825-8da6-c27671bd26ad,41.00,USD,LOCAL,ACCOUNT_CLOSED
+invoice,supplier,beneficiary_id,amount,currency,method,due_date,sandbox_outcome
+INV-RUN-1001,Example Supplier LLC,6170b987-3840-4825-8da6-c27671bd26ad,40.00,USD,LOCAL,2026-11-02,PAID
+INV-RUN-1002,Example Supplier LLC,6170b987-3840-4825-8da6-c27671bd26ad,41.00,USD,LOCAL,,ACCOUNT_CLOSED
 ```
 
 `fixtures/pay-run-example.csv` is a sample. Its beneficiary ids belong to the sandbox account PayOnce was built on, so use your own.
 
-Each row names the beneficiary by its Airwallex id and gives the supplier's name, the amount and the currency. The amount is in major units with a dot, at most two decimals and no thousands separator. `method` is optional. `sandbox_outcome` tells the sandbox bank what to do with the row's payment: `PAID` by default, or a failure type as in `pnpm recover`. `supplier_domain` is optional too: the domain the supplier's emails come from, which the sender check trusts for that invoice. It is part of what the approvers approve. A domain that differs from the one on file for the beneficiary, or from another row of the same run, or that is the first domain for a beneficiary PayOnce has already paid, shows a caution and needs two approvers. A row without one flags every sender. PayOnce never reads bank details or phone numbers from a file. It pays the account on the beneficiary record. Every row pays in its own currency from that currency's wallet. PayOnce refuses a file with a column naming another wallet to pay from, such as `source_currency`. Pay such an invoice on its own. A file holds 50 rows at most. A file PayOnce cannot read is refused with every problem found. A problem in the header, such as a missing or unknown column, gives the header's line, and a quote that never closes gives the line it opened on. A problem with the whole file has no line: no name, an empty file, no rows after the header, more than 50 rows, or more than 40,000 characters.
+Each row names the beneficiary by its Airwallex id and gives the supplier's name, the amount and the currency. The amount is in major units with a dot, at most two decimals and no thousands separator. `method` is optional, and so is `due_date`, written like 2026-11-02 (see [Route advisory](#route-advisory)). `sandbox_outcome` tells the sandbox bank what to do with the row's payment: `PAID` by default, or a failure type as in `pnpm recover`. `supplier_domain` is optional too: the domain the supplier's emails come from, which the sender check trusts for that invoice. It is part of what the approvers approve. A domain that differs from the one on file for the beneficiary, or from another row of the same run, or that is the first domain for a beneficiary PayOnce has already paid, shows a caution and needs two approvers. A row without one flags every sender. PayOnce never reads bank details or phone numbers from a file. It pays the account on the beneficiary record. Every row pays in its own currency from that currency's wallet. PayOnce refuses a file with a column naming another wallet to pay from, such as `source_currency`. Pay such an invoice on its own. A file holds 50 rows at most. A file PayOnce cannot read is refused with every problem found. A problem in the header, such as a missing or unknown column, gives the header's line, and a quote that never closes gives the line it opened on. A problem with the whole file has no line: no name, an empty file, no rows after the header, more than 50 rows, or more than 40,000 characters.
 
 PayOnce checks every row with GETs only. It skips a row that:
 
-- has a cell it cannot read, such as `4,000.00`, `40.005` or a currency without two decimals;
+- has a cell it cannot read, such as `4,000.00`, `40.005`, a currency without two decimals or a due date that is not a day on the calendar;
 - has an invoice number the ledger already has, or the same number for the same supplier apart from case, spacing or leading zeros;
 - repeats an earlier row's number, or looks like a second bill for an earlier row of the file;
 - names a beneficiary Airwallex does not have, or one whose account name, currency or transfer method does not match the row (names are compared without case, spacing or punctuation);
@@ -251,6 +267,34 @@ An event counts only if its signature checks out with the subscription's secret,
 A status check runs every 15 seconds in case an event is late or lost, and every 3 seconds when webhooks are off. In the sandbox, Airwallex records an event for every status change but leaves each one queued and never sends it, even a test event sent from its own web app, so the status check finds every change. A request from outside through the tunnel does reach the receiver.
 
 Install cloudflared with `winget install --id Cloudflare.cloudflared`, or set `CLOUDFLARED` to the path of `cloudflared.exe`. Set `WEBHOOK_URL` to use a public address you already have, or `WEBHOOKS=off` to skip webhooks.
+
+## Alerts
+
+PayOnce can post to a Slack or Discord channel when something needs a person. It alerts on an invoice that is escalated, held or waiting on an approval, a bank deadline that has passed, a payout sent outside PayOnce, a pay run waiting for approval, an audit trail that no longer verifies, and a currency whose headroom has gone below 0.
+
+Set `ALERT_WEBHOOK_URL` to a Slack incoming webhook (`https://hooks.slack.com/services/...`) or a Discord webhook (`https://discord.com/api/webhooks/...` or the same on `discordapp.com`, with `ALERT_FORMAT=discord`). PayOnce takes no other address. If the setting is wrong, the start-up line says why and nothing is posted. With no address set, PayOnce makes no alert calls at all. Treat the address as a password and keep it in `.env`. PayOnce prints its host and never the rest.
+
+Only `pnpm ui` posts. Every 5 seconds it works out from the ledger what needs a person, which is the same state the page shows, so an incident escalated in the terminal is alerted by the server on its next check. A condition alerts once when it appears, and again only when it changes: an approval request opening on an escalated invoice, say, or a new reason. A request renewed on the same terms does not alert again, and neither does a floor clause that comes and goes as the balance moves. Each alert waits 10 seconds before it goes out, so when a request opens a moment after an escalation, only the request is posted. If the condition then goes back to what it was, as when that request is withdrawn, the alert held back is posted after all. A condition that clears and comes back within 10 minutes alerts again only if it changed.
+
+The first time alerts are on for a ledger, PayOnce records what is already waiting and posts one summary, such as "2 invoices are waiting on a person, 1 pay run waits for approval", instead of an alert for each. It waits for the server's first balance read before it looks, so a currency already below 0 is counted in the summary too.
+
+An alert gives the invoice number, the supplier, the amount, the reason PayOnce recorded, how many approvers a request needs and when it runs out, and a link to the incident on the local page. The link only works on the machine running PayOnce, and the message says so. An alert never carries email text, anything the model read, an account number or any digits of one, an approver's name or a secret. Text PayOnce did not write itself, such as a supplier name, goes out as code, with `://` and `www.` broken up, so it cannot turn into a link, a mention or formatting. PayOnce also strips characters that can reverse or hide part of it, such as right-to-left overrides and zero-width spaces. The only link in an alert is the one to the local page. Discord mentions are off, and long values are cut to fit each service's limits.
+
+When a post fails, PayOnce tries again after 30 seconds, 2 minutes, 8 minutes and 32 minutes, then gives up. After a 429 it waits as long as the answer asks. If the webhook answers 401, 403, 404 or 410, the address is wrong or the webhook is gone, so PayOnce stops posting until it is restarted. It does not follow redirects. The agent, the watcher and the page never wait on a post. If the server dies between posting an alert and recording it, the alert can be posted again a minute later, because incoming webhooks take no idempotency key.
+
+While alerts are on, the server also reads the balances every 5 minutes when nothing else has, so a headroom below 0 is noticed with no page open. Like any balance read, each one also reads up to five transfers to fill in the fees of failed transfers.
+
+To try alerts without Slack or Discord, run a receiver on this machine and set `ALERT_TEST_RECEIVER_URL` to it, such as `http://127.0.0.1:4399/slack`. It takes only a 127.0.0.1, localhost or [::1] address, and while it is set PayOnce posts there instead of to `ALERT_WEBHOOK_URL`, in the format `ALERT_FORMAT` names. `GET /api/alerts` lists the last 50 alerts and how each one went.
+
+## Messages to send
+
+Each incident has a "Messages to send" card, and `pnpm outbox` does the same in the terminal. PayOnce suggests the messages that fit the incident now, a person drafts one, copies it into their own email and sends it to the contact on file, then marks it sent. PayOnce never sends anything itself.
+
+There are four messages for the supplier: the payment has been sent (with its reference, amount and when it usually arrives), it has been sent again after a failure, we are looking into it (which promises nothing), and we will call you on the number we have on file to confirm a change of bank details. That last one asks the supplier not to send bank details by email. The fifth is a trace request to Airwallex for a transfer past its deadline, with its reference, amount, creation time and status.
+
+A draft is built only from what PayOnce formats itself: the invoice number, amounts, bank references, dates and statuses, and the last four digits of the phone number on file. It never includes the supplier's name, anything from an email, an escalation reason or account details. For when a payment usually arrives it uses the route advisory's latest usual day, never PayOnce's own bank deadline, and without an estimate it says "within the usual time for this route".
+
+The text is fixed when it is drafted. Its SHA-256 goes on the incident's timeline in the same write, and copying, sending and dismissing are recorded there too. If the payment changes afterwards, for example the bank pays it, the card says what changed and suggests drafting it again. If the stored text no longer matches its hash, the card says that too.
 
 ## Run it
 
@@ -289,8 +333,15 @@ pnpm payrun show <RUN>
 pnpm payrun approve <RUN> [REQUEST NAME]
 pnpm payrun check <RUN>
 pnpm payrun cancel <RUN> <NAME> <NOTE>
+pnpm outbox <INVOICE>
+pnpm outbox <INVOICE> draft <TEMPLATE> <NAME>
+pnpm outbox <INVOICE> show <DRAFT>
+pnpm outbox <INVOICE> sent <DRAFT> <NAME>
+pnpm outbox <INVOICE> dismiss <DRAFT> <NAME> [NOTE]
 pnpm reset
 ```
+
+`pnpm outbox` lists an invoice's drafts and the messages that fit now. The templates are `payment-sent`, `replacement-sent`, `checking`, `callback-notice` and `bank-trace`. It reads and writes only the ledger, and runs without a `.env`. When there is one, it takes the bank deadlines from it.
 
 `pnpm payrun upload` and `check` read Airwallex, GETs only. `show`, `approve` and `cancel` read only the ledger. `approve` without a name shows the terms and the request number, like `pnpm approve`.
 
@@ -336,6 +387,7 @@ In the fifth, `inv-05002` has the same supplier, amount and number as INV-5002, 
 | `src/dispatcher.ts` | Runs the agent's steps one invoice at a time |
 | `src/watcher.ts` | Status checks on payments in flight, the fallback for webhooks. It also wakes an incident at its deadline and runs the sweep |
 | `src/deadlines.ts` | How long the bank has to pay or fail a transfer |
+| `src/arrival.ts` | The route advisory: how many business days each route usually takes, the arrival against a due date, and the fee last seen |
 | `src/sweep.ts` | Finds payouts PayOnce did not send |
 | `src/duplicates.ts` | Finds invoices that look like a second bill, and the invoice a payout sent outside PayOnce is for |
 | `src/webhooks.ts`, `src/tunnel.ts` | The webhook receiver and its signature check, and the cloudflared tunnel |
@@ -360,8 +412,11 @@ In the fifth, `inv-05002` has the same supplier, amount and number as INV-5002, 
 | `src/model-reader.ts` | The model reader: one chat completion that returns the findings |
 | `src/reader.ts` | Picks the model reader, or the keyword placeholder when no key is set |
 | `src/keyword-reader.ts` | Keyword placeholder that reads the emails when no key is set |
+| `src/drafts.ts` | Messages to send: the templates, which ones fit an incident, and drafts that keep their hash |
+| `src/alerts.ts` | Alerts: the webhook setting, what needs a person, and posting with retries |
+| `src/alert-payloads.ts` | What an alert says, and its Slack and Discord message shapes |
 | `src/server.ts` | Local web server and JSON API |
-| `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/audit.ts`, `src/cash.ts`, `src/payrun.ts`, `src/reset.ts`, `src/index.ts` | The commands |
+| `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/audit.ts`, `src/cash.ts`, `src/payrun.ts`, `src/outbox.ts`, `src/reset.ts`, `src/index.ts` | The commands |
 | `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, exchange rate quotes, balances and their cache for the cash panel, the webhook subscription and the simulation calls |
 | `web/` | The page: plain HTML, CSS and JavaScript with no build step |
 | `fixtures/emails/` | Sample supplier emails |
@@ -373,7 +428,8 @@ The code holds amounts in minor units and converts at the Airwallex boundary. Th
 
 - A model's explanation of each decision. The reasons on the timeline come from the policy.
 - Closing an incident without a payment, except a held duplicate. A person can close any other only when the bank reports a payment for the invoice as paid.
-- Chasing the bank. When a payment passes its deadline, PayOnce tells a person and does nothing else.
+- Chasing the bank by itself. When a payment passes its deadline, PayOnce tells a person and offers a trace request for them to send to Airwallex.
+- Sending email. Messages are drafted for a person, who sends them from their own mail, and PayOnce keeps no recipient addresses.
 - A floor check on a single incident's first payment. Pay run rows have one.
 - Totals across currencies. They need exchange rates. A run's approver limits are compared with each currency's total on its own.
 - Editing a run, approving part of one, or scheduling one for a later date. Cancel it and upload a corrected file.
@@ -381,6 +437,9 @@ The code holds amounts in minor units and converts at the Airwallex boundary. Th
 - Pay run rows paid from another currency's wallet. Each row pays in its own currency from that currency's wallet.
 - Paying a replacement from the currency a failed converting payment is refunded in. By Airwallex's docs that refund lands in the transfer currency by default, so a replacement from that wallet would need no new rate. The sandbox simulator cannot fail a converting payment, so the refund cannot be seen and the replacement pays from the original's wallet again, on a new quote.
 - A fee estimate for the first payment of an invoice paid from another wallet. The card says the fee is charged when it is sent.
+- Choosing or switching a payment's route. The route advisory says when a payment usually arrives and whether it may be late, and a person decides what to do.
+- Public holidays in arrival estimates, and arrival figures for countries other than the United States and Germany.
+- A due date for `pnpm recover`. Give one on the page or in `POST /api/incidents`.
 - A webhook delivered by the sandbox. The receiver, the tunnel and the subscription work, and Airwallex records the events, but the sandbox has not sent one.
 - Real bank outcomes. The run uses the sandbox simulator to send, fail and pay transfers.
 - Fetching mail. Emails arrive only as uploads, with no IMAP, Gmail or forwarding address, and there is no terminal command for them.

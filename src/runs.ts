@@ -23,6 +23,7 @@ import {
   type Barred,
   type SignoffRule,
 } from "./approvers.js";
+import { arrivalFor, ifSentOn, today } from "./arrival.js";
 import { bankDetailsKey } from "./assess.js";
 import { committedAcross, committedByInvoice, type CommittedExcept } from "./cash-position.js";
 import { withCurrencyLocks } from "./currency-lock.js";
@@ -182,6 +183,7 @@ function asObligation(row: RunFileRow, payee: string, method: TransferMethod): O
     duplicateOf: [],
     rejectedBy: null,
     runRowId: null,
+    dueDate: row.dueDate,
   };
 }
 
@@ -204,11 +206,13 @@ function billOf(row: RunFileRow, payees: Map<string, Payee>): (Bill & { invoiceI
 }
 
 // Every reason a row is skipped, or none, and what PayOnce would pay with it.
+// from is the day a pay row's arrival estimate counts from.
 function checkRow(
   ledger: Ledger,
   row: RunFileRow,
   earlier: RunFileRow[],
   payees: Map<string, Payee>,
+  from: string,
 ): CheckedRow {
   const reasons: string[] = [...row.problems];
   const payee: Payee | undefined =
@@ -346,6 +350,11 @@ function checkRow(
     payee: details === undefined ? null : name,
     payTo: details === undefined ? null : payTo(name, details),
     accountKey: details === undefined ? null : accountKeyOf(details),
+    dueDate: row.dueDate,
+    arrival:
+      pays && method !== null && row.currency !== null
+        ? arrivalFor(method, row.currency, details, row.dueDate, from)
+        : null,
   };
 }
 
@@ -362,7 +371,8 @@ export function payRows(rows: CheckedRow[]): PayRow[] {
       row.transferMethod !== null &&
       row.payee !== null &&
       row.payTo !== null &&
-      row.accountKey !== null
+      row.accountKey !== null &&
+      row.arrival !== null
     ) {
       pay.push({
         line: row.line,
@@ -375,6 +385,7 @@ export function payRows(rows: CheckedRow[]): PayRow[] {
         accountKey: row.accountKey,
         heldFor: row.heldFor,
         bankChange: row.bankChangeId,
+        arrival: row.arrival,
         payee: row.payee,
         newPayee: row.newPayee,
       });
@@ -458,15 +469,19 @@ async function cashCheck(engine: Engine, rows: CheckedRow[], runId: number | nul
 // read. A row with any problem is skipped with every reason found. Then each
 // currency's pay rows are checked against its floor, and when they do not fit,
 // every row in that currency is skipped, so file order never decides who is paid.
+// Each pay row's arrival estimate counts from the day from: today for a check, and
+// the approved estimate's day for a release, so a release after midnight still
+// matches its approval.
 export async function checkRows(
   engine: Engine,
   rows: RunFileRow[],
   runId: number | null,
+  from: string = today(),
 ): Promise<RunCheck> {
   const payees: Map<string, Payee> = await readPayees(engine, rows);
   const checked: CheckedRow[] = rows.map(
     (row: RunFileRow, index: number): CheckedRow =>
-      checkRow(engine.ledger, row, rows.slice(0, index), payees),
+      checkRow(engine.ledger, row, rows.slice(0, index), payees, from),
   );
   const cash: RunCash[] = await cashCheck(engine, checked, runId);
   const short: Map<string, string> = new Map(
@@ -580,6 +595,31 @@ export function domainText(check: DomainCheck): string {
   return `${gives}, ${parts.join(", ")}`;
 }
 
+// The day the estimates in a run's terms count from, or null when no row has one.
+function termsDay(terms: RunTerms): string | null {
+  return terms.rows.find((row: RunRowTerms): boolean => row.arrival !== undefined)?.arrival?.from ?? null;
+}
+
+// The day a check counts arrival estimates from: the day of the run's request
+// while it is requested or approved and has not expired, so a check after
+// midnight keeps its binding and its signoffs. Otherwise today.
+function checkDay(ledger: Ledger, runId: number): string {
+  const latest: RunApproval | undefined = ledger.latestRunApproval(runId);
+  return latest !== undefined &&
+    (latest.state === "requested" || latest.state === "approved") &&
+    !isExpired(latest)
+    ? (termsDay(JSON.parse(latest.terms) as RunTerms) ?? today())
+    : today();
+}
+
+// The rows with every pay row's estimate counted from the day. Only the dates
+// change, so nothing is read again.
+function countedFrom(rows: CheckedRow[], day: string): CheckedRow[] {
+  return rows.map(
+    (row: CheckedRow): CheckedRow =>
+      row.arrival === null || row.arrival.from === day ? row : { ...row, arrival: ifSentOn(row.arrival, day) },
+  );
+}
 
 // The largest currency total, which approver limits are checked against, as the
 // page and pnpm payrun show it.
@@ -777,14 +817,15 @@ function settleRunRequest(
   ledger: Ledger,
   policy: ApprovalPolicy,
   run: Run,
-  rows: CheckedRow[],
+  checked: CheckedRow[],
   cash: RunCash[],
 ): RunLine[] {
   const lines: RunLine[] = [];
   const say = (kind: EventKind, message: string, topic: string | null = null): void => {
     lines.push({ kind, message, topic });
   };
-  const terms: RunTerms = termsOf(run, rows, cash);
+  let rows: CheckedRow[] = checked;
+  let terms: RunTerms = termsOf(run, rows, cash);
   if (terms.rows.length === 0) {
     if (ledger.voidOpenRunApprovals(run.id)) {
       say("approval", "Approval request withdrawn: every row is skipped now");
@@ -796,7 +837,7 @@ function settleRunRequest(
     );
     return lines;
   }
-  const binding: string = bindingOf(terms);
+  let binding: string = bindingOf(terms);
   const amount: PaymentAmount = runAmount(terms);
   const rule: SignoffRule = runRule(policy, rows, amount, domainChecks(ledger, terms));
   const eligible: Approver[] = eligibleApprovers(policy, amount, runBarred(ledger, terms));
@@ -826,6 +867,15 @@ function settleRunRequest(
     latest.needed >= rule.needed &&
     !isExpired(latest);
   if (!same) {
+    // A new request counts from today, even when the check counted from the open
+    // request's day to keep it. The stored rows count from today too.
+    const day: string = today();
+    if (rows.some((row: CheckedRow): boolean => row.arrival !== null && row.arrival.from !== day)) {
+      rows = countedFrom(rows, day);
+      ledger.setRunArrivals(run.id, rows);
+      terms = termsOf(run, rows, cash);
+      binding = bindingOf(terms);
+    }
     if (latest?.state === "requested" && isExpired(latest)) {
       say(
         "approval",
@@ -929,7 +979,12 @@ export async function recheckRun(engine: Engine, runId: number): Promise<void> {
   if (run?.state !== "waiting") {
     throw new Error(`Run ${runId} is not waiting for approval, so there is nothing to check`);
   }
-  const check: RunCheck = await checkRows(engine, fileRowsOf(engine.ledger, run), runId);
+  const check: RunCheck = await checkRows(
+    engine,
+    fileRowsOf(engine.ledger, run),
+    runId,
+    checkDay(engine.ledger, runId),
+  );
   const lines: RunLine[] | undefined = engine.ledger.setRunRows(
     runId,
     check.rows,
@@ -1046,7 +1101,8 @@ export async function releaseRun(engine: Engine, agent: Dispatcher, runId: numbe
   if (run?.state !== "waiting" || approval?.state !== "approved") {
     return;
   }
-  const check: RunCheck = await checkRows(engine, fileRowsOf(ledger, run), runId);
+  const approved: RunTerms = JSON.parse(approval.terms) as RunTerms;
+  const check: RunCheck = await checkRows(engine, fileRowsOf(ledger, run), runId, termsDay(approved) ?? today());
   const terms: RunTerms = termsOf(run, check.rows, check.cash);
   const amount: PaymentAmount = runAmount(terms);
   let why: string | null = null;
@@ -1064,9 +1120,11 @@ export async function releaseRun(engine: Engine, agent: Dispatcher, runId: numbe
     );
     why = problem === null ? null : `is void: ${problem}`;
   }
+  // Rows left waiting for a person count from today, as the next check does.
+  const waiting: CheckedRow[] = countedFrom(check.rows, today());
   if (why !== null) {
     // Another process may have released the run, or checked it again, since.
-    if (ledger.setRunRows(runId, check.rows, JSON.stringify(check.cash), approval.id, (): boolean => true) === undefined) {
+    if (ledger.setRunRows(runId, waiting, JSON.stringify(check.cash), approval.id, (): boolean => true) === undefined) {
       return;
     }
     noteCheck(ledger, runId, check.rows, check.cash);
@@ -1082,7 +1140,6 @@ export async function releaseRun(engine: Engine, agent: Dispatcher, runId: numbe
   // The rows are released as the approved terms have them, whatever a check in
   // another process has written on them since. The binding matched, so they are
   // the rows this release checked.
-  const approved: RunTerms = JSON.parse(approval.terms) as RunTerms;
   const payees: Map<number, string> = new Map(
     payRows(check.rows).map((row: PayRow): [number, string] => [row.line, row.payee]),
   );
@@ -1100,6 +1157,7 @@ export async function releaseRun(engine: Engine, agent: Dispatcher, runId: numbe
     transferMethod: row.transferMethod,
     accountKey: row.accountKey,
     payTo: row.payTo,
+    dueDate: row.arrival?.dueDate ?? null,
     firstLine: `Opened from pay run ${runId}, row ${row.line} (${run.fileName}, file ${run.fileHash.slice(0, 8)}), uploaded by ${run.uploadedBy} and approved by ${approval.approver ?? ""} on request ${approval.id} (binding ${approval.binding.slice(0, 8)}): ${formatMoney(row.amountMinor, row.currency)} to ${row.payTo}`,
   }));
 
@@ -1112,7 +1170,7 @@ export async function releaseRun(engine: Engine, agent: Dispatcher, runId: numbe
       const fresh: RunCash[] = await cashCheck(engine, check.rows, runId);
       const short: RunCash | undefined = fresh.find((entry: RunCash): boolean => entry.problem !== null);
       if (short !== undefined) {
-        if (ledger.setRunRows(runId, check.rows, JSON.stringify(fresh), approval.id, (): boolean => true) !== undefined) {
+        if (ledger.setRunRows(runId, waiting, JSON.stringify(fresh), approval.id, (): boolean => true) !== undefined) {
           runNote(
             ledger,
             runId,

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { AirwallexClient } from "./airwallex/client.js";
 import type { RunTotal } from "./approval.js";
+import { arrivalAdvice, feeSeenText, HOLIDAYS_NOTE, type ArrivalAdvice } from "./arrival.js";
 import { describePolicy, policyFromEnv, type ApprovalPolicy } from "./approvers.js";
 import type { Engine } from "./engine.js";
 import {
@@ -99,11 +100,20 @@ function rowText(row: CheckedRow | RunRow): string {
   return `  row ${String(row.line).padEnd(3)} ${(row.invoiceId ?? "?").padEnd(16)}${money} ${row.action}${state}${outcome}`;
 }
 
-function printRows(rows: (CheckedRow | RunRow)[]): void {
+function printRows(ledger: Ledger, rows: (CheckedRow | RunRow)[]): void {
+  let arriving: boolean = false;
   for (const row of rows) {
     console.log(rowText(row));
     if (row.payTo !== null && row.action === "pay") {
       console.log(`           to ${row.payTo}${row.newPayee ? ", a payee PayOnce has never paid" : ""}`);
+    }
+    if (row.arrival !== null && row.currency !== null) {
+      const advice: ArrivalAdvice = arrivalAdvice(row.arrival);
+      console.log(`           ${advice.text}; ${feeSeenText(ledger, row.currency, row.arrival.method)}`);
+      if (advice.sentToday !== null) {
+        console.log(`           ${advice.sentToday.text}`);
+      }
+      arriving = true;
     }
     for (const reason of row.reasons) {
       console.log(`           ${reason}`);
@@ -114,6 +124,9 @@ function printRows(rows: (CheckedRow | RunRow)[]): void {
     if ("note" in row && row.note !== null) {
       console.log(`           ${row.note}`);
     }
+  }
+  if (arriving) {
+    console.log(`  ${HOLIDAYS_NOTE}`);
   }
 }
 
@@ -146,6 +159,21 @@ function printApproval(ledger: Ledger, pending: PendingRunApproval): void {
       `  ${total.currency.padEnd(8)} ${formatMoney(total.amountMinor, total.currency)} in ${total.payments} ${total.payments === 1 ? "payment" : "payments"}, ${total.reserveFloorMinor === null ? `no reserve floor is set for ${total.currency}` : `reserve floor ${formatMoney(total.reserveFloorMinor, total.currency)}`}`,
     );
   }
+  // When each row with a due date usually arrives, as the terms carry it.
+  let arriving: boolean = false;
+  for (const row of pending.terms.rows) {
+    if (row.arrival !== undefined) {
+      const advice: ArrivalAdvice = arrivalAdvice(row.arrival);
+      console.log(`  arrival  row ${row.line} ${row.invoiceId}: ${advice.text}`);
+      if (advice.sentToday !== null) {
+        console.log(`           ${advice.sentToday.text}`);
+      }
+      arriving = true;
+    }
+  }
+  if (arriving) {
+    console.log(`           ${HOLIDAYS_NOTE}`);
+  }
   console.log(
     `  needs    ${approval.needed === 1 ? "one approver" : `${approval.needed} approvers, because ${approval.neededWhy}`}`,
   );
@@ -175,7 +203,7 @@ function show(ledger: Ledger, run: Run): void {
   console.log(
     `  ${counts.pay} to pay (${totalsText(counts.totals)})${counts.held === 0 ? "" : `, ${counts.held} held for a person when sent`}, ${counts.skip} skipped`,
   );
-  printRows(rows);
+  printRows(ledger, rows);
   printCash(JSON.parse(run.cash) as RunCash[]);
   const pending: PendingRunApproval | undefined = pendingRunApproval(ledger, run.id);
   if (pending !== undefined) {
@@ -228,7 +256,7 @@ async function upload(ledger: Ledger, path: string | undefined, uploadedBy: stri
   } catch (error: unknown) {
     if (error instanceof NothingToPayError) {
       fail(error.message);
-      printRows(error.rows);
+      printRows(ledger, error.rows);
     } else if (error instanceof WaitingRunError || error instanceof SameFileError) {
       fail(error.message);
     } else {

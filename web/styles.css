@@ -332,6 +332,11 @@ input:read-only {
   margin-top: 10px;
 }
 
+.hint--caution {
+  color: var(--amber);
+  font-weight: 600;
+}
+
 .form-error {
   margin-top: 8px;
   padding: 7px 10px;
@@ -1611,6 +1616,18 @@ input[type="file"] {
   overflow-wrap: anywhere;
 }
 
+.run-row__arrival {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 13.5px;
+  overflow-wrap: anywhere;
+}
+
+.run-row__arrival--caution {
+  color: var(--amber);
+  font-weight: 600;
+}
+
 .run-row.is-skipped .run-row__invoice,
 .run-row.is-skipped .run-row__amount,
 .run-row.is-skipped .run-row__payee {
@@ -1622,6 +1639,85 @@ input[type="file"] {
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 6px;
+}
+
+.outbox-offers,
+.outbox-drafts {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.outbox-offer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+}
+
+.outbox-offer__text .hint {
+  margin-top: 2px;
+}
+
+.outbox-draft {
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.outbox-draft__head,
+.outbox-offer__text {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+
+.outbox-offer__text {
+  display: block;
+}
+
+.outbox-offer__text .tag {
+  margin-left: 8px;
+}
+
+.outbox-draft__label {
+  font-weight: 600;
+}
+
+.outbox-draft .caution {
+  margin-top: 8px;
+}
+
+.outbox-draft__text {
+  display: block;
+  width: 100%;
+  height: 180px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-y: auto;
+  resize: vertical;
+}
+
+.outbox-draft__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.outbox-draft__actions .button--small {
+  min-width: 0;
+}
+
+.event--outbox .event__marker {
+  color: var(--slate);
 }
 
 .tag {

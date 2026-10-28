@@ -6,10 +6,20 @@ import {
   type ServerResponse,
 } from "node:http";
 import { extname } from "node:path";
-import { BalanceCache } from "./airwallex/balances.js";
+import { BalanceCache, type BalanceState } from "./airwallex/balances.js";
 import { AirwallexClient, AirwallexError, AirwallexUnreachableError } from "./airwallex/client.js";
 import { subscribe } from "./airwallex/webhooks.js";
-import type { ApprovalTerms, RunTerms } from "./approval.js";
+import { alertMessage, type AlertFacts } from "./alert-payloads.js";
+import {
+  Alerts,
+  alertTargetFromEnv,
+  describeAlerts,
+  type AlertCash,
+  type AlertSetting,
+  type AlertsStatus,
+} from "./alerts.js";
+import type { ApprovalTerms, RunRowTerms, RunTerms } from "./approval.js";
+import { arrivalAdvice, dueDateProblem, feeSeenText } from "./arrival.js";
 import { describePolicy, policyFromEnv, type Approver, type Barred } from "./approvers.js";
 import {
   auditCsv,
@@ -40,6 +50,15 @@ import {
 import { cashReport, payRunLines, type CashReport } from "./cash-position.js";
 import { CurrencyBusyError } from "./currency-lock.js";
 import { Dispatcher } from "./dispatcher.js";
+import {
+  createDraft,
+  DraftNotFitError,
+  isTemplate,
+  markDraft,
+  outboxOf,
+  type DraftTemplate,
+  type DraftView,
+} from "./drafts.js";
 import { MAX_EMAIL_BYTES, noteTexts, type ParsedEmail } from "./eml.js";
 import type { EmailFindings, SupplierEmail } from "./emails.js";
 import { describeQuotes } from "./fx.js";
@@ -68,6 +87,7 @@ import { recordMissingFees } from "./payments.js";
 import { readerFromEnv } from "./reader.js";
 import { describeFloors, reserveFromEnv } from "./reserve.js";
 import {
+  DraftOpenError,
   DuplicateUploadError,
   INVOICE_ID_PATTERN,
   isExpired,
@@ -77,8 +97,12 @@ import {
   NothingToPayError,
   SameFileError,
   WaitingRunError,
+  type Alert,
   type Approval,
   type Attempt,
+  type Draft,
+  type DraftMove,
+  type LedgerEvent,
   type Obligation,
   type OutsidePayout,
   type Run,
@@ -141,6 +165,8 @@ const SWEEP_EVERY_MS: number = 30_000;
 // How long the cash panel shows a balance before reading it again. The policy
 // reads its own, fresh, before any money moves.
 const BALANCE_MAX_AGE_MS: number = 30_000;
+// How often alerts read the balances when nothing else has.
+const ALERT_BALANCE_EVERY_MS: number = 5 * 60_000;
 const SUBSCRIBE_TRIES: number = 3;
 const SUBSCRIBE_RETRY_MS: number = 5_000;
 const MAX_BODY_BYTES: number = 64 * 1024;
@@ -470,7 +496,12 @@ function listIncidents(): unknown {
       currency: obligation.currency,
       amountMinor: obligation.amountMinor,
       state: obligation.state,
-      headline: engine.ledger.events(obligation.invoiceId).at(-1)?.message ?? "",
+      // A line about a message draft does not stand for how the incident is.
+      headline:
+        engine.ledger
+          .events(obligation.invoiceId)
+          .filter((event: LedgerEvent): boolean => event.kind !== "outbox")
+          .at(-1)?.message ?? "",
       busy: isBusy(obligation.invoiceId),
       watching: isWatching(obligation.invoiceId),
       runId: engine.ledger.runRowOf(obligation.invoiceId)?.runId ?? null,
@@ -561,6 +592,8 @@ function incidentDetail(invoiceId: string): unknown {
   // The approval card shows who may not approve, and that is the same for any request.
   const barred: Barred[] = pendingApproval(engine.ledger, invoiceId)?.barred ?? [];
   const row: RunRow | undefined = engine.ledger.runRowOf(invoiceId);
+  const terms: ApprovalTerms | undefined =
+    approval === undefined ? undefined : (JSON.parse(approval.terms) as ApprovalTerms);
   return {
     obligation,
     run: row === undefined ? null : { id: row.runId, line: row.line },
@@ -582,7 +615,9 @@ function incidentDetail(invoiceId: string): unknown {
             id: approval.id,
             state: approval.state,
             approver: approval.approver,
-            terms: JSON.parse(approval.terms) as ApprovalTerms,
+            terms,
+            // How the page words the estimate the terms carry, kept out of them.
+            arrivalAdvice: terms?.arrival === undefined ? null : arrivalAdvice(terms.arrival),
             needed: approval.needed,
             neededWhy: approval.neededWhy,
             signoffs: approval.signoffs.map((signoff: Signoff) => ({
@@ -594,6 +629,7 @@ function incidentDetail(invoiceId: string): unknown {
             barred,
           },
     review: pendingClose(engine.ledger, invoiceId) ?? null,
+    outbox: outboxOf(engine.ledger, obligation),
     events: engine.ledger.events(invoiceId),
     audit: auditSummary(invoiceId),
     busy: isBusy(invoiceId),
@@ -623,6 +659,16 @@ async function startIncident(request: IncomingMessage): Promise<unknown> {
   ) {
     throw new HttpError(400, "Unknown scenario");
   }
+  // Optional. A date in the past is taken, and the arrival estimates say it has
+  // passed.
+  if (body["dueDate"] !== undefined && typeof body["dueDate"] !== "string") {
+    throw new HttpError(400, "The due date is not a date written like 2026-11-02");
+  }
+  const dueDate: string = typeof body["dueDate"] === "string" ? body["dueDate"].trim() : "";
+  const badDue: string | null = dueDate === "" ? null : dueDateProblem(dueDate);
+  if (badDue !== null) {
+    throw new HttpError(400, badDue);
+  }
 
   // The supplier's invoice number when the person gives one, so a second bill
   // under a near-identical number can be caught.
@@ -641,7 +687,13 @@ async function startIncident(request: IncomingMessage): Promise<unknown> {
     );
   }
   const invoiceId: string = given === "" ? newInvoiceId(engine.ledger) : given;
-  const obligation: Obligation = await openScenario(engine, invoiceId, scenarioId, startedBy);
+  const obligation: Obligation = await openScenario(
+    engine,
+    invoiceId,
+    scenarioId,
+    startedBy,
+    dueDate === "" ? null : dueDate,
+  );
   runScenario(engine, agent, bank, obligation, { bankOutcome, emailsName }).catch(
     (error: unknown): void => noteError(engine.ledger, invoiceId, error),
   );
@@ -760,8 +812,10 @@ async function bankChangeByPerson(
 
 // The cash panel: balances from the cache, read again when 30 seconds old, and the
 // ledger as it is now. It answers at once with whatever the cache holds.
-function cash(): CashReport {
-  balances.refreshIfOld();
+function cash(read: boolean = true): CashReport {
+  if (read) {
+    balances.refreshIfOld();
+  }
   return cashReport({
     ledger: engine.ledger,
     reserve: engine.reserve,
@@ -771,11 +825,141 @@ function cash(): CashReport {
   });
 }
 
+// While alerts are on, the balances are read every 5 minutes even with no page
+// open, so a headroom below 0 is noticed. Null until a balance has been read,
+// and "reading" while none has and a read is running.
+let alertBalanceAskedAt: number = Number.NEGATIVE_INFINITY;
+
+function alertCash(): AlertCash {
+  const now: number = Date.now();
+  const state: BalanceState = balances.latest();
+  if (
+    now - alertBalanceAskedAt >= ALERT_BALANCE_EVERY_MS &&
+    (state.readAt === null || now - state.readAt >= ALERT_BALANCE_EVERY_MS)
+  ) {
+    alertBalanceAskedAt = now;
+    balances.refreshIfOld(now);
+  }
+  if (state.readAt !== null) {
+    return cash(false);
+  }
+  return balances.latest().refreshing ? "reading" : null;
+}
+
+const alertSetting: AlertSetting = alertTargetFromEnv();
+const alerts: Alerts | null =
+  alertSetting.target === null
+    ? null
+    : new Alerts(engine.ledger, alertSetting.target, `http://${HOST}:${PORT}`, alertCash);
+
+function alertsStatus(): AlertsStatus {
+  return (
+    alerts?.status() ?? {
+      on: false,
+      format: null,
+      host: null,
+      test: false,
+      problem: alertSetting.problem,
+      stopped: null,
+    }
+  );
+}
+
+// The latest alerts and how they went. Never the address.
+function recentAlerts(): unknown {
+  return {
+    ...alertsStatus(),
+    recent: engine.ledger.recentAlerts(50).map((alert: Alert) => ({
+      id: alert.id,
+      key: alert.key,
+      kind: alert.kind,
+      title: alertMessage(JSON.parse(alert.facts) as AlertFacts, "").title,
+      state: alert.state,
+      tries: alert.tries,
+      lastError: alert.lastError,
+      createdAt: alert.createdAt,
+      sentAt: alert.sentAt,
+    })),
+  };
+}
+
 // Has the agent look at an incident again. It cannot send a second live payment,
 // and an escalated invoice still needs its approval.
 function resume(invoiceId: string): unknown {
   requireObligation(invoiceId);
   agent.wake(invoiceId);
+  return { ok: true };
+}
+
+// ---------- outbox ----------
+
+const DRAFT_MOVES: Record<string, DraftMove> = {
+  copied: "copied",
+  sent: "sent",
+  dismiss: "dismissed",
+};
+
+// A person's step on a draft waits its turn on the invoice like any other.
+async function inOutboxTurn<T>(invoiceId: string, step: () => T): Promise<T> {
+  try {
+    return await agent.run(invoiceId, step);
+  } catch (error: unknown) {
+    if (error instanceof DraftOpenError) {
+      throw new HttpError(409, error.message, { draftId: error.draftId });
+    }
+    if (error instanceof DraftNotFitError) {
+      throw new HttpError(422, error.message);
+    }
+    throw new HttpError(409, error instanceof Error ? error.message : String(error));
+  }
+}
+
+// Renders a message for a person to send and records it. PayOnce sends nothing.
+async function draftByPerson(request: IncomingMessage, invoiceId: string): Promise<unknown> {
+  requireObligation(invoiceId);
+  const body: Record<string, unknown> = await readJson(request);
+  const template: unknown = body["template"];
+  if (!isTemplate(template)) {
+    throw new HttpError(400, "Choose a message PayOnce offers");
+  }
+  const createdBy: string = name(body, "createdBy", "Enter your name");
+  const chosen: DraftTemplate = template;
+  const draft: DraftView = await inOutboxTurn(invoiceId, (): DraftView =>
+    createDraft(engine.ledger, requireObligation(invoiceId), chosen, createdBy),
+  );
+  return { draftId: draft.id };
+}
+
+// Records a person copying a draft, marking it sent or dismissing it.
+async function markByPerson(
+  request: IncomingMessage,
+  invoiceId: string,
+  rawId: string,
+  move: DraftMove,
+): Promise<unknown> {
+  requireObligation(invoiceId);
+  const draft: Draft | undefined = RUN_ID_PATTERN.test(rawId) ? engine.ledger.draft(Number(rawId)) : undefined;
+  if (draft === undefined || draft.invoiceId !== invoiceId) {
+    throw new HttpError(404, `Draft ${rawId.slice(0, 20)} is not a draft for ${invoiceId}`);
+  }
+  const body: Record<string, unknown> = await readJson(request);
+  let by: string | null;
+  if (move === "copied") {
+    const given: string = text(body, "copiedBy");
+    if (given.length > MAX_NAME_LENGTH) {
+      throw new HttpError(400, "That name is too long");
+    }
+    by = given === "" ? null : given;
+  } else {
+    by = name(body, move === "sent" ? "sentBy" : "dismissedBy", "Enter your name");
+  }
+  const note: string = move === "dismissed" ? text(body, "note") : "";
+  if (note.length > MAX_FINDING_LENGTH) {
+    throw new HttpError(400, "The note is too long");
+  }
+  await inOutboxTurn(invoiceId, (): void =>
+    markDraft(engine.ledger, requireObligation(invoiceId), draft.id, move, by, note === "" ? null : note),
+  );
   return { ok: true };
 }
 
@@ -864,6 +1048,12 @@ function runDetail(raw: string): unknown {
     counts: runCounts(rows),
     rows: rows.map((row: RunRow) => ({
       ...row,
+      // The fee PayOnce last saw by the row's method in its currency, as an estimate.
+      feeSeen:
+        row.arrival === null || row.currency === null
+          ? null
+          : feeSeenText(engine.ledger, row.currency, row.arrival.method),
+      arrivalAdvice: row.arrival === null ? null : arrivalAdvice(row.arrival),
       invoice:
         row.state === "released" && row.invoiceId !== null ? invoiceSummary(row.invoiceId) : null,
     })),
@@ -876,6 +1066,12 @@ function runDetail(raw: string): unknown {
             state: approval.state,
             approver: approval.approver,
             terms,
+            // How the page words each estimate the terms carry, kept out of them.
+            arrivalAdvice: terms.rows.flatMap((row: RunRowTerms) =>
+              row.arrival === undefined
+                ? []
+                : [{ line: row.line, invoiceId: row.invoiceId, advice: arrivalAdvice(row.arrival) }],
+            ),
             needed: approval.needed,
             neededWhy: approval.neededWhy,
             signoffs: approval.signoffs.map((signoff: Signoff) => ({
@@ -1162,7 +1358,10 @@ async function route(
         id: scenario.id,
         label: scenario.label,
       })),
+      alerts: alertsStatus(),
     });
+  } else if (method === "GET" && pathname === "/api/alerts") {
+    sendJson(response, 200, recentAlerts());
   } else if (method === "GET" && pathname === "/api/cash") {
     sendJson(response, 200, cash());
   } else if (method === "GET" && pathname === "/api/inbox") {
@@ -1253,6 +1452,25 @@ async function route(
   ) {
     sendJson(response, 200, await payAgainByPerson(invoiceId));
   } else if (
+    method === "POST" &&
+    parts[1] === "incidents" &&
+    invoiceId !== undefined &&
+    parts[3] === "outbox" &&
+    parts.length === 4
+  ) {
+    sendJson(response, 201, await draftByPerson(request, invoiceId));
+  } else if (
+    method === "POST" &&
+    parts[1] === "incidents" &&
+    invoiceId !== undefined &&
+    parts[3] === "outbox" &&
+    parts[4] !== undefined &&
+    parts[5] !== undefined &&
+    Object.hasOwn(DRAFT_MOVES, parts[5]) &&
+    parts.length === 6
+  ) {
+    sendJson(response, 200, await markByPerson(request, invoiceId, parts[4], DRAFT_MOVES[parts[5]] ?? "copied"));
+  } else if (
     method === "GET" &&
     parts[1] === "incidents" &&
     invoiceId !== undefined &&
@@ -1313,9 +1531,11 @@ server.listen(PORT, HOST, (): void => {
   console.log(describePolicy(engine.approvals));
   console.log(describeFloors(engine.reserve));
   console.log(describeQuotes());
+  console.log(describeAlerts(alertSetting));
   // The first page load then has balances to show.
   balances.refreshIfOld();
   pickUpInterrupted();
   watcher.start();
+  alerts?.start();
   void connectWebhooks();
 });

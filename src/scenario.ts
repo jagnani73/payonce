@@ -133,12 +133,13 @@ export function newInvoiceId(ledger: Ledger): string {
 
 // Records the demo invoice as an obligation to the scenario's supplier. startedBy
 // is the name the person starting it gave, and that person cannot approve its
-// replacement.
+// replacement. dueDate is when the supplier expects the money, or null.
 export async function openScenario(
   engine: Engine,
   invoiceId: string,
   scenarioId: string,
   startedBy: string,
+  dueDate: string | null = null,
 ): Promise<Obligation> {
   const def: ScenarioDef | undefined = SCENARIOS.find(
     (scenario: ScenarioDef): boolean => scenario.id === scenarioId,
@@ -179,6 +180,7 @@ export async function openScenario(
     startedBy,
     supplierPhone: def.supplierPhone,
     sourceCurrency: def.sourceCurrency ?? def.currency,
+    dueDate,
   });
 }
 

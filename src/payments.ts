@@ -28,6 +28,8 @@ function record(ledger: Ledger, transfer: Transfer): void {
     fee?.currency ?? null,
     debit?.minor ?? null,
     debit?.currency ?? null,
+    transfer.created_at ?? null,
+    transfer.status ?? null,
   );
 }
 

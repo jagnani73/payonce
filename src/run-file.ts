@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { dueDateProblem } from "./arrival.js";
 import { validDomain } from "./eml.js";
 import { INVOICE_ID_PATTERN, type TransferMethod } from "./ledger.js";
 import { PAID_OUTCOME, SANDBOX_OUTCOMES } from "./sandbox-bank.js";
@@ -19,6 +20,7 @@ export const RUN_COLUMNS: RunColumn[] = [
   { name: "amount", required: true },
   { name: "currency", required: true },
   { name: "method", required: false },
+  { name: "due_date", required: false },
   { name: "sandbox_outcome", required: false },
   { name: "supplier_domain", required: false },
 ];
@@ -53,6 +55,8 @@ export interface RunFileRow {
   currency: string | null;
   // Null when the cell is blank, so the beneficiary's own method is used.
   method: TransferMethod | null;
+  // YYYY-MM-DD, or null when the cell is blank or cannot be read.
+  dueDate: string | null;
   sandboxOutcome: string;
   // A plain ASCII domain, lowercased, or null when the cell is blank.
   supplierDomain: string | null;
@@ -268,6 +272,13 @@ export function rowFromCells(line: number, columns: string[], cells: string[]): 
     problems.push(`The method ${value("method")} is not LOCAL or SWIFT`);
   }
 
+  // A date in the past is read, and the arrival estimate says it has passed.
+  const dueCell: string = value("due_date");
+  const badDue: string | null = dueCell === "" ? null : dueDateProblem(dueCell);
+  if (badDue !== null) {
+    problems.push(badDue);
+  }
+
   const outcomeCell: string = value("sandbox_outcome").toUpperCase();
   if (outcomeCell !== "" && !SANDBOX_OUTCOMES.includes(outcomeCell)) {
     problems.push(
@@ -294,6 +305,7 @@ export function rowFromCells(line: number, columns: string[], cells: string[]): 
     amountMinor,
     currency,
     method,
+    dueDate: dueCell === "" || badDue !== null ? null : dueCell,
     sandboxOutcome: outcomeCell === "" || !SANDBOX_OUTCOMES.includes(outcomeCell) ? PAID_OUTCOME : outcomeCell,
     supplierDomain: domainCell === "" || !validDomain(domain) ? null : domain,
   };

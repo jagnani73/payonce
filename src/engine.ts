@@ -27,6 +27,7 @@ import {
   paymentAmount,
   rateMismatch,
   termsFor,
+  withArrival,
   withFeeEstimate,
   type ApprovalTerms,
   type DuplicateEvidence,
@@ -46,6 +47,15 @@ import {
   type Barred,
   type SignoffRule,
 } from "./approvers.js";
+import {
+  arrivalFor,
+  atRisk,
+  ifSentOn,
+  replacementArrivalText,
+  sentArrivalText,
+  today,
+  type ArrivalTerms,
+} from "./arrival.js";
 import {
   attemptStateOf,
   bankDetailsKey,
@@ -176,6 +186,9 @@ interface Assessment {
   // The quote a replacement from another currency's wallet would be paid at.
   // Null for any other invoice, and before the original has failed.
   rate: Rate | null;
+  // When a replacement sent now usually arrives. Null for an invoice with no due
+  // date, so its terms are as they were before.
+  arrival: ArrivalTerms | null;
   decision: Decision;
   // The floor reason added to the decision's reason, or null when none was.
   floor: string | null;
@@ -617,6 +630,60 @@ async function rateFor(
   return { fx, fresh: true, endsAt };
 }
 
+// The day an invoice's arrival estimate counts from. While an approval request is
+// requested or approved and has not expired, it is that request's day, so its
+// binding holds past midnight. Otherwise it is today. awaitApproval never opens
+// a new request on an estimate from another day.
+function arrivalFrom(ledger: Ledger, invoiceId: string): string {
+  const latest: Approval | undefined = ledger.latestApproval(invoiceId);
+  const open: ArrivalTerms | undefined =
+    latest !== undefined &&
+    (latest.state === "requested" || latest.state === "approved") &&
+    !isExpired(latest)
+      ? (JSON.parse(latest.terms) as ApprovalTerms).arrival
+      : undefined;
+  return open?.from ?? today();
+}
+
+// When a payment of the invoice to these bank details usually arrives, or null
+// when the invoice has no due date.
+function arrivalOf(
+  ledger: Ledger,
+  obligation: Obligation,
+  bankDetails: TransferBankDetails,
+): ArrivalTerms | null {
+  return obligation.dueDate === null
+    ? null
+    : arrivalFor(
+        obligation.transferMethod,
+        obligation.currency,
+        bankDetails,
+        obligation.dueDate,
+        arrivalFrom(ledger, obligation.invoiceId),
+      );
+}
+
+// What the decision line adds about when a replacement would arrive: only for an
+// invoice with a due date whose original failed and no payout sent outside
+// PayOnce may pay. It counts from today, also while an open request keeps the day
+// it opened on.
+function arrivalClause(assessment: Assessment): string {
+  return assessment.arrival === null ||
+    assessment.incident.originalState !== "failed" ||
+    assessment.incident.outsidePayoutLive
+    ? ""
+    : `. ${replacementArrivalText(ifSentOn(assessment.arrival, today()))}`;
+}
+
+// The terms a new request opens on. Terms that kept an open request's arrival
+// estimate, counted from a day that is not today, count from today. Only the
+// dates change.
+function countedFromToday<T extends ApprovalTerms>(terms: T): T {
+  return terms.arrival !== undefined && terms.arrival.from !== today()
+    ? withArrival(terms, ifSentOn(terms.arrival, today()))
+    : terms;
+}
+
 // The email evidence a person sees and approves against. It names no address, so
 // nothing a sender wrote reaches the binding.
 function evidenceSummary(obligation: Obligation, assessment: Assessment): string {
@@ -781,18 +848,34 @@ async function assess(
         : decision.action === "close"
           ? ". This invoice was escalated, so a person closes it"
           : "";
-  note(
-    engine.ledger,
-    obligation.invoiceId,
-    "decision",
-    `${capitalise(decision.action)}: ${decision.reason}${held}`,
-    "decision",
-  );
   const bankChange: BankChange | null = incident.beneficiaryChanged
     ? (engine.ledger.verifiedBankChange(obligation.beneficiaryId, bankDetailsKey(bankDetails)) ??
       null)
     : null;
-  return { original, incident, findings, unverified, emails, bankDetails, bankChange, rate, decision, floor: null, paidDuplicate: paid };
+  const arrival: ArrivalTerms | null = arrivalOf(engine.ledger, obligation, bankDetails);
+  const assessment: Assessment = {
+    original,
+    incident,
+    findings,
+    unverified,
+    emails,
+    bankDetails,
+    bankChange,
+    rate,
+    arrival,
+    decision,
+    floor: null,
+    paidDuplicate: paid,
+  };
+  // The arrival is advice for people. The policy decided without it.
+  note(
+    engine.ledger,
+    obligation.invoiceId,
+    "decision",
+    `${capitalise(decision.action)}: ${decision.reason}${held}${arrivalClause(assessment)}`,
+    "decision",
+  );
+  return assessment;
 }
 
 // The first invoice this one looks like a second bill for that is paid, by
@@ -918,6 +1001,24 @@ async function send(
     engine.ledger.escalate(obligation.invoiceId, reason);
     note(engine.ledger, obligation.invoiceId, "warning", capitalise(reason));
   }
+  // When it usually arrives, counted from the day the transfer was created, which
+  // is earlier than today for a pending attempt found by its request_id, against
+  // the due date. Advice for people: nothing PayOnce decides reads it.
+  const createdAt: number = Date.parse(created.created_at);
+  const arrival: ArrivalTerms = arrivalFor(
+    obligation.transferMethod,
+    obligation.currency,
+    sentTo,
+    obligation.dueDate,
+    Number.isNaN(createdAt) ? today() : today(new Date(createdAt)),
+  );
+  engine.ledger.setArrival(attempt.requestId, arrival);
+  note(
+    engine.ledger,
+    obligation.invoiceId,
+    atRisk(arrival) ? "warning" : "payment",
+    sentArrivalText(`${capitalise(kind)} ${created.short_reference_id}`, arrival),
+  );
   engine.bank?.sent(obligation.invoiceId, kind, created.id);
   return created;
 }
@@ -973,6 +1074,9 @@ function deadlineLook(transfer: Transfer): number {
   return Number.isFinite(deadline) ? deadline : Date.now();
 }
 
+export const REPLACEMENT_DEADLINE_REASON: string =
+  "the bank has not paid or failed the replacement by its deadline";
+
 // A replacement the bank sits on is never followed by another payment. A person
 // hears about it, and the incident still closes if the bank pays it.
 function replacementOverdue(
@@ -980,7 +1084,7 @@ function replacementOverdue(
   invoiceId: string,
   replacement: Transfer,
 ): NextLook {
-  const reason: string = "the bank has not paid or failed the replacement by its deadline";
+  const reason: string = REPLACEMENT_DEADLINE_REASON;
   engine.ledger.escalate(invoiceId, reason);
   note(engine.ledger, invoiceId, "decision", `Escalate: ${reason}`, "decision");
   note(
@@ -1002,6 +1106,7 @@ function termsOf(obligation: Obligation, assessment: Assessment): ReplacementTer
     assessment.bankDetails,
     assessment.bankChange,
     assessment.rate?.fx ?? null,
+    assessment.arrival,
   );
 }
 
@@ -1129,12 +1234,13 @@ function quoteLine(obligation: Obligation, fx: FxTerms, previous: FxTerms | unde
 function awaitApproval(
   engine: Engine,
   obligation: Obligation,
-  terms: ApprovalTerms,
+  given: ApprovalTerms,
   rule: SignoffRule,
   rate: Rate | null,
 ): NextLook {
   const invoiceId: string = obligation.invoiceId;
-  const binding: string = bindingOf(terms);
+  let terms: ApprovalTerms = given;
+  let binding: string = bindingOf(terms);
 
   // A request nobody on the list could approve would only expire and be opened
   // again, so none is opened until the approver list changes.
@@ -1198,16 +1304,23 @@ function awaitApproval(
     }
     return Date.now();
   }
+  if (opening) {
+    terms = countedFromToday(terms);
+    binding = bindingOf(terms);
+  }
   const previous: FxTerms | undefined =
     latest === undefined ? undefined : (JSON.parse(latest.terms) as ApprovalTerms).fx;
   // A partly signed request that expired is reported as expired, even when the
   // terms have changed since. So is a request on a quote, which is replaced on a
   // fresh quote once it expires, so its terms differ even when nothing else
-  // changed.
+  // changed, and one with an arrival estimate, which may count from a new day.
   const expiredRequest: boolean =
     latest?.state === "requested" &&
     isExpired(latest) &&
-    (sameRequest || latest.signoffs.length > 0 || terms.fx !== undefined);
+    (sameRequest ||
+      latest.signoffs.length > 0 ||
+      terms.fx !== undefined ||
+      terms.arrival !== undefined);
   if (expiredRequest && latest !== undefined) {
     note(
       engine.ledger,
@@ -1344,10 +1457,13 @@ function escalate(
     assessment.rate,
   );
   // No request is open when nobody on the approver list could approve it, or when
-  // a request on an old quote was withdrawn so the next look takes a fresh one.
+  // a request on an old quote was withdrawn so the next look takes a fresh one. A
+  // request awaitApproval opened just now counts its arrival from today.
   const latest: Approval | undefined = engine.ledger.latestApproval(obligation.invoiceId);
   const requested: boolean =
-    latest?.state === "requested" && latest.binding === bindingOf(terms) && !isExpired(latest);
+    latest?.state === "requested" &&
+    !isExpired(latest) &&
+    (latest.binding === bindingOf(terms) || latest.binding === bindingOf(countedFromToday(terms)));
   noteFloor(engine, obligation, assessment, requested);
   noteSecondBill(engine, obligation, assessment, requested);
   return next;
@@ -2010,7 +2126,14 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
   // Paid from another currency's wallet, it is approved at a quote. Nothing has
   // been sent, so no fee is known yet.
   const rate: Rate | null = crossCurrency(obligation) ? await rateFor(engine, obligation, null) : null;
-  const terms: HeldPaymentTerms = heldTermsFor(held, bankDetails, duplicates, rate?.fx ?? null, evidence);
+  const terms: HeldPaymentTerms = heldTermsFor(
+    held,
+    bankDetails,
+    duplicates,
+    rate?.fx ?? null,
+    evidence,
+    arrivalOf(engine.ledger, obligation, bankDetails),
+  );
   // A second bill paid to a different account from the first is the pattern of an
   // invoice resent with new bank details, so it needs two approvers.
   const elsewhere: DuplicateEvidence | undefined = duplicates.find(
@@ -2170,7 +2293,7 @@ async function replaceUnderLock(
     return Date.now();
   }
   if ("action" in next) {
-    note(engine.ledger, invoiceId, "decision", `Escalate: ${next.reason}`, "decision");
+    note(engine.ledger, invoiceId, "decision", `Escalate: ${next.reason}${arrivalClause(assessment)}`, "decision");
     // The first request names the floor as well, as every later one does.
     return escalate(
       engine,

@@ -42,6 +42,9 @@
       <symbol id="i-warning" viewBox="0 0 16 16">
         <path d="M8 2.6 14 13H2zM8 6.8v2.8M8 11.3v.1" />
       </symbol>
+      <symbol id="i-outbox" viewBox="0 0 16 16">
+        <path d="M4 2.5h5.5L12 5v8.5H4zM6 7.5h4M6 10h4" />
+      </symbol>
       <symbol id="i-other" viewBox="0 0 16 16">
         <circle cx="8" cy="8" r="2.2" fill="currentColor" stroke="none" />
       </symbol>
@@ -82,6 +85,10 @@
               <input id="invoice-number" name="invoiceId" type="text" autocomplete="off" spellcheck="false" maxlength="40" />
             </label>
             <label class="field">
+              <span class="field__label">Due date (optional)</span>
+              <input id="due-date" name="dueDate" type="date" min="2000-01-01" max="2099-12-31" />
+            </label>
+            <label class="field">
               <span class="field__label">Your name</span>
               <input id="started-by" name="startedBy" type="text" autocomplete="name" maxlength="80" />
             </label>
@@ -91,6 +98,7 @@
             <p class="hint">PayOnce sends a sandbox transfer, then applies the bank outcome above.</p>
             <p class="hint">Leave the invoice number empty to get a new one. PayOnce holds an invoice before paying it when its number matches one already in the ledger for the same supplier and amount, apart from case, spacing, leading zeros or letters added at the end.</p>
             <p class="hint">The person who starts an incident cannot approve its payments.</p>
+            <p class="hint">With a due date, the timeline and the approval card say when a payment usually arrives and whether it may be late. A late payment is still paid.</p>
             <p id="new-error" class="form-error" role="alert" hidden></p>
           </form>
         </section>
@@ -107,7 +115,7 @@
               <input id="run-uploaded-by" name="uploadedBy" type="text" autocomplete="name" maxlength="80" />
             </label>
             <button id="run-button" class="button button--primary" type="submit">Check file</button>
-            <p id="run-columns" class="hint">Columns: invoice, supplier, beneficiary_id, amount and currency, plus method, sandbox_outcome and supplier_domain (the domain its emails come from) if you need them. One row per invoice, 50 rows at most.</p>
+            <p id="run-columns" class="hint">Columns: invoice, supplier, beneficiary_id, amount and currency, plus method, due_date (such as 2026-11-02), sandbox_outcome and supplier_domain (the domain its emails come from) if you need them. One row per invoice, 50 rows at most.</p>
             <p class="hint">PayOnce never reads bank details from a file. It pays the account on the beneficiary record.</p>
             <p class="hint">The person who uploads a run cannot approve it.</p>
             <div id="run-error" class="form-error" role="alert" hidden></div>
@@ -201,6 +209,8 @@
 
               <section id="approval" class="card approval" aria-labelledby="approval-title" hidden></section>
 
+              <section id="outbox" class="card outbox" aria-labelledby="outbox-title" hidden></section>
+
               <section class="card" aria-labelledby="payments-title">
                 <h2 id="payments-title">Payments</h2>
                 <div id="payments"></div>
@@ -248,6 +258,7 @@
               <section class="card" aria-labelledby="run-rows-title">
                 <h2 id="run-rows-title">Rows</h2>
                 <ol id="run-rows" class="run-rows"></ol>
+                <p class="hint">Arrival dates count weekdays only. A public holiday counts as a working day, so a payment may arrive a day or more later. A row that may arrive late is still paid.</p>
               </section>
 
               <section class="card" aria-labelledby="run-timeline-title">

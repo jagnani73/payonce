@@ -70,6 +70,19 @@ const EVENT_KINDS = {
   lock: "Duplicate refused",
   closed: "Closed",
   error: "Error",
+  outbox: "Message draft",
+};
+
+const AUDIENCES = {
+  supplier: "Supplier",
+  bank: "Bank",
+};
+
+const DRAFT_STATES = {
+  draft: { label: "Draft", tone: "waiting" },
+  copied: { label: "Copied", tone: "active" },
+  sent: { label: "Marked sent", tone: "paid" },
+  dismissed: { label: "Dismissed", tone: "neutral" },
 };
 
 // Airwallex failure codes seen in the sandbox, as listed in the repo's CLAUDE.md.
@@ -98,6 +111,7 @@ const els = {
   bankOutcome: byId("bank-outcome"),
   emailThread: byId("email-thread"),
   invoiceNumber: byId("invoice-number"),
+  dueDate: byId("due-date"),
   startedBy: byId("started-by"),
   startButton: byId("start-button"),
   newError: byId("new-error"),
@@ -118,6 +132,7 @@ const els = {
   review: byId("review"),
   bankChange: byId("bank-change"),
   approval: byId("approval"),
+  outbox: byId("outbox"),
   payments: byId("payments"),
   payAgain: byId("pay-again"),
   payAgainResult: byId("pay-again-result"),
@@ -227,6 +242,12 @@ const state = {
   matchDrafts: new Map(),
   dismissing: false,
   dismissError: null,
+  // Messages to send: the name typed on the card, notes typed per draft, and the
+  // action under way with any error it came back with.
+  outboxName: null,
+  outboxNotes: new Map(),
+  outboxBusy: null,
+  outboxError: null,
 };
 
 // Signatures of what each section last drew, so an unchanged poll touches nothing.
@@ -799,6 +820,7 @@ function renderForm() {
   // Read-only rather than disabled, so the name keeps focus while the incident starts.
   els.startedBy.readOnly = state.creating;
   els.invoiceNumber.readOnly = state.creating;
+  els.dueDate.readOnly = state.creating;
   els.startButton.disabled = locked;
   setText(els.startButton, state.creating ? "Starting" : "Start incident");
   showMessage(els.newError, state.createError ?? state.optionsError);
@@ -825,6 +847,16 @@ async function startIncident(event) {
   if (invoiceNumber !== "") {
     body.invoiceId = invoiceNumber;
   }
+  // The date input gives YYYY-MM-DD, or nothing when it is empty or incomplete.
+  if (els.dueDate.validity.badInput) {
+    state.createError = "Finish the due date, or clear it.";
+    renderForm();
+    els.dueDate.focus();
+    return;
+  }
+  if (els.dueDate.value !== "") {
+    body.dueDate = els.dueDate.value;
+  }
   if (state.options.scenarios.length > 0 && els.scenario.value !== "") {
     body.scenario = els.scenario.value;
   }
@@ -838,6 +870,7 @@ async function startIncident(event) {
     }
     state.started = { id: created.invoiceId, at: Date.now() };
     els.invoiceNumber.value = "";
+    els.dueDate.value = "";
     state.fastUntil = Date.now() + EXPECT_WORK_MS;
     window.scrollTo(0, 0);
     select(created.invoiceId);
@@ -1027,6 +1060,8 @@ function renderHeader(detail) {
     typeof obligation.sourceCurrency === "string" && obligation.sourceCurrency !== obligation.currency
       ? obligation.sourceCurrency
       : null;
+  const dueDate = typeof obligation.dueDate === "string" ? obligation.dueDate : null;
+  const duePassed = dueDate !== null && dueDate < localToday();
   if (
     changed("header", [
       invoiceId,
@@ -1034,6 +1069,8 @@ function renderHeader(detail) {
       obligation.currency,
       obligation.amountMinor,
       paidFrom,
+      dueDate,
+      duePassed,
       obligation.state,
       obligation.origin,
       startedBy,
@@ -1090,6 +1127,12 @@ function renderHeader(detail) {
           formatMoney(obligation.amountMinor, obligation.currency),
         ),
         paidFrom !== null && h("p", { class: "hint" }, `Paid from ${paidFrom}`),
+        dueDate !== null &&
+          h(
+            "p",
+            { class: duePassed ? "hint hint--caution" : "hint" },
+            duePassed ? `Due ${dueDate}, which has passed` : `Due ${dueDate}`,
+          ),
         h(
           "div",
           { class: "detail__state" },
@@ -1572,6 +1615,57 @@ function caution(message) {
   return h("div", { class: "caution" }, icon("warning"), h("p", { class: "caution__title" }, message));
 }
 
+// ---------- arrival estimates ----------
+
+// Today on this computer's calendar, as YYYY-MM-DD.
+function localToday() {
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
+// An arrival estimate as the server words it, or null. The page keeps no copy of
+// the rules or the words, so it cannot drift from pnpm approve and the timeline.
+function adviceOf(value) {
+  return value !== null &&
+    typeof value === "object" &&
+    typeof value.text === "string" &&
+    typeof value.route === "string" &&
+    typeof value.note === "string"
+    ? value
+    : null;
+}
+
+function cautionSub(atRisk, text) {
+  return h("span", { class: atRisk === true ? "terms__sub terms__sub--caution" : "terms__sub" }, text);
+}
+
+// When the payment usually arrives if it is sent today, shown only when the
+// estimate counts from an earlier day. It is not part of what is approved.
+function sentTodayOf(advice) {
+  const today = advice.sentToday;
+  return today !== null && typeof today === "object" && typeof today.text === "string" ? today : null;
+}
+
+// The Arrival row of an approval card, or nothing when the terms carry no estimate.
+function arrivalTerm(advice) {
+  if (advice === null) {
+    return [];
+  }
+  const today = sentTodayOf(advice);
+  return [
+    h("dt", null, "Arrival"),
+    h(
+      "dd",
+      null,
+      advice.route,
+      typeof advice.due === "string" && cautionSub(advice.atRisk, sentence(advice.due)),
+      today !== null && cautionSub(today.atRisk, sentence(today.text)),
+      h("span", { class: "terms__sub" }, withPeriod(advice.note)),
+    ),
+  ];
+}
+
 // A held invoice's payment is its first, so the card does not call it a replacement.
 function isHeldPayment(approval) {
   return approval.terms?.action === "pay";
@@ -1672,6 +1766,8 @@ function buildApproval(invoiceId, approval) {
 
   // Set on a payment from another currency's wallet. The approval covers this quote.
   const fx = fxOf(terms);
+  // Set on an invoice with a due date. Advice only: it never stops a payment.
+  const arrival = adviceOf(approval.arrivalAdvice);
   const validTo = fx === null ? null : parseDate(fx.validTo);
   const rateSub =
     fx === null
@@ -1734,6 +1830,7 @@ function buildApproval(invoiceId, approval) {
             "Not the account the original payment went to",
           ),
       ),
+      arrivalTerm(arrival),
       held
         ? [
             term("Why it was held", sentence(evidence.reason)),
@@ -2635,10 +2732,257 @@ function renderMain() {
   renderReview(detail);
   renderBankChange(detail);
   renderApproval(detail);
+  renderOutbox(detail);
   renderPayments(detail);
   renderEmails(detail);
   els.placeholder.hidden = true;
   els.detail.hidden = false;
+}
+
+// ---------- messages to send ----------
+
+let outboxRefs = null;
+
+function draftText(draft) {
+  return `Subject: ${draft.subject}\n\n${draft.body}`;
+}
+
+function draftWarnings(draft) {
+  const warnings = [];
+  if (draft.intact === false) {
+    warnings.push(caution("This text no longer matches the hash recorded on the timeline when it was drafted."));
+  }
+  if (typeof draft.noLongerFits === "string") {
+    warnings.push(
+      caution(`Since this was drafted, it no longer fits: ${draft.noLongerFits}. Dismiss it, and draft another if one fits.`),
+    );
+  } else if (Array.isArray(draft.changed) && draft.changed.length > 0) {
+    warnings.push(caution(`Since this was drafted, ${draft.changed.join(", ")}. Dismiss it and draft it again.`));
+  }
+  return warnings;
+}
+
+function draftWho(draft) {
+  if (draft.state === "sent") {
+    return `Drafted by ${draft.createdBy}. Marked sent by ${draft.sentBy ?? ""}.`;
+  }
+  if (draft.state === "dismissed") {
+    return `Drafted by ${draft.createdBy}. Dismissed by ${draft.dismissedBy ?? ""}${draft.dismissNote ? `: ${draft.dismissNote}` : ""}.`;
+  }
+  return `Drafted by ${draft.createdBy}${draft.copiedBy ? `, copied by ${draft.copiedBy}` : ""}.`;
+}
+
+function buildDraft(invoiceId, draft) {
+  const open = draft.state === "draft" || draft.state === "copied";
+  const head = h(
+    "div",
+    { class: "outbox-draft__head" },
+    h("span", { class: "outbox-draft__label" }, draft.label),
+    h("span", { class: "tag" }, AUDIENCES[draft.audience] ?? humanize(draft.audience)),
+    badge(DRAFT_STATES[draft.state], draft.state, false),
+  );
+  if (!open) {
+    return h("li", { class: "outbox-draft outbox-draft--closed" }, head, h("p", { class: "hint" }, draftWho(draft)));
+  }
+  const text = h("textarea", {
+    class: "outbox-draft__text",
+    id: `draft-text-${draft.id}`,
+    readonly: true,
+    rows: "9",
+    spellcheck: "false",
+    "aria-label": `${draft.label}, the text to copy`,
+  });
+  text.value = draftText(draft);
+  const note = h("input", {
+    type: "text",
+    id: `draft-note-${draft.id}`,
+    maxlength: "200",
+    autocomplete: "off",
+    placeholder: "Why, if you dismiss it (optional)",
+    "aria-label": "Why you dismiss it, optional",
+  });
+  note.value = state.outboxNotes.get(draft.id) ?? "";
+  note.addEventListener("input", () => state.outboxNotes.set(draft.id, note.value));
+  const copy = h("button", { class: "button button--small", type: "button" }, "Copy");
+  copy.addEventListener("click", () => copyDraft(invoiceId, draft, text));
+  const sent = h("button", { class: "button button--small button--primary", type: "button" }, "Mark sent");
+  sent.addEventListener("click", () => moveDraft(invoiceId, draft.id, "sent"));
+  const dismiss = h("button", { class: "button button--small", type: "button" }, "Dismiss");
+  dismiss.addEventListener("click", () => moveDraft(invoiceId, draft.id, "dismiss"));
+  return h(
+    "li",
+    { class: "outbox-draft" },
+    head,
+    draftWarnings(draft),
+    draft.template === "callback-notice" &&
+      h(
+        "p",
+        { class: "hint" },
+        "Send it to the supplier's contact on file, not as a reply to the email that asked for the change.",
+      ),
+    text,
+    h("div", { class: "outbox-draft__actions" }, copy, sent, dismiss),
+    note,
+    h("p", { class: "hint" }, draftWho(draft)),
+  );
+}
+
+function buildOffer(invoiceId, offer) {
+  const button = h("button", { class: "button button--small", type: "button" }, "Draft it");
+  button.addEventListener("click", () => draftMessage(invoiceId, offer.template));
+  return h(
+    "li",
+    { class: "outbox-offer" },
+    h(
+      "div",
+      { class: "outbox-offer__text" },
+      h("span", { class: "outbox-draft__label" }, offer.label),
+      h("span", { class: "tag" }, AUDIENCES[offer.audience] ?? humanize(offer.audience)),
+      typeof offer.why === "string" && h("p", { class: "hint" }, withPeriod(offer.why)),
+    ),
+    button,
+  );
+}
+
+function buildOutbox(invoiceId, outbox) {
+  const focus = focusedControl(els.outbox);
+  const name = h("input", {
+    type: "text",
+    id: "outbox-name",
+    autocomplete: "name",
+    maxlength: "80",
+  });
+  name.value = state.outboxName ?? readStoredName();
+  name.addEventListener("input", () => {
+    state.outboxName = name.value;
+  });
+  const suggested = outbox.offers.filter((offer) => offer.suggested);
+  const others = outbox.offers.filter((offer) => !offer.suggested);
+  const drafts = [...outbox.drafts].reverse();
+  const error = h("p", { class: "form-error", role: "alert", hidden: true });
+  outboxRefs = { name, error, buttons: [] };
+  const children = [
+    h("div", { class: "approval__head" }, h("h2", { id: "outbox-title" }, "Messages to send")),
+    h(
+      "p",
+      { class: "hint" },
+      "PayOnce never sends these. Copy one into your own email, send it to the contact on file, then mark it sent.",
+    ),
+    h("label", { class: "field" }, h("span", { class: "field__label" }, "Your name"), name),
+    error,
+    suggested.length > 0 && h("ul", { class: "outbox-offers" }, suggested.map((offer) => buildOffer(invoiceId, offer))),
+    others.length > 0 && [
+      h("p", { class: "bank-form__title" }, suggested.length > 0 ? "Other messages" : "Messages that fit"),
+      h("ul", { class: "outbox-offers" }, others.map((offer) => buildOffer(invoiceId, offer))),
+    ],
+    outbox.notOffered.map((item) => h("p", { class: "hint" }, `${item.label} is not offered. ${item.why}`)),
+    drafts.length > 0 && h("ul", { class: "outbox-drafts" }, drafts.map((draft) => buildDraft(invoiceId, draft))),
+  ];
+  els.outbox.replaceChildren(...children.flat(Infinity).filter((child) => child instanceof Node));
+  outboxRefs.buttons = [...els.outbox.querySelectorAll("button")];
+  restoreFocus(focus);
+}
+
+function syncOutboxControls() {
+  if (outboxRefs === null) {
+    return;
+  }
+  for (const button of outboxRefs.buttons) {
+    button.disabled = state.outboxBusy !== null;
+  }
+  if (liveMessage("outbox", state.outboxError) === null) {
+    state.outboxError = null;
+  }
+  showMessage(outboxRefs.error, state.outboxError?.message);
+}
+
+function renderOutbox(detail) {
+  const invoiceId = detail.obligation.invoiceId;
+  const outbox = detail.outbox ?? { drafts: [], offers: [], notOffered: [] };
+  const empty = outbox.drafts.length === 0 && outbox.offers.length === 0 && outbox.notOffered.length === 0;
+  if (changed("outbox", [invoiceId, outbox])) {
+    if (empty) {
+      outboxRefs = null;
+      els.outbox.hidden = true;
+      els.outbox.replaceChildren();
+    } else {
+      buildOutbox(invoiceId, outbox);
+      els.outbox.hidden = false;
+    }
+  }
+  syncOutboxControls();
+}
+
+function outboxName() {
+  const name = (outboxRefs?.name.value ?? "").trim();
+  if (name === "") {
+    state.outboxError = actionError("outbox", "Enter your name first.");
+    syncOutboxControls();
+    outboxRefs?.name.focus();
+    return null;
+  }
+  storeName(name);
+  return name;
+}
+
+async function outboxAction(invoiceId, label, path, body) {
+  if (state.outboxBusy !== null) {
+    return;
+  }
+  state.outboxBusy = label;
+  state.outboxError = null;
+  syncOutboxControls();
+  let failure = null;
+  try {
+    await api(`${incidentPath(invoiceId)}/outbox${path}`, { method: "POST", body });
+  } catch (error) {
+    failure = error.message;
+  }
+  try {
+    await refresh();
+  } finally {
+    state.outboxBusy = null;
+    if (failure !== null && state.selectedId === invoiceId) {
+      state.outboxError = actionError("outbox", failure);
+    }
+    syncOutboxControls();
+  }
+}
+
+function draftMessage(invoiceId, template) {
+  const createdBy = outboxName();
+  if (createdBy !== null) {
+    outboxAction(invoiceId, "draft", "", { template, createdBy });
+  }
+}
+
+function moveDraft(invoiceId, draftId, move) {
+  const by = outboxName();
+  if (by === null) {
+    return;
+  }
+  const body =
+    move === "sent"
+      ? { sentBy: by }
+      : { dismissedBy: by, note: (state.outboxNotes.get(draftId) ?? "").trim() };
+  outboxAction(invoiceId, move, `/${draftId}/${move}`, body);
+}
+
+// Copies the text to the clipboard, or selects it when the browser will not, and
+// records the copy on the timeline once.
+async function copyDraft(invoiceId, draft, text) {
+  let copied = false;
+  try {
+    await navigator.clipboard.writeText(draftText(draft));
+    copied = true;
+  } catch {
+    text.focus();
+    text.select();
+  }
+  if (copied && draft.state === "draft") {
+    const name = (outboxRefs?.name.value ?? "").trim();
+    outboxAction(invoiceId, "copy", `/${draft.id}/copied`, name === "" ? {} : { copiedBy: name });
+  }
 }
 
 // ---------- pay runs ----------
@@ -2988,6 +3332,10 @@ function buildRunRow(row, columns) {
   if (typeof row.note === "string" && row.note !== "" && row.state === "dropped") {
     notes.push(`Not released: ${row.note}`);
   }
+  // When a pay row usually arrives, and the fee PayOnce last saw on its route.
+  const arrival = pays ? adviceOf(row.arrivalAdvice) : null;
+  const today = arrival === null ? null : sentTodayOf(arrival);
+  const fee = typeof row.feeSeen === "string" && row.feeSeen !== "" ? `; ${row.feeSeen}` : "";
   return h(
     "li",
     { class: row.action === "skip" || row.state === "dropped" ? "run-row is-skipped" : "run-row" },
@@ -3004,6 +3352,18 @@ function buildRunRow(row, columns) {
       chip,
     ),
     h("p", { class: "run-row__payee" }, row.payTo ?? row.supplier ?? cellOf(columns, row, "supplier")),
+    arrival !== null &&
+      h(
+        "p",
+        { class: arrival.atRisk === true ? "run-row__arrival run-row__arrival--caution" : "run-row__arrival" },
+        `${sentence(arrival.text)}${fee}`,
+      ),
+    today !== null &&
+      h(
+        "p",
+        { class: today.atRisk === true ? "run-row__arrival run-row__arrival--caution" : "run-row__arrival" },
+        sentence(today.text),
+      ),
     tags.length > 0 && h("p", { class: "run-row__tags" }, tags),
     notes.length > 0 && h("ul", { class: "run-row__reasons" }, notes.map((note) => h("li", null, withPeriod(note)))),
   );
@@ -3099,6 +3459,32 @@ function runApprovalLead(approval, terms) {
     default:
       return "";
   }
+}
+
+// The Arrival row of a run's approval card: when each row usually arrives, as the
+// terms carry it. A request from before the estimates has none.
+function runArrivalTerm(approval) {
+  const rows = Array.isArray(approval.arrivalAdvice)
+    ? approval.arrivalAdvice.filter((entry) => entry !== null && typeof entry === "object" && adviceOf(entry.advice) !== null)
+    : [];
+  if (rows.length === 0) {
+    return [];
+  }
+  return [
+    h("dt", null, "Arrival"),
+    h(
+      "dd",
+      null,
+      rows.map((entry) => {
+        const today = sentTodayOf(entry.advice);
+        return [
+          cautionSub(entry.advice.atRisk, `Row ${entry.line}, ${entry.invoiceId}: ${entry.advice.text}`),
+          today !== null && cautionSub(today.atRisk, `Row ${entry.line}, ${today.text}`),
+        ];
+      }),
+      h("span", { class: "terms__sub" }, withPeriod(rows[0].advice.note)),
+    ),
+  ];
 }
 
 // The last thing the run's timeline says it is waiting on.
@@ -3261,6 +3647,7 @@ function renderRunApproval(run) {
               ),
             ),
           ],
+        runArrivalTerm(approval),
       ),
       h(
         "p",
