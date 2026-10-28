@@ -144,6 +144,22 @@ const els = {
   runApproval: byId("run-approval"),
   runCash: byId("run-cash"),
   runCancel: byId("run-cancel"),
+  emailForm: byId("email-form"),
+  emailFile: byId("email-file"),
+  emailPaste: byId("email-paste"),
+  emailUploadedBy: byId("email-uploaded-by"),
+  emailButton: byId("email-button"),
+  emailReader: byId("email-reader"),
+  emailFreeTier: byId("email-free-tier"),
+  emailError: byId("email-error"),
+  inboxError: byId("inbox-error"),
+  inboxEmpty: byId("inbox-empty"),
+  inboxList: byId("inbox-list"),
+  inboxDetail: byId("inbox-detail"),
+  inboxHeader: byId("inbox-header"),
+  inboxEmail: byId("inbox-email"),
+  inboxMatch: byId("inbox-match"),
+  inboxDismiss: byId("inbox-dismiss"),
 };
 
 const state = {
@@ -197,6 +213,18 @@ const state = {
   runCancelling: false,
   runCancelError: null,
   runDrafts: new Map(),
+  // The inbox: the list, the upload on screen, and what the last action on one came back with.
+  inbox: null,
+  inboxError: null,
+  upload: null,
+  uploadId: null,
+  uploadLoadError: null,
+  adding: false,
+  addError: null,
+  delivering: false,
+  deliverError: null,
+  dismissing: false,
+  dismissError: null,
 };
 
 // Signatures of what each section last drew, so an unchanged poll touches nothing.
@@ -469,6 +497,9 @@ async function loadOptions() {
       runColumns: Array.isArray(options.runColumns) ? options.runColumns : [],
       maxRunRows: typeof options.maxRunRows === "number" ? options.maxRunRows : null,
       maxRunFileChars: typeof options.maxRunFileChars === "number" ? options.maxRunFileChars : null,
+      maxEmailBytes: typeof options.maxEmailBytes === "number" ? options.maxEmailBytes : null,
+      reader: typeof options.reader === "string" ? options.reader : "",
+      readerIsModel: options.readerIsModel === true,
     };
     state.optionsError = null;
   } catch (error) {
@@ -535,6 +566,42 @@ async function loadRunDetail(runId) {
   }
 }
 
+async function loadInbox() {
+  try {
+    const data = await api("/api/inbox");
+    state.inbox = Array.isArray(data.uploads) ? data.uploads : [];
+    state.inboxError = null;
+  } catch (error) {
+    state.inboxError = `Could not refresh the inbox. ${error.message}`;
+  }
+}
+
+// "inbox/12" is upload 12. A slash cannot be in an invoice number.
+function inboxIdOf(id) {
+  const match = /^inbox\/([1-9][0-9]{0,9})$/.exec(String(id ?? ""));
+  return match === null ? null : Number(match[1]);
+}
+
+async function loadUploadDetail(uploadId) {
+  const id = state.selectedId;
+  try {
+    const detail = await api(`/api/inbox/${uploadId}`);
+    if (state.selectedId !== id) {
+      return;
+    }
+    if (detail.upload === null || typeof detail.upload !== "object" || !Array.isArray(detail.candidates)) {
+      throw new Error("The server sent an upload this page could not read.");
+    }
+    state.upload = detail;
+    state.uploadId = uploadId;
+    state.uploadLoadError = null;
+  } catch (error) {
+    if (state.selectedId === id) {
+      state.uploadLoadError = error.message;
+    }
+  }
+}
+
 async function loadDetail() {
   const id = state.selectedId;
   if (id === null) {
@@ -543,6 +610,11 @@ async function loadDetail() {
   const runId = runIdOf(id);
   if (runId !== null) {
     await loadRunDetail(runId);
+    return;
+  }
+  const uploadId = inboxIdOf(id);
+  if (uploadId !== null) {
+    await loadUploadDetail(uploadId);
     return;
   }
   try {
@@ -623,7 +695,7 @@ function refresh() {
   refreshing = (async () => {
     do {
       refreshAgain = false;
-      await Promise.all([loadOptions(), loadList(), loadRuns(), loadDetail(), loadCash()]);
+      await Promise.all([loadOptions(), loadList(), loadRuns(), loadInbox(), loadDetail(), loadCash()]);
       if (state.selectedId === null && (state.incidents ?? []).length > 0) {
         setSelected(state.incidents[0].invoiceId);
         refreshAgain = true;
@@ -664,8 +736,11 @@ function setSelected(id) {
   state.runApproveError = null;
   state.runCheckError = null;
   state.runCancelError = null;
+  state.uploadLoadError = null;
+  state.deliverError = null;
+  state.dismissError = null;
   const hash =
-    id === null ? "" : runIdOf(id) !== null ? `#${id}` : `#${encodeURIComponent(id)}`;
+    id === null ? "" : runIdOf(id) !== null || inboxIdOf(id) !== null ? `#${id}` : `#${encodeURIComponent(id)}`;
   if (window.location.hash !== hash) {
     window.history.replaceState(null, "", hash === "" ? window.location.pathname : hash);
   }
@@ -1305,7 +1380,34 @@ function buildEmail(email, unverified) {
       ),
       h("dt", null, "Subject"),
       h("dd", { class: "email__subject" }, email.subject),
+      Number.isInteger(email.uploadId) && [
+        h("dt", null, "Uploaded"),
+        h(
+          "dd",
+          null,
+          `by ${email.uploadedBy ?? ""}, `,
+          h("a", { href: `#inbox/${email.uploadId}` }, `email ${email.uploadId}`),
+        ),
+      ],
+      Array.isArray(email.replyTo) &&
+        email.replyTo.length > 0 && [
+          h("dt", null, "Reply-To"),
+          h(
+            "dd",
+            null,
+            email.replyTo.map((address) =>
+              h(
+                "div",
+                null,
+                h("span", { class: "email__from" }, addressParts(String(address))),
+                isUnverified(String(address), unverified.map((entry) => entry.toLowerCase())) &&
+                  h("span", { class: "flag" }, icon("warning"), "Does not match the supplier on file"),
+              ),
+            ),
+          ),
+        ],
     ),
+    Number.isInteger(email.uploadId) && emailExtras(email),
     h("p", { class: "email__body" }, email.body),
   );
 }
@@ -1350,6 +1452,8 @@ function buildFindings(findings, unverified, emailCount) {
       h("dd", null, findings.claimsNonReceipt === true ? "Yes" : "No"),
       h("dt", null, "Asks for new bank details"),
       h("dd", { class: asksForNewDetails ? "is-caution" : null }, asksForNewDetails ? "Yes" : "No"),
+      h("dt", null, "Asks to hold, cancel or not pay"),
+      h("dd", { class: findings.asksNotToPay === true ? "is-caution" : null }, findings.asksNotToPay === true ? "Yes" : "No"),
     ),
     readBy !== "" && h("p", { class: "hint" }, `Reader: ${readBy}`),
   );
@@ -2480,6 +2584,13 @@ async function submitBankChange(invoiceId) {
 
 function renderMain() {
   const id = state.selectedId;
+  if (inboxIdOf(id) !== null) {
+    els.detail.hidden = true;
+    els.runDetail.hidden = true;
+    renderInboxMain();
+    return;
+  }
+  els.inboxDetail.hidden = true;
   if (runIdOf(id) !== null) {
     els.detail.hidden = true;
     renderRunMain();
@@ -2550,7 +2661,7 @@ function runCountsText(counts) {
 function syncNames(source) {
   const value = source.value;
   storeName(value);
-  for (const input of [els.startedBy, els.runUploadedBy]) {
+  for (const input of [els.startedBy, els.runUploadedBy, els.emailUploadedBy]) {
     if (input !== source && document.activeElement !== input) {
       input.value = value;
     }
@@ -3386,6 +3497,529 @@ function renderRunMain() {
   els.runDetail.hidden = false;
 }
 
+// ---------- inbox ----------
+
+const UPLOAD_STATES = {
+  waiting: { label: "Waiting", tone: "waiting" },
+  delivered: { label: "Delivered", tone: "paid" },
+  dismissed: { label: "Dismissed", tone: "neutral" },
+};
+
+const WHERE_WORDS = { subject: "the subject", body: "the text", attachment: "an attachment's name" };
+
+let matchRefs = null;
+let dismissRefs = null;
+
+function bytesText(bytes) {
+  if (typeof bytes !== "number" || !Number.isFinite(bytes)) {
+    return "";
+  }
+  return bytes < 1024 ? `${bytes} bytes` : `${Math.max(1, Math.round(bytes / 1024)).toLocaleString("en-US")} KB`;
+}
+
+function toBase64(bytes) {
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  }
+  return btoa(binary);
+}
+
+function renderEmailForm() {
+  const options = state.options;
+  els.emailButton.disabled = state.adding || options === null;
+  els.emailFile.disabled = state.adding;
+  els.emailPaste.readOnly = state.adding;
+  els.emailUploadedBy.readOnly = state.adding;
+  setText(els.emailButton, state.adding ? "Adding the email" : "Add email");
+  setText(els.emailReader, options === null || options.reader === "" ? "" : `Emails are read by: ${options.reader}.`);
+  setClass(els.emailFreeTier, options?.readerIsModel === true ? "hint is-caution" : "hint");
+  const error = state.addError;
+  if (!changed("addError", error)) {
+    return;
+  }
+  if (error === null) {
+    els.emailError.hidden = true;
+    els.emailError.replaceChildren();
+    return;
+  }
+  els.emailError.replaceChildren(
+    withPeriod(error.message),
+    error.id !== null && " ",
+    error.id !== null && h("a", { href: `#inbox/${error.id}` }, `Open email ${error.id}`),
+  );
+  els.emailError.hidden = false;
+}
+
+async function submitEmail(event) {
+  event.preventDefault();
+  if (state.adding) {
+    return;
+  }
+  const file = els.emailFile.files?.[0] ?? null;
+  const pasted = els.emailPaste.value;
+  const uploadedBy = els.emailUploadedBy.value.trim();
+  const missing =
+    file === null && pasted.trim() === ""
+      ? { field: els.emailFile, message: "Choose an .eml file or paste the raw email." }
+      : file !== null && pasted.trim() !== ""
+        ? { field: els.emailPaste, message: "Choose a file or paste the email, not both." }
+        : uploadedBy === ""
+          ? { field: els.emailUploadedBy, message: "Enter your name to add an email." }
+          : null;
+  if (missing !== null) {
+    state.addError = { message: missing.message, id: null };
+    renderEmailForm();
+    missing.field.focus();
+    return;
+  }
+  const limit = state.options?.maxEmailBytes ?? 2 * 1024 * 1024;
+  state.adding = true;
+  state.addError = null;
+  renderEmailForm();
+  try {
+    // A file goes as its bytes, so mail in another character set is decoded once, on the server.
+    const bytes = file !== null ? new Uint8Array(await file.arrayBuffer()) : new TextEncoder().encode(pasted);
+    if (bytes.length > limit) {
+      throw new Error("The email is larger than 2 MB. Forward it without attachments, or paste its source without the attachment parts.");
+    }
+    const created = await api("/api/inbox", {
+      method: "POST",
+      body: { uploadedBy, source: file !== null ? "file" : "paste", fileName: file?.name, eml: toBase64(bytes) },
+    });
+    if (!Number.isInteger(created.id)) {
+      throw new Error("The server did not name the new upload.");
+    }
+    els.emailFile.value = "";
+    els.emailPaste.value = "";
+    window.scrollTo(0, 0);
+    select(`inbox/${created.id}`);
+  } catch (error) {
+    state.addError = { message: error.message, id: Number.isInteger(error.data?.id) ? error.data.id : null };
+  } finally {
+    state.adding = false;
+    renderEmailForm();
+  }
+}
+
+function createUploadNode(key) {
+  const node = createRunNode(key);
+  return node;
+}
+
+function updateUploadNode(node, upload, key) {
+  const button = node.firstElementChild;
+  const entry = UPLOAD_STATES[upload.state];
+  const badgeNode = button.querySelector(".badge");
+  setClass(button, upload.state === "waiting" ? "incident" : "incident is-done");
+  setText(button.querySelector(".incident__id"), `Email ${upload.id}`);
+  setClass(badgeNode, badgeClass(entry));
+  setText(badgeNode, entry?.label ?? humanize(upload.state));
+  setText(button.querySelector(".incident__amount"), upload.sender);
+  setText(button.querySelector(".incident__supplier"), "");
+  setText(
+    button.querySelector(".incident__headline"),
+    upload.state === "delivered" ? `${upload.subject} (on ${upload.invoiceId})` : upload.subject,
+  );
+  button.querySelector(".incident__busy").hidden = true;
+  if (key === state.selectedId) {
+    button.setAttribute("aria-current", "true");
+  } else {
+    button.removeAttribute("aria-current");
+  }
+}
+
+function renderInboxList() {
+  const uploads = state.inbox ?? [];
+  reconcile(
+    els.inboxList,
+    uploads,
+    (upload) => `inbox/${upload.id}`,
+    (node, upload, key) => {
+      const target = node ?? createUploadNode(key);
+      updateUploadNode(target, upload, key);
+      return target;
+    },
+  );
+  const waiting = uploads.filter((upload) => upload.state === "waiting").length;
+  setText(byId("inbox-title"), waiting > 0 ? `Inbox (${waiting} waiting)` : "Inbox");
+  els.inboxEmpty.hidden = state.inbox === null || uploads.length > 0;
+  showMessage(els.inboxError, state.inboxError);
+}
+
+function currentUpload() {
+  const uploadId = inboxIdOf(state.selectedId);
+  return uploadId !== null && state.uploadId === uploadId ? state.upload : null;
+}
+
+// PayOnce's notes, the attachments it did not open, and the text it found inside
+// the email's styles, each in PayOnce's own frame around the sender's text.
+function emailExtras(email) {
+  const notes = Array.isArray(email.notes) ? email.notes : [];
+  const attachments = Array.isArray(email.attachments) ? email.attachments : [];
+  const styleText = typeof email.styleText === "string" ? email.styleText : "";
+  return [
+    notes.length > 0 &&
+      h(
+        "div",
+        { class: "caution" },
+        icon("warning"),
+        h(
+          "p",
+          { class: "caution__title" },
+          email.partial === true ? "Part of this email could not be read, so a person reads it" : "Notes from PayOnce",
+        ),
+        notes.map((text) => h("p", { class: "caution__detail" }, withPeriod(text))),
+      ),
+    attachments.length > 0 &&
+      h(
+        "div",
+        { class: "email__extra" },
+        h("p", { class: "findings__title" }, "Attachments, not opened by PayOnce"),
+        h(
+          "ul",
+          { class: "email__attachments" },
+          attachments.map((attachment) =>
+            h("li", null, `${attachment.name} (${attachment.type}, ${bytesText(attachment.bytes)})`),
+          ),
+        ),
+      ),
+    styleText !== "" &&
+      h(
+        "div",
+        { class: "email__extra" },
+        h("p", { class: "findings__title" }, "Text found inside styles"),
+        h("p", { class: "hint" }, "Strings and other text from the email's HTML styles and scripts, which a mail client may draw. The reader reads this too."),
+        h("p", { class: "email__body" }, styleText),
+      ),
+  ];
+}
+
+function renderInboxHeader(detail) {
+  const upload = detail.upload;
+  if (!changed("inboxHeader", [upload.id, upload.state, upload.invoiceId, upload.deliveredBy, upload.dismissedBy, upload.dismissNote])) {
+    return;
+  }
+  const entry = UPLOAD_STATES[upload.state];
+  els.inboxHeader.replaceChildren(
+    h(
+      "div",
+      { class: "detail__title" },
+      h("p", { class: "eyebrow" }, "Inbox"),
+      h("h1", null, `Email ${upload.id}`),
+      h("p", { class: "detail__supplier" }, upload.subject),
+      upload.state === "delivered" &&
+        h(
+          "p",
+          { class: "detail__started" },
+          `Delivered by ${upload.deliveredBy ?? ""} to `,
+          h("a", { href: `#${encodeURIComponent(upload.invoiceId ?? "")}` }, upload.invoiceId ?? ""),
+          " ",
+          timeNode(upload.deliveredAt),
+        ),
+      upload.state === "dismissed" &&
+        h("p", { class: "detail__started" }, `Dismissed by ${upload.dismissedBy ?? ""}: ${upload.dismissNote ?? ""}`),
+    ),
+    h("div", { class: "detail__facts" }, h("span", { class: badgeClass(entry) }, entry?.label ?? humanize(upload.state))),
+  );
+}
+
+function renderInboxEmail(detail) {
+  const upload = detail.upload;
+  const same = Array.isArray(detail.sameMessageId) ? detail.sameMessageId : [];
+  if (!changed("inboxEmail", [upload, same])) {
+    return;
+  }
+  const replyTo = Array.isArray(upload.replyTo) ? upload.replyTo : [];
+  const source = upload.fileName ?? (upload.source === "paste" ? "pasted source" : "file");
+  els.inboxEmail.replaceChildren(
+    h(
+      "div",
+      { class: "email" },
+      h(
+        "dl",
+        { class: "email__head" },
+        h("dt", null, "From"),
+        h("dd", null, h("span", { class: "email__from" }, addressParts(upload.sender))),
+        upload.senderName !== "" && [h("dt", null, "Name in the email"), h("dd", { class: "email__muted" }, `${upload.senderName} (not checked)`)],
+        h("dt", null, "From as written"),
+        h("dd", { class: "email__muted" }, upload.fromAsWritten),
+        replyTo.length > 0 && [
+          h("dt", null, "Reply-To"),
+          h("dd", null, replyTo.map((address) => h("div", { class: "email__from" }, addressParts(address)))),
+        ],
+        h("dt", null, "Subject"),
+        h("dd", { class: "email__subject" }, upload.subject),
+        upload.dateAsWritten !== "" && [h("dt", null, "Date in the email"), h("dd", null, upload.dateAsWritten)],
+        upload.messageId !== null && [h("dt", null, "Message-ID"), h("dd", { class: "email__muted" }, upload.messageId)],
+        h("dt", null, "Uploaded"),
+        h("dd", null, `by ${upload.uploadedBy} `, timeNode(upload.uploadedAt)),
+        h("dt", null, "Upload"),
+        h("dd", { class: "email__muted" }, `${source}, ${bytesText(upload.rawBytes)}, SHA-256 ${shortId(upload.rawSha256)}`),
+      ),
+      same.length > 0 &&
+        h(
+          "div",
+          { class: "caution" },
+          icon("warning"),
+          h("p", { class: "caution__title" }, "Another upload has the same Message-ID and says something different"),
+          same.map((id) => h("p", { class: "caution__detail" }, h("a", { href: `#inbox/${id}` }, `Email ${id}`))),
+        ),
+      emailExtras(upload),
+      h("p", { class: "email__body" }, upload.body === "" ? "(no text)" : upload.body),
+      h("p", { class: "hint" }, "When the email reaches an invoice, its sender and Reply-To are compared with the supplier's domain on file. Nothing in an email proves who sent it."),
+    ),
+  );
+}
+
+function candidateRow(candidate, checked) {
+  const radio = h("input", { type: "radio", name: "inbox-invoice", value: candidate.invoiceId });
+  radio.checked = checked;
+  const how = candidate.exact
+    ? `Named in ${WHERE_WORDS[candidate.where] ?? "the email"}`
+    : `Nearly matches a number in ${WHERE_WORDS[candidate.where] ?? "the email"}`;
+  const sender = candidate.senderOnFile
+    ? "The sender matches the domain on file"
+    : candidate.supplierDomain === ""
+      ? "No supplier domain is on file, so the sender is flagged"
+      : `The sender does not match the domain on file (${candidate.supplierDomain})`;
+  return h(
+    "label",
+    { class: "candidate" },
+    radio,
+    h(
+      "span",
+      { class: "candidate__body" },
+      h(
+        "span",
+        { class: "candidate__top" },
+        h("a", { href: `#${encodeURIComponent(candidate.invoiceId)}` }, candidate.invoiceId),
+        " ",
+        badge(OBLIGATION_STATES[candidate.state], candidate.state),
+      ),
+      h("span", { class: "candidate__line" }, `${candidate.supplier}, ${formatMoney(candidate.amountMinor, candidate.currency)}`),
+      h("span", { class: "candidate__line" }, candidate.amongDigits ? `${how}, next to other digits, as in a phone number` : how),
+      h("span", { class: candidate.senderOnFile ? "candidate__line" : "candidate__line is-caution" }, sender),
+    ),
+  );
+}
+
+function matchLead(candidates, suggested) {
+  if (candidates.length === 0) {
+    return "No invoice number from the ledger is in this email. Pick the invoice it is about, or dismiss it.";
+  }
+  if (suggested !== null) {
+    return "It names one invoice. Check it, then deliver the email there.";
+  }
+  return candidates.length > 1
+    ? "It names more than one invoice. Pick the one it is about."
+    : "It names one invoice only nearly, among other digits, or one that is closed. Check before you pick it.";
+}
+
+function renderInboxMatch(detail) {
+  const upload = detail.upload;
+  const candidates = detail.candidates;
+  if (!changed("inboxMatch", [upload.id, upload.state, candidates, detail.suggested])) {
+    syncMatch();
+    return;
+  }
+  if (upload.state !== "waiting") {
+    matchRefs = null;
+    els.inboxMatch.hidden = true;
+    els.inboxMatch.replaceChildren();
+    return;
+  }
+  const other = h("input", { type: "radio", name: "inbox-invoice", value: "" });
+  other.checked = detail.suggested === null;
+  const otherInvoice = h("input", { type: "text", id: "inbox-other-invoice", autocomplete: "off", spellcheck: "false", maxlength: "40" });
+  otherInvoice.addEventListener("input", () => {
+    other.checked = true;
+  });
+  const deliveredBy = h("input", { type: "text", id: "inbox-delivered-by", autocomplete: "name", maxlength: "80" });
+  deliveredBy.value = readStoredName();
+  const button = h("button", { class: "button button--primary", type: "submit" }, "Deliver");
+  const error = h("p", { class: "form-error", role: "alert", hidden: true });
+  const form = h(
+    "form",
+    { class: "approve-form", novalidate: true },
+    h("p", { class: "approval__lead" }, matchLead(candidates, detail.suggested)),
+    candidates.map((candidate) => candidateRow(candidate, candidate.invoiceId === detail.suggested)),
+    h(
+      "label",
+      { class: "candidate" },
+      other,
+      h("span", { class: "candidate__body" }, h("span", { class: "candidate__top" }, "Another invoice"), otherInvoice),
+    ),
+    h("label", { class: "field" }, h("span", { class: "field__label" }, "Your name"), deliveredBy),
+    button,
+    error,
+    h("p", { class: "hint" }, "The agent then reads the email and decides again. An email only ever adds caution. A closed invoice keeps the email on file and is not reopened."),
+  );
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitDeliver(upload.id);
+  });
+  matchRefs = { form, otherInvoice, deliveredBy, button, error };
+  els.inboxMatch.replaceChildren(h("h2", { id: "inbox-match-title" }, "Which invoice is it about?"), form);
+  els.inboxMatch.hidden = false;
+  syncMatch();
+}
+
+function syncMatch() {
+  if (matchRefs === null) {
+    return;
+  }
+  matchRefs.button.disabled = state.delivering;
+  setText(matchRefs.button, state.delivering ? "Delivering" : "Deliver");
+  if (liveMessage("inboxMatch", state.deliverError) === null) {
+    state.deliverError = null;
+  }
+  showMessage(matchRefs.error, state.deliverError?.message);
+}
+
+async function submitDeliver(uploadId) {
+  if (state.delivering || matchRefs === null) {
+    return;
+  }
+  const picked = matchRefs.form.querySelector('input[name="inbox-invoice"]:checked');
+  const invoiceId = picked === null ? "" : picked.value === "" ? matchRefs.otherInvoice.value.trim() : picked.value;
+  const deliveredBy = matchRefs.deliveredBy.value.trim();
+  const missing =
+    invoiceId === ""
+      ? { field: matchRefs.otherInvoice, message: "Pick an invoice, or type its number." }
+      : deliveredBy === ""
+        ? { field: matchRefs.deliveredBy, message: "Enter your name to deliver the email." }
+        : null;
+  if (missing !== null) {
+    state.deliverError = actionError("inboxMatch", missing.message);
+    syncMatch();
+    missing.field.focus();
+    return;
+  }
+  state.delivering = true;
+  state.deliverError = null;
+  syncMatch();
+  try {
+    await api(`/api/inbox/${uploadId}/deliver`, { method: "POST", body: { invoiceId, deliveredBy } });
+    state.fastUntil = Date.now() + EXPECT_WORK_MS;
+    select(invoiceId);
+  } catch (error) {
+    state.deliverError = actionError("inboxMatch", error.message);
+  } finally {
+    state.delivering = false;
+    syncMatch();
+  }
+}
+
+function renderInboxDismiss(detail) {
+  const upload = detail.upload;
+  if (!changed("inboxDismiss", [upload.id, upload.state])) {
+    syncDismiss();
+    return;
+  }
+  if (upload.state !== "waiting") {
+    dismissRefs = null;
+    els.inboxDismiss.hidden = true;
+    els.inboxDismiss.replaceChildren();
+    return;
+  }
+  const dismissedBy = h("input", { type: "text", id: "inbox-dismissed-by", autocomplete: "name", maxlength: "80" });
+  dismissedBy.value = readStoredName();
+  const note = h("input", { type: "text", id: "inbox-dismiss-note", autocomplete: "off", maxlength: "200" });
+  const button = h("button", { class: "button", type: "submit" }, "Dismiss");
+  const error = h("p", { class: "form-error", role: "alert", hidden: true });
+  const form = h(
+    "form",
+    { class: "close-form", novalidate: true },
+    h("label", { class: "field" }, h("span", { class: "field__label" }, "Your name"), dismissedBy),
+    h("label", { class: "field" }, h("span", { class: "field__label" }, "Why it belongs to no invoice"), note),
+    button,
+    error,
+    h("p", { class: "hint" }, "Dismissing is final. The same email uploaded again is refused and names who dismissed it."),
+  );
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitDismiss(upload.id);
+  });
+  dismissRefs = { dismissedBy, note, button, error };
+  els.inboxDismiss.replaceChildren(h("h2", { id: "inbox-dismiss-title" }, "Dismiss this email"), form);
+  els.inboxDismiss.hidden = false;
+  syncDismiss();
+}
+
+function syncDismiss() {
+  if (dismissRefs === null) {
+    return;
+  }
+  dismissRefs.button.disabled = state.dismissing;
+  setText(dismissRefs.button, state.dismissing ? "Dismissing" : "Dismiss");
+  if (liveMessage("inboxDismiss", state.dismissError) === null) {
+    state.dismissError = null;
+  }
+  showMessage(dismissRefs.error, state.dismissError?.message);
+}
+
+async function submitDismiss(uploadId) {
+  if (state.dismissing || dismissRefs === null) {
+    return;
+  }
+  const dismissedBy = dismissRefs.dismissedBy.value.trim();
+  const note = dismissRefs.note.value.trim();
+  const missing =
+    dismissedBy === ""
+      ? { field: dismissRefs.dismissedBy, message: "Enter your name to dismiss the email." }
+      : note === ""
+        ? { field: dismissRefs.note, message: "Say why it belongs to no invoice." }
+        : null;
+  if (missing !== null) {
+    state.dismissError = actionError("inboxDismiss", missing.message);
+    syncDismiss();
+    missing.field.focus();
+    return;
+  }
+  state.dismissing = true;
+  state.dismissError = null;
+  syncDismiss();
+  let failure = null;
+  try {
+    await api(`/api/inbox/${uploadId}/dismiss`, { method: "POST", body: { dismissedBy, note } });
+  } catch (error) {
+    failure = error.message;
+  }
+  try {
+    await refresh();
+  } finally {
+    state.dismissing = false;
+    if (failure !== null && inboxIdOf(state.selectedId) === uploadId) {
+      state.dismissError = actionError("inboxDismiss", failure);
+    }
+    syncDismiss();
+  }
+}
+
+function renderInboxMain() {
+  const uploadId = inboxIdOf(state.selectedId);
+  const detail = currentUpload();
+  if (detail === null) {
+    if (state.uploadLoadError === null && Date.now() - state.selectedAt < LOADING_DELAY_MS) {
+      return;
+    }
+    setText(els.placeholderTitle, state.uploadLoadError === null ? `Loading email ${uploadId}` : `Could not load email ${uploadId}`);
+    setText(els.placeholderText, state.uploadLoadError ?? "");
+    els.inboxDetail.hidden = true;
+    els.placeholder.hidden = false;
+    showMessage(els.connection, null);
+    return;
+  }
+  showMessage(els.connection, state.uploadLoadError === null ? null : `Could not refresh this email. ${state.uploadLoadError}`);
+  renderInboxHeader(detail);
+  renderInboxEmail(detail);
+  renderInboxMatch(detail);
+  renderInboxDismiss(detail);
+  els.placeholder.hidden = true;
+  els.inboxDetail.hidden = false;
+}
+
 // ---------- cash panel ----------
 
 const WAITING_KINDS = ["awaiting-approval", "awaiting-person"];
@@ -3776,6 +4410,8 @@ function render() {
   renderRunForm();
   renderList();
   renderRunList();
+  renderEmailForm();
+  renderInboxList();
   renderCash();
   renderMain();
 }
@@ -3784,6 +4420,19 @@ function render() {
 
 els.form.addEventListener("submit", startIncident);
 els.runForm.addEventListener("submit", submitRunFile);
+els.emailForm.addEventListener("submit", submitEmail);
+els.emailUploadedBy.value = readStoredName();
+els.emailUploadedBy.addEventListener("input", () => {
+  syncNames(els.emailUploadedBy);
+});
+for (const input of [els.emailFile, els.emailPaste]) {
+  input.addEventListener("input", () => {
+    if (state.addError !== null) {
+      state.addError = null;
+      renderEmailForm();
+    }
+  });
+}
 els.payAgain.addEventListener("click", payAgain);
 els.startedBy.value = readStoredName();
 els.runUploadedBy.value = readStoredName();

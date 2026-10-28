@@ -114,6 +114,37 @@
           </form>
         </section>
 
+        <section class="new-incident" aria-labelledby="email-form-title">
+          <h2 id="email-form-title">Supplier email</h2>
+          <form id="email-form" novalidate>
+            <label class="field">
+              <span class="field__label">Email file (.eml)</span>
+              <input id="email-file" name="file" type="file" accept=".eml,message/rfc822" />
+            </label>
+            <label class="field">
+              <span class="field__label">Or paste the raw email</span>
+              <textarea id="email-paste" name="paste" rows="4" spellcheck="false" autocomplete="off"></textarea>
+            </label>
+            <label class="field">
+              <span class="field__label">Your name</span>
+              <input id="email-uploaded-by" name="uploadedBy" type="text" autocomplete="name" maxlength="80" />
+            </label>
+            <button id="email-button" class="button button--primary" type="submit">Add email</button>
+            <p class="hint">Paste the source (Show original or View source), not the text your mail client shows. Save the supplier's email itself, not a forward.</p>
+            <p class="hint">PayOnce reads the sender, subject and text. It never opens attachments, loads images or follows links. It goes to an invoice only when you pick one.</p>
+            <p id="email-reader" class="hint"></p>
+            <p id="email-free-tier" class="hint">When READER_API_KEY is set, a Gemini model on Google's free tier reads uploaded mail, and Google may use free-tier content to improve its products. Keep confidential mail out, or unset the key.</p>
+            <p id="email-error" class="form-error" role="alert" hidden></p>
+          </form>
+        </section>
+
+        <section class="runs" aria-labelledby="inbox-title">
+          <h2 id="inbox-title">Inbox</h2>
+          <p id="inbox-error" class="form-error" role="status" hidden></p>
+          <p id="inbox-empty" class="empty" hidden>No uploaded emails yet</p>
+          <ul id="inbox-list" class="incident-list"></ul>
+        </section>
+
         <section class="runs" aria-labelledby="runs-title">
           <h2 id="runs-title">Pay runs</h2>
           <p id="runs-error" class="form-error" role="status" hidden></p>
@@ -188,6 +219,23 @@
                 <div id="emails"></div>
                 <div id="findings"></div>
               </section>
+            </div>
+          </div>
+        </article>
+
+        <article id="inbox-detail" class="detail" hidden>
+          <header id="inbox-header" class="detail__header"></header>
+
+          <div class="detail__grid">
+            <section class="card" aria-labelledby="inbox-email-title">
+              <h2 id="inbox-email-title">Email</h2>
+              <div id="inbox-email"></div>
+            </section>
+
+            <div class="detail__side">
+              <section id="inbox-match" class="card approval" aria-labelledby="inbox-match-title" hidden></section>
+
+              <section id="inbox-dismiss" class="card approval" aria-labelledby="inbox-dismiss-title" hidden></section>
             </div>
           </div>
         </article>

@@ -1212,6 +1212,62 @@ input:read-only {
   white-space: pre-wrap;
 }
 
+.email__muted {
+  color: var(--muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.email__extra {
+  margin-top: 10px;
+}
+
+.email__extra .email__body {
+  margin-top: 4px;
+}
+
+.email__attachments {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 13.5px;
+  overflow-wrap: anywhere;
+}
+
+.incident.is-done {
+  opacity: 0.62;
+}
+
+.candidate {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+
+.candidate__body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.candidate__top {
+  font-weight: 600;
+}
+
+.candidate__line {
+  color: var(--ink-2);
+  font-size: 13.5px;
+  overflow-wrap: anywhere;
+}
+
+.candidate__line.is-caution,
+.hint.is-caution {
+  color: var(--amber);
+  font-weight: 600;
+}
+
 .flag {
   display: inline-flex;
   align-items: center;
