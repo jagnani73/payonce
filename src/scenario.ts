@@ -22,7 +22,6 @@ import {
 import type { Attempt, Ledger, Obligation, TransferMethod } from "./ledger.js";
 import type { SandboxBank } from "./sandbox-bank.js";
 
-const AMPLE_RESERVE_MINOR: number = 100_000_000;
 const SUPPLIER_DOMAIN: string = "example-supplier.test";
 const REST_CHECK_MS: number = 500;
 // How long a scripted incident may take, from the bank's outcome to the agent
@@ -37,8 +36,9 @@ export interface ScenarioDef {
   currency: string;
   amountMinor: number;
   transferMethod: TransferMethod;
-  // The transfer fee the scenario expects. When set, the reserve floor is placed
-  // so that one payment fits and a second fee is what breaches it.
+  // The transfer fee the scenario expects. When set, the invoice gets a floor of
+  // its own, placed so that one payment fits and a second fee is what breaches it.
+  // Every other scenario uses its currency's floor from RESERVE_FLOORS.
   tightReserveFeeMinor: number | null;
   // The supplier's phone number on file, for a callback about new bank details.
   supplierPhone: string | null;
@@ -142,9 +142,9 @@ export async function openScenario(
       ? { ...def.beneficiary, nickname: `${def.beneficiary.nickname} ${invoiceId}` }
       : def.beneficiary,
   );
-  const reserveFloorMinor: number =
+  const invoiceFloorMinor: number =
     def.tightReserveFeeMinor === null
-      ? AMPLE_RESERVE_MINOR
+      ? 0
       : (await getAvailableMinor(engine.client, def.currency)) -
         def.amountMinor -
         Math.round(def.tightReserveFeeMinor * 1.5);
@@ -159,7 +159,7 @@ export async function openScenario(
     currency: def.currency,
     amountMinor: def.amountMinor,
     transferMethod: def.transferMethod,
-    reserveFloorMinor,
+    invoiceFloorMinor,
     startedBy,
     supplierPhone: def.supplierPhone,
   });

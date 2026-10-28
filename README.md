@@ -32,8 +32,9 @@ If the bank sits on a payment past its deadline, a person hears about it. PayOnc
 | The original transfer is still in flight | Wait |
 | A replacement has already failed | Escalate to a person |
 | The original failed for a reason a resend cannot fix | Escalate to a person |
+| No reserve floor is set for the payment's currency | Escalate to a person |
 | The cash position could not be read | Escalate to a person |
-| The original failed and a replacement with its transfer fee would push cash below the reserve floor | Escalate to a person |
+| The original failed and a replacement with its transfer fee, on top of money already committed to other payments, would push cash below the reserve floor | Escalate to a person |
 | The original was sent outside PayOnce and would otherwise be replaced | Escalate to a person |
 | The replacement is above `TWO_APPROVERS_ABOVE` | Escalate to a person |
 | The original failed, a resend can fix it and the beneficiary details are unchanged | Replace |
@@ -135,7 +136,31 @@ Lines written before the chain existed were hashed the first time the ledger was
 
 ## The cost of a second transfer
 
-A failed SWIFT transfer gets its amount back but not its fee, so a replacement pays the fee again. PayOnce adds that fee to the cost of a replacement before it checks the cash reserve. In the `eur-swift-low-reserve` scenario the reserve floor is set so that the second fee is what breaches it, and the incident goes to a person.
+A failed SWIFT transfer gets its amount back but not its fee, so a replacement pays the fee again. PayOnce adds that fee to the cost of a replacement before it checks the reserve floor. It also takes off money already committed to other payments in the same currency and not yet sent, and the timeline shows the numbers. In the `eur-swift-low-reserve` scenario the invoice gets a floor of its own, stricter than the one for EUR, set so that the second fee is what breaches it, and the incident goes to a person.
+
+## Reserve floors
+
+`RESERVE_FLOORS` in `.env` sets how much each wallet keeps back, as currency and amount pairs: `RESERVE_FLOORS=USD:1000000,EUR:1000000`. PayOnce replaces a failed payment by itself only if the wallet stays above its floor afterwards.
+
+A currency that is not listed has no floor, and PayOnce never replaces a payment in it by itself. The incident goes to a person, the same way approvals are refused when `APPROVERS` is missing. To say on purpose that a currency needs no floor, list it with 0, as in `EUR:0`. If the setting cannot be read, every automatic replacement goes to a person. Floors are read when PayOnce starts, so a change needs a restart.
+
+New payments are not checked against the floor yet, only replacements.
+
+## Cash panel
+
+The page opens with a cash panel, one row per currency. A row shows the available balance from Airwallex, the reserve floor and the headroom: how much can still leave the wallet before cash drops below the floor. Open a row to see how the headroom is worked out, with each figure tagged by where it comes from.
+
+The balance comes from Airwallex, with the age of the read. Money held for outgoing payments and money still arriving from currency conversions are shown next to it, but neither is part of available. The floor comes from `RESERVE_FLOORS`, and any invoice held to a stricter floor of its own is listed under it. The rest comes from PayOnce's ledger. Payments being sent that have no transfer yet, and approvals given but not used yet, are taken off to give the headroom. A second figure also takes off every payment waiting on a person, as if each one were approved.
+
+Below that the panel lists payments already with the bank, payouts sent outside PayOnce and the fees kept on failed transfers. Airwallex takes a transfer out of available as soon as it is created, so the panel does not take these off again.
+
+The panel reads Airwallex at most every 30 seconds, and only while the page is open. That read is for display. Before an automatic replacement, PayOnce reads the balance fresh and takes off the same committed money the panel does, so the panel's headroom and the agent's decision agree.
+
+If a read fails, the panel keeps the last good one, shows its age and says why the newer one failed. If no read has worked yet, it shows no headroom, because a headroom worked out from a missing balance would be wrong.
+
+PayOnce reads each transfer's fee and keeps it in the ledger, and fills in older failed transfers a few at a time. The fee line is called "Fees on failed transfers", with a note that the sandbox keeps the fee when a transfer fails. That rests on what the sandbox did with failed EUR SWIFT transfers, so the panel does not claim every rail works this way. Pay runs are not built yet, and their line says so.
+
+`pnpm cash` prints the same figures in the terminal after one fresh read. It exits with 1 when Airwallex could not be read, the floor setting is unreadable or a headroom is below 0, so a script can check it.
 
 ## Webhooks
 
@@ -154,9 +179,9 @@ pnpm install
 pnpm dev
 ```
 
-`pnpm dev` needs no credentials. It reads the sample supplier emails in `fixtures/emails/` and prints the findings and the decision for four incidents.
+`pnpm dev` needs no credentials. It reads the sample supplier emails in `fixtures/emails/` and prints the findings and the decision for six incidents.
 
-Everything else talks to the Airwallex sandbox. Copy `.env.example` to `.env` and fill in a sandbox Client ID and API key.
+Everything else talks to the Airwallex sandbox. Copy `.env.example` to `.env` and fill in a sandbox Client ID and API key. Set `RESERVE_FLOORS=USD:1000000,EUR:1000000` as well. Without it no currency has a floor, and every failed payment goes to a person instead of being replaced.
 
 For a model to read the emails, create a Gemini API key in Google AI Studio and set it as `READER_API_KEY`. The free tier needs no billing account. Google may use free-tier content to improve its products, so keep real supplier emails out of it. `READER_MODEL` takes a comma-separated list of models to try in order.
 
@@ -177,6 +202,7 @@ pnpm recover [OUTCOME] [INVOICE] [EMAILS] [SCENARIO] [NAME]
 pnpm approve <INVOICE> [REQUEST NAME]
 pnpm close <INVOICE> [NAME] [NOTE]
 pnpm run audit [INVOICE] [json|csv]
+pnpm cash
 pnpm reset
 ```
 
@@ -230,7 +256,9 @@ In the fifth, `inv-05002` has the same supplier, amount and number as INV-5002, 
 | `src/assess.ts` | Maps an Airwallex transfer to the facts the policy reads |
 | `src/ledger.ts` | Obligations, payment attempts, approvals, emails and the timeline in SQLite |
 | `src/audit-trail.ts` | How timeline lines are hashed and checked, and the JSON and CSV export |
-| `src/payments.ts` | Sends an attempt under its `request_id` and syncs transfer state into the ledger |
+| `src/payments.ts` | Sends an attempt under its `request_id`, syncs transfer state and fees into the ledger, and fills in fees missing from older failed transfers |
+| `src/reserve.ts` | The reserve floors from `RESERVE_FLOORS`, and the floor one invoice's replacement is held to |
+| `src/cash-position.ts` | The cash panel's figures, and the committed money the policy also takes off |
 | `src/approval.ts` | Approval terms and the hash that binds an approval to them |
 | `src/approvers.ts` | The approval policy: who may approve, how many are needed, and when a request expires |
 | `src/bank-change.ts` | Records a callback about new bank details and updates the supplier's record in Airwallex |
@@ -239,8 +267,8 @@ In the fifth, `inv-05002` has the same supplier, amount and number as INV-5002, 
 | `src/reader.ts` | Picks the model reader, or the keyword placeholder when no key is set |
 | `src/keyword-reader.ts` | Keyword placeholder that reads the emails when no key is set |
 | `src/server.ts` | Local web server and JSON API |
-| `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/audit.ts`, `src/reset.ts`, `src/index.ts` | The commands |
-| `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, balances, the webhook subscription and the simulation calls |
+| `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/audit.ts`, `src/cash.ts`, `src/reset.ts`, `src/index.ts` | The commands |
+| `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, balances and their cache for the cash panel, the webhook subscription and the simulation calls |
 | `web/` | The page: plain HTML, CSS and JavaScript with no build step |
 | `fixtures/emails/` | Sample supplier emails |
 
@@ -251,5 +279,7 @@ The code holds amounts in minor units and converts at the Airwallex boundary. Th
 - A model's explanation of each decision. The reasons on the timeline come from the policy.
 - Closing an incident without a payment, except a held duplicate. A person can close any other only when the bank reports a payment for the invoice as paid.
 - Chasing the bank. When a payment passes its deadline, PayOnce tells a person and does nothing else.
+- A floor check on new payments, and a lock per currency so that two replacements checked at the same moment cannot both pass. Both come with pay runs.
+- Totals across currencies. They need exchange rates.
 - A webhook delivered by the sandbox. The receiver, the tunnel and the subscription work, and Airwallex records the events, but the sandbox has not sent one.
 - Real bank outcomes. The run uses the sandbox simulator to send, fail and pay transfers.

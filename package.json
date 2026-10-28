@@ -9,6 +9,7 @@
     "approve": "tsx --env-file=.env src/approve.ts",
     "close": "tsx src/close.ts",
     "audit": "tsx src/audit.ts",
+    "cash": "tsx --env-file=.env src/cash.ts",
     "reset": "tsx src/reset.ts",
     "ui": "tsx --env-file=.env src/server.ts",
     "typecheck": "tsc --noEmit"

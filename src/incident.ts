@@ -21,7 +21,12 @@ export interface Incident {
   emailFromUnverifiedSender: boolean;
   emailsUnread: boolean;
   availableBalanceMinor: number;
-  reserveFloorMinor: number;
+  // Money promised to other payments from the same wallet that has not left the
+  // available balance yet: payments being sent and approvals not used yet.
+  committedMinor: number;
+  // Null when no floor is set for the currency. NaN when RESERVE_FLOORS could not
+  // be read.
+  reserveFloorMinor: number | null;
   // Above this amount the approval policy needs two approvers.
   twoApproversAboveMinor: number;
 }

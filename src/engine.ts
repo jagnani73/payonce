@@ -33,10 +33,13 @@ import {
 import {
   attemptStateOf,
   bankDetailsKey,
+  feeOf,
   originalStateOf,
   resendCanFix,
   sameBankDetails,
+  type Fee,
 } from "./assess.js";
+import { committedMinor } from "./cash-position.js";
 import { deadlineOf, describeDeadline, isOverdue } from "./deadlines.js";
 import { decide, OUTSIDE_PAYOUT_REASON } from "./decide.js";
 import { likelyDuplicates, nearlyPays } from "./duplicates.js";
@@ -49,6 +52,8 @@ import {
 import type { Decision, Incident, OriginalTransferState } from "./incident.js";
 import {
   DuplicatePaymentError,
+  expiryOf,
+  isExpired,
   signersOf,
   type Approval,
   type Attempt,
@@ -61,11 +66,13 @@ import {
   type Obligation,
   type ObligationState,
   type OutsidePayout,
+  type PayoutMoney,
   type PayoutState,
   type Signoff,
 } from "./ledger.js";
-import { formatMoney, toMinor } from "./money.js";
+import { formatMoney, readMinor, toMinor } from "./money.js";
 import { sendAttempt, syncTransfer, wasRejected } from "./payments.js";
+import { debitCurrency, floorFor, type ReservePolicy } from "./reserve.js";
 
 // What the reader found. unverifiedSenders is kept for display; the policy works
 // the sender check out again from the stored emails. unread marks a thread the
@@ -99,6 +106,7 @@ export interface Engine {
   ledger: Ledger;
   reader: EmailReader;
   approvals: ApprovalPolicy;
+  reserve: ReservePolicy;
   bank?: Bank;
 }
 
@@ -203,6 +211,18 @@ export function payoutSummary(transfer: Transfer): string {
   return `${formatMoney(toMinor(transfer.transfer_amount), transfer.transfer_currency)} to ${payee}, ${transfer.status}${failure}`;
 }
 
+// A payout's amount and fee for the ledger. One that cannot be read is null, so
+// tying the payout never fails on it.
+function payoutMoney(transfer: Transfer): PayoutMoney {
+  const fee: Fee | null = feeOf(transfer);
+  return {
+    amountMinor: readMinor(transfer.transfer_amount),
+    currency: transfer.transfer_currency ?? null,
+    feeMinor: fee?.minor ?? null,
+    feeCurrency: fee?.currency ?? null,
+  };
+}
+
 // A payout whose reference names an invoice PayOnce has may pay that invoice a
 // second time. It goes on the invoice's timeline, and the policy holds every
 // payment while it is live. A settled invoice, or one closed without paying, is
@@ -220,6 +240,7 @@ export function linkOutsidePayout(
     transferId: transfer.id,
     reference: transfer.short_reference_id,
     state,
+    ...payoutMoney(transfer),
   });
   if (!linked) {
     return false;
@@ -281,10 +302,10 @@ async function syncOutsidePayouts(
     }
     const transfer: Transfer = await getTransfer(engine.client, payout.transferId);
     const state: PayoutState = originalStateOf(transfer);
+    engine.ledger.recordOutsidePayout(payout.transferId, state, payoutMoney(transfer));
     if (state === payout.state) {
       continue;
     }
-    engine.ledger.recordOutsidePayout(payout.transferId, state);
     if (state === "paid" || state === "failed") {
       note(engine.ledger, invoiceId, "bank", `Payout sent outside PayOnce ${describe(transfer)}`);
     }
@@ -361,6 +382,16 @@ async function readNewEmails(engine: Engine, obligation: Obligation): Promise<vo
   note(engine.ledger, invoiceId, "email", `Emails read: ${findings.summary}`);
 }
 
+// The floor as the cost line names it.
+function floorText(floorMinor: number | null, currency: string): string {
+  if (floorMinor === null) {
+    return `no reserve floor is set for ${currency}`;
+  }
+  return Number.isFinite(floorMinor)
+    ? `reserve floor ${formatMoney(floorMinor, currency)}`
+    : "the reserve floor setting could not be read";
+}
+
 // The email evidence a person sees and approves against.
 function evidenceSummary(assessment: Assessment): string {
   return assessment.unverified.length === 0
@@ -386,10 +417,11 @@ async function assess(
     obligation.beneficiaryId,
   );
   const feeMinor: number = toMinor(original.fee_amount);
-  const availableMinor: number = await getAvailableMinor(
-    engine.client,
-    obligation.currency,
-  );
+  // Read fresh on every look. The cash panel's cached balance never feeds a decision.
+  const wallet: string = debitCurrency(obligation);
+  const availableMinor: number = await getAvailableMinor(engine.client, wallet);
+  const floorMinor: number | null = floorFor(engine.reserve, obligation);
+  const committed: number = committedMinor(engine.ledger, wallet, obligation.invoiceId);
   const originalState: OriginalTransferState = originalStateOf(original);
   const incident: Incident = {
     invoiceId: obligation.invoiceId,
@@ -419,7 +451,8 @@ async function assess(
     emailsUnread:
       findings.unread === true || (emails.length > 0 && stored === undefined),
     availableBalanceMinor: availableMinor,
-    reserveFloorMinor: obligation.reserveFloorMinor,
+    committedMinor: committed,
+    reserveFloorMinor: floorMinor,
     twoApproversAboveMinor: engine.approvals.twoApproversAboveMinor,
   };
 
@@ -435,15 +468,23 @@ async function assess(
   }
 
   // A failed transfer keeps its fee, so a replacement pays the fee a second time.
-  if (incident.originalState === "failed" && feeMinor > 0) {
+  // Money committed to other payments is taken off as well, so the numbers behind
+  // a floor decision are on the timeline.
+  if (incident.originalState === "failed" && (feeMinor > 0 || committed > 0)) {
     const costMinor: number = obligation.amountMinor + feeMinor;
-    const afterMinor: number = availableMinor - costMinor;
+    const afterMinor: number = availableMinor - committed - costMinor;
     const currency: string = obligation.currency;
+    const fee: string =
+      feeMinor > 0 ? ` with a second ${formatMoney(feeMinor, currency)} transfer fee` : "";
+    const others: string =
+      committed > 0
+        ? `, and ${formatMoney(committed, wallet)} is committed to other payments not sent yet`
+        : "";
     note(
       engine.ledger,
       obligation.invoiceId,
-      afterMinor < obligation.reserveFloorMinor ? "warning" : "payment",
-      `A replacement costs ${formatMoney(costMinor, currency)} with a second ${formatMoney(feeMinor, currency)} transfer fee. Cash after it: ${formatMoney(afterMinor, currency)}, reserve floor ${formatMoney(obligation.reserveFloorMinor, currency)}`,
+      floorMinor !== null && afterMinor >= floorMinor ? "payment" : "warning",
+      `A replacement costs ${formatMoney(costMinor, currency)}${fee}${others}. Cash after it: ${formatMoney(afterMinor, wallet)}, ${floorText(floorMinor, wallet)}`,
       "cost",
     );
   }
@@ -652,17 +693,6 @@ function barredFrom(ledger: Ledger, obligation: Obligation, accountKey: string |
     }
   }
   return barred;
-}
-
-// When a request stops covering a payment, in epoch milliseconds. One recorded
-// before requests expired counts as expired already.
-function expiryOf(approval: Approval): number {
-  const at: number = approval.expiresAt === null ? Number.NaN : Date.parse(approval.expiresAt);
-  return Number.isFinite(at) ? at : 0;
-}
-
-export function isExpired(approval: Approval, now: number = Date.now()): boolean {
-  return expiryOf(approval) <= now;
 }
 
 function ruleFor(engine: Engine, obligation: Obligation, assessment: Assessment): SignoffRule {

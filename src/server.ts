@@ -6,6 +6,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import { extname } from "node:path";
+import { BalanceCache } from "./airwallex/balances.js";
 import { AirwallexClient } from "./airwallex/client.js";
 import { subscribe } from "./airwallex/webhooks.js";
 import type { ApprovalTerms } from "./approval.js";
@@ -28,12 +29,12 @@ import {
   type BankChangeForm,
   type CallbackInput,
 } from "./bank-change.js";
+import { cashReport, payRunLines, type CashReport } from "./cash-position.js";
 import { Dispatcher } from "./dispatcher.js";
 import type { EmailFindings } from "./emails.js";
 import {
   approvePayment,
   closeIncident,
-  isExpired,
   note,
   noteError,
   payAgain,
@@ -42,9 +43,12 @@ import {
   type Engine,
   type PayAgainResult,
 } from "./engine.js";
+import { recordMissingFees } from "./payments.js";
 import { readerFromEnv } from "./reader.js";
+import { describeFloors, reserveFromEnv } from "./reserve.js";
 import {
   INVOICE_ID_PATTERN,
+  isExpired,
   Ledger,
   LEDGER_PATH,
   type Approval,
@@ -79,6 +83,9 @@ const CHECK_EVERY_MS: number = 3_000;
 const CHECK_WITH_WEBHOOKS_MS: number = 15_000;
 // How often Airwallex is swept for payouts PayOnce did not send.
 const SWEEP_EVERY_MS: number = 30_000;
+// How long the cash panel shows a balance before reading it again. The policy
+// reads its own, fresh, before any money moves.
+const BALANCE_MAX_AGE_MS: number = 30_000;
 const SUBSCRIBE_TRIES: number = 3;
 const SUBSCRIBE_RETRY_MS: number = 5_000;
 const MAX_BODY_BYTES: number = 64 * 1024;
@@ -127,10 +134,20 @@ const engine: Engine = {
   ledger,
   reader: readerFromEnv(),
   approvals: policyFromEnv(),
+  reserve: reserveFromEnv(),
   bank,
 };
 const agent: Dispatcher = new Dispatcher(engine);
 const watcher: Watcher = new Watcher(engine, agent, CHECK_EVERY_MS, SWEEP_EVERY_MS);
+// After each read it fills in the fees of failed transfers the ledger has none for.
+// That writes only fee columns, so it runs outside the invoices' turns.
+const balances: BalanceCache = new BalanceCache(
+  client,
+  BALANCE_MAX_AGE_MS,
+  async (): Promise<void> => {
+    await recordMissingFees(client, ledger);
+  },
+);
 
 const ALLOWED_HOSTS: ReadonlySet<string> = new Set<string>([
   `${HOST}:${PORT}`,
@@ -604,6 +621,19 @@ async function bankChangeByPerson(
   return { ok: true };
 }
 
+// The cash panel: balances from the cache, read again when 30 seconds old, and the
+// ledger as it is now. It answers at once with whatever the cache holds.
+function cash(): CashReport {
+  balances.refreshIfOld();
+  return cashReport({
+    ledger: engine.ledger,
+    reserve: engine.reserve,
+    balances: balances.latest(),
+    statesCheckedAt: watcher.lastCheckedAt,
+    payRunLines: payRunLines(engine.ledger),
+  });
+}
+
 // Has the agent look at an incident again. It cannot send a second live payment,
 // and an escalated invoice still needs its approval.
 function resume(invoiceId: string): unknown {
@@ -665,6 +695,8 @@ async function route(
         label: scenario.label,
       })),
     });
+  } else if (method === "GET" && pathname === "/api/cash") {
+    sendJson(response, 200, cash());
   } else if (method === "GET" && pathname === "/api/incidents") {
     sendJson(response, 200, listIncidents());
   } else if (method === "POST" && pathname === "/api/incidents") {
@@ -772,6 +804,9 @@ server.listen(PORT, HOST, (): void => {
   console.log(`PayOnce is at http://${HOST}:${PORT} (sandbox only, no real money)`);
   console.log(`Supplier emails are read by: ${engine.reader.name}`);
   console.log(describePolicy(engine.approvals));
+  console.log(describeFloors(engine.reserve));
+  // The first page load then has balances to show.
+  balances.refreshIfOld();
   pickUpInterrupted();
   watcher.start();
   void connectWebhooks();

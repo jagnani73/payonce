@@ -5,6 +5,7 @@ import { Dispatcher } from "./dispatcher.js";
 import { noteError, type Engine } from "./engine.js";
 import { Ledger, LEDGER_PATH, type Obligation } from "./ledger.js";
 import { readerFromEnv } from "./reader.js";
+import { describeFloors, reserveFromEnv } from "./reserve.js";
 import { SandboxBank } from "./sandbox-bank.js";
 import {
   DEFAULT_EMAILS,
@@ -33,8 +34,10 @@ async function main(): Promise<void> {
     ledger,
     reader: readerFromEnv(),
     approvals: policyFromEnv(),
+    reserve: reserveFromEnv(),
     bank,
   };
+  console.log(describeFloors(engine.reserve));
   const agent: Dispatcher = new Dispatcher(engine);
   const watcher: Watcher = new Watcher(engine, agent, CHECK_EVERY_MS);
   const invoiceId: string = process.argv[3] ?? newInvoiceId(ledger);

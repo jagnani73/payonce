@@ -654,6 +654,232 @@ input:read-only {
   color: var(--amber);
 }
 
+/* Cash */
+
+.cash {
+  margin-bottom: 20px;
+}
+
+.cash__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 16px;
+  margin-bottom: 12px;
+}
+
+.cash__head h2 {
+  margin-bottom: 0;
+}
+
+.cash__fresh {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.cash__problem {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--amber-line);
+  border-radius: 8px;
+  background: var(--amber-soft);
+  color: var(--amber);
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.cash__problem p + p {
+  margin-top: 4px;
+}
+
+.cash__currencies {
+  display: grid;
+  gap: 8px;
+}
+
+.cash-currency {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.cash-currency__summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 22px;
+  padding: 9px 14px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.cash-currency__summary::-webkit-details-marker {
+  display: none;
+}
+
+.cash-currency__summary::before {
+  content: "";
+  align-self: center;
+  width: 7px;
+  height: 7px;
+  margin-right: -10px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(-45deg);
+}
+
+.cash-currency[open] > .cash-currency__summary::before {
+  transform: rotate(45deg);
+}
+
+.cash-currency__code {
+  min-width: 3.2em;
+  font-weight: 700;
+}
+
+.cash-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.cash-stat__label {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.cash-stat__value {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.cash-currency__counts {
+  margin-left: auto;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.cash-currency__body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 0 32px;
+  padding: 2px 14px 14px;
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 8px 8px;
+  background: var(--surface);
+}
+
+.cash-column {
+  min-width: 0;
+}
+
+.cash-group__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin: 12px 0 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.cash-group__sub {
+  margin: 12px 0 6px;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.source {
+  display: inline-block;
+  padding: 0 7px;
+  border: 1px solid var(--slate-line);
+  border-radius: 999px;
+  background: var(--slate-soft);
+  color: var(--slate);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.source--airwallex {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.source--setting {
+  border-color: var(--amber-line);
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.cash__rows {
+  display: grid;
+  gap: 3px;
+}
+
+.cash-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 2px 16px;
+  align-items: baseline;
+  font-size: 14px;
+}
+
+.cash-row dt {
+  min-width: 0;
+}
+
+.cash-row dd {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.cash-row__detail {
+  margin-left: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.cash-row__detail a,
+.cash-note a {
+  color: var(--accent);
+}
+
+.cash-row.is-total {
+  margin-top: 2px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+  font-weight: 700;
+}
+
+.cash-row.is-empty,
+.cash-row.is-aside {
+  color: var(--muted);
+}
+
+.cash-row.is-negative dd,
+.cash-stat.is-negative .cash-stat__value {
+  color: var(--red);
+}
+
+.cash-row.is-unknown dd,
+.cash-stat.is-unknown .cash-stat__value {
+  color: var(--amber);
+}
+
+.cash-note {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 /* Timeline */
 
 .event {
@@ -1335,6 +1561,20 @@ input:read-only {
   .terms dd,
   .email__head dd {
     margin-bottom: 8px;
+  }
+
+  .cash-currency__summary {
+    gap: 2px 22px;
+  }
+
+  .cash-stat,
+  .cash-currency__counts {
+    flex: 1 1 100%;
+    margin-left: 17px;
+  }
+
+  .cash-currency__body {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

@@ -1,5 +1,5 @@
 import { listTransfersSince, type Transfer } from "./airwallex/transfers.js";
-import { originalStateOf } from "./assess.js";
+import { feeOf, originalStateOf, type Fee } from "./assess.js";
 import { isOverdue } from "./deadlines.js";
 import type { Dispatcher } from "./dispatcher.js";
 import { invoiceForPayout, type PayoutMatch } from "./duplicates.js";
@@ -10,9 +10,9 @@ import { toMinor } from "./money.js";
 
 const METHODS: ReadonlySet<string> = new Set<string>(["LOCAL", "SWIFT"]);
 
-// A found payout is only paid again on a person's approval, and the approval card
-// shows the cash left after it, so no floor of PayOnce's own is set.
-const FOUND_RESERVE_FLOOR_MINOR: number = 0;
+// A found payout's invoice has no floor of its own, so its currency's floor in
+// RESERVE_FLOORS applies.
+const FOUND_INVOICE_FLOOR_MINOR: number = 0;
 
 // The states in which a found payout becomes an incident.
 type FoundState = Extract<OriginalTransferState, "failed" | "in_flight">;
@@ -48,6 +48,7 @@ function adopt(engine: Engine, transfer: Transfer, state: FoundState): string | 
   if (engine.ledger.obligation(invoiceId) !== undefined) {
     return undefined;
   }
+  const fee: Fee | null = feeOf(transfer);
   engine.ledger.adoptPayout(
     {
       invoiceId,
@@ -58,7 +59,7 @@ function adopt(engine: Engine, transfer: Transfer, state: FoundState): string | 
       currency: transfer.transfer_currency,
       amountMinor: toMinor(transfer.transfer_amount),
       transferMethod: transfer.transfer_method as TransferMethod,
-      reserveFloorMinor: FOUND_RESERVE_FLOOR_MINOR,
+      invoiceFloorMinor: FOUND_INVOICE_FLOOR_MINOR,
       // Airwallex does not say who sent it.
       startedBy: null,
       supplierPhone: null,
@@ -71,6 +72,8 @@ function adopt(engine: Engine, transfer: Transfer, state: FoundState): string | 
       reference: transfer.short_reference_id,
       state,
       failureCode: transfer.failure?.code ?? null,
+      feeMinor: fee?.minor ?? null,
+      feeCurrency: fee?.currency ?? null,
     },
   );
   note(

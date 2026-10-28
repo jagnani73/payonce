@@ -29,6 +29,10 @@ export interface Transfer {
   transfer_amount: number;
   transfer_currency: string;
   fee_amount: number;
+  // Airwallex charges the fee in the source currency.
+  fee_currency?: string;
+  // PAYER unless the transfer was created with BENEFICIARY. PayOnce never sets it.
+  fee_paid_by?: string;
   failure?: TransferFailure;
   beneficiary_id?: string;
   beneficiary?: { bank_details?: TransferBankDetails };

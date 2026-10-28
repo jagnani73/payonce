@@ -157,7 +157,9 @@ export interface NewObligation {
   currency: string;
   amountMinor: number;
   transferMethod: TransferMethod;
-  reserveFloorMinor: number;
+  // A floor of the invoice's own, stricter than its currency's in RESERVE_FLOORS.
+  // 0 for none. Only the low-reserve demo sets one.
+  invoiceFloorMinor: number;
   // The name the person who started the incident gave. Null when PayOnce does
   // not know, as for a payout sent outside it.
   startedBy: string | null;
@@ -189,14 +191,27 @@ export interface Attempt {
   reference: string | null;
   state: AttemptState;
   failureCode: string | null;
+  // What the payer paid Airwallex for the transfer, as last read from it. Null
+  // until a transfer has been read.
+  feeMinor: number | null;
+  feeCurrency: string | null;
 }
 
 // What the bank last did with a payout sent outside PayOnce. unknown is a status
 // PayOnce does not recognise.
 export type PayoutState = "in_flight" | "paid" | "failed" | "unknown";
 
+// A payout's amount and fee as last read from the transfer. Null when it has not
+// been read since PayOnce started keeping them.
+export interface PayoutMoney {
+  amountMinor: number | null;
+  currency: string | null;
+  feeMinor: number | null;
+  feeCurrency: string | null;
+}
+
 // A payout sent outside PayOnce whose reference names an invoice in the ledger.
-export interface OutsidePayout {
+export interface OutsidePayout extends PayoutMoney {
   transferId: string;
   // The bank's short reference.
   reference: string;
@@ -210,6 +225,8 @@ export interface FoundPayout {
   reference: string;
   state: AttemptState;
   failureCode: string | null;
+  feeMinor: number | null;
+  feeCurrency: string | null;
 }
 
 // One approver's approval of a request, with the binding of the terms they saw.
@@ -279,7 +296,7 @@ interface ObligationRow {
   currency: string;
   amount_minor: number;
   transfer_method: TransferMethod;
-  reserve_floor_minor: number;
+  invoice_floor_minor: number;
   origin: ObligationOrigin;
   state: ObligationState;
   escalation_reason: string;
@@ -403,6 +420,18 @@ interface OutsideRow {
   transfer_id: string;
   reference: string;
   state: PayoutState;
+  amount_minor: number | null;
+  currency: string | null;
+  fee_minor: number | null;
+  fee_currency: string | null;
+}
+
+interface TransferRow {
+  transfer_id: string;
+}
+
+interface FeeRow {
+  fee_minor: number;
 }
 
 // Columns added after the first version of the ledger, by table. A database
@@ -411,7 +440,10 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
   obligations: {
     supplier_domain: "TEXT NOT NULL DEFAULT ''",
     transfer_method: "TEXT NOT NULL DEFAULT 'LOCAL'",
+    // The floor each invoice carried before RESERVE_FLOORS. No longer read or
+    // written.
     reserve_floor_minor: "INTEGER NOT NULL DEFAULT 0",
+    invoice_floor_minor: "INTEGER NOT NULL DEFAULT 0",
     escalation_reason: "TEXT NOT NULL DEFAULT ''",
     origin: "TEXT NOT NULL DEFAULT 'payonce'",
     // A found invoice's payout reference, when it could not be the invoice number.
@@ -432,6 +464,8 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
   },
   attempts: {
     reference: "TEXT",
+    fee_minor: "INTEGER",
+    fee_currency: "TEXT",
   },
   events: {
     topic: "TEXT",
@@ -442,6 +476,10 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
   outside_payouts: {
     reference: "TEXT NOT NULL DEFAULT ''",
     state: "TEXT NOT NULL DEFAULT 'in_flight'",
+    amount_minor: "INTEGER",
+    currency: "TEXT",
+    fee_minor: "INTEGER",
+    fee_currency: "TEXT",
   },
 };
 
@@ -453,6 +491,8 @@ interface AttemptRow {
   reference: string | null;
   state: AttemptState;
   failure_code: string | null;
+  fee_minor: number | null;
+  fee_currency: string | null;
 }
 
 export class DuplicatePaymentError extends Error {
@@ -483,7 +523,7 @@ function toObligation(row: ObligationRow): Obligation {
     currency: row.currency,
     amountMinor: row.amount_minor,
     transferMethod: row.transfer_method,
-    reserveFloorMinor: row.reserve_floor_minor,
+    invoiceFloorMinor: row.invoice_floor_minor,
     origin: row.origin,
     state: row.state,
     escalationReason: row.escalation_reason,
@@ -504,6 +544,20 @@ function toAttempt(row: AttemptRow): Attempt {
     reference: row.reference,
     state: row.state,
     failureCode: row.failure_code,
+    feeMinor: row.fee_minor,
+    feeCurrency: row.fee_currency,
+  };
+}
+
+function toOutsidePayout(row: OutsideRow): OutsidePayout {
+  return {
+    transferId: row.transfer_id,
+    reference: row.reference,
+    state: row.state,
+    amountMinor: row.amount_minor,
+    currency: row.currency,
+    feeMinor: row.fee_minor,
+    feeCurrency: row.fee_currency,
   };
 }
 
@@ -521,6 +575,17 @@ function toApproval(row: ApprovalRow, signoffs: Signoff[]): Approval {
     neededWhy: row.needed_why,
     signoffs,
   };
+}
+
+// When a request stops covering a payment, in epoch milliseconds. One recorded
+// before requests expired counts as expired already.
+export function expiryOf(approval: Approval): number {
+  const at: number = approval.expiresAt === null ? Number.NaN : Date.parse(approval.expiresAt);
+  return Number.isFinite(at) ? at : 0;
+}
+
+export function isExpired(approval: Approval, now: number = Date.now()): boolean {
+  return expiryOf(approval) <= now;
 }
 
 // Everyone who approved, as the timeline names them.
@@ -650,7 +715,7 @@ export class Ledger {
       .prepare(
         `INSERT OR IGNORE INTO obligations
            (invoice_id, supplier, supplier_domain, beneficiary_id, currency,
-            amount_minor, transfer_method, reserve_floor_minor, started_by,
+            amount_minor, transfer_method, invoice_floor_minor, started_by,
             supplier_phone)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
@@ -662,7 +727,7 @@ export class Ledger {
         input.currency,
         input.amountMinor,
         input.transferMethod,
-        input.reserveFloorMinor,
+        input.invoiceFloorMinor,
         input.startedBy,
         input.supplierPhone,
       );
@@ -805,6 +870,8 @@ export class Ledger {
       reference: null,
       state: "pending",
       failureCode: null,
+      feeMinor: null,
+      feeCurrency: null,
     };
   }
 
@@ -854,7 +921,7 @@ export class Ledger {
         .prepare(
           `INSERT INTO obligations
              (invoice_id, supplier, supplier_domain, beneficiary_id, currency,
-              amount_minor, transfer_method, reserve_floor_minor, origin,
+              amount_minor, transfer_method, invoice_floor_minor, origin,
               payout_reference, started_by, supplier_phone)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'outside', ?, ?, ?)`,
         )
@@ -866,7 +933,7 @@ export class Ledger {
           input.currency,
           input.amountMinor,
           input.transferMethod,
-          input.reserveFloorMinor,
+          input.invoiceFloorMinor,
           payoutReference,
           input.startedBy,
           input.supplierPhone,
@@ -874,8 +941,9 @@ export class Ledger {
       this.db
         .prepare(
           `INSERT INTO attempts
-             (request_id, invoice_id, kind, transfer_id, reference, state, failure_code)
-           VALUES (?, ?, 'original', ?, ?, ?, ?)`,
+             (request_id, invoice_id, kind, transfer_id, reference, state, failure_code,
+              fee_minor, fee_currency)
+           VALUES (?, ?, 'original', ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           found.requestId,
@@ -884,6 +952,8 @@ export class Ledger {
           found.reference,
           found.state,
           found.failureCode,
+          found.feeMinor,
+          found.feeCurrency,
         );
       this.db.exec("COMMIT");
     } catch (error: unknown) {
@@ -916,8 +986,9 @@ export class Ledger {
     const result: { changes: number | bigint } = this.db
       .prepare(
         `INSERT OR IGNORE INTO outside_payouts
-           (transfer_id, invoice_id, found_at, reference, state)
-         VALUES (?, ?, ?, ?, ?)`,
+           (transfer_id, invoice_id, found_at, reference, state, amount_minor, currency,
+            fee_minor, fee_currency)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         payout.transferId,
@@ -925,6 +996,10 @@ export class Ledger {
         new Date().toISOString(),
         payout.reference,
         payout.state,
+        payout.amountMinor,
+        payout.currency,
+        payout.feeMinor,
+        payout.feeCurrency,
       );
     return Number(result.changes) === 1;
   }
@@ -933,23 +1008,31 @@ export class Ledger {
     return (
       this.db
         .prepare(
-          `SELECT transfer_id, reference, state FROM outside_payouts
-            WHERE invoice_id = ? ORDER BY rowid`,
+          `SELECT transfer_id, reference, state, amount_minor, currency, fee_minor, fee_currency
+             FROM outside_payouts WHERE invoice_id = ? ORDER BY rowid`,
         )
         .all(invoiceId) as unknown as OutsideRow[]
-    ).map(
-      (row: OutsideRow): OutsidePayout => ({
-        transferId: row.transfer_id,
-        reference: row.reference,
-        state: row.state,
-      }),
-    );
+    ).map(toOutsidePayout);
   }
 
-  recordOutsidePayout(transferId: string, state: PayoutState): void {
+  // A value that could not be read keeps the one already on file.
+  recordOutsidePayout(transferId: string, state: PayoutState, money: PayoutMoney): void {
     this.db
-      .prepare("UPDATE outside_payouts SET state = ? WHERE transfer_id = ?")
-      .run(state, transferId);
+      .prepare(
+        `UPDATE outside_payouts
+            SET state = ?, amount_minor = COALESCE(?, amount_minor),
+                currency = COALESCE(?, currency), fee_minor = COALESCE(?, fee_minor),
+                fee_currency = COALESCE(?, fee_currency)
+          WHERE transfer_id = ?`,
+      )
+      .run(
+        state,
+        money.amountMinor,
+        money.currency,
+        money.feeMinor,
+        money.feeCurrency,
+        transferId,
+      );
   }
 
   // The invoice an outside payout is tied to, if any.
@@ -1022,25 +1105,73 @@ export class Ledger {
     return Number(result.changes) === 1;
   }
 
-  // A null state leaves the stored state as it is.
+  // A null state leaves the stored state as it is, and a null fee the stored fee.
   record(
     requestId: string,
     transferId: string,
     reference: string,
     state: AttemptState | null,
     failureCode: string | null,
+    feeMinor: number | null,
+    feeCurrency: string | null,
   ): void {
     const result: { changes: number | bigint } = this.db
       .prepare(
         `UPDATE attempts
             SET transfer_id = ?, reference = ?, state = COALESCE(?, state),
-                failure_code = ?
+                failure_code = ?, fee_minor = COALESCE(?, fee_minor),
+                fee_currency = COALESCE(?, fee_currency)
           WHERE request_id = ?`,
       )
-      .run(transferId, reference, state, failureCode, requestId);
+      .run(transferId, reference, state, failureCode, feeMinor, feeCurrency, requestId);
     if (Number(result.changes) !== 1) {
       throw new Error(`No payment attempt has request_id ${requestId}`);
     }
+  }
+
+  // Failed transfers, PayOnce's and payouts sent outside it, whose fee has not
+  // been recorded, such as those failed before fees were kept.
+  failedWithoutFee(limit: number): string[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT transfer_id FROM attempts
+            WHERE state = 'failed' AND transfer_id IS NOT NULL AND fee_minor IS NULL
+           UNION
+           SELECT transfer_id FROM outside_payouts
+            WHERE state = 'failed' AND fee_minor IS NULL
+           LIMIT ?`,
+        )
+        .all(limit) as unknown as TransferRow[]
+    ).map((row: TransferRow): string => row.transfer_id);
+  }
+
+  // Writes only the fee of a transfer that has none on file, so it never changes
+  // what a look decides on and is safe outside the invoice's turn.
+  recordFee(transferId: string, feeMinor: number, feeCurrency: string): void {
+    for (const table of ["attempts", "outside_payouts"]) {
+      this.db
+        .prepare(
+          `UPDATE ${table} SET fee_minor = ?, fee_currency = ?
+            WHERE transfer_id = ? AND fee_minor IS NULL`,
+        )
+        .run(feeMinor, feeCurrency, transferId);
+    }
+  }
+
+  // The fee most recently recorded for a payment in this currency by this
+  // transfer method, or null when the ledger has none.
+  latestFee(currency: string, method: TransferMethod): number | null {
+    const row: FeeRow | undefined = this.db
+      .prepare(
+        `SELECT attempts.fee_minor FROM attempts
+           JOIN obligations ON obligations.invoice_id = attempts.invoice_id
+          WHERE attempts.fee_minor IS NOT NULL AND attempts.fee_currency = ?
+            AND obligations.transfer_method = ?
+          ORDER BY attempts.rowid DESC LIMIT 1`,
+      )
+      .get(currency, method) as unknown as FeeRow | undefined;
+    return row?.fee_minor ?? null;
   }
 
   // For an attempt Airwallex refused to create. It never became a transfer, so

@@ -1,8 +1,14 @@
 import { getTransfer, type Transfer } from "./airwallex/transfers.js";
 import { attemptStateOf } from "./assess.js";
 import type { Dispatcher } from "./dispatcher.js";
-import { isExpired, type Engine } from "./engine.js";
-import type { Approval, Attempt, AttemptState, OutsidePayout } from "./ledger.js";
+import type { Engine } from "./engine.js";
+import {
+  isExpired,
+  type Approval,
+  type Attempt,
+  type AttemptState,
+  type OutsidePayout,
+} from "./ledger.js";
 import { sweep } from "./sweep.js";
 
 // The fallback for webhooks. It checks every payment the ledger still shows in
@@ -20,6 +26,10 @@ export class Watcher {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private lastSweep: number = 0;
   private sweepRequested: boolean = false;
+  // When a check last went through the payments with the bank. A state the ledger
+  // still shows then is at most one interval old, because a change wakes the
+  // invoice. Null before the first check.
+  lastCheckedAt: number | null = null;
 
   constructor(
     engine: Engine,
@@ -121,6 +131,7 @@ export class Watcher {
         }
       }
     }
+    this.lastCheckedAt = Date.now();
     if (
       this.sweepEveryMs !== null &&
       (this.sweepRequested || Date.now() - this.lastSweep >= this.sweepEveryMs)

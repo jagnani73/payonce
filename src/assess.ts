@@ -1,6 +1,12 @@
 import type { Transfer, TransferBankDetails } from "./airwallex/transfers.js";
 import type { OriginalTransferState } from "./incident.js";
 import type { AttemptState } from "./ledger.js";
+import { readMinor } from "./money.js";
+
+export interface Fee {
+  minor: number;
+  currency: string;
+}
 
 const IN_FLIGHT_STATUSES: ReadonlySet<string> = new Set<string>([
   "SCHEDULED",
@@ -39,6 +45,18 @@ export function originalStateOf(transfer: Transfer): OriginalTransferState {
 export function attemptStateOf(transfer: Transfer): AttemptState | null {
   const state: OriginalTransferState = originalStateOf(transfer);
   return state === "unknown" ? null : state;
+}
+
+// What the payer paid Airwallex for a transfer, for the ledger and the cash panel.
+// A fee the beneficiary pays costs the payer nothing. Null when the fee cannot be
+// read, so recording a transfer never fails on it.
+export function feeOf(transfer: Transfer): Fee | null {
+  const currency: string = transfer.fee_currency ?? transfer.transfer_currency;
+  if (transfer.fee_paid_by === "BENEFICIARY") {
+    return { minor: 0, currency };
+  }
+  const minor: number | null = readMinor(transfer.fee_amount);
+  return minor === null ? null : { minor, currency };
 }
 
 // The bank details as one string, the same whatever order Airwallex sends the

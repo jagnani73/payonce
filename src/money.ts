@@ -10,6 +10,14 @@ export function toMinor(amountMajor: number): number {
   return Math.round(amountMajor * MINOR_UNITS_PER_MAJOR);
 }
 
+// For an amount that is recorded or shown but never decided on: null where
+// toMinor would throw.
+export function readMinor(amountMajor: unknown): number | null {
+  return typeof amountMajor === "number" && Number.isFinite(amountMajor)
+    ? toMinor(amountMajor)
+    : null;
+}
+
 export function toMajor(amountMinor: number): number {
   return amountMinor / MINOR_UNITS_PER_MAJOR;
 }

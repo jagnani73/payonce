@@ -3,6 +3,9 @@ import type { Decision, Incident } from "./incident.js";
 export const OUTSIDE_PAYOUT_REASON: string =
   "a payout for this invoice was sent outside PayOnce";
 
+export const NO_FLOOR_REASON: string =
+  "no reserve floor is set for this currency, so a person approves any replacement";
+
 export function decide(incident: Incident): Decision {
   // PayOnce's lock only covers its own payments, so one sent by someone else
   // stops it sending anything until a person has looked.
@@ -87,10 +90,17 @@ export function decide(incident: Incident): Decision {
     };
   }
 
+  // A currency with no floor set fails closed, as approvals do without APPROVERS.
+  if (incident.reserveFloorMinor === null) {
+    return { action: "escalate", reason: NO_FLOOR_REASON };
+  }
+
+  // Money already promised to other payments is still in the available balance,
+  // so it is taken off before the floor is checked.
   const replacementCostMinor: number =
     incident.amountMinor + incident.transferFeeMinor;
   const balanceAfterMinor: number =
-    incident.availableBalanceMinor - replacementCostMinor;
+    incident.availableBalanceMinor - incident.committedMinor - replacementCostMinor;
 
   // A NaN compares false against everything, so an unreadable cash position must
   // be caught here and not allowed to pass as "above the floor".

@@ -7,6 +7,10 @@ const STARTING_GRACE_MS = 30000;
 // Keep the previous incident on screen this long before showing a loading state.
 const LOADING_DELAY_MS = 250;
 const STARTED_BY_KEY = "payonce.startedBy";
+// Which currencies of the cash panel are open, by currency code.
+const CASH_OPEN_KEY = "payonce.cashOpen";
+// Invoice numbers listed on one line of the cash panel before "and N more".
+const CASH_INVOICES_SHOWN = 5;
 
 const OBLIGATION_STATES = {
   open: { label: "Open", tone: "active" },
@@ -101,6 +105,9 @@ const els = {
   payAgainResult: byId("pay-again-result"),
   emails: byId("emails"),
   findings: byId("findings"),
+  cashFresh: byId("cash-fresh"),
+  cashProblem: byId("cash-problem"),
+  cashCurrencies: byId("cash-currencies"),
 };
 
 const state = {
@@ -136,6 +143,9 @@ const state = {
   bankSaving: false,
   bankError: null,
   bankDrafts: new Map(),
+  // The cash panel as /api/cash last returned it, kept when a later load fails.
+  cash: null,
+  cashError: null,
 };
 
 // Signatures of what each section last drew, so an unchanged poll touches nothing.
@@ -321,6 +331,25 @@ function storeName(value) {
   }
 }
 
+function readCashOpen() {
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(CASH_OPEN_KEY) ?? "{}");
+    return stored !== null && typeof stored === "object" ? stored : {};
+  } catch {
+    return {};
+  }
+}
+
+function storeCashOpen(currency, open) {
+  try {
+    const stored = readCashOpen();
+    stored[currency] = open;
+    window.localStorage.setItem(CASH_OPEN_KEY, JSON.stringify(stored));
+  } catch {
+    // Which currencies are open is not remembered.
+  }
+}
+
 async function api(path, { method = "GET", body } = {}) {
   const headers = { Accept: "application/json" };
   if (body !== undefined) {
@@ -399,6 +428,19 @@ async function loadList() {
   }
 }
 
+async function loadCash() {
+  try {
+    const cash = await api("/api/cash");
+    if (!Array.isArray(cash.currencies) || cash.airwallex === null || typeof cash.airwallex !== "object") {
+      throw new Error("The server sent a cash position this page could not read.");
+    }
+    state.cash = cash;
+    state.cashError = null;
+  } catch (error) {
+    state.cashError = `Could not refresh the cash position. ${error.message}`;
+  }
+}
+
 async function loadDetail() {
   const id = state.selectedId;
   if (id === null) {
@@ -445,6 +487,10 @@ function expectsWork() {
   if (detail?.busy === true || detail?.watching === true) {
     return true;
   }
+  // The server's first balance read shows up as soon as it lands.
+  if (state.cash?.airwallex.refreshing === true && state.cash.airwallex.readAt === null) {
+    return true;
+  }
   // A payment with the bank can change at any moment, by webhook or status check.
   return (state.incidents ?? []).some(
     (incident) => incident.busy === true || incident.watching === true,
@@ -465,7 +511,7 @@ function refresh() {
   refreshing = (async () => {
     do {
       refreshAgain = false;
-      await Promise.all([loadOptions(), loadList(), loadDetail()]);
+      await Promise.all([loadOptions(), loadList(), loadDetail(), loadCash()]);
       if (state.selectedId === null && (state.incidents ?? []).length > 0) {
         setSelected(state.incidents[0].invoiceId);
         refreshAgain = true;
@@ -2256,9 +2302,376 @@ function renderMain() {
   els.detail.hidden = false;
 }
 
+// ---------- cash panel ----------
+
+const WAITING_KINDS = ["awaiting-approval", "awaiting-person"];
+
+function cashAmount(minor) {
+  return typeof minor === "number" && Number.isFinite(minor) ? formatMoney(minor, "") : "Unknown";
+}
+
+// How long ago an ISO time was, measured against when the server answered.
+function since(value, now) {
+  const at = parseDate(value);
+  const reference = parseDate(now) ?? new Date();
+  if (at === null) {
+    return null;
+  }
+  const seconds = Math.max(0, Math.round((reference.getTime() - at.getTime()) / 1000));
+  if (seconds < 60) {
+    return `${seconds} s ago`;
+  }
+  if (seconds < 3600) {
+    return `${Math.floor(seconds / 60)} min ago`;
+  }
+  return `at ${timeFormat.format(at)}`;
+}
+
+function cashFreshness(cash) {
+  if (cash === null) {
+    return state.cashError === null ? "Loading" : "";
+  }
+  const airwallex = cash.airwallex;
+  const read =
+    airwallex.readAt === null
+      ? airwallex.refreshing
+        ? "Reading balances from Airwallex."
+        : "Airwallex balances not read yet."
+      : `Airwallex balances read ${since(airwallex.readAt, cash.generatedAt)}, kept for up to ${airwallex.maxAgeSeconds} s.`;
+  const checked = since(cash.ledger.statesCheckedAt, cash.generatedAt);
+  return `${read} ${checked === null ? "Payment states not checked yet." : `Payment states checked ${checked}.`}`;
+}
+
+function cashProblems(cash) {
+  const problems = [];
+  if (state.cashError !== null) {
+    problems.push(state.cashError);
+  }
+  if (cash === null) {
+    return problems;
+  }
+  const error = cash.airwallex.error;
+  if (error !== null && typeof error === "object") {
+    const failedAt = parseDate(error.at);
+    const readAt = parseDate(cash.airwallex.readAt);
+    const when = failedAt === null ? "" : ` at ${timeFormat.format(failedAt)}`;
+    problems.push(
+      readAt === null
+        ? `Airwallex could not be read${when}: ${withPeriod(error.message)} PayOnce's own figures are current.`
+        : `The last read${when} failed: ${withPeriod(error.message)} The panel shows the read from ${timeFormat.format(readAt)}.`,
+    );
+  }
+  if (typeof cash.floors?.problem === "string" && cash.floors.problem !== "") {
+    problems.push(
+      `Every reserve floor is unreadable, so every automatic replacement goes to a person. ${withPeriod(sentence(cash.floors.problem))}`,
+    );
+  }
+  return problems;
+}
+
+function cashLinesOf(currency, kinds) {
+  return (Array.isArray(currency.lines) ? currency.lines : []).filter((line) => kinds.includes(line.kind));
+}
+
+function cashTotal(lines) {
+  return lines.reduce((sum, line) => sum + line.amountMinor + line.feeMinor, 0);
+}
+
+// Links to the invoices behind a line, five at most.
+function invoiceLinks(lines) {
+  const ids = [...new Set(lines.map((line) => String(line.invoiceId)))];
+  const parts = [];
+  ids.slice(0, CASH_INVOICES_SHOWN).forEach((id, index) => {
+    if (index > 0) {
+      parts.push(", ");
+    }
+    parts.push(h("a", { href: `#${encodeURIComponent(id)}` }, id));
+  });
+  if (ids.length > CASH_INVOICES_SHOWN) {
+    parts.push(` and ${ids.length - CASH_INVOICES_SHOWN} more`);
+  }
+  return parts;
+}
+
+function cashRow(label, detail, amount, tone) {
+  const hasDetail = Array.isArray(detail) ? detail.length > 0 : detail !== null && detail !== "";
+  return h(
+    "div",
+    { class: tone ? `cash-row ${tone}` : "cash-row" },
+    h("dt", null, label, hasDetail && h("span", { class: "cash-row__detail" }, detail)),
+    h("dd", null, amount),
+  );
+}
+
+// A line of money with the invoices it is for. Money headroom takes off reads "- ".
+function moneyRow(currency, label, kinds, subtract) {
+  const lines = cashLinesOf(currency, kinds);
+  const unknown = lines.filter((line) => line.feeKnown !== true).length;
+  const notes = [];
+  if (unknown > 0) {
+    notes.push(unknown === lines.length ? "fee not known" : `fee not known for ${unknown}`);
+  }
+  if (lines.some((line) => line.estimated === true)) {
+    notes.push("amount from the invoice");
+  }
+  const detail = [...invoiceLinks(lines), notes.length > 0 ? ` (${notes.join(", ")})` : null];
+  return cashRow(
+    label,
+    lines.length === 0 ? null : detail,
+    `${subtract ? "- " : ""}${cashAmount(cashTotal(lines))}`,
+    lines.length === 0 ? "is-empty" : null,
+  );
+}
+
+function headroomTone(minor) {
+  if (typeof minor !== "number") {
+    return "is-unknown";
+  }
+  return minor < 0 ? "is-negative" : null;
+}
+
+function cashGroup(tag, tone, when, ...rows) {
+  return h(
+    "div",
+    { class: "cash-group" },
+    h(
+      "p",
+      { class: "cash-group__head" },
+      h("span", { class: `source source--${tone}` }, tag),
+      when,
+    ),
+    rows,
+  );
+}
+
+function floorText(floor) {
+  if (floor.source === "setting") {
+    return cashAmount(floor.minor);
+  }
+  return floor.source === "not-set" ? "Not set" : "Unreadable";
+}
+
+// One count per kind of money that has any, for the closed summary.
+function cashCounts(currency) {
+  const count = (kinds) => cashLinesOf(currency, kinds).length;
+  return [
+    [count(["sending"]), "being sent"],
+    [count(["approved"]), "approved"],
+    [count(WAITING_KINDS), "waiting"],
+    [count(["with-bank"]), "with the bank"],
+    [count(["outside"]), "sent outside PayOnce"],
+  ]
+    .filter(([number]) => number > 0)
+    .map(([number, what]) => `${number} ${what}`)
+    .join(", ");
+}
+
+// Until the person opens or closes it, a currency is open when money in it is
+// promised or waiting on a person, or a headroom is below 0, so the panel stays
+// short enough to leave the incident in view.
+function cashOpen(currency) {
+  const stored = readCashOpen()[currency.currency];
+  if (typeof stored === "boolean") {
+    return stored;
+  }
+  const below = (minor) => typeof minor === "number" && minor < 0;
+  return (
+    cashLinesOf(currency, ["sending", "approved", "pay-run", ...WAITING_KINDS]).length > 0 ||
+    below(currency.headroomMinor) ||
+    below(currency.headroomIfApprovedMinor)
+  );
+}
+
+function buildCurrency(currency, cash) {
+  const code = String(currency.currency);
+  const balance = currency.airwallex;
+  const floor = currency.floor ?? { minor: null, source: "unreadable", invoiceFloors: [] };
+  const neverRead = cash.airwallex.readAt === null;
+  const available = balance === null ? (neverRead ? "Not read" : `No ${code} balance`) : cashAmount(balance.availableMinor);
+
+  const summary = h(
+    "summary",
+    { class: "cash-currency__summary", id: `cash-summary-${code}` },
+    h("span", { class: "cash-currency__code" }, code),
+    h(
+      "span",
+      { class: "cash-stat" },
+      h("span", { class: "cash-stat__label" }, "Available"),
+      h("span", { class: "cash-stat__value" }, available),
+      h("span", { class: "source source--airwallex" }, "Airwallex"),
+    ),
+    h(
+      "span",
+      { class: floor.source === "setting" ? "cash-stat" : "cash-stat is-unknown" },
+      h("span", { class: "cash-stat__label" }, "Floor"),
+      h("span", { class: "cash-stat__value" }, floorText(floor)),
+    ),
+    h(
+      "span",
+      { class: `cash-stat ${headroomTone(currency.headroomMinor) ?? ""}`.trim() },
+      h("span", { class: "cash-stat__label" }, "Headroom"),
+      h("span", { class: "cash-stat__value" }, cashAmount(currency.headroomMinor)),
+    ),
+    h("span", { class: "cash-currency__counts" }, cashCounts(currency)),
+  );
+
+  const airwallexRows = [cashRow("Available", null, available, balance === null ? "is-unknown" : null)];
+  if (balance !== null) {
+    if (typeof balance.reservedMinor === "number") {
+      airwallexRows.push(cashRow("Held for outgoing payments", "reserved", cashAmount(balance.reservedMinor), "is-aside"));
+    }
+    if (typeof balance.pendingMinor === "number") {
+      airwallexRows.push(cashRow("Settling in", "pending conversions", cashAmount(balance.pendingMinor), "is-aside"));
+    }
+    if (typeof balance.prepaymentMinor === "number" && balance.prepaymentMinor !== 0) {
+      airwallexRows.push(
+        cashRow("Held for future-dated payments", "prepayment", cashAmount(balance.prepaymentMinor), "is-aside"),
+      );
+    }
+    if (typeof balance.totalMinor === "number") {
+      airwallexRows.push(cashRow("Total", null, cashAmount(balance.totalMinor), "is-aside"));
+    }
+  }
+
+  const floorRow =
+    floor.source === "setting"
+      ? cashRow("Reserve floor", null, `- ${cashAmount(floor.minor)}`)
+      : floor.source === "not-set"
+        ? cashRow("Reserve floor", `not set, so every automatic replacement in ${code} goes to a person`, "- 0.00", "is-unknown")
+        : cashRow("Reserve floor", "could not be read", "Unknown", "is-unknown");
+  const invoiceFloors = (Array.isArray(floor.invoiceFloors) ? floor.invoiceFloors : []).map((own) =>
+    h(
+      "p",
+      { class: "cash-note" },
+      h("a", { href: `#${encodeURIComponent(own.invoiceId)}` }, own.invoiceId),
+      ` has a stricter floor of its own: ${cashAmount(own.floorMinor)}`,
+    ),
+  );
+
+  const fees = cashLinesOf(currency, ["fee-lost"]);
+  const feesUnknown = fees.filter((line) => line.feeKnown !== true).length;
+  const feesKnown = fees.length - feesUnknown;
+  const ledgerRows = [
+    moneyRow(currency, "Being sent, no transfer yet", ["sending"], true),
+    moneyRow(currency, "Approved, not sent yet", ["approved"], true),
+    cash.payRuns === null
+      ? cashRow("Approved pay runs not sent yet", "Pay runs are not built yet", "", "is-empty")
+      : moneyRow(currency, "Approved pay runs not sent yet", ["pay-run"], true),
+    cashRow("= Headroom", null, cashAmount(currency.headroomMinor), `is-total ${headroomTone(currency.headroomMinor) ?? ""}`.trim()),
+    moneyRow(currency, "Waiting on a person", WAITING_KINDS, true),
+    cashRow(
+      "= Headroom if every waiting payment is approved",
+      null,
+      cashAmount(currency.headroomIfApprovedMinor),
+      `is-total ${headroomTone(currency.headroomIfApprovedMinor) ?? ""}`.trim(),
+    ),
+  ];
+  const outRows = [
+    moneyRow(currency, "With the bank", ["with-bank"], false),
+    moneyRow(currency, "Payouts sent outside PayOnce", ["outside"], false),
+    cashRow(
+      "Fees on failed transfers",
+      feesKnown === 0 ? null : `${feesKnown} ${feesKnown === 1 ? "transfer" : "transfers"}`,
+      cashAmount(cashTotal(fees)),
+      fees.length === 0 ? "is-empty" : null,
+    ),
+  ];
+
+  const body = h(
+    "div",
+    { class: "cash-currency__body" },
+    h(
+      "div",
+      { class: "cash-column" },
+      cashGroup(
+        "Airwallex",
+        "airwallex",
+        h("span", { class: "cash-group__when", "data-cash-age": "airwallex" }),
+        h("dl", { class: "cash__rows" }, airwallexRows),
+      ),
+      cashGroup(
+        "Setting",
+        "setting",
+        h("span", { class: "cash-group__when mono" }, "RESERVE_FLOORS"),
+        h("dl", { class: "cash__rows" }, floorRow),
+        invoiceFloors,
+      ),
+    ),
+    h(
+      "div",
+      { class: "cash-column" },
+      cashGroup(
+        "PayOnce ledger",
+        "ledger",
+        h("span", { class: "cash-group__when", "data-cash-age": "ledger" }),
+        h("dl", { class: "cash__rows" }, ledgerRows),
+        h("p", { class: "cash-group__sub" }, "Already out of available, not subtracted again"),
+        h("dl", { class: "cash__rows" }, outRows),
+        feesUnknown > 0 &&
+          h(
+            "p",
+            { class: "cash-note" },
+            `${feesUnknown} failed ${feesUnknown === 1 ? "transfer has" : "transfers have"} no fee recorded yet.`,
+          ),
+        h("p", { class: "cash-note" }, "The sandbox keeps the fee when a transfer fails."),
+      ),
+    ),
+  );
+
+  const details = h("details", { class: "cash-currency", "data-currency": code }, summary, body);
+  details.open = cashOpen(currency);
+  // Stored on the person's click only, so a currency opened by default follows the
+  // default until someone chooses.
+  summary.addEventListener("click", () => {
+    storeCashOpen(code, !details.open);
+  });
+  return details;
+}
+
+// The ages change on every poll, so they are set on their own nodes and do not
+// redraw the panel.
+function renderCashAges(cash) {
+  const airwallex = cash.airwallex;
+  const read =
+    airwallex.readAt === null
+      ? airwallex.refreshing
+        ? "reading now"
+        : "not read yet"
+      : `read ${since(airwallex.readAt, cash.generatedAt)}`;
+  const checked = since(cash.ledger.statesCheckedAt, cash.generatedAt);
+  const ledger = checked === null ? "as of now" : `as of now, payment states checked ${checked}`;
+  for (const node of els.cashCurrencies.querySelectorAll("[data-cash-age]")) {
+    setText(node, node.dataset.cashAge === "airwallex" ? read : ledger);
+  }
+}
+
+function renderCash() {
+  const cash = state.cash;
+  setText(els.cashFresh, cashFreshness(cash));
+  const problems = cashProblems(cash);
+  if (changed("cashProblems", problems)) {
+    els.cashProblem.replaceChildren(...problems.map((problem) => h("p", null, problem)));
+    els.cashProblem.hidden = problems.length === 0;
+  }
+  if (cash === null) {
+    return;
+  }
+  if (changed("cash", [cash.currencies, cash.payRuns, cash.floors, cash.airwallex.readAt === null])) {
+    const focus = focusedControl(els.cashCurrencies);
+    els.cashCurrencies.replaceChildren(
+      ...(cash.currencies.length === 0
+        ? [h("p", { class: "empty" }, "No currency has a floor, a balance or a payment in the ledger.")]
+        : cash.currencies.map((currency) => buildCurrency(currency, cash))),
+    );
+    restoreFocus(focus);
+  }
+  renderCashAges(cash);
+}
+
 function render() {
   renderForm();
   renderList();
+  renderCash();
   renderMain();
 }
 
