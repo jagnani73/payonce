@@ -1,12 +1,15 @@
 // Turns an email's HTML into the text a person reads. It is one pass with no DOM,
-// and it errs on reading more than a mail client shows: only the content of
-// script, style, title and template is dropped, and comments, CDATA and
-// processing instructions lose their markup but keep the text between. Text a
-// client hides with CSS is kept too. The reader and the page then see the same
-// text, and reading more only adds caution. Every loop moves forward, so the
-// work is linear in the input.
+// and it errs on reading more than a mail client shows. Only the content of
+// script and style is dropped, and when that content reads like words for a
+// person, such as a CSS content string, the result says so and the email counts
+// as partly unread. A comment ends where a browser ends it, at --> or --!>, or at
+// the end of the input. Nothing inside it opens or closes an element, and its
+// text is kept with any markup taken out. Text a client hides with CSS, a title
+// and a template are kept too. The reader and the page then see the same text,
+// and reading more only adds caution. Every loop moves forward, so the work is
+// linear in the input.
 
-const DROPPED: ReadonlySet<string> = new Set<string>(["script", "style", "title", "template"]);
+const DROPPED: ReadonlySet<string> = new Set<string>(["script", "style"]);
 const BREAKS: ReadonlySet<string> = new Set<string>([
   "address", "article", "aside", "blockquote", "br", "caption", "center", "dd", "details",
   "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2", "h3",
@@ -139,31 +142,160 @@ function tagName(tag: string): string {
   return tag.slice(0, end).toLowerCase();
 }
 
-// The end of the element's closing tag: </name followed by whitespace, / or >,
-// in any case. -1 when there is none, and missing remembers where a search found
-// none, so a later search for the same name gives up at once.
-function closeOf(html: string, from: number, name: string, missing: Map<string, number>): number {
+interface Span {
+  start: number;
+  end: number;
+}
+
+// The element's closing tag: </name followed by whitespace, / or >, in any case,
+// from its < to just after its >. Null when there is none, and missing remembers
+// where a search found none, so a later search for the same name gives up at once.
+function closeOf(html: string, from: number, name: string, missing: Map<string, number>): Span | null {
   const known: number | undefined = missing.get(name);
   if (known !== undefined && known <= from) {
-    return -1;
+    return null;
   }
   let position: number = from;
   for (;;) {
     const open: number = html.indexOf("</", position);
     if (open < 0) {
       missing.set(name, from);
-      return -1;
+      return null;
     }
     const after: number = open + 2 + name.length;
     if (html.slice(open + 2, after).toLowerCase() === name) {
       const next: number = after < html.length ? html.charCodeAt(after) : 62;
       if (isSpace(next) || next === 47 || next === 62) {
         const end: number = html.indexOf(">", after);
-        return end < 0 ? html.length : end + 1;
+        return { start: open, end: end < 0 ? html.length : end + 1 };
       }
     }
     position = open + 2;
   }
+}
+
+// A comment whose content starts at from: the content runs to its --> or --!>,
+// or to the end of the input, which ends an unclosed comment.
+function commentOf(html: string, from: number): Span {
+  let position: number = from;
+  for (;;) {
+    const dashes: number = html.indexOf("--", position);
+    if (dashes < 0) {
+      return { start: html.length, end: html.length };
+    }
+    if (html.charCodeAt(dashes + 2) === 62) {
+      return { start: dashes, end: dashes + 3 };
+    }
+    if (html.startsWith("!>", dashes + 2)) {
+      return { start: dashes, end: dashes + 4 };
+    }
+    position = dashes + 1;
+  }
+}
+
+// A comment's content with anything tag-like taken out and its text kept, so an
+// Outlook conditional comment reads as Outlook shows it. Nothing in it opens or
+// closes an element.
+function commentText(content: string): string {
+  const parts: string[] = [];
+  const condition: RegExpExecArray | null = /^\[if [^\]>]{0,100}\]>/.exec(content.slice(0, 110));
+  let index: number = condition === null ? 0 : condition[0].length;
+  const trimmed: string = content.trimEnd();
+  const stop: number = trimmed.endsWith("<![endif]") ? trimmed.length - 9 : content.length;
+  while (index < stop) {
+    let open: number = content.indexOf("<", index);
+    while (open >= 0 && open < stop && !opensTag(content.charCodeAt(open + 1))) {
+      open = content.indexOf("<", open + 1);
+    }
+    if (open < 0 || open >= stop) {
+      parts.push(content.slice(index, stop));
+      break;
+    }
+    parts.push(content.slice(index, open));
+    const end: number = tagEnd(content, open + 1, false);
+    if (end < 0 || end >= stop) {
+      const window: number = Math.min(stop, open + MAX_TAG_LENGTH);
+      parts.push(content.slice(open, window));
+      index = window;
+      continue;
+    }
+    parts.push(" ");
+    index = end + 1;
+  }
+  return parts.join("");
+}
+
+// Script and style with CSS and script comments taken out. Each kind of comment
+// is searched for once from where the last one was found, so this stays linear.
+function withoutCodeComments(code: string): string {
+  const parts: string[] = [];
+  let index: number = 0;
+  let block: number = code.indexOf("/*");
+  let line: number = code.indexOf("//");
+  while (index < code.length) {
+    if (block >= 0 && block < index) {
+      block = code.indexOf("/*", index);
+    }
+    if (line >= 0 && line < index) {
+      line = code.indexOf("//", index);
+    }
+    if (block < 0 && line < 0) {
+      parts.push(code.slice(index));
+      break;
+    }
+    const start: number = block < 0 ? line : line < 0 ? block : Math.min(block, line);
+    parts.push(code.slice(index, start), " ");
+    const close: number = start === block ? code.indexOf("*/", start + 2) : code.indexOf("\n", start + 2);
+    index = close < 0 ? code.length : close + (start === block ? 2 : 1);
+  }
+  return parts.join("");
+}
+
+// Four or more words of letters in a row, which reads as something meant for a
+// person. CSS such as "@media only screen and" stops short of it.
+function wordRun(text: string): boolean {
+  let run: number = 0;
+  for (const token of text.split(/\s+/)) {
+    const word: string = /[.,;:!?]$/.test(token) ? token.slice(0, -1) : token;
+    run = word.length >= 2 && /^\p{L}+$/u.test(word) ? run + 1 : 0;
+    if (run >= 4) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// True when dropped script or style content holds words for a person: a run of
+// them, or one inside a quoted string, such as content:"Pay our new account".
+function looksVisible(content: string): boolean {
+  const code: string = withoutCodeComments(content);
+  if (wordRun(code)) {
+    return true;
+  }
+  let index: number = 0;
+  let double: number = code.indexOf("\"");
+  let single: number = code.indexOf("'");
+  while (index < code.length) {
+    if (double >= 0 && double < index) {
+      double = code.indexOf("\"", index);
+    }
+    if (single >= 0 && single < index) {
+      single = code.indexOf("'", index);
+    }
+    const open: number = double < 0 ? single : single < 0 ? double : Math.min(double, single);
+    if (open < 0) {
+      return false;
+    }
+    const close: number = code.indexOf(code.charAt(open), open + 1);
+    if (close < 0) {
+      return false;
+    }
+    if (wordRun(code.slice(open + 1, close))) {
+      return true;
+    }
+    index = close + 1;
+  }
+  return false;
 }
 
 function altOf(tag: string): string {
@@ -171,10 +303,18 @@ function altOf(tag: string): string {
   return match === null ? "" : decodeEntities(match[1] ?? match[2] ?? match[3] ?? "").trim();
 }
 
-export function htmlToText(html: string): string {
+// The text of an HTML part. hiddenText is true when script or style content
+// PayOnce dropped reads like words a person could be shown.
+export interface HtmlText {
+  text: string;
+  hiddenText: boolean;
+}
+
+export function htmlToText(html: string): HtmlText {
   const out: string[] = [];
   const missing: Map<string, number> = new Map<string, number>();
   let preDepth: number = 0;
+  let hiddenText: boolean = false;
   const text = (chunk: string): void => {
     if (chunk === "") {
       return;
@@ -198,20 +338,18 @@ export function htmlToText(html: string): string {
     index = open;
     if (html.startsWith("<!--", index)) {
       // <!--> and <!---> are whole comments in HTML.
-      index += html.startsWith("<!-->", index) ? 5 : html.startsWith("<!--->", index) ? 6 : 4;
-      // What is left of an Outlook conditional comment. Its content is read.
-      const condition: RegExpExecArray | null = /^\[if [^\]>]{0,100}\]>/.exec(html.slice(index, index + 110));
-      if (condition !== null) {
-        index += condition[0].length;
+      if (html.startsWith("<!-->", index) || html.startsWith("<!--->", index)) {
+        index += html.startsWith("<!-->", index) ? 5 : 6;
+        continue;
       }
-      continue;
-    }
-    if (html.startsWith("<![CDATA[", index)) {
-      index += 9;
+      const comment: Span = commentOf(html, index + 4);
+      text(commentText(html.slice(index + 4, comment.start)));
+      index = comment.end;
       continue;
     }
     const next: number = html.charCodeAt(index + 1);
-    // <!DOCTYPE>, <!x> and <?x> end at the first >, quotes or not.
+    // <!DOCTYPE>, <![CDATA[, <!x> and <?x> are bogus comments, which end at the
+    // first >, quotes or not.
     const bogus: boolean = next === 33 || next === 63;
     const end: number = tagEnd(html, index + 1, !bogus);
     if (end < 0) {
@@ -229,9 +367,10 @@ export function htmlToText(html: string): string {
     const name: string = tagName(closing ? tag.slice(1) : tag);
     if (!closing && DROPPED.has(name)) {
       // With no closing tag the content is read as text, which shows more.
-      const close: number = closeOf(html, index, name, missing);
-      if (close >= 0) {
-        index = close;
+      const close: Span | null = closeOf(html, index, name, missing);
+      if (close !== null) {
+        hiddenText = hiddenText || looksVisible(html.slice(index, close.start));
+        index = close.end;
       }
       continue;
     }
@@ -252,11 +391,14 @@ export function htmlToText(html: string): string {
       }
     }
   }
-  return out
-    .join("")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n[ \t]+/g, "\n")
-    .replace(/ {2,}/g, " ")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  return {
+    text: out
+      .join("")
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n[ \t]+/g, "\n")
+      .replace(/ {2,}/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim(),
+    hiddenText,
+  };
 }

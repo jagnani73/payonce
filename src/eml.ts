@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { storable } from "./audit-trail.js";
 import type { EmailAttachment } from "./emails.js";
-import { htmlToText } from "./html-text.js";
+import { htmlToText, type HtmlText } from "./html-text.js";
 
 // Reads a raw email (an .eml file, or the source a mail client shows) into the
 // sender, subject, text and attachment list PayOnce keeps. It works on bytes,
@@ -28,9 +28,12 @@ const MAX_TEXT_PARTS: number = 16;
 const MAX_ATTACHMENTS: number = 50;
 const MAX_REPLY_TO: number = 5;
 const MAX_COMMENT_DEPTH: number = 8;
-// Two parts are compared on this much of their words, which is more than the
-// body keeps.
-const COMPARE_CHARS: number = 2 * MAX_BODY_CHARS;
+// The parts a signature may follow in multipart/signed.
+const SIGNATURE_TYPES: ReadonlySet<string> = new Set<string>([
+  "application/pgp-signature",
+  "application/pkcs7-signature",
+  "application/x-pkcs7-signature",
+]);
 
 // PayOnce's notes about an email. They are codes, shown in PayOnce's words and
 // kept apart from the text a sender wrote, so an email cannot forge one.
@@ -52,7 +55,9 @@ export type EmailNote =
   | "message-id"
   | "versions-differ"
   | "only-attachments"
-  | "more-attachments";
+  | "more-attachments"
+  | "hidden-html"
+  | "signed-parts";
 
 export const NOTE_TEXT: Record<EmailNote, string> = {
   cut: `PayOnce kept the first ${MAX_BODY_CHARS.toLocaleString("en-US")} characters of its text. Nobody read the rest`,
@@ -73,6 +78,8 @@ export const NOTE_TEXT: Record<EmailNote, string> = {
   "versions-differ": "Its plain-text and HTML versions do not say the same thing, so both are shown",
   "only-attachments": "It has no text, only attachments, which PayOnce does not open",
   "more-attachments": `It has more than ${MAX_ATTACHMENTS} attachments. PayOnce lists the first ${MAX_ATTACHMENTS}`,
+  "hidden-html": "Its HTML has words inside a style or script block, which PayOnce did not read",
+  "signed-parts": "Its signed section has more than two parts, and mail clients disagree on which to show",
 };
 
 // Notes about text nobody read. An email with any of them counts as partly
@@ -87,7 +94,16 @@ export const PARTIAL_NOTES: ReadonlySet<EmailNote> = new Set<EmailNote>([
   "skipped-line",
   "repeated-mime",
   "encoded-header",
+  "hidden-html",
+  "signed-parts",
 ]);
+
+// The notes as PayOnce words them. A code it does not know is left out.
+export function noteTexts(codes: string[]): string[] {
+  return codes
+    .filter((code: string): code is EmailNote => Object.hasOwn(NOTE_TEXT, code))
+    .map((code: EmailNote): string => NOTE_TEXT[code]);
+}
 
 export interface ParsedEmail {
   messageId: string | null;
@@ -784,12 +800,13 @@ function listPart(raw: Buffer, headers: Headers, start: number, end: number, typ
   });
 }
 
-const URLS: RegExp = /\b(?:https?:|mailto:|ftp:|www\.)\S*/gi;
-
-// The words of a text part, so a plain and an HTML version that say the same
-// thing are read once.
-function wordsOf(text: string): string {
-  return (text.slice(0, COMPARE_CHARS).toLowerCase().replace(URLS, " ").match(/[\p{L}\p{N}]+/gu) ?? []).join(" ");
+// A text part as it is compared with the others: cleaned, with whitespace
+// collapsed and case folded, and hashed. Only a part identical to one read
+// already is left out, so a plain and an HTML version that differ in an amount,
+// an account number or a link are both read.
+function sameTextKey(text: string): string {
+  const folded: string = cleanText(text).replace(/\s+/g, " ").trim().toLowerCase();
+  return folded === "" ? "" : sha256(folded);
 }
 
 // format=flowed: a line ending in a space continues on the next, and delsp=yes
@@ -844,17 +861,21 @@ function readText(raw: Buffer, start: number, end: number, type: ContentType, en
     return;
   }
   const decoded: string = decoder.decode(bytes);
-  const text: string =
-    type.type === "text/html"
-      ? htmlToText(decoded)
-      : asciiLower(type.params.get("format") ?? "") === "flowed"
-        ? reflow(decoded, asciiLower(type.params.get("delsp") ?? "") === "yes")
-        : decoded;
-  const words: string = wordsOf(text);
-  if (words === "" || walk.read.has(words)) {
+  let text: string = decoded;
+  if (type.type === "text/html") {
+    const html: HtmlText = htmlToText(decoded);
+    if (html.hiddenText) {
+      walk.notes.add("hidden-html");
+    }
+    text = html.text;
+  } else if (asciiLower(type.params.get("format") ?? "") === "flowed") {
+    text = reflow(decoded, asciiLower(type.params.get("delsp") ?? "") === "yes");
+  }
+  const key: string = sameTextKey(text);
+  if (key === "" || walk.read.has(key)) {
     return;
   }
-  walk.read.add(words);
+  walk.read.add(key);
   walk.texts.push(text);
 }
 
@@ -992,17 +1013,24 @@ function walkPart(
       readText(raw, start, end, { type: "text/plain", params: new Map<string, string>() }, encoding, walk);
       return;
     }
-    if (type.type === "multipart/signed") {
-      walk.notes.add("signed");
+    // A signed section is the signed part and then its signature. Any other part
+    // is walked like a part of any section, and a third part makes the email
+    // partly unread, because clients disagree on which parts they show.
+    const signed: boolean = type.type === "multipart/signed";
+    if (signed) {
+      walk.notes.add(ranges.length > 2 ? "signed-parts" : "signed");
     }
     const before: number = walk.texts.length;
     ranges.forEach((range: Range, index: number): void => {
       const part: Headers = readHeaders(raw, range.start, range.end, walk);
-      if (type.type === "multipart/signed" && index > 0) {
-        walk.parts += 1;
-        const signature: ContentType = parseParameters(part.fields.get("content-type")?.[0] ?? "application/octet-stream", walk);
-        listPart(raw, part, part.bodyStart, range.end, signature, asciiLower((part.fields.get("content-transfer-encoding")?.[0] ?? "").trim()), walk);
-        return;
+      const partType: string | undefined = part.fields.get("content-type")?.[0];
+      if (signed && index === 1 && partType !== undefined) {
+        const signature: ContentType = parseParameters(partType, walk);
+        if (SIGNATURE_TYPES.has(signature.type)) {
+          walk.parts += 1;
+          listPart(raw, part, part.bodyStart, range.end, signature, asciiLower((part.fields.get("content-transfer-encoding")?.[0] ?? "").trim()), walk);
+          return;
+        }
       }
       walkPart(raw, part, range.end, depth + 1, [...boundaries, boundary], type.type, walk);
     });
