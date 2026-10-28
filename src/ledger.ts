@@ -875,17 +875,18 @@ export class Ledger {
   // Spends the approval to pay a held invoice, hands the invoice back to the
   // agent and opens its original's attempt, in one transaction, so a crash or a
   // failed write cannot leave it open with nothing sent. Undefined, with nothing
-  // changed, when the approval is no longer approved or the invoice is no longer
-  // held: a person closed it, it has sent something, or a payout for it sent
-  // outside PayOnce is live.
+  // changed, when the approval is no longer approved or has expired, or the
+  // invoice is no longer held: a person closed it, it has sent something, or a
+  // payout for it sent outside PayOnce is live.
   releaseFor(invoiceId: string, approvalId: number): Attempt | undefined {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const used: { changes: number | bigint } = this.db
         .prepare(
-          "UPDATE approvals SET state = 'used' WHERE id = ? AND invoice_id = ? AND state = 'approved'",
+          `UPDATE approvals SET state = 'used'
+            WHERE id = ? AND invoice_id = ? AND state = 'approved' AND expires_at > ?`,
         )
-        .run(approvalId, invoiceId);
+        .run(approvalId, invoiceId, new Date().toISOString());
       const released: { changes: number | bigint } = this.db
         .prepare(
           `UPDATE obligations SET state = 'open'
@@ -1100,11 +1101,14 @@ export class Ledger {
   }
 
   // Spends an approval on one payment. False when it is no longer approved, for
-  // example because another process voided it in the meantime.
+  // example because another process voided it in the meantime, or when it has
+  // expired since the look checked it.
   useApproval(id: number): boolean {
     const result: { changes: number | bigint } = this.db
-      .prepare("UPDATE approvals SET state = 'used' WHERE id = ? AND state = 'approved'")
-      .run(id);
+      .prepare(
+        "UPDATE approvals SET state = 'used' WHERE id = ? AND state = 'approved' AND expires_at > ?",
+      )
+      .run(id, new Date().toISOString());
     return Number(result.changes) === 1;
   }
 
