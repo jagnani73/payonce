@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
+import { validDomain } from "./eml.js";
 import { INVOICE_ID_PATTERN, type TransferMethod } from "./ledger.js";
 import { PAID_OUTCOME, SANDBOX_OUTCOMES } from "./sandbox-bank.js";
 
 // A column a pay run file can have. Nothing else is read from a file: no bank
-// details, no phone number and no email domain.
+// details and no phone number. supplier_domain is the domain the supplier's
+// emails come from. Without it, every sender of an email about the row's
+// invoice is flagged.
 export interface RunColumn {
   name: string;
   required: boolean;
@@ -17,6 +20,7 @@ export const RUN_COLUMNS: RunColumn[] = [
   { name: "currency", required: true },
   { name: "method", required: false },
   { name: "sandbox_outcome", required: false },
+  { name: "supplier_domain", required: false },
 ];
 
 // Columns that would name a wallet to pay from. A run pays each row in its own
@@ -50,6 +54,8 @@ export interface RunFileRow {
   // Null when the cell is blank, so the beneficiary's own method is used.
   method: TransferMethod | null;
   sandboxOutcome: string;
+  // A plain ASCII domain, lowercased, or null when the cell is blank.
+  supplierDomain: string | null;
 }
 
 export interface RunFile {
@@ -269,6 +275,15 @@ export function rowFromCells(line: number, columns: string[], cells: string[]): 
     );
   }
 
+  // Compared as ASCII only, so only A to Z is lowercased.
+  const domainCell: string = value("supplier_domain");
+  const domain: string = domainCell.replace(/[A-Z]/g, (letter: string): string => letter.toLowerCase());
+  if (domainCell !== "" && !validDomain(domain)) {
+    problems.push(
+      `The supplier_domain ${domainCell.slice(0, 40)} is not a plain domain such as example.com, in letters, digits, hyphens and dots`,
+    );
+  }
+
   return {
     line,
     cells,
@@ -280,6 +295,7 @@ export function rowFromCells(line: number, columns: string[], cells: string[]): 
     currency,
     method,
     sandboxOutcome: outcomeCell === "" || !SANDBOX_OUTCOMES.includes(outcomeCell) ? PAID_OUTCOME : outcomeCell,
+    supplierDomain: domainCell === "" || !validDomain(domain) ? null : domain,
   };
 }
 

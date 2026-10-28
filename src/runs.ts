@@ -773,6 +773,12 @@ function settleRunRequest(
   return lines;
 }
 
+// A row's supplier_domain, read again from its stored cells. Empty when the file
+// has none for it.
+function domainOf(run: Run, row: RunRow | undefined): string {
+  return row === undefined ? "" : (rowFromCells(row.line, run.columns, row.cells).supplierDomain ?? "");
+}
+
 // Reads a run's rows again from the cells the ledger stored.
 function fileRowsOf(ledger: Ledger, run: Run): RunFileRow[] {
   return ledger
@@ -994,6 +1000,8 @@ export async function releaseRun(engine: Engine, agent: Dispatcher, runId: numbe
   const stored: RunRow[] = ledger.runRows(runId);
   const releaseRows: ReleaseRow[] = approved.rows.map((row: RunRowTerms): ReleaseRow => ({
     rowId: stored.find((entry: RunRow): boolean => entry.line === row.line)?.id ?? 0,
+    // From the cells the file hash in the approved terms covers.
+    supplierDomain: domainOf(run, stored.find((entry: RunRow): boolean => entry.line === row.line)),
     line: row.line,
     invoiceId: row.invoiceId,
     payee: payees.get(row.line) ?? row.payTo,

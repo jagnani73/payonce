@@ -1088,6 +1088,8 @@ export interface ReleaseRow {
   payTo: string;
   // The invoice's first timeline line, chained like any other.
   firstLine: string;
+  // The domain the supplier's emails come from, from the file. Empty for none.
+  supplierDomain: string;
 }
 
 // A currency lock held for one payment or one release. The ledger opens an
@@ -3026,11 +3028,12 @@ export class Ledger {
                  (invoice_id, supplier, supplier_domain, beneficiary_id, currency, amount_minor,
                   transfer_method, invoice_floor_minor, started_by, supplier_phone, run_row_id,
                   look_at, source_currency)
-               VALUES (?, ?, '', ?, ?, ?, ?, 0, ?, NULL, ?, ?, NULL)`,
+               VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, ?, ?, NULL)`,
             )
             .run(
               row.invoiceId,
               row.payee,
+              row.supplierDomain,
               row.beneficiaryId,
               row.currency,
               row.amountMinor,
