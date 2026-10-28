@@ -422,8 +422,9 @@ function runSituation(run: Run, status: RunStatus, approval: RunApproval | undef
   if (status === "waiting-approval" && approval !== undefined) {
     return situation("person", "run-waiting-approval", `Pay run ${run.id} waits for approval (${progress(approval)})`);
   }
+  // The server's watcher releases an approved run, so the next step is PayOnce's.
   if (status === "approved") {
-    return situation("person", "run-approved", `Pay run ${run.id} is approved and waits for its release`);
+    return situation("open", "run-approved", `Pay run ${run.id} is approved, and PayOnce releases it on its next check`);
   }
   if (status === "expired") {
     return situation("person", "run-expired", `The approval request for pay run ${run.id} expired. Check the run again`);
