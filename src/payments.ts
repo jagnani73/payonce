@@ -79,6 +79,9 @@ export async function sendAttempt(
       `${obligation.invoiceId} is paid from ${obligation.sourceCurrency} and its ${attempt.kind} payment has no approved exchange rate quote, so PayOnce sent nothing`,
     );
   }
+  // Each try is on file before Airwallex is called, so a look that would mark the
+  // attempt never sent counts its bank deadline from this try.
+  ledger.tried(attempt.requestId, Date.now());
   let transfer: Transfer;
   try {
     transfer = await createTransfer(client, {

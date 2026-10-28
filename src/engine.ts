@@ -1239,15 +1239,29 @@ function holdRetryForOutsidePayout(engine: Engine, invoiceId: string, attempt: A
   return holdForOutsidePayout(engine, invoiceId);
 }
 
+// When a pending attempt with no transfer counts as never sent: a bank deadline
+// of its method after its latest create try, or after it was opened when it has
+// had none. One with neither time on file is given a try time now, so it waits a
+// full deadline and is never failed on the first look.
+function neverSentAt(engine: Engine, obligation: Obligation, attempt: Attempt): number {
+  let from: number = Date.parse(attempt.triedAt ?? attempt.openedAt ?? "");
+  if (!Number.isFinite(from)) {
+    from = Date.now();
+    engine.ledger.tried(attempt.requestId, from);
+  }
+  return from + deadlineMinutes(obligation.transferMethod) * 60_000;
+}
+
 // A pending attempt with no transfer, on an invoice a payout sent outside PayOnce
-// has paid. It is held as any retry is until the bank deadline of its method has
-// passed since it was opened, and the look comes back then. After that, if
-// Airwallex still lists no transfer under its request id, it never became one:
-// it is marked failed, which releases the duplicate lock, and a person can close
-// the invoice as paid outside PayOnce. failAttempt changes only an attempt still
-// pending with no transfer. A transfer listed by then is recorded by the next
-// look, due at once. An attempt from before the opening time was kept counts as
-// past its deadline, as isOverdue counts a time it cannot read.
+// has paid. It is held as any retry is until neverSentAt, and the look comes back
+// then. After that, if Airwallex still lists no transfer under its request id, it
+// never became one: it is marked failed, which releases the duplicate lock, and a
+// person can close the invoice as paid outside PayOnce. The attempt is read
+// again, listed and failed under the lock of the wallet it pays from, which a
+// retry holds from its create try to recording the transfer, so no try is under
+// way meanwhile, and a try another process made since this look read it moves
+// the deadline on. failAttempt changes only an attempt still pending with no
+// transfer. A transfer listed by then is recorded by the next look, due at once.
 async function failNeverSent(
   engine: Engine,
   obligation: Obligation,
@@ -1256,34 +1270,53 @@ async function failNeverSent(
 ): Promise<NextLook> {
   const invoiceId: string = obligation.invoiceId;
   const kind: string = capitalise(attempt.kind);
-  const deadline: number =
-    Date.parse(attempt.openedAt ?? "") + deadlineMinutes(obligation.transferMethod) * 60_000;
   engine.ledger.escalate(invoiceId, OUTSIDE_PAYOUT_REASON);
-  if (Date.now() < deadline) {
-    note(
+  let deadline: number = neverSentAt(engine, obligation, attempt);
+  if (Date.now() >= deadline) {
+    const failed: boolean | number = await withCurrencyLock(
       engine.ledger,
-      invoiceId,
-      "warning",
-      `${kind} payment not sent again: payout ${paidBy.reference} sent outside PayOnce has paid this invoice. If Airwallex still lists no transfer for the ${attempt.kind} at ${new Date(deadline).toISOString().slice(11, 16)} UTC, a bank deadline after it was opened, PayOnce marks it failed and a person can close the invoice`,
-      "retry",
+      debitCurrency(obligation),
+      async (): Promise<boolean | number> => {
+        const now: Attempt | undefined = engine.ledger
+          .attempts(invoiceId)
+          .find((current: Attempt): boolean => current.requestId === attempt.requestId);
+        if (now === undefined || now.state !== "pending" || now.transferId !== null) {
+          return false;
+        }
+        const due: number = neverSentAt(engine, obligation, now);
+        if (Date.now() < due) {
+          return due;
+        }
+        return (
+          (await findTransferByRequestId(engine.client, attempt.requestId)) === undefined &&
+          engine.ledger.failAttempt(attempt.requestId, null)
+        );
+      },
     );
-    holdForOutsidePayout(engine, invoiceId);
-    return deadline;
-  }
-  if (
-    (await findTransferByRequestId(engine.client, attempt.requestId)) !== undefined ||
-    !engine.ledger.failAttempt(attempt.requestId, null)
-  ) {
-    return Date.now();
+    if (failed === false) {
+      return Date.now();
+    }
+    if (failed === true) {
+      note(
+        engine.ledger,
+        invoiceId,
+        "payment",
+        `${kind} payment marked failed: Airwallex lists no transfer under its request id a bank deadline after it was last tried, and payout ${paidBy.reference} sent outside PayOnce has paid this invoice. PayOnce sent nothing for it, so a person can close the invoice`,
+        "retry",
+      );
+      return holdForOutsidePayout(engine, invoiceId);
+    }
+    deadline = failed;
   }
   note(
     engine.ledger,
     invoiceId,
-    "payment",
-    `${kind} payment marked failed: Airwallex lists no transfer under its request id a bank deadline after it was opened, and payout ${paidBy.reference} sent outside PayOnce has paid this invoice. PayOnce sent nothing for it, so a person can close the invoice`,
+    "warning",
+    `${kind} payment not sent again: payout ${paidBy.reference} sent outside PayOnce has paid this invoice. If Airwallex still lists no transfer for the ${attempt.kind} at ${new Date(deadline).toISOString().slice(11, 16)} UTC, a bank deadline after it was last tried, PayOnce marks it failed and a person can close the invoice`,
     "retry",
   );
-  return holdForOutsidePayout(engine, invoiceId);
+  holdForOutsidePayout(engine, invoiceId);
+  return deadline;
 }
 
 // When a request opened now on this quote stops covering a payment: its TTL, or

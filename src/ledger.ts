@@ -442,6 +442,9 @@ export interface Attempt {
   // When PayOnce opened it. Null on attempts from before this was kept and on a
   // found payout's.
   openedAt: string | null;
+  // When PayOnce last asked Airwallex to create its transfer. Null until the first
+  // try, and on a found payout's.
+  triedAt: string | null;
 }
 
 // The quote an attempt is sent with, from the terms of the approval it was opened
@@ -923,6 +926,8 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     // When PayOnce opened the attempt, as an ISO time. Null on attempts from
     // before the column and on a found payout's.
     opened_at: "TEXT",
+    // When PayOnce last called Airwallex to create the transfer, as an ISO time.
+    tried_at: "TEXT",
   },
   rail_failures: {
     // When the transfer failed by Airwallex's updated_at, or when PayOnce first
@@ -988,6 +993,7 @@ interface AttemptRow {
   bank_status: string | null;
   arrival: string | null;
   opened_at: string | null;
+  tried_at: string | null;
 }
 
 export class DuplicatePaymentError extends Error {
@@ -1078,6 +1084,7 @@ function toAttempt(row: AttemptRow): Attempt {
     bankStatus: row.bank_status ?? null,
     arrival: row.arrival === null || row.arrival === undefined ? null : (JSON.parse(row.arrival) as ArrivalTerms),
     openedAt: row.opened_at ?? null,
+    triedAt: row.tried_at ?? null,
   };
 }
 
@@ -1643,6 +1650,15 @@ export class Ledger {
               this.db.exec(
                 "UPDATE obligations SET invoice_floor_minor = reserve_floor_minor WHERE reserve_floor_minor <> 0",
               );
+            }
+            // A pending attempt with no transfer from before tries were kept may
+            // have been tried at any time, so it counts as tried now.
+            if (table === "attempts" && name === "tried_at") {
+              this.db
+                .prepare(
+                  "UPDATE attempts SET tried_at = ? WHERE state = 'pending' AND transfer_id IS NULL",
+                )
+                .run(new Date().toISOString());
             }
           }
         }
@@ -2338,6 +2354,7 @@ export class Ledger {
       bankStatus: null,
       arrival: null,
       openedAt,
+      triedAt: null,
     };
   }
 
@@ -2695,6 +2712,14 @@ export class Ledger {
     this.db
       .prepare("UPDATE attempts SET rate_mismatch = ? WHERE request_id = ?")
       .run(reason, requestId);
+  }
+
+  // Written just before each call that creates the attempt's transfer, so a look
+  // in another process counts a bank deadline from the latest try.
+  tried(requestId: string, at: number): void {
+    this.db
+      .prepare("UPDATE attempts SET tried_at = ? WHERE request_id = ?")
+      .run(new Date(at).toISOString(), requestId);
   }
 
   // For an attempt that never became a transfer: Airwallex refused to create it,
