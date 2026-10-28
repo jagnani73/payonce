@@ -218,6 +218,23 @@ PayOnce reads each transfer's fee and keeps it in the ledger, and fills in older
 
 `pnpm cash` prints the same figures in the terminal after one fresh read. It exits with 1 when Airwallex could not be read, the floor setting is unreadable or a headroom is below 0, so a script can check it.
 
+## Incident board
+
+The page opens on the incident board, under the cash panel. It lists every invoice that is not closed, and the rows of a pay run waiting for approval, in four groups, most urgent first:
+
+1. Waiting on a person, with money that could still leave a wallet: an approval request that is open, or approved and not used yet, an invoice held before paying, a failed payment with no request open, a pay run waiting for approval, or an invoice named by an email waiting in the inbox.
+2. Bank deadline passed: a payment still with the bank after its deadline.
+3. With the bank: a payment, or a payout sent outside PayOnce, that the bank still has.
+4. Everything else that is open, such as a paid invoice waiting for someone to close it, or a pay run row waiting for its turn.
+
+Within a group, the invoice with the most money at risk comes first, then the oldest. Money at risk is what could still leave a wallet for the invoice, fee included, in the currency of the wallet it leaves: a payment being sent, approved or waiting on a person, a held invoice's amount, a pay run row, or a payment still with the bank. For an invoice paid from another wallet it is the quote's amount. The board takes these figures from the cash panel and never works them out another way.
+
+The totals at the top add them up per currency. Their parts "approved or being sent", "waiting on a person" and "with the bank" match the cash panel's lines. A pay run waiting for approval gets a part of its own, because the cash panel counts a run only once it is approved. PayOnce has no exchange rates, so the board ranks amounts in different currencies as plain numbers. Filter by wallet to rank one currency on its own.
+
+Each row gives the invoice, the supplier, the amount and the wallet it is paid from, why it is in its group, how long since PayOnce took it on, and a link to the incident, or to the pay run for a row not released yet. The reasons are PayOnce's own fixed words, never an email's. The board has no buttons of its own: the cards on the incident do the work. You can filter by group, by wallet and by origin (PayOnce, sent outside PayOnce, pay run). The board reads only the ledger and refreshes with the incident list. The incident list stays in the sidebar, and the "Incident board" button in the top bar brings the board back.
+
+`pnpm board` prints the same ranking in the terminal. It takes the same filters as words in any order, such as `pnpm board deadline USD outside`.
+
 ## Pay runs
 
 A pay run pays a batch of invoices from one CSV file on one approval. Upload the file on the page under "Pay run", or with `pnpm payrun upload <FILE> <NAME>`.
@@ -319,7 +336,7 @@ For a model to read the emails, create a Gemini API key in Google AI Studio and 
 pnpm ui
 ```
 
-Open `http://127.0.0.1:4310`. `docs/demo.md` walks through four incidents in under five minutes. Choose a payment, a bank outcome and a supplier email thread, then start an incident. The page follows it step by step. The agent waits for a webhook or a status check after each bank outcome, so an incident takes up to a minute in the sandbox. When an incident is waiting on a person, the approval card shows the terms and takes a name. If the bank has paid the invoice, a close card takes a name and a note instead. "Check again" continues an incident that stopped part-way.
+Open `http://127.0.0.1:4310`. The page opens on the [incident board](#incident-board). `docs/demo.md` walks through four incidents in under five minutes. Choose a payment, a bank outcome and a supplier email thread, then start an incident. The page follows it step by step. The agent waits for a webhook or a status check after each bank outcome, so an incident takes up to a minute in the sandbox. When an incident is waiting on a person, the approval card shows the terms and takes a name. If the bank has paid the invoice, a close card takes a name and a note instead. "Check again" continues an incident that stopped part-way.
 
 The server has no login. It listens on this machine only and accepts changes only from its own page.
 
@@ -332,6 +349,7 @@ pnpm close <INVOICE> [NAME] [NOTE]
 pnpm run audit [INVOICE] [json|csv]
 pnpm run audit run <RUN> [json|csv]
 pnpm cash
+pnpm board [FILTER...]
 pnpm payrun upload <FILE> <NAME>
 pnpm payrun show <RUN>
 pnpm payrun approve <RUN> [REQUEST NAME]
@@ -403,6 +421,7 @@ In the fifth, `inv-05002` has the same supplier, amount and number as INV-5002, 
 | `src/payments.ts` | Sends an attempt under its `request_id`, syncs transfer state and fees into the ledger, and fills in fees missing from older failed transfers |
 | `src/reserve.ts` | The reserve floors from `RESERVE_FLOORS`, the floor one invoice's replacement is held to, and the wallet a payment leaves |
 | `src/cash-position.ts` | The cash panel's figures, and the committed money the policy also takes off, pay runs included |
+| `src/incident-board.ts` | The incident board: every open invoice in its group, with the money it has at risk and why |
 | `src/run-file.ts` | Reads a pay run CSV file and the cells of each row |
 | `src/runs.ts` | Pay runs: the checks, the terms and the request, approving, releasing and cancelling a run |
 | `src/currency-lock.ts` | The lease that lets one payment at a time be sent in each currency |
@@ -420,7 +439,7 @@ In the fifth, `inv-05002` has the same supplier, amount and number as INV-5002, 
 | `src/alerts.ts` | Alerts: the webhook setting, what needs a person, and posting with retries |
 | `src/alert-payloads.ts` | What an alert says, and its Slack and Discord message shapes |
 | `src/server.ts` | Local web server and JSON API |
-| `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/audit.ts`, `src/cash.ts`, `src/payrun.ts`, `src/outbox.ts`, `src/reset.ts`, `src/index.ts` | The commands |
+| `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/audit.ts`, `src/cash.ts`, `src/board.ts`, `src/payrun.ts`, `src/outbox.ts`, `src/reset.ts`, `src/index.ts` | The commands |
 | `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, exchange rate quotes, balances and their cache for the cash panel, the webhook subscription and the simulation calls |
 | `web/` | The page: plain HTML, CSS and JavaScript with no build step |
 | `fixtures/emails/` | Sample supplier emails |
@@ -435,7 +454,8 @@ The code holds amounts in minor units and converts at the Airwallex boundary. Th
 - Chasing the bank by itself. When a payment passes its deadline, PayOnce tells a person and offers a trace request for them to send to Airwallex.
 - Sending email. Messages are drafted for a person, who sends them from their own mail, and PayOnce keeps no recipient addresses.
 - A floor check on a single incident's first payment. Pay run rows have one.
-- Totals across currencies. They need exchange rates. A run's approver limits are compared with each currency's total on its own.
+- Totals across currencies. They need exchange rates. A run's approver limits are compared with each currency's total on its own, and the incident board ranks amounts in different currencies as plain numbers.
+- Rail outages on the incident board. The board keeps an empty place for them at the top.
 - Editing a run, approving part of one, or scheduling one for a later date. Cancel it and upload a corrected file.
 - Recording a callback for a supplier outside an incident, so a run can pay a supplier who changed banks.
 - Pay run rows paid from another currency's wallet. Each row pays in its own currency from that currency's wallet.
