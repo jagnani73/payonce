@@ -633,8 +633,12 @@ function waitForBank(
       : `Waiting for the bank to pay or fail original ${transfer.short_reference_id}. If it has done neither within ${describeDeadline(transfer)} of sending, a person hears about it`,
     "waiting",
   );
-  // A deadline that cannot be read is due now, and the look then finds the
-  // transfer overdue.
+  return deadlineLook(transfer);
+}
+
+// The look at a transfer's deadline. A deadline that cannot be read is due now,
+// and the look then finds the transfer overdue.
+function deadlineLook(transfer: Transfer): number {
   const deadline: number = deadlineOf(transfer);
   return Number.isFinite(deadline) ? deadline : Date.now();
 }
@@ -1103,10 +1107,19 @@ export async function startPayment(
   const outsideLive: boolean = anyLive(engine.ledger.outsidePayouts(invoiceId));
   if (duplicates.length === 0 && !outsideLive) {
     try {
-      return await pay(engine, now, "original");
+      const original: Transfer = await pay(engine, now, "original");
+      // The look at its deadline is planned as soon as it is with the bank, so it
+      // comes even if nothing wakes the invoice before, for example when the
+      // sandbox bank's script fails.
+      engine.ledger.lookAt(invoiceId, deadlineLook(original));
+      return original;
     } catch (error: unknown) {
       const refused: Attempt | undefined = engine.ledger.attempts(invoiceId).at(-1);
       if (refused?.state !== "failed" || refused.transferId !== null) {
+        // The transfer may exist, so a look tries again a minute later, as after a
+        // look that failed.
+        const at: number = Date.now();
+        engine.ledger.postponeDueLook(invoiceId, at, at + RETRY_FAILED_LOOK_MS);
         throw error;
       }
       note(engine.ledger, invoiceId, "error", messageOf(error));
