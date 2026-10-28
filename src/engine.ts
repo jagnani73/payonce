@@ -2502,11 +2502,13 @@ function paidOriginal(ledger: Ledger, invoiceId: string): Attempt | undefined {
 // PayOnce after every payment PayOnce sent failed. kind duplicate is an invoice
 // held before paying as a second bill for others, and its reference lists them.
 // kind unpaid is any other invoice that has sent nothing, such as one whose
-// original Airwallex refused. Closing either leaves it unpaid.
+// original Airwallex refused. Closing either leaves it unpaid. emails is the
+// email evidence an approval would show, null when the invoice has no emails.
 export interface CloseReview {
   kind: AttemptKind | "outside" | "duplicate" | "unpaid";
   reference: string | null;
   reason: string;
+  emails: string | null;
 }
 
 export function pendingClose(
@@ -2518,6 +2520,11 @@ export function pendingClose(
     return undefined;
   }
   const reason: string = obligation.escalationReason;
+  const onFile: SupplierEmail[] = ledger.emails(invoiceId);
+  const emails: string | null =
+    onFile.length === 0
+      ? null
+      : emailEvidence(storedFindings(ledger, invoiceId, onFile).findings.summary, onFile, obligation.supplierDomain);
   if (ledger.paidOnce(invoiceId)) {
     const paid: Attempt | undefined = ledger
       .attempts(invoiceId)
@@ -2525,7 +2532,7 @@ export function pendingClose(
     // A payment at a rate nobody approved is why it was not closed by itself.
     return paid === undefined
       ? undefined
-      : { kind: paid.kind, reference: paid.reference, reason: paid.rateMismatch ?? reason };
+      : { kind: paid.kind, reference: paid.reference, reason: paid.rateMismatch ?? reason, emails };
   }
   if (ledger.paidOutside(invoiceId)) {
     const paid: OutsidePayout | undefined = ledger
@@ -2533,13 +2540,13 @@ export function pendingClose(
       .find((payout: OutsidePayout): boolean => payout.state === "paid");
     return paid === undefined
       ? undefined
-      : { kind: "outside", reference: paid.reference, reason };
+      : { kind: "outside", reference: paid.reference, reason, emails };
   }
   // Not while a payout sent outside PayOnce may be paying it.
   if (heldBeforePaying(ledger, obligation) && !anyLive(ledger.outsidePayouts(invoiceId))) {
     return obligation.duplicateOf.length > 0
-      ? { kind: "duplicate", reference: listOf(obligation.duplicateOf), reason }
-      : { kind: "unpaid", reference: null, reason };
+      ? { kind: "duplicate", reference: listOf(obligation.duplicateOf), reason, emails }
+      : { kind: "unpaid", reference: null, reason, emails };
   }
   return undefined;
 }

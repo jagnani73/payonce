@@ -40,6 +40,9 @@ function show(pending: PendingApproval): void {
     for (const duplicate of terms.evidence.duplicates) {
       console.log(`  like     ${describeDuplicate(duplicate)}`);
     }
+    if (terms.evidence.emails !== undefined) {
+      console.log(`  emails   ${terms.evidence.emails}`);
+    }
   }
   console.log(
     `  needs    ${approval.needed === 1 ? "one approver" : `${approval.needed} approvers, because ${approval.neededWhy}`}`,

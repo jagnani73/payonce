@@ -1739,6 +1739,8 @@ function buildApproval(invoiceId, approval) {
               "Looks like a second bill for",
               duplicates.length === 0 ? null : duplicates.map(duplicateNode),
             ),
+            // Only on a held invoice with emails on file, and covered by the binding as on a replacement.
+            term("Email evidence", sentence(evidence.emails)),
           ]
         : [
             term("Callback", bankChange === null ? null : callbackText(bankChange)),
@@ -2123,7 +2125,8 @@ function syncReviewControls() {
 function renderReview(detail) {
   const invoiceId = detail.obligation.invoiceId;
   const review = detail.review ?? null;
-  const emailSummary = typeof detail.findings?.summary === "string" ? detail.findings.summary : "";
+  // The findings with the counts an approval shows: emails on file, text nobody read, flagged senders.
+  const emailSummary = typeof review?.emails === "string" ? review.emails : "";
   if (changed("review", [invoiceId, review, emailSummary])) {
     if (review === null) {
       reviewRefs = null;

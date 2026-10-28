@@ -31,6 +31,9 @@ function main(): void {
     console.log(`  ${review.kind.padEnd(9)} ${review.reference ?? "no reference"} paid`);
   }
   console.log(`  because   ${review.reason}`);
+  if (review.emails !== null) {
+    console.log(`  emails    ${review.emails}`);
+  }
   if (closedBy === undefined || finding === "") {
     console.log(
       `To close it${duplicate ? " without paying" : ""}: pnpm close ${invoiceId} <NAME> <NOTE>`,
