@@ -152,7 +152,7 @@ function printApproval(ledger: Ledger, pending: PendingRunApproval): void {
   console.log(`  limits   checked against ${formatMoney(pending.largest.amountMinor, pending.largest.currency)}, the largest total`);
   // The sender check trusts these domains, so the approvers see each one.
   for (const check of domainChecks(ledger, pending.terms)) {
-    const changed: boolean = check.onFile !== null && check.onFile !== check.domain;
+    const changed: boolean = check.caution;
     console.log(`  ${changed ? "caution " : "domain  "} ${domainText(check)}`);
   }
   if (approval.signoffs.length > 0) {

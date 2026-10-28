@@ -515,39 +515,71 @@ export function termsOf(run: Run, rows: CheckedRow[], cash: RunCash[]): RunTerms
   return runTermsFor(run.id, run.fileHash, run.uploadedBy, withDomains, totalsOf(rows, cash));
 }
 
-// A row's supplier_domain against the domain on file for its beneficiary: the
-// latest invoice to it that has one. onFile is null when the row's domain is the
-// first for that beneficiary.
+// A row's supplier_domain against the others PayOnce knows for its beneficiary.
+// onFile is the domain of the latest invoice to it that has one, or null.
+// inRun lists other domains this run gives the same beneficiary. paidBefore is
+// true when an invoice to it was paid once. caution is true when the domain
+// disagrees with either, or is the first on file for a beneficiary PayOnce has
+// already paid, which is where a fraudster's domain would slip in. Any caution
+// needs two approvers.
 export interface DomainCheck {
   line: number;
   invoiceId: string;
   domain: string;
   onFile: string | null;
+  inRun: string[];
+  paidBefore: boolean;
+  caution: boolean;
 }
 
 export function domainChecks(ledger: Ledger, terms: RunTerms): DomainCheck[] {
   const obligations: Obligation[] = ledger.obligations();
+  // Every domain the run gives each beneficiary.
+  const given: Map<string, Set<string>> = new Map<string, Set<string>>();
+  for (const row of terms.rows) {
+    if (row.supplierDomain !== undefined) {
+      const domains: Set<string> = given.get(row.beneficiaryId) ?? new Set<string>();
+      domains.add(row.supplierDomain);
+      given.set(row.beneficiaryId, domains);
+    }
+  }
   return terms.rows.flatMap((row: RunRowTerms): DomainCheck[] => {
-    if (row.supplierDomain === undefined) {
+    const domain: string | undefined = row.supplierDomain;
+    if (domain === undefined) {
       return [];
     }
-    const earlier: Obligation | undefined = obligations.find(
-      (obligation: Obligation): boolean =>
-        obligation.beneficiaryId === row.beneficiaryId && obligation.supplierDomain !== "",
+    const theirs: Obligation[] = obligations.filter(
+      (obligation: Obligation): boolean => obligation.beneficiaryId === row.beneficiaryId,
     );
-    return [{ line: row.line, invoiceId: row.invoiceId, domain: row.supplierDomain, onFile: earlier?.supplierDomain ?? null }];
+    // Newest first, so this is the latest invoice with a domain.
+    const onFile: string | null =
+      theirs.find((obligation: Obligation): boolean => obligation.supplierDomain !== "")?.supplierDomain ?? null;
+    const inRun: string[] = [...(given.get(row.beneficiaryId) ?? [])].filter((other: string): boolean => other !== domain);
+    const paidBefore: boolean = theirs.some((obligation: Obligation): boolean => ledger.paidOnce(obligation.invoiceId));
+    const caution: boolean = inRun.length > 0 || (onFile !== null && onFile !== domain) || (onFile === null && paidBefore);
+    return [{ line: row.line, invoiceId: row.invoiceId, domain, onFile, inRun, paidBefore, caution }];
   });
 }
 
 // The words for a row's domain, as the approval card and pnpm payrun show them.
 export function domainText(check: DomainCheck): string {
+  const gives: string = `Row ${check.line} gives ${check.domain} as the supplier's email domain`;
+  const parts: string[] = [];
   if (check.onFile === null) {
-    return `Row ${check.line} gives ${check.domain} as the supplier's email domain, the first domain on file for this beneficiary`;
+    parts.push(
+      check.paidBefore
+        ? "the first domain on file for a beneficiary PayOnce has already paid"
+        : "the first domain on file for this beneficiary",
+    );
+  } else {
+    parts.push(check.onFile === check.domain ? "the one already on file" : `but ${check.onFile} is on file for this beneficiary`);
   }
-  return check.onFile === check.domain
-    ? `Row ${check.line} gives ${check.domain} as the supplier's email domain, the one already on file`
-    : `Row ${check.line} gives ${check.domain} as the supplier's email domain, but ${check.onFile} is on file for this beneficiary`;
+  if (check.inRun.length > 0) {
+    parts.push(`and this run also gives it ${check.inRun.join(" and ")}`);
+  }
+  return `${gives}, ${parts.join(", ")}`;
 }
+
 
 // The largest currency total, which approver limits are checked against, as the
 // page and pnpm payrun show it.
@@ -557,8 +589,9 @@ export function largestTotal(terms: RunTerms): { amountMinor: number; currency: 
 }
 
 // How many approvers a run needs, and why: two for a payee PayOnce has never
-// paid, for an account a callback verified, and when any currency's total is
-// above TWO_APPROVERS_ABOVE.
+// paid, for an account a callback verified, for a supplier_domain with a
+// caution (domainChecks), and when any currency's total is above
+// TWO_APPROVERS_ABOVE.
 export function runRule(
   policy: ApprovalPolicy,
   rows: CheckedRow[],
@@ -577,14 +610,19 @@ export function runRule(
       why: `row ${changed.line} pays an account a callback verified, not the one PayOnce last paid ${changed.payee}`,
     };
   }
-  // The sender check trusts the domain, so changing it is reviewed by two.
-  const otherDomain: DomainCheck | undefined = domains.find(
-    (check: DomainCheck): boolean => check.onFile !== null && check.onFile !== check.domain,
-  );
-  if (otherDomain !== undefined) {
+  // The sender check trusts the domain, so one that disagrees with another for
+  // the same beneficiary, or is new for a beneficiary already paid, is reviewed
+  // by two.
+  const caution: DomainCheck | undefined = domains.find((check: DomainCheck): boolean => check.caution);
+  if (caution !== undefined) {
     return {
       needed: 2,
-      why: `row ${otherDomain.line} gives ${otherDomain.domain} as the supplier's email domain, and ${otherDomain.onFile ?? ""} is on file for that beneficiary`,
+      why:
+        caution.inRun.length > 0
+          ? `row ${caution.line} gives ${caution.domain} as the supplier's email domain, and this run gives the same beneficiary ${caution.inRun.join(" and ")}`
+          : caution.onFile === null
+            ? `row ${caution.line} sets ${caution.domain} as the first email domain for a beneficiary PayOnce has already paid`
+            : `row ${caution.line} gives ${caution.domain} as the supplier's email domain, and ${caution.onFile} is on file for that beneficiary`,
     };
   }
   if (amount.minor > policy.twoApproversAboveMinor) {

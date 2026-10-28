@@ -887,7 +887,7 @@ function runDetail(raw: string): unknown {
             largest: largestTotal(terms),
             domains: domainChecks(engine.ledger, terms).map((check: DomainCheck) => ({
               ...check,
-              changed: check.onFile !== null && check.onFile !== check.domain,
+              changed: check.caution,
               text: domainText(check),
             })),
           },
