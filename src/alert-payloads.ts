@@ -105,9 +105,9 @@ export interface AlertField {
 }
 
 // One message, before it is shaped for Slack or Discord. The title holds only
-// PayOnce's own words and checked identifiers. link is the one real link, to the
-// local page, and only works on the machine running PayOnce, which every message
-// says.
+// PayOnce's own words and checked identifiers. The parts of line are joined with
+// a space. link is the one real link, to the local page, and only works on the
+// machine running PayOnce, which every message says.
 export interface AlertMessage {
   title: string;
   line: AlertText[];
@@ -251,7 +251,7 @@ function invoiceMessage(facts: InvoiceAlertFacts, base: string): AlertMessage {
     facts.need === "bank" ? `Bank deadline passed on ${invoice}` : `${invoice} ${NEED_TITLES[facts.need]}`;
   return {
     title,
-    line: [ours(`${facts.amount} to `), theirs(facts.supplier)],
+    line: [ours(`${facts.amount} to`), theirs(facts.supplier)],
     fields: [
       field("Supplier", theirs(facts.supplier)),
       field("Amount", ours(facts.amount)),
@@ -279,7 +279,7 @@ function payoutMessage(facts: PayoutAlertFacts, base: string): AlertMessage {
       reference === null || reference === ""
         ? `A payout for ${invoice} was sent outside PayOnce`
         : `Payout ${reference} was sent outside PayOnce`,
-    line: [ours(`${facts.amount} to `), theirs(facts.supplier)],
+    line: [ours(`${facts.amount} to`), theirs(facts.supplier)],
     fields: [
       field("Invoice", ours(facts.takenOn ? `${invoice}, taken on as a new incident` : `${invoice}, tied to this invoice`)),
       field("Supplier", theirs(facts.supplier)),
@@ -401,7 +401,7 @@ export function slackPayload(message: AlertMessage): unknown {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: message.line.map((part: AlertText): string => slackSpan(part, MAX_SUPPLIER)).join(""),
+          text: message.line.map((part: AlertText): string => slackSpan(part, MAX_SUPPLIER)).join(" "),
         },
       },
       {
@@ -436,7 +436,7 @@ export function discordPayload(message: AlertMessage, at: string): unknown {
     embeds: [
       {
         title: capped(oneLine(message.title), DISCORD_TITLE_MAX, (char: string): string => char),
-        description: `${message.line.map((part: AlertText): string => discordSpan(part, MAX_SUPPLIER)).join("")}\nOpen it in PayOnce on the machine running it: ${message.link}`,
+        description: `${message.line.map((part: AlertText): string => discordSpan(part, MAX_SUPPLIER)).join(" ")}\nOpen it in PayOnce on the machine running it: ${message.link}`,
         color: message.urgent ? RED : AMBER,
         fields: message.fields.map((item: AlertField) => ({
           name: item.name,
