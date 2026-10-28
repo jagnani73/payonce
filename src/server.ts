@@ -590,6 +590,9 @@ async function startIncident(request: IncomingMessage): Promise<unknown> {
   }
   // Optional. A date in the past is taken, and the arrival estimates say it has
   // passed.
+  if (body["dueDate"] !== undefined && typeof body["dueDate"] !== "string") {
+    throw new HttpError(400, "The due date is not a date written like 2026-11-02");
+  }
   const dueDate: string = typeof body["dueDate"] === "string" ? body["dueDate"].trim() : "";
   const badDue: string | null = dueDate === "" ? null : dueDateProblem(dueDate);
   if (badDue !== null) {
