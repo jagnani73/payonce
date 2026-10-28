@@ -502,7 +502,19 @@ async function assess(
     );
   }
 
-  const decision: Decision = decide(incident);
+  const decided: Decision = decide(incident);
+  // A replacement for what looks like a second bill of a paid invoice goes to a
+  // person. Decided here so every look, and so every request, gives this reason.
+  const paid: Obligation | undefined =
+    decided.action === "replace"
+      ? likelyDuplicates(engine.ledger, obligation).find(
+          (other: Obligation): boolean => isPaid(engine.ledger, other.invoiceId),
+        )
+      : undefined;
+  const decision: Decision =
+    paid === undefined
+      ? decided
+      : { action: "escalate", reason: `it looks like a second bill for ${paid.invoiceId}, which is paid` };
   // Once an invoice has gone to a person, the policy no longer acts for itself.
   const held: string =
     obligation.state !== "escalated"
@@ -1386,19 +1398,6 @@ async function act(
       // A payout tied to the invoice now is looked at before anything is sent.
       if (await linkUnseenPayouts(engine, obligation.invoiceId)) {
         return Date.now();
-      }
-      // A replacement for what looks like a second bill of a paid invoice goes to a
-      // person, for example when the invoice was paid after this one was released.
-      const paid: Obligation | undefined = likelyDuplicates(engine.ledger, obligation).find(
-        (other: Obligation): boolean => isPaid(engine.ledger, other.invoiceId),
-      );
-      if (paid !== undefined) {
-        const reason: string = `it looks like a second bill for ${paid.invoiceId}, which is paid`;
-        note(engine.ledger, obligation.invoiceId, "decision", `Escalate: ${reason}`, "decision");
-        return escalate(engine, obligation, {
-          ...assessment,
-          decision: { action: "escalate", reason },
-        });
       }
       return replace(engine, obligation, accountKeyOf(assessment.bankDetails));
     }
