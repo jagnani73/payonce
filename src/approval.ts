@@ -350,8 +350,10 @@ declare const fromTerms: unique symbol;
 // What a payment takes from the company's wallet, which approval limits and the
 // two-approver threshold are compared with: the quote's sell amount for a payment
 // from another currency's wallet, the invoice amount otherwise. Only
-// paymentAmount builds one, so every limit check starts from the terms a person
-// approves and the compiler finds any that does not.
+// paymentAmount builds one, and signoffsNeeded, eligibleApprovers and
+// checkSigner take nothing else, so the compiler refuses a bare amount passed to
+// them. decide.ts is not covered: its two-approver check compares
+// incident.sourceAmountMinor, which assess takes from the same quote.
 export interface PaymentAmount {
   readonly minor: number;
   readonly currency: string;

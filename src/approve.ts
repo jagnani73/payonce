@@ -23,6 +23,9 @@ function show(pending: PendingApproval): void {
     console.log(
       `  quote    ${terms.fx.quoteId}, holds until ${new Date(terms.fx.validTo).toLocaleString()}`,
     );
+    console.log(
+      `  fee      ${terms.fx.feeEstimateMinor === null ? `charged in ${terms.fx.sellCurrency} when it is sent` : `about ${formatMoney(terms.fx.feeEstimateMinor, terms.fx.sellCurrency)}`}`,
+    );
   }
   console.log(`  to       ${terms.payTo} (the account on file)`);
   if (terms.action === "replace") {

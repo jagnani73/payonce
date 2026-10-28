@@ -1,7 +1,8 @@
 import type { AirwallexClient } from "./client.js";
 
-// How long a quote holds. MIN_1 and MIN_15 are left out: neither leaves room for
-// an approval request, the time an approval has to be used, and a margin.
+// How long a quote holds. A request ends 12 minutes before its quote does (the
+// 10 minutes an approval has to be used and a 2 minute margin), so MIN_1 would
+// leave no time to approve and MIN_15 about 3 minutes. Both are left out.
 export type QuoteValidity = "MIN_30" | "HR_1" | "HR_4" | "HR_8" | "HR_24";
 
 export const QUOTE_VALIDITIES: QuoteValidity[] = ["MIN_30", "HR_1", "HR_4", "HR_8", "HR_24"];

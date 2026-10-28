@@ -1,5 +1,5 @@
 import type { AirwallexClient } from "./airwallex/client.js";
-import { simulateTransfer } from "./airwallex/simulation.js";
+import { isAmbiguous, simulateTransfer } from "./airwallex/simulation.js";
 import { getTransfer, waitForTransfer, type Transfer } from "./airwallex/transfers.js";
 import { isOverdue } from "./deadlines.js";
 import type { Bank } from "./engine.js";
@@ -17,6 +17,9 @@ const SETTLED_STATUSES: ReadonlySet<string> = new Set<string>([
   "FAILED",
   "CANCELLED",
 ]);
+
+const READ_TRIES: number = 4;
+const READ_RETRY_MS: number = 1_500;
 
 // Sandbox-only. Nothing moves a sandbox transfer on by itself, so this plays the
 // bank: it sends a new transfer, and pays or fails it when told to. It pays every
@@ -60,6 +63,21 @@ export class SandboxBank implements Bank {
         this.running.delete(invoiceId);
       } else {
         this.running.set(invoiceId, left);
+      }
+    }
+  }
+
+  // Reads a transfer, trying again on a server error or a lost connection, as
+  // the simulation calls do.
+  private async read(transferId: string): Promise<Transfer> {
+    for (let attempt: number = 1; ; attempt += 1) {
+      try {
+        return await getTransfer(this.client, transferId);
+      } catch (error: unknown) {
+        if (!isAmbiguous(error) || attempt >= READ_TRIES) {
+          throw error;
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, READ_RETRY_MS));
       }
     }
   }
@@ -128,7 +146,7 @@ export class SandboxBank implements Bank {
       kind === "replacement" ? PAID_OUTCOME : (this.held.get(invoiceId) ?? PAID_OUTCOME);
     this.held.delete(invoiceId);
     this.run(invoiceId, async (): Promise<void> => {
-      const transfer: Transfer = await getTransfer(this.client, transferId);
+      const transfer: Transfer = await this.read(transferId);
       if (transfer.source_currency !== undefined && transfer.source_currency !== transfer.transfer_currency) {
         // Past its deadline the agent has said so already.
         if (!this.converting.has(transferId) && !isOverdue(transfer)) {
