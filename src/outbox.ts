@@ -73,6 +73,14 @@ function list(outbox: Outbox, invoiceId: string): void {
   for (const item of outbox.notOffered) {
     console.log(`  not offered: ${item.label}. ${item.why}`);
   }
+  if (outbox.withheld.length > 0) {
+    console.log(
+      `No message to the supplier is suggested, because they asked to hold, cancel or not pay this invoice. To draft one anyway: pnpm outbox ${invoiceId} draft <TEMPLATE> <NAME>`,
+    );
+  }
+  for (const offer of outbox.withheld) {
+    console.log(`  held back ${offer.template.padEnd(17)} ${offer.label} (${offer.audience})`);
+  }
   console.log("PayOnce never sends these. Copy one into your own email, send it to the contact on file, then record it with pnpm outbox <INVOICE> sent <DRAFT> <NAME>.");
 }
 

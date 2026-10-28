@@ -469,10 +469,14 @@ export interface NotOffered {
   why: string;
 }
 
+// withheld holds the messages to the supplier that fit but are not offered,
+// because the supplier asked to hold, cancel or not pay the invoice. A person can
+// still draft one on purpose. Empty otherwise.
 export interface Outbox {
   drafts: DraftView[];
   offers: DraftOffer[];
   notOffered: NotOffered[];
+  withheld: DraftOffer[];
 }
 
 // What a draft says now: whether its text still matches its hash, and what has
@@ -538,7 +542,10 @@ function viewOf(context: Context, draft: Draft): DraftView {
 }
 
 // The drafts on file and the templates that fit the invoice now, suggested ones
-// first. A pure read: nothing is drafted until a person asks.
+// first. A pure read: nothing is drafted until a person asks. While the
+// supplier's ask to hold, cancel or not pay is on file, no message to the
+// supplier is offered: each one that fits is withheld, and the trace request to
+// the bank is still offered.
 export function outboxOf(ledger: Ledger, obligation: Obligation, now: number = Date.now()): Outbox {
   const context: Context = contextOf(ledger, obligation, now);
   const drafts: Draft[] = ledger.drafts(obligation.invoiceId);
@@ -557,6 +564,17 @@ export function outboxOf(ledger: Ledger, obligation: Obligation, now: number = D
     const why: string | null = template.suggest(context, facts);
     offers.push({ template: name, label: template.label, audience: template.audience, suggested: why !== null, why });
   }
+  if (context.findings?.asksNotToPay === true) {
+    const withheld: DraftOffer[] = offers
+      .filter((offer: DraftOffer): boolean => offer.audience === "supplier")
+      .map((offer: DraftOffer): DraftOffer => ({ ...offer, suggested: false, why: null }));
+    return {
+      drafts: drafts.map((draft: Draft): DraftView => viewOf(context, draft)),
+      offers: offers.filter((offer: DraftOffer): boolean => offer.audience !== "supplier"),
+      notOffered: notOfferedIn(context, obligation),
+      withheld,
+    };
+  }
   // A note to the supplier while it waits on a person only when nothing more
   // specific is suggested.
   const checking: DraftOffer | undefined = offers.find((offer: DraftOffer): boolean => offer.template === "checking");
@@ -571,16 +589,23 @@ export function outboxOf(ledger: Ledger, obligation: Obligation, now: number = D
     checking.why = null;
   }
   offers.sort((a: DraftOffer, b: DraftOffer): number => Number(b.suggested) - Number(a.suggested));
-  const notOffered: NotOffered[] =
-    stillOpen(obligation) && aboutBankDetails(context) && phoneEnding(obligation) === null
-      ? [
-          {
-            label: TEMPLATES["callback-notice"].label,
-            why: "No phone number for this supplier is on file, so PayOnce has no number to call back on. Do not ask the supplier to send bank details by email.",
-          },
-        ]
-      : [];
-  return { drafts: drafts.map((draft: Draft): DraftView => viewOf(context, draft)), offers, notOffered };
+  return {
+    drafts: drafts.map((draft: Draft): DraftView => viewOf(context, draft)),
+    offers,
+    notOffered: notOfferedIn(context, obligation),
+    withheld: [],
+  };
+}
+
+function notOfferedIn(context: Context, obligation: Obligation): NotOffered[] {
+  return stillOpen(obligation) && aboutBankDetails(context) && phoneEnding(obligation) === null
+    ? [
+        {
+          label: TEMPLATES["callback-notice"].label,
+          why: "No phone number for this supplier is on file, so PayOnce has no number to call back on. Do not ask the supplier to send bank details by email.",
+        },
+      ]
+    : [];
 }
 
 export class DraftNotFitError extends Error {

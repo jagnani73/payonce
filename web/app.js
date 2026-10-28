@@ -2827,8 +2827,8 @@ function buildDraft(invoiceId, draft) {
   );
 }
 
-function buildOffer(invoiceId, offer) {
-  const button = h("button", { class: "button button--small", type: "button" }, "Draft it");
+function buildOffer(invoiceId, offer, action = "Draft it") {
+  const button = h("button", { class: "button button--small", type: "button" }, action);
   button.addEventListener("click", () => draftMessage(invoiceId, offer.template));
   return h(
     "li",
@@ -2858,6 +2858,7 @@ function buildOutbox(invoiceId, outbox) {
   });
   const suggested = outbox.offers.filter((offer) => offer.suggested);
   const others = outbox.offers.filter((offer) => !offer.suggested);
+  const withheld = Array.isArray(outbox.withheld) ? outbox.withheld : [];
   const drafts = [...outbox.drafts].reverse();
   const error = h("p", { class: "form-error", role: "alert", hidden: true });
   outboxRefs = { name, error, buttons: [] };
@@ -2874,6 +2875,14 @@ function buildOutbox(invoiceId, outbox) {
     others.length > 0 && [
       h("p", { class: "bank-form__title" }, suggested.length > 0 ? "Other messages" : "Messages that fit"),
       h("ul", { class: "outbox-offers" }, others.map((offer) => buildOffer(invoiceId, offer))),
+    ],
+    withheld.length > 0 && [
+      h(
+        "p",
+        { class: "hint" },
+        "No message to the supplier is suggested, because they asked to hold, cancel or not pay this invoice.",
+      ),
+      h("ul", { class: "outbox-offers" }, withheld.map((offer) => buildOffer(invoiceId, offer, "Draft one anyway"))),
     ],
     outbox.notOffered.map((item) => h("p", { class: "hint" }, `${item.label} is not offered. ${item.why}`)),
     drafts.length > 0 && h("ul", { class: "outbox-drafts" }, drafts.map((draft) => buildDraft(invoiceId, draft))),
@@ -2898,8 +2907,12 @@ function syncOutboxControls() {
 
 function renderOutbox(detail) {
   const invoiceId = detail.obligation.invoiceId;
-  const outbox = detail.outbox ?? { drafts: [], offers: [], notOffered: [] };
-  const empty = outbox.drafts.length === 0 && outbox.offers.length === 0 && outbox.notOffered.length === 0;
+  const outbox = detail.outbox ?? { drafts: [], offers: [], notOffered: [], withheld: [] };
+  const empty =
+    outbox.drafts.length === 0 &&
+    outbox.offers.length === 0 &&
+    outbox.notOffered.length === 0 &&
+    (outbox.withheld ?? []).length === 0;
   if (changed("outbox", [invoiceId, outbox])) {
     if (empty) {
       outboxRefs = null;
