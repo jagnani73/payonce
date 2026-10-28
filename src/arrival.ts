@@ -6,8 +6,10 @@ import { formatMoney } from "./money.js";
 // payout network pages for the United States and Germany, read on 2026-10-28.
 // A row with no currency covers every currency the route takes. clearing is the
 // local clearing system on the beneficiary record, and a US local record with
-// none pays by ACH. Airwallex sends ACH as Next Day ACH, 1 to 2 days, above
-// 1,000,000 USD or for a payer outside the US, which moves the earliest day only.
+// none pays by ACH. Every ACH payment gets 0 to 2 days. Airwallex sends ACH as
+// Next Day ACH, 1 to 2 days, above 1,000,000 USD or for a payer outside the US,
+// as the sandbox account's is. For those the earliest day shown is a day early,
+// and the latest day is right.
 interface Corridor {
   country: string;
   currency: string | null;
@@ -42,7 +44,8 @@ const FIRST_YEAR: number = 2000;
 const LAST_YEAR: number = 2099;
 const MS_PER_DAY: number = 86_400_000;
 
-export const HOLIDAYS_NOTE: string = "Business days skip weekends. Public holidays are not counted";
+export const HOLIDAYS_NOTE: string =
+  "The dates count weekdays only. A public holiday counts as a working day, so a payment may arrive a day or more later";
 
 // When a payment usually arrives, as the people approving it see it. route, the
 // days and the dates are null on a route PayOnce has no figures for. from is the
@@ -238,7 +241,7 @@ export function routeText(arrival: ArrivalTerms): string {
     : `${arrival.route}, usually ${daysText(arrival.minDays, arrival.maxDays)}`;
 }
 
-// "SWIFT, usually 0 to 3 business days, by 2026-10-31 if sent on 2026-10-28;
+// "SWIFT, usually 0 to 3 business days, by 2026-11-02 if sent on 2026-10-28;
 // due 2026-10-30; may arrive late"
 export function arrivalText(arrival: ArrivalTerms): string {
   const by: string = arrival.latest === null ? "" : `, by ${arrival.latest} if sent on ${arrival.from}`;
@@ -294,18 +297,18 @@ export function replacementArrivalText(arrival: ArrivalTerms): string {
   if (arrival.route === null || arrival.minDays === null || arrival.maxDays === null) {
     return `PayOnce has no arrival estimate for a replacement by ${methodText(arrival)}. Due ${due}`;
   }
-  const sent: string = `A replacement sent on ${arrival.from} usually arrives by ${arrival.latest ?? ""} (${arrival.route}, ${daysText(arrival.minDays, arrival.maxDays)}, not counting public holidays)`;
+  const sent: string = `A replacement sent on ${arrival.from} usually arrives by ${arrival.latest ?? ""} (${arrival.route}, ${daysText(arrival.minDays, arrival.maxDays)})`;
   switch (arrivalRisk(arrival)) {
     case "on-time":
-      return `${sent}, in time for the due date, ${due}`;
+      return `${sent}, in time for the due date, ${due}. ${HOLIDAYS_NOTE}`;
     case "may-be-late":
-      return `${sent}, so it may miss the due date, ${due}`;
+      return `${sent}, so it may miss the due date, ${due}. ${HOLIDAYS_NOTE}`;
     case "late":
-      return `${sent}, and even at its fastest it misses the due date, ${due}`;
+      return `${sent}, and even at its fastest it misses the due date, ${due}. ${HOLIDAYS_NOTE}`;
     case "passed":
-      return `${sent}. The due date, ${due}, has passed`;
+      return `${sent}. The due date, ${due}, has passed. ${HOLIDAYS_NOTE}`;
     default:
-      return sent;
+      return `${sent}. ${HOLIDAYS_NOTE}`;
   }
 }
 

@@ -99,6 +99,7 @@ function rowText(row: CheckedRow | RunRow): string {
 }
 
 function printRows(ledger: Ledger, rows: (CheckedRow | RunRow)[]): void {
+  let arriving: boolean = false;
   for (const row of rows) {
     console.log(rowText(row));
     if (row.payTo !== null && row.action === "pay") {
@@ -108,6 +109,7 @@ function printRows(ledger: Ledger, rows: (CheckedRow | RunRow)[]): void {
       console.log(
         `           ${arrivalText(row.arrival)}; ${feeSeenText(ledger, row.currency, row.arrival.method)}`,
       );
+      arriving = true;
     }
     for (const reason of row.reasons) {
       console.log(`           ${reason}`);
@@ -118,6 +120,9 @@ function printRows(ledger: Ledger, rows: (CheckedRow | RunRow)[]): void {
     if ("note" in row && row.note !== null) {
       console.log(`           ${row.note}`);
     }
+  }
+  if (arriving) {
+    console.log(`  ${HOLIDAYS_NOTE}`);
   }
 }
 

@@ -1486,7 +1486,8 @@ function caution(message) {
 
 // ---------- arrival estimates ----------
 
-const HOLIDAYS_NOTE = "Business days skip weekends. Public holidays are not counted.";
+const HOLIDAYS_NOTE =
+  "The dates count weekdays only. A public holiday counts as a working day, so a payment may arrive a day or more later.";
 
 const ARRIVAL_RISK_WORDS = {
   "on-time": "on time",
@@ -1536,7 +1537,7 @@ function arrivalAtRisk(arrival) {
   return risk === "may-be-late" || risk === "late" || risk === "passed";
 }
 
-// "SWIFT, usually 0 to 3 business days, by 2026-10-31 if sent on 2026-10-28"
+// "SWIFT, usually 0 to 3 business days, by 2026-11-02 if sent on 2026-10-28"
 function arrivalRoute(arrival) {
   if (typeof arrival.route !== "string" || !Number.isInteger(arrival.minDays) || !Number.isInteger(arrival.maxDays)) {
     return `${arrival.method}${typeof arrival.country === "string" ? ` to ${arrival.country}` : ""}, arrival not known`;
