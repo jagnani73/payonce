@@ -664,7 +664,8 @@ async function pay(
 // A payment from another currency's wallet must go out on the quote a person
 // approved. Checked wherever an attempt first becomes a transfer: when it is
 // sent, when a retry creates it, and when it is found by its request_id. The
-// money has moved by then, so a transfer at any other rate goes to a person.
+// money has moved by then, so a transfer at any other rate goes to a person, and
+// only a person closes the invoice.
 function checkRate(
   engine: Engine,
   obligation: Obligation,
@@ -690,6 +691,7 @@ function checkRate(
     return;
   }
   const reason: string = `${attempt.kind} ${transfer.short_reference_id} ${problem}`;
+  engine.ledger.markRateMismatch(attempt.requestId, reason);
   engine.ledger.escalate(obligation.invoiceId, reason);
   note(engine.ledger, obligation.invoiceId, "warning", capitalise(reason));
 }
@@ -1642,7 +1644,16 @@ async function look(engine: Engine, invoiceId: string): Promise<NextLook> {
     // incident. A paid original goes to the policy, which may want a person. So
     // does an invoice with a live payout sent outside PayOnce.
     if (paidOriginal(engine.ledger, invoiceId) === undefined && !anyLive(outside)) {
-      close(engine, invoiceId);
+      // Refused when a payment went out at a rate nobody approved.
+      if (!close(engine, invoiceId)) {
+        note(
+          engine.ledger,
+          invoiceId,
+          "approval",
+          "Waiting on a person to check the exchange rate a payment went out at and close the incident. PayOnce will not send another payment",
+          "waiting",
+        );
+      }
       return null;
     }
   }

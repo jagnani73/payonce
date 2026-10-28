@@ -208,6 +208,9 @@ export interface Attempt {
   sourceAmountMinor: number | null;
   // The approval the quote was approved on. Null on any other payment.
   approvalId: number | null;
+  // Why the transfer did not go out on its approved quote. Null when it did, or
+  // has not been checked. Only a person closes an invoice with one.
+  rateMismatch: string | null;
 }
 
 // The quote an attempt is sent with, and the approval it was approved on.
@@ -495,6 +498,7 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     quote_valid_to: "TEXT",
     source_amount_minor: "INTEGER",
     approval_id: "INTEGER",
+    rate_mismatch: "TEXT",
   },
   events: {
     topic: "TEXT",
@@ -526,6 +530,7 @@ interface AttemptRow {
   quote_valid_to: string | null;
   source_amount_minor: number | null;
   approval_id: number | null;
+  rate_mismatch: string | null;
 }
 
 export class DuplicatePaymentError extends Error {
@@ -597,6 +602,7 @@ function toAttempt(row: AttemptRow): Attempt {
     quoteValidTo: row.quote_valid_to,
     sourceAmountMinor: row.source_amount_minor,
     approvalId: row.approval_id,
+    rateMismatch: row.rate_mismatch,
   };
 }
 
@@ -943,6 +949,7 @@ export class Ledger {
       quoteValidTo: quote?.validTo ?? null,
       sourceAmountMinor: null,
       approvalId: quote?.approvalId ?? null,
+      rateMismatch: null,
     };
   }
 
@@ -1256,6 +1263,13 @@ export class Ledger {
       )
       .get(currency, method) as unknown as FeeRow | undefined;
     return row?.fee_minor ?? null;
+  }
+
+  // For a transfer that did not go out on its approved quote.
+  markRateMismatch(requestId: string, reason: string): void {
+    this.db
+      .prepare("UPDATE attempts SET rate_mismatch = ? WHERE request_id = ?")
+      .run(reason, requestId);
   }
 
   // For an attempt Airwallex refused to create. It never became a transfer, so
@@ -1649,9 +1663,16 @@ export class Ledger {
   }
 
   // Settles only when the invoice has been paid once by PayOnce or, when a
-  // person closes it, by a payout sent outside PayOnce.
+  // person closes it, by a payout sent outside PayOnce. A payment that went out
+  // at a rate nobody approved leaves the invoice for a person to close.
   settle(invoiceId: string, byPerson: boolean = false): boolean {
     if (!this.paidOnce(invoiceId) && !(byPerson && this.paidOutside(invoiceId))) {
+      return false;
+    }
+    if (
+      !byPerson &&
+      this.attempts(invoiceId).some((attempt: Attempt): boolean => attempt.rateMismatch !== null)
+    ) {
       return false;
     }
     this.db
