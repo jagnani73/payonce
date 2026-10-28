@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import type { Quote } from "./airwallex/fx.js";
 import type { Transfer, TransferBankDetails } from "./airwallex/transfers.js";
-import { bankDetailsKey, originalStateOf } from "./assess.js";
+import { bankDetailsKey, debitOf, originalStateOf, type Debit } from "./assess.js";
 import type { Decision, OriginalTransferState } from "./incident.js";
 import type { BankChange, Obligation, ObligationState, TransferMethod } from "./ledger.js";
-import { formatMoney, readMinor, toMinor } from "./money.js";
+import { formatMoney, toMinor } from "./money.js";
 
 // The callback that verified the bank details the payment goes to, when they are
 // not the ones the original went to.
@@ -392,11 +392,11 @@ export function paidWith(fx: FxTerms | undefined): string {
 // What went out of the wallet on a transfer that converts, as the timeline says
 // it. Empty when the transfer does not convert or cannot be read.
 export function conversionText(transfer: Transfer): string {
-  const source: number | null = readMinor(transfer.source_amount);
-  if (transfer.conversion === undefined || source === null || transfer.source_currency === undefined) {
+  const debit: Debit | null = debitOf(transfer);
+  if (transfer.conversion === undefined || debit === null || debit.currency === transfer.transfer_currency) {
     return "";
   }
-  return `, paid with ${formatMoney(source, transfer.source_currency)} at ${rateText(transfer.conversion.currency_pair, transfer.conversion.rate)}`;
+  return `, paid with ${formatMoney(debit.minor, debit.currency)} at ${rateText(transfer.conversion.currency_pair, transfer.conversion.rate)}`;
 }
 
 // Why a transfer did not go out on its approved quote, or null when it did. fx is
@@ -404,20 +404,20 @@ export function conversionText(transfer: Transfer): string {
 // compared as Airwallex gives them, never inverted, and a transfer with no
 // conversion on it does not match.
 export function rateMismatch(fx: FxTerms | undefined, transfer: Transfer): string | null {
-  const source: number | null = readMinor(transfer.source_amount);
+  const debit: Debit | null = debitOf(transfer);
   if (
     fx !== undefined &&
     transfer.conversion?.currency_pair === fx.currencyPair &&
     transfer.conversion.rate === fx.clientRate &&
-    source === fx.sellAmountMinor &&
-    transfer.source_currency === fx.sellCurrency
+    debit?.minor === fx.sellAmountMinor &&
+    debit.currency === fx.sellCurrency
   ) {
     return null;
   }
   const actual: string =
     transfer.conversion === undefined
       ? "with no exchange rate on it"
-      : `at ${rateText(transfer.conversion.currency_pair, transfer.conversion.rate)} (${source === null ? "amount not readable" : formatMoney(source, transfer.source_currency ?? "")})`;
+      : `at ${rateText(transfer.conversion.currency_pair, transfer.conversion.rate)} (${debit === null ? "amount not readable" : formatMoney(debit.minor, debit.currency)})`;
   return fx === undefined
     ? `went out ${actual}, and no approval covers the quote it was sent with`
     : `went out ${actual}, not the approved ${describeRate(fx)} (${formatMoney(fx.sellAmountMinor, fx.sellCurrency)})`;
