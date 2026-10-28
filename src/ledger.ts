@@ -1928,11 +1928,21 @@ export class Ledger {
   // failed write cannot leave it open with nothing sent. Undefined, with nothing
   // changed, when the approval is no longer approved or has expired, or the
   // invoice is no longer held: a person closed it, it has sent something, or a
-  // payout for it sent outside PayOnce is live. The attempt keeps the approval,
-  // and the quote in its terms for a payment from another currency's wallet.
-  releaseFor(invoiceId: string, approvalId: number, lease: Lease): Attempt | undefined {
+  // payout for it sent outside PayOnce is live. Also when unchanged, run under
+  // the write lock, returns false. The attempt keeps the approval, and the quote
+  // in its terms for a payment from another currency's wallet.
+  releaseFor(
+    invoiceId: string,
+    approvalId: number,
+    lease: Lease,
+    unchanged: () => boolean,
+  ): Attempt | undefined {
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      if (!unchanged()) {
+        this.db.exec("ROLLBACK");
+        return undefined;
+      }
       const used: { changes: number | bigint } = this.db
         .prepare(
           `UPDATE approvals SET state = 'used'
@@ -2188,11 +2198,21 @@ export class Ledger {
   // longer approved, for example because another process voided it in the
   // meantime, or when it has expired since the look checked it. Also when the
   // invoice is no longer escalated, as when a person closed it, or a payout for
-  // it sent outside PayOnce is live. The attempt keeps the approval, and the quote
-  // in its terms for a payment from another currency's wallet.
-  useApproval(invoiceId: string, approvalId: number, lease: Lease): Attempt | undefined {
+  // it sent outside PayOnce is live. Also when unchanged, run under the write
+  // lock, returns false. The attempt keeps the approval, and the quote in its
+  // terms for a payment from another currency's wallet.
+  useApproval(
+    invoiceId: string,
+    approvalId: number,
+    lease: Lease,
+    unchanged: () => boolean,
+  ): Attempt | undefined {
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      if (!unchanged()) {
+        this.db.exec("ROLLBACK");
+        return undefined;
+      }
       const result: { changes: number | bigint } = this.db
         .prepare(
           `UPDATE approvals SET state = 'used'

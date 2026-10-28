@@ -1410,8 +1410,15 @@ async function continueEscalated(
     // Checked before the approval is spent, so a failed check leaves it unspent.
     await requireAccount(engine, obligation, current.accountKey, "replacement was approved");
     // One approval covers one attempt, so it is spent as the attempt is opened.
-    // Another process may have voided it since it was read.
-    const attempt: Attempt | undefined = engine.ledger.useApproval(obligation.invoiceId, approval.id, lease);
+    // Another process may have voided it since it was read, or recorded paid an
+    // invoice this one looks like a second bill for since assess looked. Then
+    // nothing is spent, and the next look names that invoice in a new request.
+    const attempt: Attempt | undefined = engine.ledger.useApproval(
+      obligation.invoiceId,
+      approval.id,
+      lease,
+      (): boolean => paidDuplicate(engine.ledger, obligation) === assessment.paidDuplicate,
+    );
     if (attempt === undefined) {
       return Date.now();
     }
@@ -1424,6 +1431,28 @@ async function continueEscalated(
     const replacement: Transfer = await send(engine, obligation, attempt, current.accountKey);
     return waitForBank(engine, obligation.invoiceId, "replacement", replacement);
   });
+}
+
+// What the ledger shows of the invoices a held one looks like a second bill for,
+// listed or found now: each one's state and the payments for it that reached the
+// bank. duplicateEvidence reads its terms from these, so a release compares this
+// under the lease with what it was when the terms were taken.
+function duplicatesOnFile(ledger: Ledger, held: Obligation): string {
+  const found: string[] = likelyDuplicates(ledger, held).map(
+    (other: Obligation): string => other.invoiceId,
+  );
+  return JSON.stringify(
+    [...new Set([...held.duplicateOf, ...found])].map((invoiceId: string): unknown[] => [
+      invoiceId,
+      ledger.obligation(invoiceId)?.state ?? null,
+      [...ledger.attempts(invoiceId), ...ledger.outsidePayouts(invoiceId)]
+        .filter((payment: { transferId: string | null }): boolean => payment.transferId !== null)
+        .map((payment: { transferId: string | null; state: string }): string[] => [
+          payment.transferId ?? "",
+          payment.state,
+        ]),
+    ]),
+  );
 }
 
 // The invoices a held one looks like a second bill for, as they stand now, and
@@ -1789,6 +1818,7 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
       "Waiting on a person. The bank details on file are not the ones the pay run approved, so PayOnce does not pay this invoice. Close it without paying, or restore the approved details in Airwallex and check again",
     );
   }
+  const onFile: string = duplicatesOnFile(engine.ledger, held);
   const duplicates: DuplicateEvidence[] = await duplicateEvidence(engine, held, accountKey);
   // Paid from another currency's wallet, it is approved at a quote. Nothing has
   // been sent, so no fee is known yet.
@@ -1832,8 +1862,14 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
     // with its approval unspent.
     await requireAccount(engine, obligation, terms.accountKey, "payment was approved");
     // Another process may have voided the approval, closed the invoice or tied a
-    // payout to it since it was read. The next look sees which.
-    const attempt: Attempt | undefined = engine.ledger.releaseFor(invoiceId, approval.id, lease);
+    // payout to it since it was read, or changed what the terms say of the
+    // invoices it looks like a second bill for. The next look sees which.
+    const attempt: Attempt | undefined = engine.ledger.releaseFor(
+      invoiceId,
+      approval.id,
+      lease,
+      (): boolean => duplicatesOnFile(engine.ledger, held) === onFile,
+    );
     if (attempt === undefined) {
       return Date.now();
     }
