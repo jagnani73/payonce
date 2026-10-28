@@ -72,7 +72,8 @@ export interface BalanceState {
 
 // Balances for the cash panel, read at most once per maxAgeMs and only while
 // something asks for them. The policy never uses it: a decision reads the balance
-// fresh. afterRead runs after each good read.
+// fresh. afterRead runs after each good read, and no new read starts until it is
+// done, but refreshing is true only while the balances themselves are read.
 export class BalanceCache {
   private readonly client: AirwallexClient;
   private readonly maxAgeMs: number;
@@ -83,6 +84,7 @@ export class BalanceCache {
   // The last try, good or failed, so a failing Airwallex is tried once per maxAgeMs.
   private triedAt: number = Number.NEGATIVE_INFINITY;
   private reading: Promise<void> | null = null;
+  private readingBalances: boolean = false;
 
   constructor(client: AirwallexClient, maxAgeMs: number, afterRead?: () => Promise<void>) {
     this.client = client;
@@ -94,7 +96,7 @@ export class BalanceCache {
     return {
       readAt: this.readAt,
       balances: this.balances,
-      refreshing: this.reading !== null,
+      refreshing: this.readingBalances,
       error: this.error,
       maxAgeMs: this.maxAgeMs,
     };
@@ -112,6 +114,7 @@ export class BalanceCache {
   }
 
   private async read(): Promise<void> {
+    this.readingBalances = true;
     try {
       this.balances = await getBalances(this.client);
       this.readAt = Date.now();
@@ -122,6 +125,8 @@ export class BalanceCache {
         at: Date.now(),
       };
       return;
+    } finally {
+      this.readingBalances = false;
     }
     try {
       await this.afterRead?.();
