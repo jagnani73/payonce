@@ -40,9 +40,10 @@ If the bank sits on a payment past its deadline, a person hears about it. PayOnc
 | The replacement is above `TWO_APPROVERS_ABOVE` | Escalate to a person |
 | The invoice is paid from another currency's wallet, so the replacement needs a new exchange rate | Escalate to a person |
 | No reserve floor is set for the payment's currency | Escalate to a person |
+| The policy would replace, but an outage is active on the payment's currency and transfer method | Escalate to a person |
 | The original failed, a resend can fix it and the beneficiary details are unchanged | Replace |
 
-`src/decide.ts` checks the rules in that order. A resend can fix a failure only when it happened on the sending side: a system error or a channel timeout. Any other failure, including a return from the beneficiary's bank, goes to a person.
+`src/decide.ts` checks the rules in that order. The engine checks the outage last, in the transaction that would open the replacement (see [Rail outages](#rail-outages)). A resend can fix a failure only when it happened on the sending side: a system error or a channel timeout. Any other failure, including a return from the beneficiary's bank, goes to a person.
 
 When the supplier asks to hold, cancel or not pay the invoice, and the policy escalated for an earlier rule or the invoice was already held before paying, PayOnce adds "and the supplier asks to hold, cancel or not pay this invoice" to the reason. The approval request, the alert and the approval card all show it, and a person can still approve paying.
 
@@ -87,7 +88,24 @@ The lock only covers payments PayOnce sends. Someone can still pay the same invo
 - A payout whose reference is an invoice PayOnce has, or nearly matches one as described under [Duplicate invoices](#duplicate-invoices), goes on that invoice's timeline. While it is in flight or paid, PayOnce sends nothing for the invoice, withdraws any open approval and hands the invoice to a person. If the invoice was already closed, it is reopened.
 - Any other payout becomes an incident of its own once it fails or passes its deadline. PayOnce runs it like its own, except that a replacement always needs a person's approval, because whoever sent the original may be resending it too.
 
-Before it sends any payment, PayOnce lists the transfers again, so a resend made a moment earlier is caught even between sweeps. If every payment PayOnce sent failed and a payout sent outside it paid the invoice, a person can close the incident from the close card.
+Before it sends any payment, PayOnce lists the transfers again, so a resend made a moment earlier is caught even between sweeps. That includes sending again a payment whose first try may not have reached Airwallex: while a payout sent outside PayOnce is in flight or paid, the payment stays open and is not sent. If every payment PayOnce sent failed and a payout sent outside it paid the invoice, a person can close the incident from the close card.
+
+## Rail outages
+
+A rail is a currency and a transfer method, such as USD LOCAL. When payouts to three different payees fail on one rail within 30 minutes with a code that means the rail failed and not the account, PayOnce declares an outage on that rail. Those codes are 91401 (system error), 91402 (channel timeout), 99901 (unable to apply) and 99902 (other), and they can be mixed. A payee is the account paid, so two beneficiary records for one account count once, and so do several failures to one supplier. Payouts sent outside PayOnce count too. Failures that point at the account never count: account closed, invalid account, a return from the beneficiary's bank, a recall and a duplication return. `OUTAGE_FAILURES` and `OUTAGE_WINDOW_MINUTES` change the three and the 30.
+
+PayOnce dates a failure by when it first reads it, on a look at the invoice or in the sweep. It leaves out a transfer created before the ledger started counting outages, and one it first reads later than the bank deadline plus the window after the transfer was created, for example after PayOnce was down.
+
+While an outage lasts, PayOnce opens no new payment on the rail:
+
+- A new invoice's first payment waits unsent. The timeline says why, and PayOnce checks again every minute. The cash panel lists it as waiting on an outage. It is not taken off the headroom, because a single incident's first payment is not checked against the floor.
+- A replacement PayOnce would send by itself goes to a person, with the reason "an outage was declared on this payment's currency and transfer method". The approval request carries the terms it would carry without the outage, so an outage changes no approval.
+- An approved payment waits, and its approval is kept. It still expires when it would, and the next look opens a new request as usual.
+- A pay run with any row on the rail waits whole, with its approval kept. Only one run waits at a time, so no other run can be uploaded until this one is released or cancelled.
+
+A payment opened before the outage was declared was decided already and goes out as usual. The check runs in the database transaction that opens a payment, under its currency's lock, so neither the terminal nor the server can open one while the other declares an outage.
+
+Nothing ends an outage by itself. A person ends it with their name and a note, on the card at the top of the page or with `pnpm outage end <ID> <NAME> <NOTE>`. Only a name in `APPROVERS` may end one, because ending it lets payments go out again. When `APPROVERS` is unset or cannot be read, any named person may, and the timeline says no approver list was set, so an outage can always be ended. The end goes on the timeline of every invoice and run the outage held, and they carry on at once: a first payment goes out after the checks made before any payment, and an approved payment goes out if its approval still counts. `GET /api/outages` lists the active outages and those ended recently, from the ledger only.
 
 ## Duplicate invoices
 
@@ -272,7 +290,7 @@ Install cloudflared with `winget install --id Cloudflare.cloudflared`, or set `C
 
 ## Alerts
 
-PayOnce can post to a Slack or Discord channel when something needs a person. It alerts on an invoice that is escalated, held or waiting on an approval, a bank deadline that has passed, a payout sent outside PayOnce, a pay run waiting for approval, supplier emails waiting in the inbox for a person, an audit trail that no longer verifies, and a currency whose headroom has gone below 0.
+PayOnce can post to a Slack or Discord channel when something needs a person. It alerts on an invoice that is escalated, held or waiting on an approval, a bank deadline that has passed, a payout sent outside PayOnce, a pay run waiting for approval, supplier emails waiting in the inbox for a person, an audit trail that no longer verifies, a currency whose headroom has gone below 0, and a rail outage, once when it is declared and once when a person ends it. An outage alert names the rail, the failure codes, the payees counted and the bank's references, and never who ended it or their note.
 
 Set `ALERT_WEBHOOK_URL` to a Slack incoming webhook (`https://hooks.slack.com/services/...`) or a Discord webhook (`https://discord.com/api/webhooks/...` or the same on `discordapp.com`, with `ALERT_FORMAT=discord`). PayOnce takes no other address. If the setting is wrong, the start-up line says why and nothing is posted. With no address set, PayOnce makes no alert calls at all. Treat the address as a password and keep it in `.env`. PayOnce prints its host and never the rest.
 
@@ -342,8 +360,12 @@ pnpm outbox <INVOICE> draft <TEMPLATE> <NAME>
 pnpm outbox <INVOICE> show <DRAFT>
 pnpm outbox <INVOICE> sent <DRAFT> <NAME>
 pnpm outbox <INVOICE> dismiss <DRAFT> <NAME> [NOTE]
+pnpm outage
+pnpm outage end <ID> <NAME> <NOTE>
 pnpm reset
 ```
+
+`pnpm outage` lists the active outages and the last few ended, with the payouts each counted and what it held. `pnpm outage end` ends one, as the button on the page does. It writes only the ledger, and the server's watcher picks up what the outage held on its next check.
 
 `pnpm outbox` lists an invoice's drafts and the messages that fit now. The templates are `payment-sent`, `replacement-sent`, `checking`, `callback-notice` and `bank-trace`. It reads and writes only the ledger, and runs without a `.env`. When there is one, it takes the bank deadlines from it.
 
@@ -393,6 +415,7 @@ In the fifth, `inv-05002` has the same supplier, amount and number as INV-5002, 
 | `src/deadlines.ts` | How long the bank has to pay or fail a transfer |
 | `src/arrival.ts` | The route advisory: how many business days each route usually takes, the arrival against a due date, and the fee last seen |
 | `src/sweep.ts` | Finds payouts PayOnce did not send |
+| `src/outages.ts` | Rail outages: the rule, counting failures, the timeline lines, ending one, and what the page and the board show |
 | `src/duplicates.ts` | Finds invoices that look like a second bill, and the invoice a payout sent outside PayOnce is for |
 | `src/webhooks.ts`, `src/tunnel.ts` | The webhook receiver and its signature check, and the cloudflared tunnel |
 | `src/sandbox-bank.ts` | Plays the bank in the sandbox: sends, pays and fails transfers |
@@ -420,7 +443,7 @@ In the fifth, `inv-05002` has the same supplier, amount and number as INV-5002, 
 | `src/alerts.ts` | Alerts: the webhook setting, what needs a person, and posting with retries |
 | `src/alert-payloads.ts` | What an alert says, and its Slack and Discord message shapes |
 | `src/server.ts` | Local web server and JSON API |
-| `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/audit.ts`, `src/cash.ts`, `src/payrun.ts`, `src/outbox.ts`, `src/reset.ts`, `src/index.ts` | The commands |
+| `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/audit.ts`, `src/cash.ts`, `src/payrun.ts`, `src/outbox.ts`, `src/outage.ts`, `src/reset.ts`, `src/index.ts` | The commands |
 | `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, exchange rate quotes, balances and their cache for the cash panel, the webhook subscription and the simulation calls |
 | `web/` | The page: plain HTML, CSS and JavaScript with no build step |
 | `fixtures/emails/` | Sample supplier emails |
@@ -450,3 +473,8 @@ The code holds amounts in minor units and converts at the Airwallex boundary. Th
 - Opening attachments, loading images or following links. A PDF, an image of text or a forwarded email is listed by name, and a forwarded one makes the email partly unread.
 - Checking DKIM, SPF or DMARC. Nothing in an email proves its sender, which is why bank details change only through a callback.
 - A mail client's layout. PayOnce reads every character it can, but not the order a client draws them in.
+- Ending an outage by itself, probing a rail to see whether it works again, or declaring an outage by hand. A person ends every outage.
+- Releasing only the rows of a pay run that do not pay on a rail with an outage. The whole run waits.
+- Counting an outage's failures from a webhook or from the status check. A look at the invoice and the sweep count them, so a failure can take up to one sweep, 30 seconds, to count.
+- Grouping failures by bank. Several payees at one bank that fail together still declare an outage on the whole rail.
+- Closing an invoice whose open payment PayOnce held back because a payout sent outside it was live, after that payout is paid. The payment stays open with no transfer, so the close card does not offer it.
