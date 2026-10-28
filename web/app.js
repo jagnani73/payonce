@@ -4610,10 +4610,67 @@ function renderInboxMain() {
 
 const BOARD_ALL = { group: "All groups", currency: "All wallets", origin: "All origins" };
 
-// The slot at the top of the board for active rail outages. Outage detection is
-// not built yet, so it stays empty and hidden.
+// One active outage at the top of the board: what it saw, what it holds now and
+// the money those entries have at risk, as GET /api/board works them out from
+// the cash panel's lines, and the end form the Outages card has.
+function buildBoardOutage(outage, enders) {
+  const list = (value) => (Array.isArray(value) ? value : []);
+  const codes = list(outage.codes)
+    .map((entry) => `${entry.code} (${entry.label})`)
+    .join(", ");
+  const atRisk = list(outage.atRisk);
+  const since = boardWhen(outage.declaredAt);
+  const held = [
+    ["First payments waiting", list(outage.originals), (id) => outageLink(id, null)],
+    ["Replacements escalated", list(outage.replacements), (id) => outageLink(id, null)],
+    ["Approved payments waiting", list(outage.approved), (id) => outageLink(id, null)],
+    ["Pay runs waiting", list(outage.runs), (id) => outageLink(null, id)],
+  ];
+  const titleId = `board-outage-${outage.id}-title`;
+  return h(
+    "section",
+    { class: "card board-outage", "aria-labelledby": titleId },
+    h(
+      "div",
+      { class: "approval__head" },
+      h("h2", { id: titleId, class: "outage__title" }, `Outage ${outage.id} on ${outage.rail}`),
+      badge(OUTAGE_STATES.active, "active", false),
+    ),
+    h("p", { class: "outage__text" }, withPeriod(outage.text)),
+    h(
+      "dl",
+      { class: "facts approval__status" },
+      h("dt", null, "Since"),
+      h("dd", null, since === null ? "Not on file" : h("time", { datetime: outage.declaredAt }, since)),
+      h("dt", null, "Failure codes"),
+      h("dd", null, codes),
+      h("dt", null, "Payees"),
+      h("dd", null, `${outage.payees} failed within ${outage.windowMinutes} minutes`),
+      held.map(([label, items, build]) => [
+        h("dt", null, label),
+        h("dd", null, items.length === 0 ? "None" : listNodes(items, build)),
+      ]),
+      h("dt", null, "At risk"),
+      h("dd", null, atRisk.length === 0 ? "Nothing" : atRisk.map(boardMoneyText).join(", ")),
+    ),
+    buildEndForm(outage, enders, "board"),
+  );
+}
+
+// The slot at the top of the board: every active outage, whatever the filters.
+// It is built again when the board comes back on screen, so a name or note typed
+// on the Outages card meanwhile is in its form.
 function renderBoardOutages() {
-  els.boardOutages.hidden = true;
+  const outages = Array.isArray(state.board?.outages) ? state.board.outages : [];
+  const enders = Array.isArray(state.outages?.enders) ? state.outages.enders : null;
+  if (changed("boardOutages", [outages, enders, state.selectedAt])) {
+    const focus = focusedControl(els.boardOutages);
+    outageRefs.board = new Map();
+    els.boardOutages.replaceChildren(...outages.map((outage) => buildBoardOutage(outage, enders)));
+    els.boardOutages.hidden = outages.length === 0;
+    restoreFocus(focus);
+  }
+  syncOutages();
 }
 
 function renderBoardFilters(board) {
@@ -4655,6 +4712,7 @@ function buildBoardTotal(total) {
   const parts = [
     [total.promisedMinor, "approved or being sent"],
     [total.waitingMinor, "waiting on a person"],
+    [total.outageMinor, "waiting on an outage"],
     [total.runWaitingMinor, "pay run waiting for approval"],
     [total.withBankMinor, "with the bank"],
   ]
@@ -4733,6 +4791,9 @@ function buildBoardEntry(entry, now) {
         { class: "board-entry__top" },
         h("span", { class: "board-entry__id" }, entry.invoiceId),
         origin !== null && h("span", { class: "tag" }, origin),
+        typeof entry.outage === "object" &&
+          entry.outage !== null &&
+          h("span", { class: "tag tag--caution" }, `Outage ${entry.outage.id} on ${entry.outage.rail}`),
         h(
           "span",
           { class: atRisk.length === 0 ? "board-entry__risk is-empty" : "board-entry__risk" },
@@ -5203,7 +5264,15 @@ function renderCash() {
 
 // ---------- outages ----------
 
-let outageRefs = new Map();
+// An active outage's end form is on the Outages card above the cash panel, or in
+// the slot at the top of the board. Each place keeps its own forms, ids and
+// messages. The names and notes typed are shared, by outage.
+const OUTAGE_PLACES = {
+  card: { section: "outages", prefix: "outage" },
+  board: { section: "boardOutages", prefix: "board-outage" },
+};
+
+const outageRefs = { card: new Map(), board: new Map() };
 
 function recentlyEnded(view, now) {
   const ended = parseDate(view.endedAt);
@@ -5222,7 +5291,8 @@ function listNodes(items, build) {
 
 // The form a person ends an outage with: a name from the approver list, or any
 // name when no list is set, and a note.
-function buildEndForm(view, enders) {
+function buildEndForm(view, enders, place) {
+  const prefix = `${OUTAGE_PLACES[place].prefix}-${view.id}`;
   const draft = state.outageDrafts.get(view.id) ?? {};
   const remember = () => {
     state.outageDrafts.set(view.id, { name: name.value, note: note.value });
@@ -5233,10 +5303,10 @@ function buildEndForm(view, enders) {
   };
   const name =
     enders === null
-      ? h("input", { type: "text", id: `outage-${view.id}-name`, autocomplete: "name", maxlength: "80" })
+      ? h("input", { type: "text", id: `${prefix}-name`, autocomplete: "name", maxlength: "80" })
       : h(
           "select",
-          { id: `outage-${view.id}-name` },
+          { id: `${prefix}-name` },
           h("option", { value: "" }, "Choose your name"),
           enders.map((ender) => h("option", { value: ender }, ender)),
         );
@@ -5245,7 +5315,7 @@ function buildEndForm(view, enders) {
       ? (draft.name ?? readStoredName())
       : (enders.find((ender) => sameName(ender, draft.name ?? readStoredName())) ?? "");
   name.addEventListener(enders === null ? "input" : "change", remember);
-  const note = h("input", { type: "text", id: `outage-${view.id}-note`, autocomplete: "off", maxlength: "200" });
+  const note = h("input", { type: "text", id: `${prefix}-note`, autocomplete: "off", maxlength: "200" });
   note.value = draft.note ?? "";
   note.addEventListener("input", remember);
   const label = `End outage on ${view.rail}`;
@@ -5273,9 +5343,9 @@ function buildEndForm(view, enders) {
   );
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    submitEndOutage(view.id);
+    submitEndOutage(view.id, place);
   });
-  outageRefs.set(view.id, { name, note, button, error, label });
+  outageRefs[place].set(view.id, { name, note, button, error, label });
   return form;
 }
 
@@ -5327,23 +5397,30 @@ function buildOutage(view, enders) {
         ),
       ],
     ),
-    active && buildEndForm(view, enders),
+    active && buildEndForm(view, enders, "card"),
   );
 }
 
-// Active outages, and those ended in the last day, above the cash panel. The
-// board reads the same GET /api/outages.
+// Active outages, and those ended in the last day, above the cash panel. While the
+// board is on screen, the active outages its slot shows are left out here, so each
+// is shown once with one end form. Runs after renderMain, which shows the board.
 function renderOutages() {
   const report = state.outages;
   const now = Date.now();
+  const inSlot = new Set(
+    els.board.hidden || !Array.isArray(state.board?.outages) ? [] : state.board.outages.map((outage) => outage.id),
+  );
   const shown =
     report === null
       ? []
-      : [...report.active, ...report.recent.filter((view) => recentlyEnded(view, now))];
+      : [
+          ...report.active.filter((view) => !inSlot.has(view.id)),
+          ...report.recent.filter((view) => recentlyEnded(view, now)),
+        ];
   const enders = report === null || !Array.isArray(report.enders) ? null : report.enders;
   if (changed("outages", [shown, enders])) {
     const focus = focusedControl(els.outages);
-    outageRefs = new Map();
+    outageRefs.card = new Map();
     els.outages.replaceChildren(
       h("h2", { id: "outages-title" }, "Outages"),
       ...shown.map((view) => buildOutage(view, enders)),
@@ -5355,21 +5432,28 @@ function renderOutages() {
 }
 
 function syncOutages() {
-  if (liveMessage("outages", state.outageError?.error ?? null) === null) {
+  const shown = state.outageError;
+  if (shown !== null && liveMessage(OUTAGE_PLACES[shown.place].section, shown.error) === null) {
     state.outageError = null;
   }
-  for (const [id, refs] of outageRefs) {
-    const busy = state.outageEnding === id;
-    refs.button.disabled = state.outageEnding !== null;
-    refs.name.disabled = busy;
-    refs.note.readOnly = busy;
-    setText(refs.button, busy ? "Ending" : refs.label);
-    showMessage(refs.error, state.outageError?.id === id ? state.outageError.error.message : null);
+  for (const [place, forms] of Object.entries(outageRefs)) {
+    for (const [id, refs] of forms) {
+      const busy = state.outageEnding === id;
+      refs.button.disabled = state.outageEnding !== null;
+      refs.name.disabled = busy;
+      refs.note.readOnly = busy;
+      setText(refs.button, busy ? "Ending" : refs.label);
+      showMessage(
+        refs.error,
+        state.outageError?.id === id && state.outageError.place === place ? state.outageError.error.message : null,
+      );
+    }
   }
 }
 
-async function submitEndOutage(id) {
-  const refs = outageRefs.get(id);
+async function submitEndOutage(id, place) {
+  const refs = outageRefs[place].get(id);
+  const section = OUTAGE_PLACES[place].section;
   if (state.outageEnding !== null || refs === undefined) {
     return;
   }
@@ -5382,7 +5466,7 @@ async function submitEndOutage(id) {
         ? { field: refs.note, message: "Say why the outage is over." }
         : null;
   if (missing !== null) {
-    state.outageError = { id, error: actionError("outages", missing.message) };
+    state.outageError = { id, place, error: actionError(section, missing.message) };
     syncOutages();
     missing.field.focus();
     return;
@@ -5403,7 +5487,7 @@ async function submitEndOutage(id) {
   } finally {
     state.outageEnding = null;
     if (failure !== null) {
-      state.outageError = { id, error: actionError("outages", failure) };
+      state.outageError = { id, place, error: actionError(section, failure) };
     }
     syncOutages();
   }
@@ -5416,9 +5500,9 @@ function render() {
   renderRunList();
   renderEmailForm();
   renderInboxList();
-  renderOutages();
   renderCash();
   renderMain();
+  renderOutages();
 }
 
 // ---------- start ----------

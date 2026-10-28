@@ -691,11 +691,13 @@ input:read-only {
   overflow-wrap: anywhere;
 }
 
-.outage .facts dd {
+.outage .facts dd,
+.board-outage .facts dd {
   overflow-wrap: anywhere;
 }
 
-.outage .facts a {
+.outage .facts a,
+.board-outage .facts a {
   color: var(--accent);
 }
 
@@ -1838,6 +1840,15 @@ input[type="file"] {
 .board {
   display: grid;
   gap: 20px;
+}
+
+.board__outages {
+  display: grid;
+  gap: 12px;
+}
+
+.board-outage {
+  border-color: var(--amber-line);
 }
 
 .board__head {
