@@ -457,6 +457,8 @@ async function rateFor(
     return { fx: withFeeEstimate(open, feeEstimateMinor), fresh: false, endsAt: Number.NaN };
   }
   // Every request opens on the last quote, so only the latest can have shown it.
+  // It is offered while a request opened on it would stay open at least as long
+  // as an approval has to be used.
   const kept: string | undefined = engine.ledger.lastQuote(obligation.invoiceId);
   const last: LastQuote | undefined =
     kept === undefined ? undefined : (JSON.parse(kept) as LastQuote);
@@ -464,7 +466,7 @@ async function rateFor(
     last !== undefined &&
     last.fx.quoteId !== shown?.quoteId &&
     quoteFits(last.fx, obligation) &&
-    last.endsAt - Date.now() > APPROVED_USE_WITHIN_MS + QUOTE_MARGIN_MS
+    last.endsAt - Date.now() > 2 * APPROVED_USE_WITHIN_MS + QUOTE_MARGIN_MS
   ) {
     return { fx: withFeeEstimate(last.fx, feeEstimateMinor), fresh: true, endsAt: last.endsAt };
   }
