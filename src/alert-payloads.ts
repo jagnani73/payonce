@@ -1,7 +1,7 @@
 // What an alert says, and how it is posted to a Slack or Discord incoming webhook.
-// Every message is built from an alert's stored facts, which hold invoice numbers,
-// formatted amounts, dates, counts and reasons PayOnce wrote. They never hold email
-// text, model output, account details or anything secret.
+// Every message is built from an alert's stored facts: invoice numbers, supplier
+// names, formatted amounts, dates, counts and reasons PayOnce wrote. They never
+// hold email text, model output, account details or anything secret.
 
 export type AlertFormat = "slack" | "discord";
 
@@ -89,33 +89,49 @@ export type AlertFacts =
   | CashAlertFacts
   | SummaryAlertFacts;
 
+// Text in a message. outside is text PayOnce did not write itself, such as a
+// supplier name from a pay run file or an outside payout, or a reason that names
+// other invoices. Each format renders it as an inline code span, so it cannot
+// become a link, a mention or markup.
+export interface AlertText {
+  text: string;
+  outside: boolean;
+}
+
 export interface AlertField {
   name: string;
-  value: string;
+  value: AlertText;
   inline: boolean;
 }
 
-// One message, before it is shaped for Slack or Discord. link only works on the
-// machine running PayOnce, and every message says so.
+// One message, before it is shaped for Slack or Discord. The title holds only
+// PayOnce's own words and checked identifiers. link is the one real link, to the
+// local page, and only works on the machine running PayOnce, which every message
+// says.
 export interface AlertMessage {
   title: string;
-  line: string;
+  line: AlertText[];
   fields: AlertField[];
   link: string;
   linkText: string;
   urgent: boolean;
 }
 
-const MAX_NAME: number = 80;
-const MAX_REASON: number = 300;
+// Caps on text after it is escaped, well inside each service's limits: Slack's
+// header is 150 characters and a field 2,000; Discord's title is 256, a field
+// value 1,024 and a whole embed 6,000.
+const MAX_SUPPLIER: number = 200;
+const MAX_REASON: number = 600;
+const MAX_VALUE: number = 300;
 const SLACK_HEADER_MAX: number = 150;
 const SLACK_FIELDS_MAX: number = 10;
 const DISCORD_TITLE_MAX: number = 256;
-const DISCORD_FIELD_VALUE_MAX: number = 1024;
 const AMBER: number = 15105570;
 const RED: number = 15158332;
 const FOOTNOTE: string = "Sandbox, no real money.";
 const CONTROL: RegExp = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
+// An invoice number or a bank reference, as PayOnce accepts them.
+const IDENTIFIER: RegExp = /^[A-Za-z0-9-]{1,40}$/;
 
 const NEED_TITLES: Record<InvoiceNeed, string> = {
   "approve-held": "is held: approve paying it or close it",
@@ -128,22 +144,68 @@ const NEED_TITLES: Record<InvoiceNeed, string> = {
   check: "needs a person",
 };
 
-// Control characters and line breaks become spaces, and long text is cut.
-export function oneLine(text: string, max: number): string {
-  const flat: string = text.replace(CONTROL, " ").trim();
-  return flat.length <= max ? flat : `${flat.slice(0, max - 1).trimEnd()}…`;
+// Control characters and line breaks become spaces.
+export function oneLine(text: string): string {
+  return text.replace(CONTROL, " ").trim();
+}
+
+// Escapes each character, then cuts to max characters with an ellipsis. It cuts
+// between whole characters, so neither an escape nor a surrogate pair is split,
+// and the result is never longer than max.
+export function capped(text: string, max: number, escape: (char: string) => string): string {
+  const pieces: string[] = Array.from(text, escape);
+  const whole: string = pieces.join("");
+  if (whole.length <= max) {
+    return whole;
+  }
+  let out: string = "";
+  for (const piece of pieces) {
+    if (out.length + piece.length > max - 1) {
+      break;
+    }
+    out += piece;
+  }
+  return `${out}…`;
 }
 
 // Slack reads &, < and > as control characters, so <!channel>, <@U123> and
 // <url|text> cannot come from a value.
-export function slackText(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+function slackChar(char: string): string {
+  return char === "&" ? "&amp;" : char === "<" ? "&lt;" : char === ">" ? "&gt;" : char;
 }
 
-// Discord markdown is escaped, so a value cannot become a masked link, a heading
-// or a mention. allowed_mentions stops pings in any case.
-export function discordText(text: string): string {
-  return text.replace(/[\\*_~`|<>[\]()#@]/g, "\\$&");
+export function slackText(text: string): string {
+  return Array.from(text, slackChar).join("");
+}
+
+// Discord markdown is escaped, so PayOnce's own text cannot turn into a heading,
+// a masked link or a mention. allowed_mentions stops pings in any case.
+function discordChar(char: string): string {
+  return /[\\*_~`|<>[\]()#@]/.test(char) ? `\\${char}` : char;
+}
+
+// A link needs ://, or www. on Slack, so neither survives in outside text. A
+// backtick would end the code span, so it becomes an apostrophe.
+export function defanged(text: string): string {
+  return oneLine(text).replace(/:\/\//g, "[:]//").replace(/\bwww\./gi, "www[.]").replace(/`/g, "'");
+}
+
+function identifier(value: string | null, fallback: string): string {
+  return value !== null && IDENTIFIER.test(value) ? value : fallback;
+}
+
+// Outside text is a code span: on Slack with &, < and > escaped, on Discord as is,
+// because nothing inside a code span is read as markdown, a link or a mention.
+function slackSpan(part: AlertText, max: number): string {
+  return part.outside
+    ? `\`${capped(defanged(part.text), max - 2, slackChar)}\``
+    : capped(oneLine(part.text), max, slackChar);
+}
+
+function discordSpan(part: AlertText, max: number): string {
+  return part.outside
+    ? `\`${capped(defanged(part.text), max - 2, (char: string): string => char)}\``
+    : capped(oneLine(part.text), max, discordChar);
 }
 
 // "28 Oct 2026, 15:05 UTC"
@@ -171,57 +233,61 @@ function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-function field(name: string, value: string, inline: boolean = true): AlertField {
+function ours(text: string): AlertText {
+  return { text, outside: false };
+}
+
+function theirs(text: string): AlertText {
+  return { text, outside: true };
+}
+
+function field(name: string, value: AlertText, inline: boolean = true): AlertField {
   return { name, value, inline };
 }
 
 function invoiceMessage(facts: InvoiceAlertFacts, base: string): AlertMessage {
-  const supplier: string = oneLine(facts.supplier, MAX_NAME);
+  const invoice: string = identifier(facts.invoice, "An invoice");
   const title: string =
-    facts.need === "bank"
-      ? `Bank deadline passed on ${facts.invoice}`
-      : `${facts.invoice} ${NEED_TITLES[facts.need]}`;
+    facts.need === "bank" ? `Bank deadline passed on ${invoice}` : `${invoice} ${NEED_TITLES[facts.need]}`;
   return {
     title,
-    line: `${facts.amount} to ${supplier}`,
+    line: [ours(`${facts.amount} to `), theirs(facts.supplier)],
     fields: [
-      field("Supplier", supplier),
-      field("Amount", facts.amount),
-      field("Why", oneLine(facts.reason, MAX_REASON), false),
+      field("Supplier", theirs(facts.supplier)),
+      field("Amount", ours(facts.amount)),
+      field("Why", theirs(facts.reason), false),
       field(
         "Waiting on",
-        facts.approvers === null ? "a person" : plural(facts.approvers, "approver", "approvers"),
+        ours(facts.approvers === null ? "a person" : plural(facts.approvers, "approver", "approvers")),
       ),
-      ...(facts.openUntil === null ? [] : [field("Request open until", utcText(facts.openUntil))]),
+      ...(facts.openUntil === null ? [] : [field("Request open until", ours(utcText(facts.openUntil)))]),
       ...(facts.newAccount
-        ? [field("Account", "the request pays an account the original did not go to", false)]
+        ? [field("Account", ours("the request pays an account the original did not go to"), false)]
         : []),
     ],
-    link: `${base}/#${encodeURIComponent(facts.invoice)}`,
-    linkText: `Open ${facts.invoice} in PayOnce`,
+    link: `${base}/#${encodeURIComponent(invoice)}`,
+    linkText: `Open ${invoice} in PayOnce`,
     urgent: facts.need === "bank",
   };
 }
 
 function payoutMessage(facts: PayoutAlertFacts, base: string): AlertMessage {
-  const supplier: string = oneLine(facts.supplier, MAX_NAME);
+  const invoice: string = identifier(facts.invoice, "an invoice");
+  const reference: string | null = facts.reference === null ? null : identifier(facts.reference, "");
   return {
     title:
-      facts.reference === null
-        ? `A payout for ${facts.invoice} was sent outside PayOnce`
-        : `Payout ${facts.reference} was sent outside PayOnce`,
-    line: `${facts.amount} to ${supplier}`,
+      reference === null || reference === ""
+        ? `A payout for ${invoice} was sent outside PayOnce`
+        : `Payout ${reference} was sent outside PayOnce`,
+    line: [ours(`${facts.amount} to `), theirs(facts.supplier)],
     fields: [
-      field(
-        "Invoice",
-        facts.takenOn ? `${facts.invoice}, taken on as a new incident` : `${facts.invoice}, tied to this invoice`,
-      ),
-      field("Supplier", supplier),
-      field("Amount", facts.amount),
-      field("Status", facts.state),
+      field("Invoice", ours(facts.takenOn ? `${invoice}, taken on as a new incident` : `${invoice}, tied to this invoice`)),
+      field("Supplier", theirs(facts.supplier)),
+      field("Amount", ours(facts.amount)),
+      field("Status", ours(facts.state)),
     ],
-    link: `${base}/#${encodeURIComponent(facts.invoice)}`,
-    linkText: `Open ${facts.invoice} in PayOnce`,
+    link: `${base}/#${encodeURIComponent(invoice)}`,
+    linkText: `Open ${invoice} in PayOnce`,
     urgent: false,
   };
 }
@@ -229,12 +295,12 @@ function payoutMessage(facts: PayoutAlertFacts, base: string): AlertMessage {
 function runMessage(facts: RunAlertFacts, base: string): AlertMessage {
   return {
     title: `Pay run ${facts.run} is waiting for approval`,
-    line: `${plural(facts.payments, "payment", "payments")}: ${facts.totals.join(", ")}`,
+    line: [ours(`${plural(facts.payments, "payment", "payments")}: ${facts.totals.join(", ")}`)],
     fields: [
-      field("Payments", String(facts.payments)),
-      field("Totals", facts.totals.join(", ")),
-      field("Approvers needed", String(facts.approvers)),
-      ...(facts.openUntil === null ? [] : [field("Request open until", utcText(facts.openUntil))]),
+      field("Payments", ours(String(facts.payments))),
+      field("Totals", ours(facts.totals.join(", "))),
+      field("Approvers needed", ours(String(facts.approvers))),
+      ...(facts.openUntil === null ? [] : [field("Request open until", ours(utcText(facts.openUntil)))]),
     ],
     link: `${base}/#run/${facts.run}`,
     linkText: `Open pay run ${facts.run} in PayOnce`,
@@ -244,17 +310,18 @@ function runMessage(facts: RunAlertFacts, base: string): AlertMessage {
 
 function auditMessage(facts: AuditAlertFacts, base: string): AlertMessage {
   const what: string = facts.scope === "invoices" ? "Invoice timelines" : "Pay run timelines";
+  const name: string = identifier(facts.first, "one");
   const first: string =
-    facts.first === null ? "" : `, ${facts.scope === "runs" ? "run " : ""}${facts.first} from line ${facts.line ?? 1}`;
+    facts.first === null ? "" : `, ${facts.scope === "runs" ? "run " : ""}${name} from line ${facts.line ?? 1}`;
   return {
     title:
       facts.scope === "invoices"
         ? "An audit trail in PayOnce no longer verifies"
         : "A pay run audit trail in PayOnce no longer verifies",
-    line: "Check it with pnpm run audit before trusting the timeline",
+    line: [ours("Check it with pnpm run audit before trusting the timeline")],
     fields: [
-      field(what, facts.broken === 0 ? "no breaks" : `${facts.broken} broken${first}`),
-      field("Running hash", facts.runningHash),
+      field(what, ours(facts.broken === 0 ? "no breaks" : `${facts.broken} broken${first}`)),
+      field("Running hash", ours(facts.runningHash)),
     ],
     link: `${base}/`,
     linkText: "Open PayOnce",
@@ -264,12 +331,12 @@ function auditMessage(facts: AuditAlertFacts, base: string): AlertMessage {
 
 function cashMessage(facts: CashAlertFacts, base: string): AlertMessage {
   return {
-    title: `${facts.currency} headroom is below 0`,
-    line: `Headroom above the reserve floor is ${facts.headroom}`,
+    title: `${identifier(facts.currency, "A currency")} headroom is below 0`,
+    line: [ours(`Headroom above the reserve floor is ${facts.headroom}`)],
     fields: [
-      field("Headroom", facts.headroom),
-      field("Reserve floor", facts.floor ?? "not set"),
-      field("Balance read at", facts.readAt === null ? "not known" : utcText(facts.readAt)),
+      field("Headroom", ours(facts.headroom)),
+      field("Reserve floor", ours(facts.floor ?? "not set")),
+      field("Balance read at", ours(facts.readAt === null ? "not known" : utcText(facts.readAt))),
     ],
     link: `${base}/`,
     linkText: "Open the cash panel in PayOnce",
@@ -286,10 +353,10 @@ function summaryMessage(facts: SummaryAlertFacts, base: string): AlertMessage {
   ];
   return {
     title: "PayOnce alerts are on",
-    line: `${parts.join(", ")}. From now on each new one gets an alert of its own`,
+    line: [ours(`${parts.join(", ")}. From now on each new one gets an alert of its own`)],
     fields: [
-      field("Invoices waiting on a person", String(facts.invoices)),
-      field("Pay runs waiting for approval", String(facts.runs)),
+      field("Invoices waiting on a person", ours(String(facts.invoices))),
+      field("Pay runs waiting for approval", ours(String(facts.runs))),
     ],
     link: `${base}/`,
     linkText: "Open PayOnce",
@@ -315,22 +382,33 @@ export function alertMessage(facts: AlertFacts, base: string): AlertMessage {
   }
 }
 
-// An incoming webhook message: text is the notification, and the blocks are the
-// message. Incoming webhooks cannot set the channel, name or icon.
+function capFor(item: AlertField): number {
+  return item.name === "Supplier" ? MAX_SUPPLIER : item.name === "Why" ? MAX_REASON : MAX_VALUE;
+}
+
+// An incoming webhook message: text is the notification and holds only the
+// title, and the blocks are the message. Incoming webhooks cannot set the
+// channel, name or icon.
 export function slackPayload(message: AlertMessage): unknown {
   return {
-    text: slackText(`${message.title}: ${message.line}`),
+    text: capped(oneLine(message.title), SLACK_HEADER_MAX, slackChar),
     blocks: [
       {
         type: "header",
-        text: { type: "plain_text", text: oneLine(message.title, SLACK_HEADER_MAX), emoji: false },
+        text: { type: "plain_text", text: capped(oneLine(message.title), SLACK_HEADER_MAX, (char: string): string => char), emoji: false },
       },
-      { type: "section", text: { type: "mrkdwn", text: slackText(message.line) } },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: message.line.map((part: AlertText): string => slackSpan(part, MAX_SUPPLIER)).join(""),
+        },
+      },
       {
         type: "section",
         fields: message.fields.slice(0, SLACK_FIELDS_MAX).map((item: AlertField) => ({
           type: "mrkdwn",
-          text: `*${slackText(item.name)}*\n${slackText(item.value)}`,
+          text: `*${slackText(item.name)}*\n${slackSpan(item.value, capFor(item))}`,
         })),
       },
       {
@@ -354,15 +432,15 @@ export function slackPayload(message: AlertMessage): unknown {
 export function discordPayload(message: AlertMessage, at: string): unknown {
   return {
     username: "PayOnce",
-    content: discordText(oneLine(message.title, DISCORD_TITLE_MAX)),
+    content: capped(oneLine(message.title), DISCORD_TITLE_MAX, discordChar),
     embeds: [
       {
-        title: oneLine(message.title, DISCORD_TITLE_MAX),
-        description: `${discordText(message.line)}\nOpen it in PayOnce on the machine running it: ${message.link}`,
+        title: capped(oneLine(message.title), DISCORD_TITLE_MAX, (char: string): string => char),
+        description: `${message.line.map((part: AlertText): string => discordSpan(part, MAX_SUPPLIER)).join("")}\nOpen it in PayOnce on the machine running it: ${message.link}`,
         color: message.urgent ? RED : AMBER,
         fields: message.fields.map((item: AlertField) => ({
           name: item.name,
-          value: discordText(oneLine(item.value, DISCORD_FIELD_VALUE_MAX - 100)),
+          value: discordSpan(item.value, capFor(item)),
           inline: item.inline,
         })),
         footer: { text: `PayOnce. ${FOOTNOTE}` },
