@@ -435,6 +435,12 @@ function onWebhook(event: WebhookEvent): void {
     }
     return;
   }
+  // An attempt marked failed with no transfer on it, which no look reads again:
+  // the sweep records the transfer on it.
+  if (attempt.state === "failed" && attempt.transferId === null) {
+    watcher.sweepSoon();
+    return;
+  }
   // A failed transfer is cancelled a few seconds later, and a status check may
   // have got there first. Either way the ledger already has the news.
   if (attempt.state === "paid" || attempt.state === "failed") {

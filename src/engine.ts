@@ -407,12 +407,54 @@ export function linkOutsidePayout(
   return true;
 }
 
+// The attempt a transfer Airwallex lists belongs to, when the ledger has no
+// transfer on it: one still pending whose create went unanswered, or one marked
+// failed because Airwallex listed nothing under its request id at the time.
+export function unrecordedAttemptOf(ledger: Ledger, transfer: Transfer): Attempt | undefined {
+  const requestId: string = transfer.request_id ?? "";
+  const attempt: Attempt | undefined =
+    requestId === "" ? undefined : ledger.attemptOf(requestId, transfer.id);
+  return attempt?.requestId === requestId && attempt.transferId === null ? attempt : undefined;
+}
+
+// Records a transfer Airwallex lists only now under the request id of an attempt
+// with none on it, in the state the bank gives it, and says so on the timeline.
+// An attempt marked failed is corrected. A closed invoice the transfer may still
+// pay is reopened for a person. True when it recorded one, and the caller then
+// looks at the invoice again.
+export async function recordLateTransfer(engine: Engine, transfer: Transfer): Promise<boolean> {
+  const attempt: Attempt | undefined = unrecordedAttemptOf(engine.ledger, transfer);
+  if (attempt === undefined) {
+    return false;
+  }
+  const invoiceId: string = attempt.invoiceId;
+  const recorded: Transfer = await syncTransfer(engine.client, engine.ledger, transfer.id);
+  const live: boolean = attemptStateOf(recorded) !== "failed";
+  const twice: boolean = live && anyLive(engine.ledger.outsidePayouts(invoiceId));
+  note(
+    engine.ledger,
+    invoiceId,
+    twice ? "warning" : "bank",
+    `${capitalise(attempt.kind)} payment ${attempt.state === "failed" ? "PayOnce had marked failed is a transfer after all" : "found in Airwallex"}: Airwallex now lists ${describe(recorded)} under its request id${twice ? ". A payout sent outside PayOnce for this invoice is on file too, so the supplier may be paid twice" : ""}`,
+  );
+  const state: ObligationState | undefined = engine.ledger.obligation(invoiceId)?.state;
+  if (live && (state === "settled" || state === "rejected")) {
+    engine.ledger.escalate(
+      invoiceId,
+      `${attempt.kind} ${recorded.short_reference_id} was found in Airwallex after the invoice was closed`,
+    );
+  }
+  return true;
+}
+
 // Looks in Airwallex for payouts for this invoice that PayOnce has not seen, and
 // ties them to it: one whose reference names it, or one it nearlyPays whose
 // reference names no invoice exactly. It runs before an original or a replacement
 // goes out, so a payment someone made outside PayOnce is not paid a second time,
-// even when the reference also nearly matches an older invoice. True when it tied
-// any.
+// even when the reference also nearly matches an older invoice. A transfer listed
+// under the request id of one of its attempts marked failed with none on it is
+// recorded on that attempt. A pending one is the look's own: it lists each by
+// request id before this. True when it tied or recorded any.
 async function linkUnseenPayouts(engine: Engine, invoiceId: string): Promise<boolean> {
   const obligation: Obligation | undefined = engine.ledger.obligation(invoiceId);
   if (obligation === undefined) {
@@ -424,6 +466,11 @@ async function linkUnseenPayouts(engine: Engine, invoiceId: string): Promise<boo
     engine.ledger.startedAt(),
   );
   for (const transfer of transfers) {
+    const late: Attempt | undefined = unrecordedAttemptOf(engine.ledger, transfer);
+    if (late?.invoiceId === invoiceId && late.state === "failed") {
+      linked = (await recordLateTransfer(engine, transfer)) || linked;
+      continue;
+    }
     if (engine.ledger.knowsTransfer(transfer.request_id ?? "", transfer.id)) {
       continue;
     }

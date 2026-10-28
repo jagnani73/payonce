@@ -3,9 +3,16 @@ import { debitOf, feeOf, originalStateOf, type Debit, type Fee } from "./assess.
 import { isOverdue } from "./deadlines.js";
 import type { Dispatcher } from "./dispatcher.js";
 import { invoiceForPayout, type PayoutMatch } from "./duplicates.js";
-import { linkOutsidePayout, note, payoutSummary, type Engine } from "./engine.js";
+import {
+  linkOutsidePayout,
+  note,
+  payoutSummary,
+  recordLateTransfer,
+  unrecordedAttemptOf,
+  type Engine,
+} from "./engine.js";
 import type { OriginalTransferState } from "./incident.js";
-import { INVOICE_ID_PATTERN, type TransferMethod } from "./ledger.js";
+import { INVOICE_ID_PATTERN, type Attempt, type TransferMethod } from "./ledger.js";
 import { toMinor } from "./money.js";
 import { railFailureSeen } from "./outages.js";
 
@@ -92,6 +99,18 @@ function adopt(engine: Engine, transfer: Transfer, state: FoundState): string | 
 }
 
 async function sweepOne(engine: Engine, agent: Dispatcher, transfer: Transfer): Promise<void> {
+  // One of PayOnce's own that the ledger has no transfer on, such as an attempt
+  // marked failed before Airwallex listed it, which no look reads again.
+  const late: Attempt | undefined = unrecordedAttemptOf(engine.ledger, transfer);
+  if (late !== undefined) {
+    const recorded: boolean = await agent.run(late.invoiceId, (): Promise<boolean> =>
+      recordLateTransfer(engine, transfer),
+    );
+    if (recorded) {
+      agent.wake(late.invoiceId);
+    }
+    return;
+  }
   if (engine.ledger.knowsTransfer(transfer.request_id ?? "", transfer.id)) {
     return;
   }
@@ -131,7 +150,8 @@ async function sweepOne(engine: Engine, agent: Dispatcher, transfer: Transfer): 
 }
 
 // Looks through the payouts made since the ledger started for ones PayOnce did not
-// send, for example from the Airwallex web app. One whose reference names an
+// send, for example from the Airwallex web app, and for PayOnce's own the ledger
+// has no transfer on, which it records on their attempts. One whose reference names an
 // invoice in the ledger is tied to it, and so is one whose reference nearly
 // matches an invoice to the same supplier for the same amount. Any other becomes an incident once it has
 // failed, or once the bank has sat on it past its deadline. A payout that cannot
