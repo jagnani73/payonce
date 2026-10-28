@@ -181,7 +181,14 @@ function messageOf(error: unknown): string {
 // What a standing line is about. A standing line says how things are now and is
 // written again on every check. A line with no topic records something that
 // happened.
-export type Topic = "decision" | "waiting" | "approval" | "cost" | "bank-details" | "floor";
+export type Topic =
+  | "decision"
+  | "waiting"
+  | "approval"
+  | "cost"
+  | "bank-details"
+  | "floor"
+  | "second-bill";
 
 // True when the timeline's last word on a topic is this message and nothing has
 // happened since. A pay run's timeline uses it too.
@@ -1199,6 +1206,7 @@ function escalate(
       "waiting",
     );
     noteFloor(engine, obligation, assessment, false);
+    noteSecondBill(engine, obligation, assessment, false);
     return null;
   }
 
@@ -1213,12 +1221,10 @@ function escalate(
   // No request is open when nobody on the approver list could approve it, or when
   // a request on an old quote was withdrawn so the next look takes a fresh one.
   const latest: Approval | undefined = engine.ledger.latestApproval(obligation.invoiceId);
-  noteFloor(
-    engine,
-    obligation,
-    assessment,
-    latest?.state === "requested" && latest.binding === bindingOf(terms) && !isExpired(latest),
-  );
+  const requested: boolean =
+    latest?.state === "requested" && latest.binding === bindingOf(terms) && !isExpired(latest);
+  noteFloor(engine, obligation, assessment, requested);
+  noteSecondBill(engine, obligation, assessment, requested);
   return next;
 }
 
@@ -1241,6 +1247,30 @@ function noteFloor(
       ? `Also, ${assessment.floor}. The approval request says this too, and only an approval of that request releases a replacement`
       : `Also, ${assessment.floor}`,
     "floor",
+  );
+}
+
+// Says that the invoice also looks like a second bill for a paid one when the
+// policy sent it to a person for another reason, so the decision line did not
+// say so.
+function noteSecondBill(
+  engine: Engine,
+  obligation: Obligation,
+  assessment: Assessment,
+  requested: boolean,
+): void {
+  const paid: string | null = assessment.paidDuplicate;
+  if (paid === null || decide(assessment.incident).action === "replace") {
+    return;
+  }
+  note(
+    engine.ledger,
+    obligation.invoiceId,
+    "warning",
+    requested
+      ? `Also, ${secondBillReason(paid)}. The approval request says this too`
+      : `Also, ${secondBillReason(paid)}`,
+    "second-bill",
   );
 }
 
