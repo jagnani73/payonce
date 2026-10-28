@@ -5,7 +5,7 @@ import {
   getTransfer,
   type Transfer,
 } from "./airwallex/transfers.js";
-import { attemptStateOf, feeOf, type Fee } from "./assess.js";
+import { attemptStateOf, debitOf, feeOf, type Debit, type Fee } from "./assess.js";
 import type { Attempt, Ledger, Obligation } from "./ledger.js";
 import { toMajor } from "./money.js";
 
@@ -17,6 +17,7 @@ const MISSING_FEE_RETRY_MS: number = 10 * 60_000;
 
 function record(ledger: Ledger, transfer: Transfer): void {
   const fee: Fee | null = feeOf(transfer);
+  const debit: Debit | null = debitOf(transfer);
   ledger.record(
     transfer.request_id,
     transfer.id,
@@ -25,6 +26,8 @@ function record(ledger: Ledger, transfer: Transfer): void {
     transfer.failure?.code ?? null,
     fee?.minor ?? null,
     fee?.currency ?? null,
+    debit?.minor ?? null,
+    debit?.currency ?? null,
   );
 }
 

@@ -152,7 +152,7 @@ The page opens with a cash panel, one row per currency. A row shows the availabl
 
 The balance comes from Airwallex, with the age of the read. Money held for outgoing payments and money still arriving from currency conversions are shown next to it, but neither is part of available. The floor comes from `RESERVE_FLOORS`, and any invoice held to a stricter floor of its own is listed under it. The rest comes from PayOnce's ledger. Payments being sent that have no transfer yet, and approvals given but not used yet, are taken off to give the headroom. A second figure also takes off every payment waiting on a person, as if each one were approved.
 
-Below that the panel lists payments already with the bank, payouts sent outside PayOnce and the fees kept on failed transfers. Airwallex takes a transfer out of available as soon as it is created, so the panel does not take these off again.
+Below that the panel lists payments already with the bank, payouts sent outside PayOnce and the fees kept on failed transfers. Airwallex takes a transfer out of available as soon as it is created, so the panel does not take these off again. Each is listed under the wallet the money left. A payout paid from another currency counts in the currency it was paid from, and a fee counts in the currency it was charged in.
 
 The panel reads Airwallex at most every 30 seconds, and only while the page is open. That read is for display. Before an automatic replacement, PayOnce reads the balance fresh and takes off the same committed money the panel does, so the panel's headroom and the agent's decision agree.
 

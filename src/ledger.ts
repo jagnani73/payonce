@@ -195,14 +195,20 @@ export interface Attempt {
   // until a transfer has been read.
   feeMinor: number | null;
   feeCurrency: string | null;
+  // What the transfer took from the wallet, before the fee, as last read from it.
+  // Null until a transfer has been read since PayOnce started keeping it.
+  amountMinor: number | null;
+  currency: string | null;
 }
 
 // What the bank last did with a payout sent outside PayOnce. unknown is a status
 // PayOnce does not recognise.
 export type PayoutState = "in_flight" | "paid" | "failed" | "unknown";
 
-// A payout's amount and fee as last read from the transfer. Null when it has not
-// been read since PayOnce started keeping them.
+// A payout's amount and fee as last read from the transfer. The amount and
+// currency are what it took from the wallet, before the fee: the source amount
+// when it was paid from another currency. Null when it has not been read since
+// PayOnce started keeping them.
 export interface PayoutMoney {
   amountMinor: number | null;
   currency: string | null;
@@ -227,6 +233,8 @@ export interface FoundPayout {
   failureCode: string | null;
   feeMinor: number | null;
   feeCurrency: string | null;
+  amountMinor: number | null;
+  currency: string | null;
 }
 
 // One approver's approval of a request, with the binding of the terms they saw.
@@ -469,6 +477,9 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     fee_currency: "TEXT",
     // When recordMissingFees last tried to read the fee, as an ISO time.
     fee_tried_at: "TEXT",
+    // What the transfer took from the wallet, before the fee, as on outside_payouts.
+    amount_minor: "INTEGER",
+    currency: "TEXT",
   },
   events: {
     topic: "TEXT",
@@ -497,6 +508,8 @@ interface AttemptRow {
   failure_code: string | null;
   fee_minor: number | null;
   fee_currency: string | null;
+  amount_minor: number | null;
+  currency: string | null;
 }
 
 export class DuplicatePaymentError extends Error {
@@ -550,6 +563,8 @@ function toAttempt(row: AttemptRow): Attempt {
     failureCode: row.failure_code,
     feeMinor: row.fee_minor,
     feeCurrency: row.fee_currency,
+    amountMinor: row.amount_minor,
+    currency: row.currency,
   };
 }
 
@@ -883,6 +898,8 @@ export class Ledger {
       failureCode: null,
       feeMinor: null,
       feeCurrency: null,
+      amountMinor: null,
+      currency: null,
     };
   }
 
@@ -953,8 +970,8 @@ export class Ledger {
         .prepare(
           `INSERT INTO attempts
              (request_id, invoice_id, kind, transfer_id, reference, state, failure_code,
-              fee_minor, fee_currency)
-           VALUES (?, ?, 'original', ?, ?, ?, ?, ?, ?)`,
+              fee_minor, fee_currency, amount_minor, currency)
+           VALUES (?, ?, 'original', ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           found.requestId,
@@ -965,6 +982,8 @@ export class Ledger {
           found.failureCode,
           found.feeMinor,
           found.feeCurrency,
+          found.amountMinor,
+          found.currency,
         );
       this.db.exec("COMMIT");
     } catch (error: unknown) {
@@ -1116,7 +1135,8 @@ export class Ledger {
     return Number(result.changes) === 1;
   }
 
-  // A null state leaves the stored state as it is, and a null fee the stored fee.
+  // A null state leaves the stored state as it is, and a null fee or amount the
+  // stored one.
   record(
     requestId: string,
     transferId: string,
@@ -1125,16 +1145,29 @@ export class Ledger {
     failureCode: string | null,
     feeMinor: number | null,
     feeCurrency: string | null,
+    amountMinor: number | null,
+    currency: string | null,
   ): void {
     const result: { changes: number | bigint } = this.db
       .prepare(
         `UPDATE attempts
             SET transfer_id = ?, reference = ?, state = COALESCE(?, state),
                 failure_code = ?, fee_minor = COALESCE(?, fee_minor),
-                fee_currency = COALESCE(?, fee_currency)
+                fee_currency = COALESCE(?, fee_currency),
+                amount_minor = COALESCE(?, amount_minor), currency = COALESCE(?, currency)
           WHERE request_id = ?`,
       )
-      .run(transferId, reference, state, failureCode, feeMinor, feeCurrency, requestId);
+      .run(
+        transferId,
+        reference,
+        state,
+        failureCode,
+        feeMinor,
+        feeCurrency,
+        amountMinor,
+        currency,
+        requestId,
+      );
     if (Number(result.changes) !== 1) {
       throw new Error(`No payment attempt has request_id ${requestId}`);
     }

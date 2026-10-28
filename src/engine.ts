@@ -33,10 +33,12 @@ import {
 import {
   attemptStateOf,
   bankDetailsKey,
+  debitOf,
   feeOf,
   originalStateOf,
   resendCanFix,
   sameBankDetails,
+  type Debit,
   type Fee,
 } from "./assess.js";
 import { committedMinor } from "./cash-position.js";
@@ -70,7 +72,7 @@ import {
   type PayoutState,
   type Signoff,
 } from "./ledger.js";
-import { formatMoney, readMinor, toMinor } from "./money.js";
+import { formatMoney, toMinor } from "./money.js";
 import { sendAttempt, syncTransfer, wasRejected } from "./payments.js";
 import { debitCurrency, floorFor, type ReservePolicy } from "./reserve.js";
 
@@ -211,13 +213,14 @@ export function payoutSummary(transfer: Transfer): string {
   return `${formatMoney(toMinor(transfer.transfer_amount), transfer.transfer_currency)} to ${payee}, ${transfer.status}${failure}`;
 }
 
-// A payout's amount and fee for the ledger. One that cannot be read is null, so
-// tying the payout never fails on it.
+// A payout's amount and fee for the ledger, each in the currency it was taken in.
+// One that cannot be read is null, so tying the payout never fails on it.
 function payoutMoney(transfer: Transfer): PayoutMoney {
   const fee: Fee | null = feeOf(transfer);
+  const debit: Debit | null = debitOf(transfer);
   return {
-    amountMinor: readMinor(transfer.transfer_amount),
-    currency: transfer.transfer_currency ?? null,
+    amountMinor: debit?.minor ?? null,
+    currency: debit?.currency ?? null,
     feeMinor: fee?.minor ?? null,
     feeCurrency: fee?.currency ?? null,
   };

@@ -28,6 +28,10 @@ export interface Transfer {
   transfer_method: string;
   transfer_amount: number;
   transfer_currency: string;
+  // What the transfer took from the wallet, before the fee. Not the transfer
+  // amount when it was paid from another currency.
+  source_amount?: number;
+  source_currency?: string;
   fee_amount: number;
   // Airwallex charges the fee in the source currency.
   fee_currency?: string;
