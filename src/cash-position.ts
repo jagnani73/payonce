@@ -183,10 +183,18 @@ function sentLines(line: CashLine, feeMinor: number | null, feeCurrency: string 
 }
 
 // Every line of money the ledger knows about, in every currency. Closed invoices
-// add only the fees their failed transfers kept.
-export function cashLines(ledger: Ledger, now: number = Date.now()): CashLine[] {
+// add only the fees their failed transfers kept, and with openOnly they are not
+// read at all, for a caller that needs only the money still at risk.
+export function cashLines(
+  ledger: Ledger,
+  now: number = Date.now(),
+  { openOnly = false }: { openOnly?: boolean } = {},
+): CashLine[] {
   const lines: CashLine[] = [];
   for (const obligation of ledger.obligations()) {
+    if (openOnly && (obligation.state === "settled" || obligation.state === "rejected")) {
+      continue;
+    }
     const invoiceId: string = obligation.invoiceId;
     const wallet: string = debitCurrency(obligation);
     const attempts: Attempt[] = ledger.attempts(invoiceId);

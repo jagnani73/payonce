@@ -1710,6 +1710,15 @@ export class Ledger {
       .all(invoiceId) as unknown as LedgerEvent[];
   }
 
+  // The invoice's first timeline line, without reading the rest.
+  firstEvent(invoiceId: string): LedgerEvent | undefined {
+    return this.db
+      .prepare(
+        "SELECT id, at, kind, message, topic FROM events WHERE invoice_id = ? ORDER BY id LIMIT 1",
+      )
+      .get(invoiceId) as unknown as LedgerEvent | undefined;
+  }
+
   private insertAttempt(
     requestId: string,
     invoiceId: string,

@@ -11,7 +11,7 @@ import {
 import { CHANGED_BANK_DETAILS_REASON, NEW_BANK_DETAILS_REASON, ORIGINAL_DEADLINE_REASON } from "./decide.js";
 import { deadlineMinutes } from "./deadlines.js";
 import { heldBeforePaying, pendingClose, REPLACEMENT_DEADLINE_REASON } from "./engine.js";
-import { candidatesFor } from "./intake.js";
+import { candidatesFor, invoiceIndex, type InvoiceIndex } from "./intake.js";
 import {
   isExpired,
   type Approval,
@@ -24,6 +24,7 @@ import {
   type Run,
   type RunApproval,
   type RunRow,
+  type Upload,
 } from "./ledger.js";
 import { debitCurrency } from "./reserve.js";
 import { runStatus, type RunStatus } from "./runs.js";
@@ -373,7 +374,7 @@ function invoiceEntry(
     also.push(inboxText(inbox));
   }
   const atRisk: BoardMoney[] = moneyOf(lines);
-  const first: LedgerEvent | undefined = ledger.events(invoiceId)[0];
+  const first: LedgerEvent | undefined = ledger.firstEvent(invoiceId);
   const timed: Attempt | undefined = overdue ?? latest;
   return {
     lines,
@@ -441,14 +442,16 @@ function add(map: Map<string, CashLine[]>, key: string, line: CashLine): void {
 }
 
 // How many waiting uploads name each invoice, exactly or nearly, as the inbox's
-// match card lists them.
+// match card lists them. The invoices are indexed once for every upload.
 function inboxCounts(ledger: Ledger): Map<string, number> {
   const counts: Map<string, number> = new Map<string, number>();
-  for (const upload of ledger.uploads(0)) {
-    if (upload.state !== "waiting") {
-      continue;
-    }
-    for (const candidate of candidatesFor(ledger, upload).candidates) {
+  const waiting: Upload[] = ledger.uploads(0).filter((upload: Upload): boolean => upload.state === "waiting");
+  if (waiting.length === 0) {
+    return counts;
+  }
+  const index: InvoiceIndex = invoiceIndex(ledger);
+  for (const upload of waiting) {
+    for (const candidate of candidatesFor(ledger, upload, index).candidates) {
       const id: string = candidate.invoiceId;
       counts.set(id, (counts.get(id) ?? 0) + 1);
     }
@@ -480,7 +483,7 @@ function rankedBoard(ledger: Ledger, now: number): Ranked[] {
   const run: Run | undefined = ledger.waitingRun();
   const byInvoice: Map<string, CashLine[]> = new Map<string, CashLine[]>();
   const byRow: Map<string, CashLine[]> = new Map<string, CashLine[]>();
-  for (const line of cashLines(ledger, now)) {
+  for (const line of cashLines(ledger, now, { openOnly: true })) {
     if (AT_RISK.has(line.kind)) {
       add(byInvoice, line.invoiceId, line);
     }
