@@ -241,14 +241,23 @@ export function routeText(arrival: ArrivalTerms): string {
     : `${arrival.route}, usually ${daysText(arrival.minDays, arrival.maxDays)}`;
 }
 
+// "SWIFT, usually 0 to 3 business days, by 2026-11-02 if sent on 2026-10-28"
+function byText(arrival: ArrivalTerms): string {
+  const by: string = arrival.latest === null ? "" : `, by ${arrival.latest} if sent on ${arrival.from}`;
+  return `${routeText(arrival)}${by}`;
+}
+
+// "due 2026-10-30; may arrive late", or null when there is no due date.
+function dueText(arrival: ArrivalTerms): string | null {
+  const risk: ArrivalRisk | null = arrivalRisk(arrival);
+  return risk === null ? null : `due ${arrival.dueDate ?? ""}; ${RISK_WORDS[risk]}`;
+}
+
 // "SWIFT, usually 0 to 3 business days, by 2026-11-02 if sent on 2026-10-28;
 // due 2026-10-30; may arrive late"
 export function arrivalText(arrival: ArrivalTerms): string {
-  const by: string = arrival.latest === null ? "" : `, by ${arrival.latest} if sent on ${arrival.from}`;
-  const risk: ArrivalRisk | null = arrivalRisk(arrival);
-  return risk === null
-    ? `${routeText(arrival)}${by}`
-    : `${routeText(arrival)}${by}; due ${arrival.dueDate ?? ""}; ${RISK_WORDS[risk]}`;
+  const due: string | null = dueText(arrival);
+  return due === null ? byText(arrival) : `${byText(arrival)}; ${due}`;
 }
 
 // The same estimate as if the payment were sent on another day. Only the dates
@@ -260,6 +269,41 @@ export function ifSentOn(arrival: ArrivalTerms, day: string): ArrivalTerms {
     earliest: arrival.minDays === null ? null : addBusinessDays(day, arrival.minDays),
     latest: arrival.maxDays === null ? null : addBusinessDays(day, arrival.maxDays),
   });
+}
+
+// What the page and the CLI show for an estimate, so neither keeps its own copy
+// of the wording. It is never in the terms, so no binding changes with it. text
+// is route and due together. sentToday is set when the estimate counts from a day
+// before today, as an open request keeps it after midnight, and says when the
+// payment usually arrives if it is sent today.
+export interface ArrivalAdvice {
+  text: string;
+  route: string;
+  due: string | null;
+  risk: ArrivalRisk | null;
+  atRisk: boolean;
+  sentToday: { text: string; atRisk: boolean } | null;
+  note: string;
+}
+
+export function arrivalAdvice(arrival: ArrivalTerms, on: string = today()): ArrivalAdvice {
+  const now: ArrivalTerms = ifSentOn(arrival, on);
+  const risk: ArrivalRisk | null = arrivalRisk(now);
+  return {
+    text: arrivalText(arrival),
+    route: byText(arrival),
+    due: dueText(arrival),
+    risk: arrivalRisk(arrival),
+    atRisk: atRisk(arrival),
+    sentToday:
+      arrival.from >= on || now.latest === null
+        ? null
+        : {
+            text: `if sent today, ${on}, usually by ${now.latest}${risk === null ? "" : `; ${RISK_WORDS[risk]}`}`,
+            atRisk: atRisk(now),
+          },
+    note: HOLIDAYS_NOTE,
+  };
 }
 
 // The timeline line for a payment just sent, such as "Original P261028-ABC usually

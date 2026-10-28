@@ -1486,17 +1486,6 @@ function caution(message) {
 
 // ---------- arrival estimates ----------
 
-const HOLIDAYS_NOTE =
-  "The dates count weekdays only. A public holiday counts as a working day, so a payment may arrive a day or more later.";
-
-const ARRIVAL_RISK_WORDS = {
-  "on-time": "on time",
-  "may-be-late": "may arrive late",
-  late: "arrives late even at its fastest",
-  passed: "the due date has passed",
-  unknown: "PayOnce cannot say if it is on time",
-};
-
 // Today on this computer's calendar, as YYYY-MM-DD.
 function localToday() {
   const now = new Date();
@@ -1504,82 +1493,44 @@ function localToday() {
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
-// The arrival estimate in terms or on a run row, or null.
-function arrivalOf(holder) {
-  const arrival = holder?.arrival;
-  return arrival !== null &&
-    typeof arrival === "object" &&
-    typeof arrival.method === "string" &&
-    typeof arrival.from === "string"
-    ? arrival
+// An arrival estimate as the server words it, or null. The page keeps no copy of
+// the rules or the words, so it cannot drift from pnpm approve and the timeline.
+function adviceOf(value) {
+  return value !== null &&
+    typeof value === "object" &&
+    typeof value.text === "string" &&
+    typeof value.route === "string" &&
+    typeof value.note === "string"
+    ? value
     : null;
 }
 
-// As on the server: null without a due date.
-function arrivalRisk(arrival) {
-  if (typeof arrival.dueDate !== "string") {
-    return null;
-  }
-  if (arrival.dueDate < arrival.from) {
-    return "passed";
-  }
-  if (typeof arrival.earliest !== "string" || typeof arrival.latest !== "string") {
-    return "unknown";
-  }
-  if (arrival.earliest > arrival.dueDate) {
-    return "late";
-  }
-  return arrival.latest > arrival.dueDate ? "may-be-late" : "on-time";
+function cautionSub(atRisk, text) {
+  return h("span", { class: atRisk === true ? "terms__sub terms__sub--caution" : "terms__sub" }, text);
 }
 
-function arrivalAtRisk(arrival) {
-  const risk = arrivalRisk(arrival);
-  return risk === "may-be-late" || risk === "late" || risk === "passed";
-}
-
-// "SWIFT, usually 0 to 3 business days, by 2026-11-02 if sent on 2026-10-28"
-function arrivalRoute(arrival) {
-  if (typeof arrival.route !== "string" || !Number.isInteger(arrival.minDays) || !Number.isInteger(arrival.maxDays)) {
-    return `${arrival.method}${typeof arrival.country === "string" ? ` to ${arrival.country}` : ""}, arrival not known`;
-  }
-  const days =
-    arrival.minDays === arrival.maxDays
-      ? `${arrival.maxDays} business ${arrival.maxDays === 1 ? "day" : "days"}`
-      : `${arrival.minDays} to ${arrival.maxDays} business days`;
-  const by = typeof arrival.latest === "string" ? `, by ${arrival.latest} if sent on ${arrival.from}` : "";
-  return `${arrival.route}, usually ${days}${by}`;
-}
-
-// "due 2026-10-30; may arrive late", or null without a due date.
-function arrivalDue(arrival) {
-  const risk = arrivalRisk(arrival);
-  return risk === null ? null : `due ${arrival.dueDate}; ${ARRIVAL_RISK_WORDS[risk]}`;
-}
-
-function arrivalText(arrival) {
-  const due = arrivalDue(arrival);
-  return due === null ? arrivalRoute(arrival) : `${arrivalRoute(arrival)}; ${due}`;
+// When the payment usually arrives if it is sent today, shown only when the
+// estimate counts from an earlier day. It is not part of what is approved.
+function sentTodayOf(advice) {
+  const today = advice.sentToday;
+  return today !== null && typeof today === "object" && typeof today.text === "string" ? today : null;
 }
 
 // The Arrival row of an approval card, or nothing when the terms carry no estimate.
-function arrivalTerm(arrival) {
-  if (arrival === null) {
+function arrivalTerm(advice) {
+  if (advice === null) {
     return [];
   }
-  const due = arrivalDue(arrival);
+  const today = sentTodayOf(advice);
   return [
     h("dt", null, "Arrival"),
     h(
       "dd",
       null,
-      arrivalRoute(arrival),
-      due !== null &&
-        h(
-          "span",
-          { class: arrivalAtRisk(arrival) ? "terms__sub terms__sub--caution" : "terms__sub" },
-          sentence(due),
-        ),
-      h("span", { class: "terms__sub" }, HOLIDAYS_NOTE),
+      advice.route,
+      typeof advice.due === "string" && cautionSub(advice.atRisk, sentence(advice.due)),
+      today !== null && cautionSub(today.atRisk, sentence(today.text)),
+      h("span", { class: "terms__sub" }, withPeriod(advice.note)),
     ),
   ];
 }
@@ -1685,7 +1636,7 @@ function buildApproval(invoiceId, approval) {
   // Set on a payment from another currency's wallet. The approval covers this quote.
   const fx = fxOf(terms);
   // Set on an invoice with a due date. Advice only: it never stops a payment.
-  const arrival = arrivalOf(terms);
+  const arrival = adviceOf(approval.arrivalAdvice);
   const validTo = fx === null ? null : parseDate(fx.validTo);
   const rateSub =
     fx === null
@@ -2994,7 +2945,8 @@ function buildRunRow(row, columns) {
     notes.push(`Not released: ${row.note}`);
   }
   // When a pay row usually arrives, and the fee PayOnce last saw on its route.
-  const arrival = pays ? arrivalOf(row) : null;
+  const arrival = pays ? adviceOf(row.arrivalAdvice) : null;
+  const today = arrival === null ? null : sentTodayOf(arrival);
   const fee = typeof row.feeSeen === "string" && row.feeSeen !== "" ? `; ${row.feeSeen}` : "";
   return h(
     "li",
@@ -3015,8 +2967,14 @@ function buildRunRow(row, columns) {
     arrival !== null &&
       h(
         "p",
-        { class: arrivalAtRisk(arrival) ? "run-row__arrival run-row__arrival--caution" : "run-row__arrival" },
-        `${sentence(arrivalText(arrival))}${fee}`,
+        { class: arrival.atRisk === true ? "run-row__arrival run-row__arrival--caution" : "run-row__arrival" },
+        `${sentence(arrival.text)}${fee}`,
+      ),
+    today !== null &&
+      h(
+        "p",
+        { class: today.atRisk === true ? "run-row__arrival run-row__arrival--caution" : "run-row__arrival" },
+        sentence(today.text),
       ),
     tags.length > 0 && h("p", { class: "run-row__tags" }, tags),
     notes.length > 0 && h("ul", { class: "run-row__reasons" }, notes.map((note) => h("li", null, withPeriod(note)))),
@@ -3117,8 +3075,10 @@ function runApprovalLead(approval, terms) {
 
 // The Arrival row of a run's approval card: when each row usually arrives, as the
 // terms carry it. A request from before the estimates has none.
-function runArrivalTerm(terms) {
-  const rows = Array.isArray(terms.rows) ? terms.rows.filter((row) => arrivalOf(row) !== null) : [];
+function runArrivalTerm(approval) {
+  const rows = Array.isArray(approval.arrivalAdvice)
+    ? approval.arrivalAdvice.filter((entry) => entry !== null && typeof entry === "object" && adviceOf(entry.advice) !== null)
+    : [];
   if (rows.length === 0) {
     return [];
   }
@@ -3127,15 +3087,14 @@ function runArrivalTerm(terms) {
     h(
       "dd",
       null,
-      rows.map((row) => {
-        const arrival = arrivalOf(row);
-        return h(
-          "span",
-          { class: arrivalAtRisk(arrival) ? "terms__sub terms__sub--caution" : "terms__sub" },
-          `Row ${row.line}, ${row.invoiceId}: ${arrivalText(arrival)}`,
-        );
+      rows.map((entry) => {
+        const today = sentTodayOf(entry.advice);
+        return [
+          cautionSub(entry.advice.atRisk, `Row ${entry.line}, ${entry.invoiceId}: ${entry.advice.text}`),
+          today !== null && cautionSub(today.atRisk, `Row ${entry.line}, ${today.text}`),
+        ];
       }),
-      h("span", { class: "terms__sub" }, HOLIDAYS_NOTE),
+      h("span", { class: "terms__sub" }, withPeriod(rows[0].advice.note)),
     ),
   ];
 }
@@ -3284,7 +3243,7 @@ function renderRunApproval(run) {
             h("dt", null, "Limits checked against"),
             h("dd", null, `${formatMoney(approval.largest.amountMinor, approval.largest.currency)}, the largest total`),
           ],
-        runArrivalTerm(terms),
+        runArrivalTerm(approval),
       ),
       h(
         "p",

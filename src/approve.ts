@@ -1,5 +1,5 @@
 import { describeRate, markupOf, type ApprovalTerms, type DuplicateEvidence } from "./approval.js";
-import { arrivalText, HOLIDAYS_NOTE } from "./arrival.js";
+import { arrivalAdvice, type ArrivalAdvice } from "./arrival.js";
 import { describePolicy, policyFromEnv, type ApprovalPolicy } from "./approvers.js";
 import { approvePayment, pendingApproval, type PendingApproval } from "./engine.js";
 import { Ledger, LEDGER_PATH, signersOf, type Approval } from "./ledger.js";
@@ -30,7 +30,12 @@ function show(pending: PendingApproval): void {
   }
   console.log(`  to       ${terms.payTo} (the account on file)`);
   if (terms.arrival !== undefined) {
-    console.log(`  arrival  ${arrivalText(terms.arrival)}. ${HOLIDAYS_NOTE}`);
+    const advice: ArrivalAdvice = arrivalAdvice(terms.arrival);
+    console.log(`  arrival  ${advice.text}`);
+    if (advice.sentToday !== null) {
+      console.log(`           ${advice.sentToday.text}`);
+    }
+    console.log(`           ${advice.note}`);
   }
   if (terms.action === "replace") {
     const failure: string =

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { AirwallexClient } from "./airwallex/client.js";
 import type { RunTotal } from "./approval.js";
-import { arrivalText, feeSeenText, HOLIDAYS_NOTE } from "./arrival.js";
+import { arrivalAdvice, feeSeenText, HOLIDAYS_NOTE, type ArrivalAdvice } from "./arrival.js";
 import { describePolicy, policyFromEnv, type ApprovalPolicy } from "./approvers.js";
 import type { Engine } from "./engine.js";
 import {
@@ -106,9 +106,11 @@ function printRows(ledger: Ledger, rows: (CheckedRow | RunRow)[]): void {
       console.log(`           to ${row.payTo}${row.newPayee ? ", a payee PayOnce has never paid" : ""}`);
     }
     if (row.arrival !== null && row.currency !== null) {
-      console.log(
-        `           ${arrivalText(row.arrival)}; ${feeSeenText(ledger, row.currency, row.arrival.method)}`,
-      );
+      const advice: ArrivalAdvice = arrivalAdvice(row.arrival);
+      console.log(`           ${advice.text}; ${feeSeenText(ledger, row.currency, row.arrival.method)}`);
+      if (advice.sentToday !== null) {
+        console.log(`           ${advice.sentToday.text}`);
+      }
       arriving = true;
     }
     for (const reason of row.reasons) {
@@ -159,7 +161,11 @@ function printApproval(pending: PendingRunApproval): void {
   let arriving: boolean = false;
   for (const row of pending.terms.rows) {
     if (row.arrival !== undefined) {
-      console.log(`  arrival  row ${row.line} ${row.invoiceId}: ${arrivalText(row.arrival)}`);
+      const advice: ArrivalAdvice = arrivalAdvice(row.arrival);
+      console.log(`  arrival  row ${row.line} ${row.invoiceId}: ${advice.text}`);
+      if (advice.sentToday !== null) {
+        console.log(`           ${advice.sentToday.text}`);
+      }
       arriving = true;
     }
   }

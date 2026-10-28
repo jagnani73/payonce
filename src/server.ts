@@ -9,8 +9,8 @@ import { extname } from "node:path";
 import { BalanceCache } from "./airwallex/balances.js";
 import { AirwallexClient, AirwallexError, AirwallexUnreachableError } from "./airwallex/client.js";
 import { subscribe } from "./airwallex/webhooks.js";
-import type { ApprovalTerms, RunTerms } from "./approval.js";
-import { dueDateProblem, feeSeenText } from "./arrival.js";
+import type { ApprovalTerms, RunRowTerms, RunTerms } from "./approval.js";
+import { arrivalAdvice, dueDateProblem, feeSeenText } from "./arrival.js";
 import { describePolicy, policyFromEnv, type Approver, type Barred } from "./approvers.js";
 import {
   auditCsv,
@@ -534,6 +534,8 @@ function incidentDetail(invoiceId: string): unknown {
   // The approval card shows who may not approve, and that is the same for any request.
   const barred: Barred[] = pendingApproval(engine.ledger, invoiceId)?.barred ?? [];
   const row: RunRow | undefined = engine.ledger.runRowOf(invoiceId);
+  const terms: ApprovalTerms | undefined =
+    approval === undefined ? undefined : (JSON.parse(approval.terms) as ApprovalTerms);
   return {
     obligation,
     run: row === undefined ? null : { id: row.runId, line: row.line },
@@ -547,7 +549,9 @@ function incidentDetail(invoiceId: string): unknown {
             id: approval.id,
             state: approval.state,
             approver: approval.approver,
-            terms: JSON.parse(approval.terms) as ApprovalTerms,
+            terms,
+            // How the page words the estimate the terms carry, kept out of them.
+            arrivalAdvice: terms?.arrival === undefined ? null : arrivalAdvice(terms.arrival),
             needed: approval.needed,
             neededWhy: approval.neededWhy,
             signoffs: approval.signoffs.map((signoff: Signoff) => ({
@@ -850,6 +854,7 @@ function runDetail(raw: string): unknown {
         row.arrival === null || row.currency === null
           ? null
           : feeSeenText(engine.ledger, row.currency, row.arrival.method),
+      arrivalAdvice: row.arrival === null ? null : arrivalAdvice(row.arrival),
       invoice:
         row.state === "released" && row.invoiceId !== null ? invoiceSummary(row.invoiceId) : null,
     })),
@@ -862,6 +867,12 @@ function runDetail(raw: string): unknown {
             state: approval.state,
             approver: approval.approver,
             terms,
+            // How the page words each estimate the terms carry, kept out of them.
+            arrivalAdvice: terms.rows.flatMap((row: RunRowTerms) =>
+              row.arrival === undefined
+                ? []
+                : [{ line: row.line, invoiceId: row.invoiceId, advice: arrivalAdvice(row.arrival) }],
+            ),
             needed: approval.needed,
             neededWhy: approval.neededWhy,
             signoffs: approval.signoffs.map((signoff: Signoff) => ({
