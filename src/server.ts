@@ -40,8 +40,18 @@ import {
 import { cashReport, payRunLines, type CashReport } from "./cash-position.js";
 import { CurrencyBusyError } from "./currency-lock.js";
 import { Dispatcher } from "./dispatcher.js";
-import type { EmailFindings } from "./emails.js";
+import { MAX_EMAIL_BYTES, noteTexts } from "./eml.js";
+import type { EmailFindings, SupplierEmail } from "./emails.js";
 import { describeQuotes } from "./fx.js";
+import {
+  candidatesFor,
+  deliverUpload,
+  EmailRefusedError,
+  storeUpload,
+  UploadNotWaitingError,
+  type Match,
+} from "./intake.js";
+import { KeywordReader } from "./keyword-reader.js";
 import {
   approvePayment,
   closeIncident,
@@ -57,6 +67,7 @@ import { recordMissingFees } from "./payments.js";
 import { readerFromEnv } from "./reader.js";
 import { describeFloors, reserveFromEnv } from "./reserve.js";
 import {
+  DuplicateUploadError,
   INVOICE_ID_PATTERN,
   isExpired,
   LeaseLostError,
@@ -73,6 +84,7 @@ import {
   type RunApproval,
   type RunRow,
   type Signoff,
+  type Upload,
 } from "./ledger.js";
 import {
   cleanFileName,
@@ -128,10 +140,15 @@ const BALANCE_MAX_AGE_MS: number = 30_000;
 const SUBSCRIBE_TRIES: number = 3;
 const SUBSCRIBE_RETRY_MS: number = 5_000;
 const MAX_BODY_BYTES: number = 64 * 1024;
+// An uploaded email travels as base64 inside JSON: 2 MB of email is about 2.7 MB.
+const MAX_INBOX_BODY_BYTES: number = 3 * 1024 * 1024;
+const BASE64: RegExp = /^[A-Za-z0-9+/]*={0,2}$/;
 const WEB_DIR: URL = new URL("../web/", import.meta.url);
 const EMAILS_DIR: URL = new URL("../fixtures/emails/", import.meta.url);
 
 const MAX_NAME_LENGTH: number = 80;
+// Uploads that are not waiting, shown after the waiting ones.
+const INBOX_OTHERS_SHOWN: number = 50;
 const MAX_FINDING_LENGTH: number = 200;
 const RUN_ID_PATTERN: RegExp = /^[1-9][0-9]{0,9}$/;
 
@@ -261,17 +278,23 @@ function emailThreads(): string[] {
 }
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {
-  response.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  response.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "X-Content-Type-Options": "nosniff",
+  });
   response.end(JSON.stringify(body));
 }
 
-async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
+async function readJson(
+  request: IncomingMessage,
+  maxBytes: number = MAX_BODY_BYTES,
+): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let size: number = 0;
   for await (const chunk of request) {
     const buffer: Buffer = chunk as Buffer;
     size += buffer.length;
-    if (size > MAX_BODY_BYTES) {
+    if (size > maxBytes) {
       throw new HttpError(413, "Request body is too large");
     }
     chunks.push(buffer);
@@ -538,7 +561,15 @@ function incidentDetail(invoiceId: string): unknown {
     obligation,
     run: row === undefined ? null : { id: row.runId, line: row.line },
     attempts: engine.ledger.attempts(invoiceId),
-    emails: engine.ledger.emails(invoiceId),
+    emails: engine.ledger.emails(invoiceId).map((email: SupplierEmail) =>
+      email.uploadId === undefined
+        ? email
+        : {
+            ...email,
+            notes: noteTexts(email.notes ?? []),
+            uploadedBy: engine.ledger.upload(email.uploadId)?.uploadedBy ?? null,
+          },
+    ),
     findings: findings === undefined ? null : (JSON.parse(findings) as EmailFindings),
     approval:
       approval === undefined
@@ -949,6 +980,111 @@ async function cancelRunByPerson(request: IncomingMessage, raw: string): Promise
   return { ok: true };
 }
 
+// ---------- inbox ----------
+
+function requireUpload(raw: string): Upload {
+  const upload: Upload | undefined = RUN_ID_PATTERN.test(raw) ? engine.ledger.upload(Number(raw)) : undefined;
+  if (upload === undefined) {
+    throw new HttpError(404, `Upload ${raw.slice(0, 20)} is not in the inbox`);
+  }
+  return upload;
+}
+
+// What the inbox list shows of an upload. Candidates are worked out only for one
+// upload at a time, so the list costs nothing on every poll.
+function uploadSummary(upload: Upload): unknown {
+  return {
+    id: upload.id,
+    uploadedBy: upload.uploadedBy,
+    uploadedAt: upload.uploadedAt,
+    sender: upload.sender,
+    subject: upload.subject,
+    state: upload.state,
+    partial: upload.partial,
+    invoiceId: upload.invoiceId,
+  };
+}
+
+function uploadDetail(raw: string): unknown {
+  const upload: Upload = requireUpload(raw);
+  const match: Match = upload.state === "waiting" ? candidatesFor(engine.ledger, upload) : { candidates: [], suggested: null };
+  return {
+    upload: {
+      ...upload,
+      contentHash: undefined,
+      notes: noteTexts(upload.notes),
+    },
+    candidates: match.candidates,
+    suggested: match.suggested,
+    sameMessageId: engine.ledger.sameMessageId(upload),
+  };
+}
+
+// The page sends the file's bytes, or the pasted source as UTF-8, base64 inside
+// JSON, so the guard's Origin and content type checks cover an upload and
+// nothing parses multipart.
+async function addUpload(request: IncomingMessage): Promise<unknown> {
+  const body: Record<string, unknown> = await readJson(request, MAX_INBOX_BODY_BYTES);
+  const uploadedBy: string = name(body, "uploadedBy", "Enter your name");
+  const source: unknown = body["source"];
+  if (source !== "file" && source !== "paste") {
+    throw new HttpError(400, "Say whether the email is a file or pasted source");
+  }
+  const eml: unknown = body["eml"];
+  if (typeof eml !== "string" || eml === "" || eml.length % 4 !== 0 || !BASE64.test(eml)) {
+    throw new HttpError(400, "Choose an .eml file or paste the email's source");
+  }
+  const fileName: string | null =
+    source === "file" && typeof body["fileName"] === "string" ? cleanFileName(body["fileName"]) || null : null;
+  try {
+    const upload: Upload = storeUpload(engine.ledger, Buffer.from(eml, "base64"), uploadedBy, source, fileName);
+    const match: Match = candidatesFor(engine.ledger, upload);
+    return { id: upload.id, candidates: match.candidates, suggested: match.suggested };
+  } catch (error: unknown) {
+    if (error instanceof EmailRefusedError) {
+      throw new HttpError(error.tooLarge ? 413 : 400, error.message);
+    }
+    if (error instanceof DuplicateUploadError) {
+      throw new HttpError(409, error.message, {
+        id: error.upload.id,
+        state: error.upload.state,
+        invoiceId: error.upload.invoiceId,
+      });
+    }
+    throw error;
+  }
+}
+
+// A person delivers a waiting upload to an invoice, in the invoice's turn, and
+// the agent then looks at an open or escalated invoice, which reads the email.
+async function deliverUploadByPerson(request: IncomingMessage, raw: string): Promise<unknown> {
+  const upload: Upload = requireUpload(raw);
+  const body: Record<string, unknown> = await readJson(request);
+  const deliveredBy: string = name(body, "deliveredBy", "Enter your name");
+  const obligation: Obligation = requireObligation(text(body, "invoiceId"));
+  const live: boolean = await inTurn(obligation.invoiceId, (): boolean =>
+    deliverUpload(engine.ledger, upload.id, obligation.invoiceId, deliveredBy),
+  );
+  if (live) {
+    agent.wake(obligation.invoiceId);
+  }
+  return { ok: true, invoiceId: obligation.invoiceId };
+}
+
+async function dismissUploadByPerson(request: IncomingMessage, raw: string): Promise<unknown> {
+  const upload: Upload = requireUpload(raw);
+  const body: Record<string, unknown> = await readJson(request);
+  const dismissedBy: string = name(body, "dismissedBy", "Enter your name");
+  const note: string = text(body, "note");
+  if (note === "" || note.length > MAX_FINDING_LENGTH) {
+    throw new HttpError(400, "Say why the email belongs to no invoice");
+  }
+  if (!engine.ledger.dismissUpload(upload.id, dismissedBy, note)) {
+    throw new HttpError(409, new UploadNotWaitingError(engine.ledger.upload(upload.id) ?? upload).message);
+  }
+  return { ok: true };
+}
+
 // Only files that exist directly in web/ are served, so a path cannot leave it.
 function serveStatic(response: ServerResponse, pathname: string): void {
   const name: string = pathname === "/" ? "index.html" : pathname.slice(1);
@@ -958,9 +1094,14 @@ function serveStatic(response: ServerResponse, pathname: string): void {
   // Read before any header goes out, so a failed read can still become an error
   // response.
   const content: Buffer = readFileSync(new URL(name, WEB_DIR));
+  // The page has no inline script or style and makes no outside request, so
+  // even text that slipped into markup could not run or load anything.
   response.writeHead(200, {
     "Content-Type": CONTENT_TYPES[extname(name)] ?? "application/octet-stream",
     "Cache-Control": "no-store",
+    "Content-Security-Policy":
+      "default-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+    "X-Content-Type-Options": "nosniff",
   });
   response.end(content);
 }
@@ -992,6 +1133,10 @@ async function route(
       sandboxOutcomes: SANDBOX_OUTCOMES,
       maxRunRows: MAX_RUN_ROWS,
       maxRunFileChars: MAX_RUN_FILE_CHARS,
+      maxEmailBytes: MAX_EMAIL_BYTES,
+      // The page warns that a model on Google's free tier reads uploads.
+      reader: engine.reader.name,
+      readerIsModel: !(engine.reader instanceof KeywordReader),
       approvers: engine.approvals.approvers.map((approver: Approver) => ({
         name: approver.name,
         limitMinor: approver.limitMinor,
@@ -1008,6 +1153,23 @@ async function route(
     });
   } else if (method === "GET" && pathname === "/api/cash") {
     sendJson(response, 200, cash());
+  } else if (method === "GET" && pathname === "/api/inbox") {
+    sendJson(response, 200, {
+      uploads: engine.ledger.uploads(INBOX_OTHERS_SHOWN).map(uploadSummary),
+    });
+  } else if (method === "POST" && pathname === "/api/inbox") {
+    sendJson(response, 201, await addUpload(request));
+  } else if (parts[1] === "inbox" && parts[2] !== undefined) {
+    const uploadId: string = parts[2];
+    if (method === "GET" && parts.length === 3) {
+      sendJson(response, 200, uploadDetail(uploadId));
+    } else if (method === "POST" && parts[3] === "deliver" && parts.length === 4) {
+      sendJson(response, 200, await deliverUploadByPerson(request, uploadId));
+    } else if (method === "POST" && parts[3] === "dismiss" && parts.length === 4) {
+      sendJson(response, 200, await dismissUploadByPerson(request, uploadId));
+    } else {
+      throw new HttpError(404, "Not found");
+    }
   } else if (method === "GET" && pathname === "/api/runs") {
     sendJson(response, 200, listRuns());
   } else if (method === "POST" && pathname === "/api/runs") {
