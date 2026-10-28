@@ -81,7 +81,7 @@ export const NOTE_TEXT: Record<EmailNote, string> = {
   "versions-differ": "Its plain-text and HTML versions do not say the same thing, so both are shown",
   "only-attachments": "It has no text, only attachments, which PayOnce does not open",
   "more-attachments": `It has more than ${MAX_ATTACHMENTS} attachments. PayOnce lists the first ${MAX_ATTACHMENTS}`,
-  "style-unreadable": "Its styles take something PayOnce cannot read: a linked style sheet, an @import, a url() outside the email, attr(), or CSS left open",
+  "style-unreadable": "Its styles or markup could make a mail client show characters PayOnce did not read as text, such as a web font, a counter, a reversed run or a style sheet from outside the email. Read it in your own mail client",
   "styles-cut": `PayOnce kept the first ${MAX_STYLE_CHARS.toLocaleString("en-US")} characters of the text found inside its styles. Nobody read the rest`,
   "signed-parts": "Its signed section has more than two parts, and mail clients disagree on which to show",
 };

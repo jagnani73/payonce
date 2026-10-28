@@ -3,17 +3,18 @@
 // escapes decoded, and any text that is not CSS it can parse, and puts them in
 // front of the reader and the person as "text found inside styles". A font name
 // costs nothing there, and whatever a client could draw is there by
-// construction. What PayOnce cannot read at all marks the email partly unread:
-// an @import, a url() that points outside the email, attr(), which draws an
-// attribute's value, and a comment, string or url() left open. The tokenizer
-// follows CSS: comments are /* */ only, a string ends at its quote or a line
-// break, and an unquoted url() runs to its ). It is one pass, linear in the input.
+// construction. Past that, one rule fails closed: CSS that could make a client
+// show characters that are not strings PayOnce took out marks the email partly
+// unread, so a person reads it in their own client (scanCss lists the cases).
+// The tokenizer follows CSS: comments are /* */ only, a string ends at its
+// quote or a line break, and an unquoted url() runs to its ). It is one pass,
+// linear in the input.
 
 export interface CssScan {
   // Strings and loose text, in order.
   texts: string[];
-  // Something PayOnce cannot read: an @import, a url() outside the email,
-  // attr(), or CSS left open.
+  // CSS that could make a client show characters PayOnce did not take out as
+  // strings, or that PayOnce cannot read at all.
   unreadable: boolean;
 }
 
@@ -120,18 +121,33 @@ function readString(css: string, at: number): { text: string; end: number; open:
   return { text: parts.join(""), end: index, open: true };
 }
 
-// A url() whose content is inside the email: a cid: part, a data: URL or a
-// fragment. Anything else is fetched from outside.
+// A URL inside the email: a cid: part, a data: URL or a fragment. Anything else
+// is fetched from outside.
 function insideEmail(url: string): boolean {
   const lower: string = url.trim().toLowerCase();
   return lower === "" || lower.startsWith("cid:") || lower.startsWith("data:") || lower.startsWith("#");
 }
 
+// Functions whose string arguments are URLs.
+const URL_FUNCTIONS: ReadonlySet<string> = new Set<string>([
+  "url",
+  "src",
+  "image",
+  "image-set",
+  "-webkit-image-set",
+]);
+// Functions that make a client draw characters that are in no string:
+// counters and the value of an HTML attribute.
+const DRAWING_FUNCTIONS: ReadonlySet<string> = new Set<string>(["counter", "counters", "attr"]);
+// What a content value may hold besides strings, comments and spaces. Each draws
+// nothing.
+const CONTENT_WORDS: ReadonlySet<string> = new Set<string>(["none", "normal", "important"]);
+
 // Characters that end a run of plain CSS.
 function isSpecial(code: number): boolean {
   return (
     code === 34 || code === 39 || code === 47 || code === 92 || code === 64 || code === 58 ||
-    code === 59 || code === 123 || code === 125 || code === 40 || isNameCode(code)
+    code === 59 || code === 123 || code === 125 || code === 40 || code === 41 || isNameCode(code)
   );
 }
 
@@ -139,15 +155,32 @@ function isSpecial(code: number): boolean {
 // attribute, adding its strings and loose text to scan. Loose text is a
 // statement at the top level that is not an at-rule and has no block, or a
 // declaration with no colon: neither is CSS, and a client may treat it as text.
+//
+// One rule decides what is unreadable: CSS that could make a client show
+// characters that are not strings PayOnce took out. So a content value with
+// anything but strings (a counter, attr(), an identifier such as open-quote, a
+// url(), var()), counter(), counters() or attr() anywhere, an @font-face with a
+// src (a font can draw any character as any other), an @counter-style, a
+// unicode-bidi other than normal (which can reverse a run of digits), an
+// @import, a URL outside the email, and CSS left open.
 export function scanCss(css: string, declarations: boolean, scan: CssScan): void {
   const floor: number = declarations ? 1 : 0;
   let depth: number = floor;
   let segment: string[] = [];
   let colon: boolean = false;
   let atRule: string | null = null;
-  let urlString: boolean = false;
-  // True until the statement has anything but whitespace and comments.
-  let blank: boolean = true;
+  // The statement's first name, and once its colon is read, the property it
+  // declares. Comments are tokens of their own, so one between a name and its
+  // colon changes nothing.
+  let first: string | null = null;
+  let property: string | null = null;
+  // The depth inside an @font-face block, or -1.
+  let fontFace: number = -1;
+  // The functions the scan is inside, innermost last. "" is a plain bracket.
+  const functions: string[] = [];
+  const unreadable = (): void => {
+    scan.unreadable = true;
+  };
   const finish = (opensBlock: boolean): void => {
     // <!-- and --> are allowed around a style sheet and mean nothing.
     const text: string = segment.join("").replace(/<!--|-->/g, " ").replace(/\s+/g, " ").trim();
@@ -156,9 +189,14 @@ export function scanCss(css: string, declarations: boolean, scan: CssScan): void
     segment = [];
     colon = false;
     atRule = null;
-    blank = true;
-    if (at === "import") {
-      scan.unreadable = true;
+    first = null;
+    property = null;
+    functions.length = 0;
+    if (at === "import" || at === "counter-style") {
+      unreadable();
+    }
+    if (opensBlock && at === "font-face") {
+      fontFace = depth + 1;
     }
     if (text === "" || opensBlock || at !== null) {
       return;
@@ -173,20 +211,16 @@ export function scanCss(css: string, declarations: boolean, scan: CssScan): void
     if (code === 47 && css.charCodeAt(index + 1) === 42) {
       const end: number = css.indexOf("*/", index + 2);
       if (end < 0) {
-        scan.unreadable = true;
+        unreadable();
         break;
       }
       segment.push(" ");
       index = end + 2;
     } else if (code === 34 || code === 39) {
       const read: { text: string; end: number; open: boolean } = readString(css, index);
-      if (read.open) {
-        scan.unreadable = true;
+      if (read.open || (URL_FUNCTIONS.has(functions.at(-1) ?? "") && !insideEmail(read.text))) {
+        unreadable();
       }
-      if (urlString && !insideEmail(read.text)) {
-        scan.unreadable = true;
-      }
-      urlString = false;
       if (read.text.trim() !== "") {
         scan.texts.push(read.text);
       }
@@ -194,11 +228,11 @@ export function scanCss(css: string, declarations: boolean, scan: CssScan): void
       index = read.end;
     } else if (code === 64) {
       const read: { name: string; end: number } = readName(css, index + 1);
-      if (blank) {
+      if (first === null) {
         atRule = read.name.toLowerCase();
       }
+      first = first ?? `@${read.name.toLowerCase()}`;
       segment.push(`@${read.name}`);
-      blank = false;
       index = read.end;
     } else if (isNameCode(code) || code === 92) {
       const read: { name: string; end: number } = readName(css, index);
@@ -208,38 +242,66 @@ export function scanCss(css: string, declarations: boolean, scan: CssScan): void
         continue;
       }
       const name: string = read.name.toLowerCase();
+      first = first ?? name;
       index = read.end;
-      if (css.charCodeAt(index) === 40 && name === "attr") {
-        scan.unreadable = true;
+      const call: boolean = css.charCodeAt(index) === 40;
+      if (call && DRAWING_FUNCTIONS.has(name)) {
+        unreadable();
       }
-      if (css.charCodeAt(index) === 40 && name === "url") {
+      if (property === "content" && (call || !CONTENT_WORDS.has(name))) {
+        unreadable();
+      }
+      if (property === "unicode-bidi" && name !== "normal" && name !== "important") {
+        unreadable();
+      }
+      if (call && name === "url") {
         let next: number = index + 1;
         while (next < css.length && isWhitespace(css.charCodeAt(next))) {
           next += 1;
         }
         if (css.charCodeAt(next) === 34 || css.charCodeAt(next) === 39) {
-          urlString = true;
+          functions.push("url");
           index = next;
         } else {
+          // An unquoted url() runs to its ), and nothing in it is a comment.
           const close: number = css.indexOf(")", next);
           if (close < 0) {
-            scan.unreadable = true;
+            unreadable();
             break;
           }
           if (!insideEmail(css.slice(next, close))) {
-            scan.unreadable = true;
+            unreadable();
           }
           index = close + 1;
         }
         segment.push(" ");
         continue;
       }
+      if (call) {
+        functions.push(name);
+        index += 1;
+      }
       segment.push(read.name);
-      blank = false;
+    } else if (code === 40) {
+      if (property === "content") {
+        unreadable();
+      }
+      functions.push("");
+      segment.push("(");
+      index += 1;
+    } else if (code === 41) {
+      functions.pop();
+      segment.push(")");
+      index += 1;
     } else if (code === 58) {
+      if (!colon && depth > 0) {
+        property = first;
+        if (depth === fontFace && first === "src") {
+          unreadable();
+        }
+      }
       colon = true;
       segment.push(":");
-      blank = false;
       index += 1;
     } else if (code === 123) {
       finish(true);
@@ -250,6 +312,9 @@ export function scanCss(css: string, declarations: boolean, scan: CssScan): void
       index += 1;
     } else if (code === 125) {
       finish(false);
+      if (depth === fontFace) {
+        fontFace = -1;
+      }
       depth = Math.max(floor, depth - 1);
       index += 1;
     } else {
@@ -258,8 +323,10 @@ export function scanCss(css: string, declarations: boolean, scan: CssScan): void
         end += 1;
       }
       const run: string = css.slice(index, end);
+      if (property === "content" && run.replace(/[\s!,]/g, "") !== "") {
+        unreadable();
+      }
       segment.push(run);
-      blank = blank && run.trim() === "";
       index = end;
     }
   }

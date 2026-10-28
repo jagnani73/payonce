@@ -1,19 +1,20 @@
 import { scanCss, type CssScan } from "./css-text.js";
 
 // Turns an email's HTML into the text a person reads. It is one pass with no DOM,
-// and it errs on reading more than a mail client shows. Only the content of
-// script and style is left out of the text, and PayOnce does not guess which of
-// it a client draws: every string in a style block or a style="" attribute, any
-// style text that is not CSS PayOnce can parse, and every script's text come
-// back as styleText, which the reader and the page get as "text found inside
-// styles". A linked style sheet, an @import, a url() outside the email or CSS
-// left open makes it unreadable instead. A comment ends where a browser ends it,
-// at --> or --!>, or at the end of the input. Nothing inside it opens or closes
-// an element, and its text is kept with any markup taken out. Text a client hides
-// with CSS, a title and a template are kept too. The reader and the page then see
-// the same text, and reading more only adds caution. Every loop moves forward, so
-// the work is linear in the input.
-
+// and it errs on reading more than a mail client shows. The content of script
+// and style is left out of the text, except inside <svg> and <math>, where it is
+// not raw text and is read as text too. PayOnce does not guess which of it a
+// client draws: every string in a style block or a style="" attribute, any style
+// text that is not CSS PayOnce can parse, and every script's text come back as
+// styleText, which the reader and the page get as "text found inside styles".
+// Markup or CSS that could make a client show characters PayOnce did not take
+// out as strings (scanCss, a linked style sheet, <bdo>) makes it unreadable
+// instead. A comment ends where a browser ends it, at --> or --!>, or at the end
+// of the input. Nothing inside it opens or closes an element, and its text is
+// kept with any markup taken out. Text a client hides with CSS, a title and a
+// template are kept too. The reader and the page then see the same text, and
+// reading more only adds caution. Every loop moves forward, so the work is
+// linear in the input.
 
 const DROPPED: ReadonlySet<string> = new Set<string>(["script", "style"]);
 const BREAKS: ReadonlySet<string> = new Set<string>([
@@ -295,6 +296,8 @@ export function htmlToText(html: string): HtmlText {
   const missing: Map<string, number> = new Map<string, number>();
   const styles: CssScan = { texts: [], unreadable: false };
   let preDepth: number = 0;
+  // How deep in <svg> or <math> the scan is.
+  let foreign: number = 0;
   const text = (chunk: string): void => {
     if (chunk === "") {
       return;
@@ -345,6 +348,9 @@ export function htmlToText(html: string): HtmlText {
     }
     const closing: boolean = next === 47;
     const name: string = tagName(closing ? tag.slice(1) : tag);
+    if (name === "svg" || name === "math") {
+      foreign = closing ? Math.max(0, foreign - 1) : tag.endsWith("/") ? foreign : foreign + 1;
+    }
     if (closing) {
       if (name === "pre") {
         preDepth = Math.max(0, preDepth - 1);
@@ -361,6 +367,10 @@ export function htmlToText(html: string): HtmlText {
     if (name === "link" && /stylesheet/i.test(attributeOf(tag, "rel") ?? "")) {
       styles.unreadable = true;
     }
+    // A bidi override can show a run of digits reversed.
+    if (name === "bdo") {
+      styles.unreadable = true;
+    }
     if (DROPPED.has(name)) {
       // With no closing tag the content is read as text, which shows more.
       const close: Span | null = closeOf(html, index, name, missing);
@@ -375,7 +385,11 @@ export function htmlToText(html: string): HtmlText {
         if (/<[A-Za-z]/.test(content)) {
           styles.texts.push(commentText(content));
         }
-        index = close.end;
+        // Inside <svg> or <math>, style and script are not raw text, so the scan
+        // goes on through their content as body text too.
+        if (foreign === 0) {
+          index = close.end;
+        }
       }
       continue;
     }
