@@ -92,10 +92,12 @@ export type AlertFacts =
 // Text in a message. outside is text PayOnce did not write itself, such as a
 // supplier name from a pay run file or an outside payout, or a reason that names
 // other invoices. Each format renders it as an inline code span, so it cannot
-// become a link, a mention or markup.
+// become a link, a mention or markup. blank is what outside text reads as, in
+// PayOnce's words, when nothing is left of it once hidden characters are dropped.
 export interface AlertText {
   text: string;
   outside: boolean;
+  blank: string;
 }
 
 export interface AlertField {
@@ -129,10 +131,13 @@ const DISCORD_TITLE_MAX: number = 256;
 const AMBER: number = 15105570;
 const RED: number = 15158332;
 const FOOTNOTE: string = "Sandbox, no real money.";
+const NO_NAME: string = "(no name)";
+const NO_REASON: string = "(no reason recorded)";
 const CONTROL: RegExp = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
-// Bidi controls and zero-width characters, which could reverse or hide part of
-// a supplier name inside a code span.
-const HIDDEN: RegExp = /[\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
+// Format characters (bidi controls, zero-width characters, the soft hyphen, tag
+// characters and the rest of Unicode's Cf), which could reverse or hide part of
+// a supplier name inside a code span, and the unassigned rest of the tag block.
+const HIDDEN: RegExp = /[\p{Cf}\u{e0000}-\u{e007f}]/gu;
 // An invoice number or a bank reference, as PayOnce accepts them.
 const IDENTIFIER: RegExp = /^[A-Za-z0-9-]{1,40}$/;
 
@@ -188,8 +193,8 @@ function discordChar(char: string): string {
 }
 
 // A link needs ://, or www. on Slack, so neither survives in outside text. A
-// backtick would end the code span, so it becomes an apostrophe. Bidi controls
-// and zero-width characters are dropped.
+// backtick would end the code span, so it becomes an apostrophe. Format
+// characters are dropped.
 export function defanged(text: string): string {
   return oneLine(text.replace(HIDDEN, "")).replace(/:\/\//g, "[:]//").replace(/\bwww\./gi, "www[.]").replace(/`/g, "'");
 }
@@ -198,18 +203,26 @@ function identifier(value: string | null, fallback: string): string {
   return value !== null && IDENTIFIER.test(value) ? value : fallback;
 }
 
+// Outside text with nothing left once defanged reads as its blank, in PayOnce's
+// words, so a message never holds an empty span.
+function shown(part: AlertText): AlertText {
+  return part.outside && defanged(part.text) === "" ? ours(part.blank) : part;
+}
+
 // Outside text is a code span: on Slack with &, < and > escaped, on Discord as is,
 // because nothing inside a code span is read as markdown, a link or a mention.
 function slackSpan(part: AlertText, max: number): string {
-  return part.outside
-    ? `\`${capped(defanged(part.text), max - 2, slackChar)}\``
-    : capped(oneLine(part.text), max, slackChar);
+  const text: AlertText = shown(part);
+  return text.outside
+    ? `\`${capped(defanged(text.text), max - 2, slackChar)}\``
+    : capped(oneLine(text.text), max, slackChar);
 }
 
 function discordSpan(part: AlertText, max: number): string {
-  return part.outside
-    ? `\`${capped(defanged(part.text), max - 2, (char: string): string => char)}\``
-    : capped(oneLine(part.text), max, discordChar);
+  const text: AlertText = shown(part);
+  return text.outside
+    ? `\`${capped(defanged(text.text), max - 2, (char: string): string => char)}\``
+    : capped(oneLine(text.text), max, discordChar);
 }
 
 // "28 Oct 2026, 15:05 UTC"
@@ -238,11 +251,11 @@ function plural(count: number, one: string, many: string): string {
 }
 
 function ours(text: string): AlertText {
-  return { text, outside: false };
+  return { text, outside: false, blank: "" };
 }
 
-function theirs(text: string): AlertText {
-  return { text, outside: true };
+function theirs(text: string, blank: string): AlertText {
+  return { text, outside: true, blank };
 }
 
 function field(name: string, value: AlertText, inline: boolean = true): AlertField {
@@ -265,11 +278,11 @@ function invoiceMessage(facts: InvoiceAlertFacts, base: string): AlertMessage {
       : `${known ? invoice : "An invoice"} ${NEED_TITLES[facts.need]}`;
   return {
     title,
-    line: [ours(`${facts.amount} to`), theirs(facts.supplier)],
+    line: [ours(`${facts.amount} to`), theirs(facts.supplier, NO_NAME)],
     fields: [
-      field("Supplier", theirs(facts.supplier)),
+      field("Supplier", theirs(facts.supplier, NO_NAME)),
       field("Amount", ours(facts.amount)),
-      field("Why", theirs(facts.reason), false),
+      field("Why", theirs(facts.reason, NO_REASON), false),
       field(
         "Waiting on",
         ours(facts.approvers === null ? "a person" : plural(facts.approvers, "approver", "approvers")),
@@ -293,10 +306,10 @@ function payoutMessage(facts: PayoutAlertFacts, base: string): AlertMessage {
       reference === null || reference === ""
         ? `A payout for ${invoice} was sent outside PayOnce`
         : `Payout ${reference} was sent outside PayOnce`,
-    line: [ours(`${facts.amount} to`), theirs(facts.supplier)],
+    line: [ours(`${facts.amount} to`), theirs(facts.supplier, NO_NAME)],
     fields: [
       field("Invoice", ours(facts.takenOn ? `${invoice}, taken on as a new incident` : `${invoice}, tied to this invoice`)),
-      field("Supplier", theirs(facts.supplier)),
+      field("Supplier", theirs(facts.supplier, NO_NAME)),
       field("Amount", ours(facts.amount)),
       field("Status", ours(facts.state)),
     ],
