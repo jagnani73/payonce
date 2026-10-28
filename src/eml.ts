@@ -12,6 +12,8 @@ import { htmlToText, type HtmlText } from "./html-text.js";
 
 export const MAX_EMAIL_BYTES: number = 2 * 1024 * 1024;
 export const MAX_BODY_CHARS: number = 32_000;
+// The text found inside styles and scripts, read and shown apart from the body.
+export const MAX_STYLE_CHARS: number = 8_000;
 // Neither has an @, so the sender check flags both.
 export const SENDER_UNREADABLE: string = "(no sender address PayOnce could read)";
 export const REPLY_TO_UNREADABLE: string = "(a Reply-To address PayOnce could not read)";
@@ -56,7 +58,8 @@ export type EmailNote =
   | "versions-differ"
   | "only-attachments"
   | "more-attachments"
-  | "hidden-html"
+  | "style-unreadable"
+  | "styles-cut"
   | "signed-parts";
 
 export const NOTE_TEXT: Record<EmailNote, string> = {
@@ -78,7 +81,8 @@ export const NOTE_TEXT: Record<EmailNote, string> = {
   "versions-differ": "Its plain-text and HTML versions do not say the same thing, so both are shown",
   "only-attachments": "It has no text, only attachments, which PayOnce does not open",
   "more-attachments": `It has more than ${MAX_ATTACHMENTS} attachments. PayOnce lists the first ${MAX_ATTACHMENTS}`,
-  "hidden-html": "Its HTML has words inside a style or script block, which PayOnce did not read",
+  "style-unreadable": "Its styles take something PayOnce cannot read: a linked style sheet, an @import, a url() outside the email, attr(), or CSS left open",
+  "styles-cut": `PayOnce kept the first ${MAX_STYLE_CHARS.toLocaleString("en-US")} characters of the text found inside its styles. Nobody read the rest`,
   "signed-parts": "Its signed section has more than two parts, and mail clients disagree on which to show",
 };
 
@@ -94,7 +98,8 @@ export const PARTIAL_NOTES: ReadonlySet<EmailNote> = new Set<EmailNote>([
   "skipped-line",
   "repeated-mime",
   "encoded-header",
-  "hidden-html",
+  "style-unreadable",
+  "styles-cut",
   "signed-parts",
 ]);
 
@@ -118,6 +123,9 @@ export interface ParsedEmail {
   replyTo: string[];
   subject: string;
   body: string;
+  // Text found inside the HTML's styles and scripts: every CSS string, style
+  // text that is not CSS, and script text. Read and shown apart from the body.
+  styleText: string;
   attachments: EmailAttachment[];
   notes: EmailNote[];
   partial: boolean;
@@ -142,6 +150,7 @@ interface Walk {
   source: UploadSource;
   notes: Set<EmailNote>;
   texts: string[];
+  styleTexts: string[];
   read: Set<string>;
   attachments: EmailAttachment[];
   moreAttachments: number;
@@ -864,8 +873,11 @@ function readText(raw: Buffer, start: number, end: number, type: ContentType, en
   let text: string = decoded;
   if (type.type === "text/html") {
     const html: HtmlText = htmlToText(decoded);
-    if (html.hiddenText) {
-      walk.notes.add("hidden-html");
+    if (html.unreadable) {
+      walk.notes.add("style-unreadable");
+    }
+    for (const piece of html.styleText) {
+      walk.styleTexts.push(piece);
     }
     text = html.text;
   } else if (asciiLower(type.params.get("format") ?? "") === "flowed") {
@@ -1153,6 +1165,7 @@ export function parseEmail(raw: Buffer, source: UploadSource): ParsedUpload {
       source,
       notes: new Set<EmailNote>(),
       texts: [],
+      styleTexts: [],
       read: new Set<string>(),
       attachments: [],
       moreAttachments: 0,
@@ -1187,6 +1200,19 @@ export function parseEmail(raw: Buffer, source: UploadSource): ParsedUpload {
     if (body === "" && walk.attachments.length > 0) {
       walk.notes.add("only-attachments");
     }
+    // One line per string or piece of loose text, each once, in order.
+    const lines: string[] = [
+      ...new Set<string>(
+        walk.styleTexts
+          .map((piece: string): string => cleanText(piece).replace(/\s+/g, " ").trim())
+          .filter((piece: string): boolean => piece !== ""),
+      ),
+    ];
+    let styleText: string = lines.join("\n");
+    if (styleText.length > MAX_STYLE_CHARS) {
+      styleText = storable(styleText.slice(0, MAX_STYLE_CHARS));
+      walk.notes.add("styles-cut");
+    }
     const messageId: string | null = messageIdOf(top.fields, walk);
     const fromAsWritten: string = cleanLine(decodeWords((top.fields.get("from") ?? []).join(" | "), walk), 400);
     const replyTo: string[] = replyToOf(top.fields, walk);
@@ -1202,6 +1228,7 @@ export function parseEmail(raw: Buffer, source: UploadSource): ParsedUpload {
         replyTo,
         subject,
         body,
+        styleText,
         attachments: walk.attachments,
         notes,
         partial: notes.some((note: EmailNote): boolean => PARTIAL_NOTES.has(note)),
