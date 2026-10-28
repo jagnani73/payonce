@@ -1690,14 +1690,17 @@ export class Ledger {
 
   // Settles only when the invoice has been paid once by PayOnce or, when a
   // person closes it, by a payout sent outside PayOnce. A payment that went out
-  // at a rate nobody approved leaves the invoice for a person to close.
+  // at a rate nobody approved leaves the invoice for a person to close, unless it
+  // failed.
   settle(invoiceId: string, byPerson: boolean = false): boolean {
     if (!this.paidOnce(invoiceId) && !(byPerson && this.paidOutside(invoiceId))) {
       return false;
     }
     if (
       !byPerson &&
-      this.attempts(invoiceId).some((attempt: Attempt): boolean => attempt.rateMismatch !== null)
+      this.attempts(invoiceId).some(
+        (attempt: Attempt): boolean => attempt.rateMismatch !== null && attempt.state !== "failed",
+      )
     ) {
       return false;
     }

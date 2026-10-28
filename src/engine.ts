@@ -1790,9 +1790,10 @@ export function pendingClose(
     const paid: Attempt | undefined = ledger
       .attempts(invoiceId)
       .find((attempt: Attempt): boolean => attempt.state === "paid");
+    // A payment at a rate nobody approved is why it was not closed by itself.
     return paid === undefined
       ? undefined
-      : { kind: paid.kind, reference: paid.reference, reason };
+      : { kind: paid.kind, reference: paid.reference, reason: paid.rateMismatch ?? reason };
   }
   if (ledger.paidOutside(invoiceId)) {
     const paid: OutsidePayout | undefined = ledger
