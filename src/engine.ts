@@ -2090,13 +2090,18 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
     note(engine.ledger, invoiceId, "decision", `Escalate: ${reason}`, "decision");
   }
   if (emailsNotRead(findings, stored, emails)) {
+    // An email delivered by another process while the others were read is read
+    // on the next look, at once. One the reader failed on is tried a minute later.
+    const failed: boolean = findings.unread === true;
     waitWithoutPaying(
       engine,
       invoiceId,
       EMAILS_NOT_READ,
-      "Waiting on a person. Supplier emails are on file that PayOnce could not read yet, so it asks nobody to approve paying this invoice. It tries reading them again in a minute",
+      failed
+        ? "Waiting on a person. Supplier emails are on file that PayOnce could not read yet, so it asks nobody to approve paying this invoice. It tries reading them again in a minute"
+        : "Waiting on a person. A supplier email arrived while PayOnce read the others, so it asks nobody to approve paying this invoice until it has read that one too",
     );
-    return Date.now() + RETRY_FAILED_LOOK_MS;
+    return failed ? Date.now() + RETRY_FAILED_LOOK_MS : Date.now();
   }
   const evidence: string | null =
     emails.length === 0 ? null : emailEvidence(findings.summary, emails, obligation.supplierDomain);
