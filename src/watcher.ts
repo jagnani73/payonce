@@ -75,7 +75,11 @@ export class Watcher {
     const due: ReadonlySet<string> = new Set<string>(this.engine.ledger.dueLooks(now));
     for (const obligation of this.engine.ledger.obligations()) {
       const invoiceId: string = obligation.invoiceId;
-      if (obligation.state === "settled" || this.agent.isBusy(invoiceId)) {
+      if (
+        obligation.state === "settled" ||
+        obligation.state === "rejected" ||
+        this.agent.isBusy(invoiceId)
+      ) {
         continue;
       }
       // An approval nobody has acted on yet, or a request that expired with no

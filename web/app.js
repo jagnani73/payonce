@@ -12,6 +12,7 @@ const OBLIGATION_STATES = {
   open: { label: "Open", tone: "active" },
   escalated: { label: "Waiting on a person", tone: "waiting" },
   settled: { label: "Closed", tone: "paid" },
+  rejected: { label: "Closed without paying", tone: "neutral" },
 };
 
 const ATTEMPT_KINDS = {
@@ -74,6 +75,7 @@ const els = {
   scenario: byId("scenario"),
   bankOutcome: byId("bank-outcome"),
   emailThread: byId("email-thread"),
+  invoiceNumber: byId("invoice-number"),
   startedBy: byId("started-by"),
   startButton: byId("start-button"),
   newError: byId("new-error"),
@@ -158,7 +160,7 @@ function h(tag, props, ...children) {
       node.setAttribute(key, value === true ? "" : String(value));
     }
   }
-  for (const child of children.flat()) {
+  for (const child of children.flat(Infinity)) {
     if (child === null || child === undefined || child === false) {
       continue;
     }
@@ -555,6 +557,7 @@ function renderForm() {
   els.emailThread.disabled = locked;
   // Read-only rather than disabled, so the name keeps focus while the incident starts.
   els.startedBy.readOnly = state.creating;
+  els.invoiceNumber.readOnly = state.creating;
   els.startButton.disabled = locked;
   setText(els.startButton, state.creating ? "Starting" : "Start incident");
   showMessage(els.newError, state.createError ?? state.optionsError);
@@ -577,6 +580,10 @@ async function startIncident(event) {
     emails: els.emailThread.value,
     startedBy,
   };
+  const invoiceNumber = els.invoiceNumber.value.trim();
+  if (invoiceNumber !== "") {
+    body.invoiceId = invoiceNumber;
+  }
   if (state.options.scenarios.length > 0 && els.scenario.value !== "") {
     body.scenario = els.scenario.value;
   }
@@ -589,6 +596,7 @@ async function startIncident(event) {
       throw new Error("The server did not name the new incident.");
     }
     state.started = { id: created.invoiceId, at: Date.now() };
+    els.invoiceNumber.value = "";
     state.fastUntil = Date.now() + EXPECT_WORK_MS;
     window.scrollTo(0, 0);
     select(created.invoiceId);
@@ -768,7 +776,7 @@ function renderHeader(detail) {
   const invoiceId = obligation.invoiceId;
   const busy = detail.busy === true;
   // An incident that stopped part-way is picked up again from here.
-  const canResume = !busy && obligation.state !== "settled";
+  const canResume = !busy && obligation.state !== "settled" && obligation.state !== "rejected";
   const startedBy =
     typeof obligation.startedBy === "string" && obligation.startedBy.trim() !== ""
       ? obligation.startedBy.trim()
@@ -1212,29 +1220,43 @@ function caution(message) {
   return h("div", { class: "caution" }, icon("warning"), h("p", { class: "caution__title" }, message));
 }
 
+// A held invoice's payment is its first, so the card does not call it a replacement.
+function isHeldPayment(approval) {
+  return approval.terms?.action === "pay";
+}
+
 function approvalLead(approval) {
   const approver =
     typeof approval.approver === "string" && approval.approver !== "" ? approval.approver : null;
+  const held = isHeldPayment(approval);
+  const payment = held ? "payment" : "replacement";
   switch (approval.state) {
     case "requested": {
       const needed = neededOf(approval);
-      if (needed < 2) {
-        return "A person must approve this replacement before PayOnce sends it.";
-      }
-      const people = needed === 2 ? "Two different people" : `${needed} different people`;
+      const people =
+        needed < 2 ? "A person" : needed === 2 ? "Two different people" : `${needed} different people`;
       const why = typeof approval.neededWhy === "string" ? approval.neededWhy.trim() : "";
-      return why === ""
-        ? `${people} must approve this replacement before PayOnce sends it.`
-        : `${people} must approve this replacement before PayOnce sends it, because ${why}.`;
+      const lead =
+        needed < 2 || why === ""
+          ? `${people} must approve this ${payment} before PayOnce sends it.`
+          : `${people} must approve this ${payment} before PayOnce sends it, because ${why}.`;
+      // A held invoice can be closed without paying instead.
+      const duplicates = approval.terms?.evidence?.duplicates;
+      if (!held) {
+        return lead;
+      }
+      return Array.isArray(duplicates) && duplicates.length > 0
+        ? `${lead} If the invoice is a second bill, close it without paying instead.`
+        : `${lead} If it should not be paid, close it without paying instead.`;
     }
     case "approved":
       return approver === null
-        ? "Approved. PayOnce checks the terms again before it sends the replacement."
-        : `Approved by ${approver}. PayOnce checks the terms again before it sends the replacement.`;
+        ? `Approved. PayOnce checks the terms again before it sends the ${payment}.`
+        : `Approved by ${approver}. PayOnce checks the terms again before it sends the ${payment}.`;
     case "used":
       return approver === null
-        ? "Used for one replacement payment. It cannot be used again."
-        : `Approved by ${approver} and used for one replacement payment. It cannot be used again.`;
+        ? `Used for one ${held ? "" : "replacement "}payment. It cannot be used again.`
+        : `Approved by ${approver} and used for one ${held ? "" : "replacement "}payment. It cannot be used again.`;
     case "void":
       return approver === null
         ? "Void. This approval no longer covers a payment."
@@ -1242,6 +1264,25 @@ function approvalLead(approval) {
     default:
       return "";
   }
+}
+
+// An invoice a held one looks like a second bill for, and how it stands.
+function duplicateNode(duplicate) {
+  const stateLabel = OBLIGATION_STATES[duplicate.state]?.label ?? humanize(duplicate.state);
+  const paidBy =
+    typeof duplicate.paidBy === "string" && duplicate.paidBy !== "" ? `, paid by ${duplicate.paidBy}` : "";
+  return h(
+    "span",
+    { class: "terms__duplicate" },
+    h("span", { class: "mono" }, duplicate.invoiceId),
+    h("span", { class: "terms__sub" }, `${stateLabel}${paidBy}`),
+    duplicate.sameAccount === false &&
+      h(
+        "span",
+        { class: "terms__sub terms__sub--caution" },
+        "Paid to a different account from the one this payment goes to",
+      ),
+  );
 }
 
 function buildApproval(invoiceId, approval) {
@@ -1256,6 +1297,8 @@ function buildApproval(invoiceId, approval) {
     typeof evidence.originalReference === "string" && evidence.originalReference !== "";
 
   const expired = requested && approval.expired === true;
+  const held = isHeldPayment(approval);
+  const duplicates = held && Array.isArray(evidence.duplicates) ? evidence.duplicates : [];
   // Set when the payment goes to bank details a callback verified.
   const bankChange =
     evidence.bankChange !== null && typeof evidence.bankChange === "object"
@@ -1279,7 +1322,7 @@ function buildApproval(invoiceId, approval) {
     h(
       "div",
       { class: "approval__head" },
-      h("h2", { id: "approval-title" }, "Replacement approval"),
+      h("h2", { id: "approval-title" }, held ? "Payment approval" : "Replacement approval"),
       badge(expired ? EXPIRED_REQUEST : APPROVAL_STATES[approval.state], approval.state, false),
     ),
     h("p", { class: "approval__lead" }, approvalLead(approval)),
@@ -1298,14 +1341,24 @@ function buildApproval(invoiceId, approval) {
             "Not the account the original payment went to",
           ),
       ),
-      term("Callback", bankChange === null ? null : callbackText(bankChange)),
-      term("Why it was escalated", sentence(evidence.reason)),
-      term(
-        "Original payment",
-        hasReference ? h("span", { class: "mono" }, evidence.originalReference) : originalFacts,
-        hasReference && originalFacts !== "" && h("span", { class: "terms__sub" }, originalFacts),
-      ),
-      term("Email evidence", sentence(evidence.emails)),
+      held
+        ? [
+            term("Why it was held", sentence(evidence.reason)),
+            term(
+              "Looks like a second bill for",
+              duplicates.length === 0 ? null : duplicates.map(duplicateNode),
+            ),
+          ]
+        : [
+            term("Callback", bankChange === null ? null : callbackText(bankChange)),
+            term("Why it was escalated", sentence(evidence.reason)),
+            term(
+              "Original payment",
+              hasReference ? h("span", { class: "mono" }, evidence.originalReference) : originalFacts,
+              hasReference && originalFacts !== "" && h("span", { class: "terms__sub" }, originalFacts),
+            ),
+            term("Email evidence", sentence(evidence.emails)),
+          ],
     ),
     h(
       "p",
@@ -1328,7 +1381,7 @@ function buildApproval(invoiceId, approval) {
     children.splice(2, 0, error);
   }
   // The id says which request an approval is for. The server refuses one that is out of date.
-  approvalRefs = { select, button, error, locked, approvalId: approval.id };
+  approvalRefs = { select, button, error, locked, approvalId: approval.id, label: approveLabel(approval) };
 
   setClass(
     els.approval,
@@ -1340,6 +1393,10 @@ function buildApproval(invoiceId, approval) {
   if (select !== null && hadFocus && !select.disabled) {
     select.focus();
   }
+}
+
+function approveLabel(approval) {
+  return isHeldPayment(approval) ? "Approve payment" : "Approve replacement";
 }
 
 // The form under a request still waiting: who has approved, who may approve, and
@@ -1421,7 +1478,7 @@ function buildApproveForm(invoiceId, approval, terms, error) {
   const button = h(
     "button",
     { class: "button button--primary", type: "submit", disabled: locked },
-    "Approve replacement",
+    approveLabel(approval),
   );
   const form = h(
     "form",
@@ -1456,7 +1513,7 @@ function syncApprovalControls() {
     const off = state.approving || approvalRefs.locked;
     approvalRefs.button.disabled = off;
     approvalRefs.select.disabled = off;
-    setText(approvalRefs.button, state.approving ? "Approving" : "Approve replacement");
+    setText(approvalRefs.button, state.approving ? "Approving" : approvalRefs.label);
   }
   if (liveMessage("approval", state.approveError) === null) {
     state.approveError = null;
@@ -1532,9 +1589,14 @@ async function submitApproval(invoiceId) {
 }
 
 // The card for an incident a person has to close: the bank reports the original
-// as paid, so there is no payment to approve.
+// as paid, so there is no payment to approve. For an invoice held as a likely
+// second bill, closing it pays nothing.
 function buildReview(invoiceId, review, emailSummary) {
   const hasReference = typeof review.reference === "string" && review.reference !== "";
+  const duplicate = review.kind === "duplicate";
+  // A held invoice, a likely second bill or any other that has sent nothing, closes unpaid.
+  const unpaid = duplicate || review.kind === "unpaid";
+  const label = unpaid ? "Close without paying" : "Close incident";
   const paidPayment =
     review.kind === "replacement"
       ? "replacement"
@@ -1569,7 +1631,7 @@ function buildReview(invoiceId, review, emailSummary) {
   finding.value = draft.finding;
   finding.addEventListener("input", remember);
 
-  const button = h("button", { class: "button button--primary", type: "submit" }, "Close incident");
+  const button = h("button", { class: "button button--primary", type: "submit" }, label);
   const error = h("p", { class: "form-error", role: "alert", hidden: true });
   const form = h(
     "form",
@@ -1583,37 +1645,56 @@ function buildReview(invoiceId, review, emailSummary) {
     ),
     button,
     error,
-    h("p", { class: "hint" }, "Closing records your name and this note on the timeline. It does not move money."),
+    h(
+      "p",
+      { class: "hint" },
+      unpaid
+        ? "Closing records your name and this note on the timeline. PayOnce then pays nothing for this invoice."
+        : "Closing records your name and this note on the timeline. It does not move money.",
+    ),
   );
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     submitClose(invoiceId);
   });
-  reviewRefs = { closedBy, finding, button, error };
+  reviewRefs = { closedBy, finding, button, error, label };
 
   setClass(els.review, "card approval approval--requested");
   els.review.replaceChildren(
     h(
       "div",
       { class: "approval__head" },
-      h("h2", { id: "review-title" }, "Close this incident"),
+      h("h2", { id: "review-title" }, unpaid ? "Close without paying" : "Close this incident"),
       badge(OBLIGATION_STATES.escalated, "escalated", false),
     ),
     h(
       "p",
       { class: "approval__lead" },
-      `The bank reports the ${paidPayment} as paid, so PayOnce will not send another. Check with the supplier, then close the incident.`,
+      duplicate
+        ? `This invoice looks like a second bill for ${review.reference}. If it is, close it without paying. If it is not, PayOnce pays it once it is approved.`
+        : unpaid
+          ? "PayOnce has sent nothing for this invoice. If it should not be paid, close it without paying. Otherwise PayOnce pays it once it is approved."
+          : `The bank reports the ${paidPayment} as paid, so PayOnce will not send another. Check with the supplier, then close the incident.`,
     ),
     h(
       "dl",
       { class: "terms" },
-      h("dt", null, sentence(paidPayment)),
-      h(
-        "dd",
-        null,
-        hasReference ? h("span", { class: "mono" }, review.reference) : "Paid",
-        hasReference && h("span", { class: "terms__sub" }, "Paid"),
-      ),
+      duplicate
+        ? [
+            h("dt", null, "Looks like a second bill for"),
+            h("dd", null, h("span", { class: "mono" }, review.reference)),
+          ]
+        : unpaid
+          ? []
+          : [
+            h("dt", null, sentence(paidPayment)),
+            h(
+              "dd",
+              null,
+              hasReference ? h("span", { class: "mono" }, review.reference) : "Paid",
+              hasReference && h("span", { class: "terms__sub" }, "Paid"),
+            ),
+          ],
       review.reason !== "" && [
         h("dt", null, "Why it needs a person"),
         h("dd", null, sentence(review.reason)),
@@ -1635,7 +1716,7 @@ function syncReviewControls() {
   reviewRefs.button.disabled = state.closing;
   reviewRefs.closedBy.readOnly = state.closing;
   reviewRefs.finding.readOnly = state.closing;
-  setText(reviewRefs.button, state.closing ? "Closing" : "Close incident");
+  setText(reviewRefs.button, state.closing ? "Closing" : reviewRefs.label);
   if (liveMessage("review", state.closeError) === null) {
     state.closeError = null;
   }

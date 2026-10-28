@@ -64,14 +64,28 @@ If the original is still in flight at its deadline, the incident goes to a perso
 
 The lock only covers payments PayOnce sends. Someone can still pay the same invoice from the Airwallex web app. Every 30 seconds PayOnce lists the transfers created since its ledger started and looks for ones it did not send.
 
-- A payout whose reference is an invoice PayOnce has goes on that invoice's timeline. While it is in flight or paid, PayOnce sends nothing for the invoice, withdraws any open approval and hands the invoice to a person. If the invoice was already closed, it is reopened.
+- A payout whose reference is an invoice PayOnce has, or nearly matches one as described under [Duplicate invoices](#duplicate-invoices), goes on that invoice's timeline. While it is in flight or paid, PayOnce sends nothing for the invoice, withdraws any open approval and hands the invoice to a person. If the invoice was already closed, it is reopened.
 - Any other payout becomes an incident of its own once it fails or passes its deadline. PayOnce runs it like its own, except that a replacement always needs a person's approval, because whoever sent the original may be resending it too.
 
-Before it sends any replacement, PayOnce lists the transfers again, so a resend made a moment earlier is caught even between sweeps. If every payment PayOnce sent failed and a payout sent outside it paid the invoice, a person can close the incident from the close card.
+Before it sends any payment, PayOnce lists the transfers again, so a resend made a moment earlier is caught even between sweeps. If every payment PayOnce sent failed and a payout sent outside it paid the invoice, a person can close the incident from the close card.
+
+## Duplicate invoices
+
+The lock stops PayOnce paying one invoice twice. It cannot see a supplier billing the same work twice under a slightly different number, such as INV-0042 and INV-42A. So before PayOnce sends a new invoice's first payment, it compares the invoice with every other invoice in the ledger. If one has the same supplier, currency and amount, and a number that is the same apart from case, spacing, leading zeros or up to four letters added at the end, PayOnce holds the new invoice and sends nothing. Both timelines say so.
+
+The letters count only when one number is the other with letters added. INV-42A and INV-42B each match INV-42 but not each other, so RENT-2026-OCT and RENT-2026-NOV are paid as separate bills. INV-42-1 and INV-421 do not match INV-42.
+
+A person then either pays the held invoice or closes it without paying. Paying it takes an approval under the rules below. The person who started the incident cannot give it. The terms list the invoices it looks like and how each stands, so a change in any of them voids the approval. If one of them was paid, or is being paid, to a different account from the one on file now, two approvers are needed, because a resent invoice with new bank details is a common fraud. Closing it without paying takes a name and a note, on the close card or with `pnpm close`. A held invoice keeps being compared, so an invoice that matches it later is added to its terms.
+
+Payouts sent outside PayOnce get the same check. A payout whose reference nearly matches an invoice number, to the same supplier for the same amount, is tied to that invoice as if its reference were the number itself. The check before every payment does this too, so a payout made in the Airwallex web app under a near-identical number holds the invoice. A failed payout that only nearly matches an invoice already closed may be a bill of its own, so it becomes an incident, with a warning that names the closed invoice.
+
+If Airwallex refuses an invoice's payment outright, the invoice is held the same way. A person approves paying it again or closes it without paying. PayOnce never replaces a payment by itself when it looks like a second bill for an invoice that is already paid.
+
+The invoice number on the start form is optional. An invoice number already in the ledger is refused.
 
 ## Approvals
 
-When the original has failed and the policy escalates, PayOnce records an approval request with the exact terms: the amount, the currency, the account the supplier's record points to now, and the evidence behind the escalation. A person approves it on the web page or with `pnpm approve`, and the approval names the request they were shown.
+When the original has failed and the policy escalates, PayOnce records an approval request with the exact terms: the amount, the currency, the account the supplier's record points to now, and the evidence behind the escalation. A held invoice gets one as well. A person approves it on the web page or with `pnpm approve`, and the approval names the request they were shown.
 
 Before paying, PayOnce rebuilds the terms from current data and compares them with what was approved. If they match, it sends the replacement. If anything changed, the approval is void and PayOnce opens a new request. An approval is spent on one attempt, and it cannot override the duplicate lock. Once an invoice has gone to a person, only an approval releases a payment, even if the policy would now replace it unprompted.
 
@@ -80,7 +94,7 @@ Before paying, PayOnce rebuilds the terms from current data and compares them wi
 Approvers are listed in `.env` as names with limits, for example `APPROVERS=Yash:50000,Alex:10000,Sam:5000`. Without the list nobody can approve. A limit is compared with the amount in the payment's own currency, because PayOnce has no exchange rates yet.
 
 - Two different approvers are needed above `TWO_APPROVERS_ABOVE` (5,000 by default). Two are also needed whatever the amount when the payment would go to an account the original did not go to, and when PayOnce does not know who started the incident, as with a payout found in Airwallex.
-- The person who started an incident cannot approve its replacement. The page asks for a name when an incident starts. `pnpm recover` takes one as its fifth argument and uses the computer's login name without it.
+- The person who started an incident cannot approve a payment for it. The page asks for a name when an incident starts. `pnpm recover` takes one as its fifth argument and uses the computer's login name without it.
 - An approval request expires after `APPROVAL_TTL_MINUTES` (60 by default). The agent looks at the invoice again when it expires, voids it and opens a new one. Approvals given on the old request no longer count.
 - Each approval records the hash of the terms its approver was shown, and the second approver has to approve the same request. The terms include a hash of every bank detail of the account, because the pay-to line shows only its last four digits. Before paying, PayOnce checks the approvals against the policy as it is then, so an approver taken off the list or a lowered limit voids them.
 - A request completed just before it expired has ten minutes to be used, so a slow look does not lose it.
@@ -161,9 +175,9 @@ pnpm reset
 | `INVOICE` | Any invoice number. A new one starts an incident and an existing one continues it | A random number |
 | `EMAILS` | `nothing-arrived`, `new-account` or `moved-banks` | `nothing-arrived` |
 | `SCENARIO` | `usd-local`, `eur-swift`, `eur-swift-low-reserve` or `usd-local-bank-change` | `usd-local` |
-| `NAME` | Who is starting the incident. That person cannot approve its replacement | Your login name |
+| `NAME` | Who is starting the incident. That person cannot approve a payment for it | Your login name |
 
-Four runs to try:
+Five runs to try:
 
 ```bash
 pnpm recover
@@ -175,6 +189,8 @@ pnpm recover - INV-5001
 pnpm recover PAID INV-5002
 pnpm close INV-5002
 pnpm close INV-5002 Yash supplier found the payment
+pnpm recover PAID inv-05002
+pnpm close inv-05002 Yash supplier sent it twice
 ```
 
 The terminal has no webhook receiver, so `pnpm recover` checks the bank every 2 seconds and returns once the incident is closed or waiting on a person.
@@ -182,6 +198,8 @@ The terminal has no webhook receiver, so `pnpm recover` checks the bank every 2 
 The first replaces the payment and shows the lock refusing a second one. The second ends in an escalation. In the third, the supplier asks for payment to a new account from a look-alike address, so it escalates although a channel timeout on its own would be replaced. `pnpm approve` with no name shows the terms, the request number and who may approve them. With the request number and a name it records that person's approval, so `1` stands for the number it printed. A request opened since is refused, so nobody approves terms they have not seen. `pnpm recover` started the incident under your login name, so approve it under a name from `APPROVERS`. `pnpm recover - INV-5001` then sends the replacement to the account on file. The outcome is ignored for an invoice that already exists, so `-` works as a placeholder.
 
 In the fourth, the bank pays the original while the supplier says it never arrived, so the incident goes to a person. `pnpm close` with no name shows what is waiting, and with a name and a note it closes the incident.
+
+In the fifth, `inv-05002` has the same supplier, amount and number as INV-5002, so PayOnce holds it and sends nothing. `pnpm close` closes it without paying. To pay it instead, approve it with `pnpm approve` and run `pnpm recover - inv-05002`. The bank then pays the original, or does what the outcome says if one is given in place of `-`.
 
 ## Layout
 
@@ -194,6 +212,7 @@ In the fourth, the bank pays the original while the supplier says it never arriv
 | `src/watcher.ts` | Status checks on payments in flight, the fallback for webhooks. It also wakes an incident at its deadline and runs the sweep |
 | `src/deadlines.ts` | How long the bank has to pay or fail a transfer |
 | `src/sweep.ts` | Finds payouts PayOnce did not send |
+| `src/duplicates.ts` | Finds invoices that look like a second bill, and the invoice a payout sent outside PayOnce is for |
 | `src/webhooks.ts`, `src/tunnel.ts` | The webhook receiver and its signature check, and the cloudflared tunnel |
 | `src/sandbox-bank.ts` | Plays the bank in the sandbox: sends, pays and fails transfers |
 | `src/scenario.ts` | The sample payments and the scripted incident |
@@ -218,7 +237,7 @@ The code holds amounts in minor units and converts at the Airwallex boundary. Th
 ## Not built yet
 
 - A model's explanation of each decision. The reasons on the timeline come from the policy.
-- Closing an incident without a payment. A person can close one only when the bank reports a payment for the invoice as paid.
+- Closing an incident without a payment, except a held duplicate. A person can close any other only when the bank reports a payment for the invoice as paid.
 - Chasing the bank. When a payment passes its deadline, PayOnce tells a person and does nothing else.
 - A webhook delivered by the sandbox. The receiver, the tunnel and the subscription work, and Airwallex records the events, but the sandbox has not sent one.
 - Real bank outcomes. The run uses the sandbox simulator to send, fail and pay transfers.

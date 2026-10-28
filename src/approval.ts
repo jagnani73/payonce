@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { Transfer, TransferBankDetails } from "./airwallex/transfers.js";
 import { bankDetailsKey, originalStateOf } from "./assess.js";
 import type { Decision, OriginalTransferState } from "./incident.js";
-import type { BankChange, Obligation } from "./ledger.js";
+import type { BankChange, Obligation, ObligationState } from "./ledger.js";
 
 // The callback that verified the bank details the payment goes to, when they are
 // not the ones the original went to.
@@ -25,10 +25,23 @@ export interface ApprovalEvidence {
   bankChange: BankChangeEvidence | null;
 }
 
-// What a person is shown and what their approval covers. Always build it with
-// termsFor so the key order, and with it the binding, stays stable.
-export interface ApprovalTerms {
-  action: "replace";
+// An invoice a held one looks like a second bill for, as it stood when the terms
+// were built. paidBy is the bank's reference for the payment that paid it, or
+// null. sameAccount says whether that payment, or else one still with the bank,
+// went to the account this one would, and is null when there is neither.
+export interface DuplicateEvidence {
+  invoiceId: string;
+  state: ObligationState;
+  paidBy: string | null;
+  sameAccount: boolean | null;
+}
+
+export interface HeldEvidence {
+  reason: string;
+  duplicates: DuplicateEvidence[];
+}
+
+interface PaymentTerms {
   invoiceId: string;
   amountMinor: number;
   currency: string;
@@ -37,8 +50,25 @@ export interface ApprovalTerms {
   // A hash of every bank detail the payment goes to. payTo shows only part of the
   // account, so this is what pins it.
   accountKey: string;
+}
+
+// A second payment for an invoice whose original failed.
+export interface ReplacementTerms extends PaymentTerms {
+  action: "replace";
   evidence: ApprovalEvidence;
 }
+
+// The first payment for an invoice PayOnce held before paying, because it looks
+// like a second bill for one the ledger already has.
+export interface HeldPaymentTerms extends PaymentTerms {
+  action: "pay";
+  evidence: HeldEvidence;
+}
+
+// What a person is shown and what their approval covers. Always build it with
+// termsFor or heldTermsFor so the key order, and with it the binding, stays
+// stable.
+export type ApprovalTerms = ReplacementTerms | HeldPaymentTerms;
 
 function payTo(obligation: Obligation, details: TransferBankDetails): string {
   const parts: string[] = [details.account_name ?? obligation.supplier];
@@ -62,7 +92,7 @@ export function termsFor(
   emailSummary: string,
   bankDetails: TransferBankDetails,
   bankChange: BankChange | null,
-): ApprovalTerms {
+): ReplacementTerms {
   return {
     action: "replace",
     invoiceId: obligation.invoiceId,
@@ -93,6 +123,28 @@ export function termsFor(
   };
 }
 
+// bankDetails is what the beneficiary record holds now, which is where the payment
+// would go.
+export function heldTermsFor(
+  obligation: Obligation,
+  bankDetails: TransferBankDetails,
+  duplicates: DuplicateEvidence[],
+): HeldPaymentTerms {
+  return {
+    action: "pay",
+    invoiceId: obligation.invoiceId,
+    amountMinor: obligation.amountMinor,
+    currency: obligation.currency,
+    beneficiaryId: obligation.beneficiaryId,
+    payTo: payTo(obligation, bankDetails),
+    accountKey: accountKeyOf(bankDetails),
+    evidence: {
+      reason: obligation.escalationReason,
+      duplicates,
+    },
+  };
+}
+
 // The accountKey for bank details already written by bankDetailsKey.
 export function keyHash(detailsKey: string): string {
   return createHash("sha256").update(detailsKey).digest("hex").slice(0, 16);
@@ -111,6 +163,9 @@ export function changedFields(
   current: ApprovalTerms,
 ): string[] {
   const changed: string[] = [];
+  if (approved.action !== current.action) {
+    changed.push("payment");
+  }
   if (approved.amountMinor !== current.amountMinor) {
     changed.push("amount");
   }

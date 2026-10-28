@@ -46,12 +46,16 @@ async function main(): Promise<void> {
   watcher.start();
   try {
     const existing: Obligation | undefined = ledger.obligation(invoiceId);
-    if (existing !== undefined && ledger.attempts(invoiceId).length > 0) {
+    if (
+      existing !== undefined &&
+      (ledger.attempts(invoiceId).length > 0 || existing.state === "rejected")
+    ) {
       console.log(`${invoiceId} is already in the ledger`);
       agent.wake(invoiceId);
       await untilAtRest(ledger, agent, bank, invoiceId);
     } else {
-      // An obligation with no payment yet is a run that stopped before paying.
+      // An obligation with no payment yet is a run that stopped before paying, or
+      // one PayOnce held before paying.
       console.log(`${existing === undefined ? "New incident" : "Starting"} ${invoiceId}`);
       await runScenario(
         engine,

@@ -19,7 +19,7 @@ import {
 import { Dispatcher } from "./dispatcher.js";
 import type { EmailFindings } from "./emails.js";
 import {
-  approveReplacement,
+  approvePayment,
   closeIncident,
   isExpired,
   note,
@@ -207,15 +207,23 @@ async function readJson(request: IncomingMessage): Promise<Record<string, unknow
 // What was running lives in memory, so a restart forgets it. Any invoice with a
 // payment still pending or in flight is looked at again, which syncs it with
 // Airwallex and never sends a new payment by itself. In the sandbox the bank
-// also goes back to paying a replacement it had not finished with.
+// also goes back to paying a replacement it had not finished with, and an
+// original paid on an approval after a hold.
 function pickUpInterrupted(): void {
   for (const obligation of engine.ledger.obligations()) {
-    if (obligation.state === "settled" || !isWatching(obligation.invoiceId)) {
+    if (
+      obligation.state === "settled" ||
+      obligation.state === "rejected" ||
+      !isWatching(obligation.invoiceId)
+    ) {
       continue;
     }
+    const latest: Approval | undefined = engine.ledger.latestApproval(obligation.invoiceId);
+    const released: boolean =
+      latest?.state === "used" && (JSON.parse(latest.terms) as ApprovalTerms).action === "pay";
     for (const attempt of engine.ledger.attempts(obligation.invoiceId)) {
       if (
-        attempt.kind === "replacement" &&
+        (attempt.kind === "replacement" || released) &&
         attempt.state === "in_flight" &&
         attempt.transferId !== null
       ) {
@@ -414,7 +422,16 @@ async function startIncident(request: IncomingMessage): Promise<unknown> {
     throw new HttpError(400, "Unknown scenario");
   }
 
-  const invoiceId: string = newInvoiceId(engine.ledger);
+  // The supplier's invoice number when the person gives one, so a second bill
+  // under a near-identical number can be caught.
+  const given: string = typeof body["invoiceId"] === "string" ? body["invoiceId"].trim() : "";
+  if (given !== "" && !INVOICE_ID_PATTERN.test(given)) {
+    throw new HttpError(400, "An invoice number has up to 40 letters, digits and dashes");
+  }
+  if (given !== "" && engine.ledger.obligation(given) !== undefined) {
+    throw new HttpError(409, `${given} is already in the ledger, and PayOnce pays an invoice number once`);
+  }
+  const invoiceId: string = given === "" ? newInvoiceId(engine.ledger) : given;
   const obligation: Obligation = await openScenario(engine, invoiceId, scenarioId, startedBy);
   runScenario(engine, agent, bank, obligation, { bankOutcome, emailsName }).catch(
     (error: unknown): void => noteError(engine.ledger, invoiceId, error),
@@ -448,7 +465,7 @@ async function approveIncident(
     throw new HttpError(400, "Say which approval request is being approved");
   }
   await inTurn(invoiceId, (): Approval =>
-    approveReplacement(engine.ledger, engine.approvals, invoiceId, approver, approvalId),
+    approvePayment(engine.ledger, engine.approvals, invoiceId, approver, approvalId),
   );
   agent.wake(invoiceId);
   return { ok: true };

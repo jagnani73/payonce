@@ -26,6 +26,13 @@ export class SandboxBank implements Bank {
   private readonly onError: (invoiceId: string, error: unknown) => void;
   // Steps still running, by invoice.
   private readonly running: Map<string, number> = new Map<string, number>();
+  // The scenario's outcome for the original of an invoice PayOnce held before
+  // paying, played if a person releases the payment. It lives in memory, so
+  // another process pays the original instead, and so does this one when the
+  // server picks the original up again after a restart.
+  private readonly held: Map<string, string> = new Map<string, string>();
+  // Invoices whose original the scripted run is sending and settles itself.
+  private readonly scripted: Set<string> = new Set<string>();
 
   constructor(
     client: AirwallexClient,
@@ -85,15 +92,39 @@ export class SandboxBank implements Bank {
     }
   }
 
-  // PayOnce sent a payment. The scenario decides what happens to an original, and
-  // the bank pays a replacement.
+  // For an invoice PayOnce held before paying: the outcome the bank gives its
+  // original if a person releases it. Anything that is not a simulator name,
+  // such as the CLI's - placeholder, is ignored, and the bank pays it.
+  expectOriginal(invoiceId: string, outcome: string): void {
+    if (/^[A-Z_]+$/.test(outcome)) {
+      this.held.set(invoiceId, outcome);
+    }
+  }
+
+  // While the scripted run sends an invoice's original, so the bank leaves it to
+  // the script.
+  async scripting<T>(invoiceId: string, step: () => Promise<T>): Promise<T> {
+    this.scripted.add(invoiceId);
+    try {
+      return await step();
+    } finally {
+      this.scripted.delete(invoiceId);
+    }
+  }
+
+  // PayOnce sent a payment. The scripted run decides what happens to the original
+  // it sends. The bank pays a replacement, and gives an original released after a
+  // hold the outcome expectOriginal recorded, or pays it.
   sent(invoiceId: string, kind: AttemptKind, transferId: string): void {
-    if (kind !== "replacement") {
+    if (kind === "original" && this.scripted.has(invoiceId)) {
       return;
     }
+    const outcome: string =
+      kind === "replacement" ? PAID_OUTCOME : (this.held.get(invoiceId) ?? PAID_OUTCOME);
+    this.held.delete(invoiceId);
     this.run(invoiceId, async (): Promise<void> => {
       await this.send(transferId);
-      await this.settle(transferId, PAID_OUTCOME);
+      await this.settle(transferId, outcome);
     }).catch((error: unknown): void => {
       this.onError(invoiceId, error);
     });

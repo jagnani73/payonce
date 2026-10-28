@@ -21,15 +21,24 @@ function main(): void {
     return;
   }
 
-  console.log(`${invoiceId} is paid and waiting on a person`);
-  console.log(`  ${review.kind.padEnd(9)} ${review.reference ?? "no reference"} paid`);
+  const duplicate: boolean = review.kind === "duplicate" || review.kind === "unpaid";
+  if (review.kind === "duplicate") {
+    console.log(`${invoiceId} is held before paying, as a likely second bill for ${review.reference}`);
+  } else if (review.kind === "unpaid") {
+    console.log(`${invoiceId} is waiting on a person and has sent nothing`);
+  } else {
+    console.log(`${invoiceId} is paid and waiting on a person`);
+    console.log(`  ${review.kind.padEnd(9)} ${review.reference ?? "no reference"} paid`);
+  }
   console.log(`  because   ${review.reason}`);
   if (closedBy === undefined || finding === "") {
-    console.log(`To close it: pnpm close ${invoiceId} <NAME> <NOTE>`);
+    console.log(
+      `To close it${duplicate ? " without paying" : ""}: pnpm close ${invoiceId} <NAME> <NOTE>`,
+    );
     return;
   }
   closeIncident(ledger, invoiceId, closedBy, finding);
-  console.log("Closed without a second payment");
+  console.log(duplicate ? "Closed without paying" : "Closed without a second payment");
 }
 
 main();

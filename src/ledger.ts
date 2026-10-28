@@ -9,6 +9,15 @@ export const LEDGER_PATH: string = "payonce.db";
 export const INVOICE_ID_PATTERN: RegExp = /^[A-Za-z0-9-]{1,40}$/;
 
 const SQLITE_CONSTRAINT_UNIQUE: number = 2067;
+
+// An attempt for the invoice bound as the parameter that became a transfer or may
+// still become one. An invoice with none has sent nothing.
+const SENT_ATTEMPT: string = `SELECT 1 FROM attempts WHERE invoice_id = ?
+  AND (transfer_id IS NOT NULL OR state <> 'failed')`;
+// A payout for the invoice bound as the parameter, sent outside PayOnce, that is
+// in flight, paid or in a status PayOnce does not know.
+const LIVE_OUTSIDE_PAYOUT: string = `SELECT 1 FROM outside_payouts WHERE invoice_id = ?
+  AND state <> 'failed'`;
 const BUSY_TIMEOUT_MS: number = 5_000;
 
 // The partial unique index is the duplicate lock: an invoice can hold one attempt
@@ -97,7 +106,9 @@ const SCHEMA: string = `
   );
 `;
 
-export type ObligationState = "open" | "settled" | "escalated";
+// rejected is an invoice a person closed without paying, because it was a second
+// bill for one the ledger already had.
+export type ObligationState = "open" | "settled" | "escalated" | "rejected";
 // Who sent the original: PayOnce, or someone outside it, such as a person in the
 // Airwallex web app. The sweep finds the second kind.
 export type ObligationOrigin = "payonce" | "outside";
@@ -150,6 +161,13 @@ export interface Obligation extends NewObligation {
   state: ObligationState;
   // Why the invoice last went to a person. Empty if it never has.
   escalationReason: string;
+  // A found invoice's payout reference, when it could not be the invoice number.
+  payoutReference: string | null;
+  // The invoices this one looked like a second bill for when PayOnce held it
+  // before paying. Empty when it was never held as one.
+  duplicateOf: string[];
+  // Who closed it without paying, if anyone ever did.
+  rejectedBy: string | null;
 }
 
 export interface Attempt {
@@ -257,6 +275,9 @@ interface ObligationRow {
   escalation_reason: string;
   started_by: string | null;
   supplier_phone: string | null;
+  payout_reference: string | null;
+  duplicate_of: string | null;
+  rejected_by: string | null;
 }
 
 // A person's callback to the supplier on the number on file, and the bank
@@ -351,6 +372,9 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     look_at: "TEXT",
     started_by: "TEXT",
     supplier_phone: "TEXT",
+    // A JSON list of invoice numbers, set when the invoice is held as a duplicate.
+    duplicate_of: "TEXT",
+    rejected_by: "TEXT",
   },
   approvals: {
     requested_at: "TEXT",
@@ -414,6 +438,9 @@ function toObligation(row: ObligationRow): Obligation {
     escalationReason: row.escalation_reason,
     startedBy: row.started_by,
     supplierPhone: row.supplier_phone,
+    payoutReference: row.payout_reference,
+    duplicateOf: row.duplicate_of === null ? [] : (JSON.parse(row.duplicate_of) as string[]),
+    rejectedBy: row.rejected_by,
   };
 }
 
@@ -775,7 +802,8 @@ export class Ledger {
       this.db
         .prepare(
           `SELECT invoice_id FROM obligations
-            WHERE look_at IS NOT NULL AND look_at <= ? AND state <> 'settled'`,
+            WHERE look_at IS NOT NULL AND look_at <= ?
+              AND state NOT IN ('settled', 'rejected')`,
         )
         .all(new Date(now).toISOString()) as unknown as InvoiceRow[]
     ).map((row: InvoiceRow): string => row.invoice_id);
@@ -830,6 +858,77 @@ export class Ledger {
           WHERE invoice_id = ?`,
       )
       .run(reason, invoiceId);
+  }
+
+  // Holds an invoice for a person before anything is paid. duplicateOf lists the
+  // invoices it looks like a second bill for, and is empty when it is held for
+  // another reason.
+  holdBeforePaying(invoiceId: string, duplicateOf: string[], reason: string): void {
+    this.db
+      .prepare(
+        `UPDATE obligations SET state = 'escalated', escalation_reason = ?, duplicate_of = ?
+          WHERE invoice_id = ?`,
+      )
+      .run(reason, JSON.stringify(duplicateOf), invoiceId);
+  }
+
+  // Spends the approval to pay a held invoice, hands the invoice back to the
+  // agent and opens its original's attempt, in one transaction, so a crash or a
+  // failed write cannot leave it open with nothing sent. Undefined, with nothing
+  // changed, when the approval is no longer approved or the invoice is no longer
+  // held: a person closed it, it has sent something, or a payout for it sent
+  // outside PayOnce is live.
+  releaseFor(invoiceId: string, approvalId: number): Attempt | undefined {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const used: { changes: number | bigint } = this.db
+        .prepare(
+          "UPDATE approvals SET state = 'used' WHERE id = ? AND invoice_id = ? AND state = 'approved'",
+        )
+        .run(approvalId, invoiceId);
+      const released: { changes: number | bigint } = this.db
+        .prepare(
+          `UPDATE obligations SET state = 'open'
+            WHERE invoice_id = ? AND state = 'escalated' AND rejected_by IS NULL
+              AND NOT EXISTS (${SENT_ATTEMPT}) AND NOT EXISTS (${LIVE_OUTSIDE_PAYOUT})`,
+        )
+        .run(invoiceId, invoiceId, invoiceId);
+      if (Number(used.changes) !== 1 || Number(released.changes) !== 1) {
+        this.db.exec("ROLLBACK");
+        return undefined;
+      }
+      const attempt: Attempt = this.openAttempt(invoiceId, "original");
+      this.db.exec("COMMIT");
+      return attempt;
+    } catch (error: unknown) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  // The invoices a held invoice looks like a second bill for, as they are now.
+  setDuplicateOf(invoiceId: string, duplicateOf: string[]): void {
+    this.db
+      .prepare("UPDATE obligations SET duplicate_of = ? WHERE invoice_id = ?")
+      .run(JSON.stringify(duplicateOf), invoiceId);
+  }
+
+  // Closes a held invoice without paying it, recording who did. False when it is
+  // no longer held, for example because its payment was released in the meantime,
+  // or a payout for it sent outside PayOnce is in flight or paid.
+  reject(invoiceId: string, rejectedBy: string): boolean {
+    const result: { changes: number | bigint } = this.db
+      .prepare(
+        `UPDATE obligations SET state = 'rejected', rejected_by = ?
+          WHERE invoice_id = ? AND state = 'escalated'
+            AND NOT EXISTS (${SENT_ATTEMPT}) AND NOT EXISTS (${LIVE_OUTSIDE_PAYOUT})`,
+      )
+      .run(rejectedBy, invoiceId, invoiceId, invoiceId);
+    if (Number(result.changes) !== 1) {
+      return false;
+    }
+    this.voidOpenApprovals(invoiceId);
+    return true;
   }
 
   addEmails(invoiceId: string, emails: SupplierEmail[]): void {
@@ -887,24 +986,36 @@ export class Ledger {
     return Number(result.changes) > 0;
   }
 
-  // A new request voids any earlier one for the invoice that is still open.
-  requestApproval(invoiceId: string, request: ApprovalRequest): void {
-    this.voidOpenApprovals(invoiceId);
-    this.db
-      .prepare(
-        `INSERT INTO approvals
-           (invoice_id, binding, terms, requested_at, expires_at, needed, needed_why)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        invoiceId,
-        request.binding,
-        request.terms,
-        new Date().toISOString(),
-        new Date(request.expiresAt).toISOString(),
-        request.needed,
-        request.neededWhy,
-      );
+  // A new request voids any earlier one for the invoice that is still open. Only
+  // an invoice with a person gets one, so a request cannot land on an invoice
+  // another process has just closed. False when none was opened.
+  requestApproval(invoiceId: string, request: ApprovalRequest): boolean {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.voidOpenApprovals(invoiceId);
+      const result: { changes: number | bigint } = this.db
+        .prepare(
+          `INSERT INTO approvals
+             (invoice_id, binding, terms, requested_at, expires_at, needed, needed_why)
+           SELECT ?, ?, ?, ?, ?, ?, ?
+            WHERE EXISTS (SELECT 1 FROM obligations WHERE invoice_id = ? AND state = 'escalated')`,
+        )
+        .run(
+          invoiceId,
+          request.binding,
+          request.terms,
+          new Date().toISOString(),
+          new Date(request.expiresAt).toISOString(),
+          request.needed,
+          request.neededWhy,
+          invoiceId,
+        );
+      this.db.exec("COMMIT");
+      return Number(result.changes) === 1;
+    } catch (error: unknown) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   latestApproval(invoiceId: string): Approval | undefined {
@@ -971,6 +1082,11 @@ export class Ledger {
             "UPDATE approvals SET state = 'approved', approver = ?, expires_at = ? WHERE id = ?",
           )
           .run(signersOf(signoffs), new Date(useBy).toISOString(), approvalId);
+        // The next look is due now, so a watcher in another process uses the
+        // approval on its next check and not when the look it had planned comes.
+        this.db
+          .prepare("UPDATE obligations SET look_at = ? WHERE invoice_id = ?")
+          .run(new Date().toISOString(), row.invoice_id);
       }
       this.db.exec("COMMIT");
     } catch (error: unknown) {

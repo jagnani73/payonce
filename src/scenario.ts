@@ -13,8 +13,9 @@ import type { Dispatcher } from "./dispatcher.js";
 import { loadEmails, type SupplierEmail } from "./emails.js";
 import {
   deliver,
+  heldBeforePaying,
   payAgain,
-  payOriginal,
+  startPayment,
   type Engine,
   type PayAgainResult,
 } from "./engine.js";
@@ -130,7 +131,8 @@ export async function openScenario(
     throw new Error(`Unknown scenario ${scenarioId}`);
   }
   // openObligation leaves an existing row as it is, so a reused invoice number
-  // would run this scenario against someone else's invoice.
+  // would run this scenario against someone else's invoice. It is checked again
+  // after the lookups, with nothing awaited between that check and the insert.
   if (engine.ledger.obligation(invoiceId) !== undefined) {
     throw new Error(`${invoiceId} is already in the ledger`);
   }
@@ -146,6 +148,9 @@ export async function openScenario(
       : (await getAvailableMinor(engine.client, def.currency)) -
         def.amountMinor -
         Math.round(def.tightReserveFeeMinor * 1.5);
+  if (engine.ledger.obligation(invoiceId) !== undefined) {
+    throw new Error(`${invoiceId} is already in the ledger`);
+  }
   return engine.ledger.openObligation({
     invoiceId,
     supplier: def.supplier,
@@ -203,6 +208,10 @@ export async function untilAtRest(
 // Nobody tells the agent what the bank did: it hears from Airwallex by webhook or
 // finds out on a status check. Once the incident has settled down, a paid
 // replacement is followed by a second payment the lock refuses.
+// An invoice PayOnce holds before paying stops there and waits for a person. If
+// they release it, the bank gives its original the scenario's outcome, and no
+// supplier emails arrive. Run again on a held invoice, it has the agent look, so
+// an approval given meanwhile is used.
 export async function runScenario(
   engine: Engine,
   agent: Dispatcher,
@@ -213,10 +222,24 @@ export async function runScenario(
   const invoiceId: string = obligation.invoiceId;
   const thread: SupplierEmail[] = loadEmails(scenario.emailsName, invoiceId);
 
-  const original: Transfer = await agent.run(
+  if (heldBeforePaying(engine.ledger, obligation)) {
+    bank.expectOriginal(invoiceId, scenario.bankOutcome);
+    agent.wake(invoiceId);
+    await agent.whenIdle(invoiceId);
+    await untilAtRest(engine.ledger, agent, bank, invoiceId);
+    return;
+  }
+  const original: Transfer | null = await agent.run(
     invoiceId,
-    (): Promise<Transfer> => payOriginal(engine, obligation),
+    (): Promise<Transfer | null> =>
+      bank.scripting(invoiceId, (): Promise<Transfer | null> => startPayment(engine, obligation)),
   );
+  if (original === null) {
+    bank.expectOriginal(invoiceId, scenario.bankOutcome);
+    agent.wake(invoiceId);
+    await agent.whenIdle(invoiceId);
+    return;
+  }
   await bank.run(invoiceId, (): Promise<void> => bank.send(original.id));
   for (const email of thread) {
     deliver(engine.ledger, obligation, [email]);

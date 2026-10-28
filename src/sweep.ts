@@ -2,13 +2,10 @@ import { listTransfersSince, type Transfer } from "./airwallex/transfers.js";
 import { originalStateOf } from "./assess.js";
 import { isOverdue } from "./deadlines.js";
 import type { Dispatcher } from "./dispatcher.js";
+import { invoiceForPayout, type PayoutMatch } from "./duplicates.js";
 import { linkOutsidePayout, note, payoutSummary, type Engine } from "./engine.js";
 import type { OriginalTransferState } from "./incident.js";
-import {
-  INVOICE_ID_PATTERN,
-  type Obligation,
-  type TransferMethod,
-} from "./ledger.js";
+import { INVOICE_ID_PATTERN, type TransferMethod } from "./ledger.js";
 import { toMinor } from "./money.js";
 
 const METHODS: ReadonlySet<string> = new Set<string>(["LOCAL", "SWIFT"]);
@@ -89,22 +86,36 @@ async function sweepOne(engine: Engine, agent: Dispatcher, transfer: Transfer): 
   if (engine.ledger.knowsTransfer(transfer.request_id ?? "", transfer.id)) {
     return;
   }
-  const known: Obligation | undefined = engine.ledger.obligationForReference(
-    transfer.reference ?? "",
-  );
-  if (known !== undefined) {
-    const linked: boolean = await agent.run(known.invoiceId, (): boolean =>
-      linkOutsidePayout(engine, known.invoiceId, transfer),
+  const match: PayoutMatch | undefined = invoiceForPayout(engine.ledger, transfer);
+  const state: OriginalTransferState = originalStateOf(transfer);
+  // A failed payout that only nearly matches a closed invoice may be a bill of its
+  // own, so it becomes an incident like any other found payout.
+  const nearClosed: boolean =
+    match !== undefined &&
+    !match.exact &&
+    state === "failed" &&
+    (match.obligation.state === "settled" || match.obligation.state === "rejected");
+  if (match !== undefined && !nearClosed) {
+    const invoiceId: string = match.obligation.invoiceId;
+    const linked: boolean = await agent.run(invoiceId, (): boolean =>
+      linkOutsidePayout(engine, invoiceId, transfer, match.exact),
     );
     if (linked) {
-      agent.wake(known.invoiceId);
+      agent.wake(invoiceId);
     }
     return;
   }
-  const state: OriginalTransferState = originalStateOf(transfer);
   if (state === "failed" || (state === "in_flight" && isOverdue(transfer))) {
     const invoiceId: string | undefined = adopt(engine, transfer, state);
     if (invoiceId !== undefined) {
+      if (nearClosed && match !== undefined) {
+        note(
+          engine.ledger,
+          invoiceId,
+          "warning",
+          `Its reference ${transfer.reference} nearly matches ${match.obligation.invoiceId}, which is closed. Check it is not the same bill before approving a replacement`,
+        );
+      }
       agent.wake(invoiceId);
     }
   }
@@ -112,7 +123,8 @@ async function sweepOne(engine: Engine, agent: Dispatcher, transfer: Transfer): 
 
 // Looks through the payouts made since the ledger started for ones PayOnce did not
 // send, for example from the Airwallex web app. One whose reference names an
-// invoice in the ledger is tied to it. Any other becomes an incident once it has
+// invoice in the ledger is tied to it, and so is one whose reference nearly
+// matches an invoice to the same supplier for the same amount. Any other becomes an incident once it has
 // failed, or once the bank has sat on it past its deadline. A payout that cannot
 // be handled is reported and skipped, so it does not stop the rest.
 export async function sweep(engine: Engine, agent: Dispatcher): Promise<void> {

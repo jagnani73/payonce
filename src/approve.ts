@@ -1,21 +1,35 @@
-import type { ApprovalTerms } from "./approval.js";
+import type { ApprovalTerms, DuplicateEvidence } from "./approval.js";
 import { describePolicy, policyFromEnv, type ApprovalPolicy } from "./approvers.js";
-import { approveReplacement, pendingApproval, type PendingApproval } from "./engine.js";
+import { approvePayment, pendingApproval, type PendingApproval } from "./engine.js";
 import { Ledger, LEDGER_PATH, signersOf, type Approval } from "./ledger.js";
 import { formatMoney } from "./money.js";
+
+function describeDuplicate(duplicate: DuplicateEvidence): string {
+  const paid: string = duplicate.paidBy === null ? "" : `, paid by ${duplicate.paidBy}`;
+  return `${duplicate.invoiceId}, ${duplicate.state}${paid}`;
+}
 
 function show(pending: PendingApproval): void {
   const terms: ApprovalTerms = pending.terms;
   const approval: Approval = pending.approval;
-  const failure: string =
-    terms.evidence.failureCode === null ? "" : ` (${terms.evidence.failureCode})`;
-  console.log(`Replacement payment for ${terms.invoiceId}, request ${approval.id}`);
+  console.log(
+    `${terms.action === "replace" ? "Replacement payment for" : "Payment of held invoice"} ${terms.invoiceId}, request ${approval.id}`,
+  );
   console.log(`  pay      ${formatMoney(terms.amountMinor, terms.currency)}`);
   console.log(`  to       ${terms.payTo} (the account on file)`);
-  console.log(
-    `  because  original ${terms.evidence.originalReference} ${terms.evidence.originalState}${failure}: ${terms.evidence.reason}`,
-  );
-  console.log(`  emails   ${terms.evidence.emails}`);
+  if (terms.action === "replace") {
+    const failure: string =
+      terms.evidence.failureCode === null ? "" : ` (${terms.evidence.failureCode})`;
+    console.log(
+      `  because  original ${terms.evidence.originalReference} ${terms.evidence.originalState}${failure}: ${terms.evidence.reason}`,
+    );
+    console.log(`  emails   ${terms.evidence.emails}`);
+  } else {
+    console.log(`  held     ${terms.evidence.reason}`);
+    for (const duplicate of terms.evidence.duplicates) {
+      console.log(`  like     ${describeDuplicate(duplicate)}`);
+    }
+  }
   console.log(
     `  needs    ${approval.needed === 1 ? "one approver" : `${approval.needed} approvers, because ${approval.neededWhy}`}`,
   );
@@ -60,7 +74,7 @@ function main(): void {
     return;
   }
   try {
-    const after: Approval = approveReplacement(
+    const after: Approval = approvePayment(
       ledger,
       policy,
       invoiceId,

@@ -100,9 +100,12 @@ function withoutFingerprint(details: TransferBankDetails | undefined): TransferB
 }
 
 function originalOf(engine: Engine, invoiceId: string): Attempt | undefined {
+  // An original Airwallex refused never became a transfer, so the one paid on an
+  // approval after it is the one to compare with.
   return engine.ledger
     .attempts(invoiceId)
-    .find((attempt: Attempt): boolean => attempt.kind === "original");
+    .filter((attempt: Attempt): boolean => attempt.kind === "original" && attempt.transferId !== null)
+    .at(-1);
 }
 
 // True when another open invoice paid to the same beneficiary is about to pay it:
@@ -114,6 +117,7 @@ function anotherPaymentStarting(engine: Engine, obligation: Obligation): boolean
       other.invoiceId !== obligation.invoiceId &&
       other.beneficiaryId === obligation.beneficiaryId &&
       other.state !== "settled" &&
+      other.state !== "rejected" &&
       (engine.ledger
         .attempts(other.invoiceId)
         .some((attempt: Attempt): boolean => attempt.state === "pending") ||

@@ -78,6 +78,10 @@
               <select id="email-thread" name="emails" disabled></select>
             </label>
             <label class="field">
+              <span class="field__label">Invoice number (optional)</span>
+              <input id="invoice-number" name="invoiceId" type="text" autocomplete="off" spellcheck="false" maxlength="40" />
+            </label>
+            <label class="field">
               <span class="field__label">Your name</span>
               <input id="started-by" name="startedBy" type="text" autocomplete="name" maxlength="80" />
             </label>
@@ -85,7 +89,8 @@
               Start incident
             </button>
             <p class="hint">PayOnce sends a sandbox transfer, then applies the bank outcome above.</p>
-            <p class="hint">The person who starts an incident cannot approve its replacement.</p>
+            <p class="hint">Leave the invoice number empty to get a new one. PayOnce holds an invoice before paying it when its number matches one already in the ledger for the same supplier and amount, apart from case, spacing, leading zeros or letters added at the end.</p>
+            <p class="hint">The person who starts an incident cannot approve its payments.</p>
             <p id="new-error" class="form-error" role="alert" hidden></p>
           </form>
         </section>

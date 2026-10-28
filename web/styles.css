@@ -1119,6 +1119,14 @@ input:read-only {
   font-size: 14px;
 }
 
+.terms__duplicate {
+  display: block;
+}
+
+.terms__duplicate + .terms__duplicate {
+  margin-top: 6px;
+}
+
 .terms__sub--caution {
   color: var(--amber);
   font-weight: 600;
