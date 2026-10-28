@@ -419,58 +419,69 @@ function inboxMessage(facts: InboxAlertFacts, base: string): AlertMessage {
 // "USD LOCAL", from a currency and a method PayOnce checks, so the title holds
 // only its own words.
 function railText(facts: OutageAlertFacts): string {
-  const currency: string = /^[A-Z]{3}$/.test(facts.currency) ? facts.currency : "a currency";
-  const method: string = facts.method === "LOCAL" || facts.method === "SWIFT" ? facts.method : "a transfer method";
-  return `${currency} ${method}`;
+  return /^[A-Z]{3}$/.test(facts.currency) && (facts.method === "LOCAL" || facts.method === "SWIFT")
+    ? `${facts.currency} ${facts.method}`
+    : "a currency and transfer method";
 }
 
-function outageCodes(facts: OutageAlertFacts): string {
+// "91402 and 91401", with PayOnce's label after each code when labelled.
+function outageCodes(facts: OutageAlertFacts, labelled: boolean): string {
   const named: string[] = facts.codes
     .filter((code: string): boolean => /^[0-9]{5}$/.test(code))
-    .map((code: string): string => `${code} (${RAIL_FAILURE_CODES[code] ?? "rail failure"})`);
+    .map((code: string): string => (labelled ? `${code} (${RAIL_FAILURE_CODES[code] ?? "rail failure"})` : code));
   return named.length <= 1 ? (named[0] ?? "a rail-level code") : `${named.slice(0, -1).join(", ")} and ${named.at(-1)}`;
 }
 
+// "20:42 UTC". The fields carry the dates.
+function clockText(iso: string | null): string {
+  const at: Date = new Date(iso ?? "");
+  return Number.isNaN(at.getTime()) ? "a time not known" : `${at.toISOString().slice(11, 16)} UTC`;
+}
+
+// The lines stay well under the 200 characters a line part is cut at, so the
+// codes' labels are in the fields only.
 function outageMessage(facts: OutageAlertFacts, base: string): AlertMessage {
   const rail: string = railText(facts);
   const references: string[] = facts.references.filter((reference: string): boolean => /^[A-Z0-9-]{1,30}$/.test(reference));
-  const declared: string = utcText(facts.declaredAt);
-  const counted: string = `payouts to ${plural(facts.payees, "payee", "payees")} failed with ${outageCodes(facts)}`;
+  const payees: string = plural(facts.payees, "payee", "payees");
   const fields: AlertField[] = [
     field("Rail", ours(rail)),
-    field("Failure codes", ours(outageCodes(facts))),
+    field("Failure codes", ours(outageCodes(facts, true))),
     field("Payees", ours(String(facts.payees))),
     field("Window", ours(plural(facts.windowMinutes, "minute", "minutes"))),
-    field("Declared", ours(declared)),
+    field("Declared", ours(utcText(facts.declaredAt))),
     ...(references.length === 0 ? [] : [field("Payouts", ours(references.join(", ")), false)]),
   ];
   if (facts.state === "active") {
     return {
       title: `Outage declared on ${rail}`,
-      line: [ours(`${capitalised(counted)} within ${plural(facts.windowMinutes, "minute", "minutes")}. PayOnce opens no new payment on ${rail} until a person ends the outage`)],
+      line: [
+        ours(
+          `Payouts to ${payees} failed with ${outageCodes(facts, false)} within ${plural(facts.windowMinutes, "minute", "minutes")}. PayOnce opens no new payment on ${rail} until a person ends the outage`,
+        ),
+      ],
       fields,
       link: `${base}/`,
       linkText: "Open PayOnce",
       urgent: true,
     };
   }
-  const ended: string = facts.endedAt === null ? "not known" : utcText(facts.endedAt);
   return {
     title: `Outage on ${rail} ended`,
     line: [
       ours(
-        `Declared ${declared} after ${counted}, ended ${ended}. PayOnce opens payments on ${rail} again, and the ${plural(facts.held, "invoice or run", "invoices and runs")} it held carry on`,
+        `Declared at ${clockText(facts.declaredAt)} after payouts to ${payees} failed, ended at ${clockText(facts.endedAt)}. PayOnce opens payments on ${rail} again, and the ${plural(facts.held, "invoice or run", "invoices and runs")} it held carry on`,
       ),
     ],
-    fields: [...fields, field("Ended", ours(ended)), field("Held", ours(String(facts.held)))],
+    fields: [
+      ...fields,
+      field("Ended", ours(facts.endedAt === null ? "not known" : utcText(facts.endedAt))),
+      field("Held", ours(String(facts.held))),
+    ],
     link: `${base}/`,
     linkText: "Open PayOnce",
     urgent: false,
   };
-}
-
-function capitalised(text: string): string {
-  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 function summaryMessage(facts: SummaryAlertFacts, base: string): AlertMessage {
