@@ -688,6 +688,7 @@ function renderHeader(detail) {
       obligation.currency,
       obligation.amountMinor,
       obligation.state,
+      obligation.origin,
       busy,
     ])
   ) {
@@ -710,6 +711,8 @@ function renderHeader(detail) {
         h("p", { class: "eyebrow" }, "Incident"),
         h("h1", null, invoiceId),
         h("p", { class: "detail__supplier" }, obligation.supplier),
+        obligation.origin === "outside" &&
+          h("p", { class: "hint" }, "Sent outside PayOnce. The sweep found it in Airwallex."),
       ),
       h(
         "div",
@@ -1240,6 +1243,12 @@ async function submitApproval(invoiceId) {
 // as paid, so there is no payment to approve.
 function buildReview(invoiceId, review, emailSummary) {
   const hasReference = typeof review.reference === "string" && review.reference !== "";
+  const paidPayment =
+    review.kind === "replacement"
+      ? "replacement"
+      : review.kind === "outside"
+        ? "payout sent outside PayOnce"
+        : "original payment";
   const draft = state.closeDrafts.get(invoiceId) ?? { closedBy: "", finding: "" };
   const remember = () => {
     state.closeDrafts.set(invoiceId, { closedBy: closedBy.value, finding: finding.value });
@@ -1301,12 +1310,12 @@ function buildReview(invoiceId, review, emailSummary) {
     h(
       "p",
       { class: "approval__lead" },
-      "The bank reports the original payment as paid, so PayOnce will not send another. Check with the supplier, then close the incident.",
+      `The bank reports the ${paidPayment} as paid, so PayOnce will not send another. Check with the supplier, then close the incident.`,
     ),
     h(
       "dl",
       { class: "terms" },
-      h("dt", null, "Original payment"),
+      h("dt", null, sentence(paidPayment)),
       h(
         "dd",
         null,
@@ -1355,7 +1364,11 @@ function renderReview(detail) {
       els.review.hidden = true;
       els.review.replaceChildren();
     } else {
-      buildReview(invoiceId, { reference: review.reference, reason: String(review.reason ?? "") }, emailSummary);
+      buildReview(
+        invoiceId,
+        { kind: review.kind, reference: review.reference, reason: String(review.reason ?? "") },
+        emailSummary,
+      );
     }
   }
   syncReviewControls();

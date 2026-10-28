@@ -1,6 +1,15 @@
 import type { Decision, Incident } from "./incident.js";
 
+export const OUTSIDE_PAYOUT_REASON: string =
+  "a payout for this invoice was sent outside PayOnce";
+
 export function decide(incident: Incident): Decision {
+  // PayOnce's lock only covers its own payments, so one sent by someone else
+  // stops it sending anything until a person has looked.
+  if (incident.outsidePayoutLive) {
+    return { action: "escalate", reason: OUTSIDE_PAYOUT_REASON };
+  }
+
   if (incident.supplierAsksForNewBankDetails) {
     return {
       action: "escalate",
@@ -51,10 +60,15 @@ export function decide(incident: Incident): Decision {
   }
 
   if (incident.originalState === "in_flight") {
-    return {
-      action: "wait",
-      reason: "original transfer is still in flight, a replacement risks a double payment",
-    };
+    return incident.bankOverdue
+      ? {
+          action: "escalate",
+          reason: "the bank has not paid or failed the original transfer by its deadline",
+        }
+      : {
+          action: "wait",
+          reason: "original transfer is still in flight, a replacement risks a double payment",
+        };
   }
 
   // A second failure says the route itself is broken, so sending a third payment
@@ -94,6 +108,13 @@ export function decide(incident: Incident): Decision {
     return {
       action: "escalate",
       reason: "a replacement and its transfer fee would push cash below the reserve floor",
+    };
+  }
+
+  if (incident.sentOutsidePayOnce) {
+    return {
+      action: "escalate",
+      reason: "the original was sent outside PayOnce, so a person approves any replacement",
     };
   }
 

@@ -24,10 +24,13 @@ export interface Transfer {
   status: string;
   reference: string;
   short_reference_id: string;
+  created_at: string;
+  transfer_method: string;
   transfer_amount: number;
   transfer_currency: string;
   fee_amount: number;
   failure?: TransferFailure;
+  beneficiary_id?: string;
   beneficiary?: { bank_details?: TransferBankDetails };
 }
 
@@ -65,6 +68,25 @@ export function getTransfer(
 
 interface TransferList {
   items?: Transfer[];
+  page_after?: string | null;
+}
+
+// Every transfer created since the given ISO time, newest first.
+export async function listTransfersSince(
+  client: AirwallexClient,
+  since: string,
+): Promise<Transfer[]> {
+  const transfers: Transfer[] = [];
+  let page: string | null | undefined = undefined;
+  do {
+    const cursor: string = page ? `&page=${encodeURIComponent(page)}` : "";
+    const list: TransferList = await client.get<TransferList>(
+      `/api/v1/transfers?from_created_at=${encodeURIComponent(since)}&page_size=100${cursor}`,
+    );
+    transfers.push(...(list.items ?? []));
+    page = list.page_after;
+  } while (page);
+  return transfers;
 }
 
 export async function findTransferByRequestId(

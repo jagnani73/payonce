@@ -21,13 +21,15 @@ import {
 } from "./engine.js";
 import { readerFromEnv } from "./reader.js";
 import {
+  INVOICE_ID_PATTERN,
   Ledger,
   LEDGER_PATH,
   type Approval,
   type Attempt,
   type Obligation,
+  type OutsidePayout,
 } from "./ledger.js";
-import { PAID_OUTCOME, SandboxBank } from "./sandbox-bank.js";
+import { PAID_OUTCOME, SandboxBank, STAYS_IN_FLIGHT } from "./sandbox-bank.js";
 import {
   DEFAULT_EMAILS,
   DEFAULT_SCENARIO,
@@ -51,24 +53,26 @@ const WEBHOOK_API_VERSION: string = process.env["WEBHOOK_API_VERSION"] ?? "2025-
 // event.
 const CHECK_EVERY_MS: number = 3_000;
 const CHECK_WITH_WEBHOOKS_MS: number = 15_000;
+// How often Airwallex is swept for payouts PayOnce did not send.
+const SWEEP_EVERY_MS: number = 30_000;
 const SUBSCRIBE_TRIES: number = 3;
 const SUBSCRIBE_RETRY_MS: number = 5_000;
 const MAX_BODY_BYTES: number = 64 * 1024;
 const WEB_DIR: URL = new URL("../web/", import.meta.url);
 const EMAILS_DIR: URL = new URL("../fixtures/emails/", import.meta.url);
-const INVOICE_PATTERN: RegExp = /^[A-Za-z0-9-]{1,40}$/;
 
 const MAX_NAME_LENGTH: number = 80;
 const MAX_FINDING_LENGTH: number = 200;
 
-// What the scripted bank can do to the original: fail it one of these ways, or
-// pay it.
+// What the scripted bank can do to the original: fail it one of these ways, pay
+// it, or leave it in flight past its deadline.
 const BANK_OUTCOMES: string[] = [
   "CHANNEL_TIMEOUT",
   "SYSTEM_ERROR",
   "BENEFICIARY_BANK_RETURNED",
   "ACCOUNT_CLOSED",
   "INVALID_ACCOUNT_NAME_OR_NUMBER",
+  STAYS_IN_FLIGHT,
   PAID_OUTCOME,
 ];
 
@@ -96,7 +100,7 @@ const bank: SandboxBank = new SandboxBank(
 );
 const engine: Engine = { client, ledger, reader: readerFromEnv(), bank };
 const agent: Dispatcher = new Dispatcher(engine);
-const watcher: Watcher = new Watcher(engine, agent, CHECK_EVERY_MS);
+const watcher: Watcher = new Watcher(engine, agent, CHECK_EVERY_MS, SWEEP_EVERY_MS);
 
 const ALLOWED_HOSTS: ReadonlySet<string> = new Set<string>([
   `${HOST}:${PORT}`,
@@ -128,14 +132,20 @@ function isBusy(invoiceId: string): boolean {
   return agent.isBusy(invoiceId) || bank.isBusy(invoiceId);
 }
 
-// True while a payment is with the bank, so news can arrive at any moment.
+// True while a payment is with the bank, so news can arrive at any moment. That
+// includes a payout for the invoice sent outside PayOnce.
 function isWatching(invoiceId: string): boolean {
-  return engine.ledger
-    .attempts(invoiceId)
-    .some(
-      (attempt: Attempt): boolean =>
-        attempt.state === "pending" || attempt.state === "in_flight",
-    );
+  return (
+    engine.ledger
+      .attempts(invoiceId)
+      .some(
+        (attempt: Attempt): boolean =>
+          attempt.state === "pending" || attempt.state === "in_flight",
+      ) ||
+    engine.ledger
+      .outsidePayouts(invoiceId)
+      .some((payout: OutsidePayout): boolean => payout.state === "in_flight")
+  );
 }
 
 // The default thread comes first, so the form starts on it.
@@ -219,14 +229,25 @@ function onWebhook(event: WebhookEvent): void {
   const reference: string = attempt?.reference ?? event.data.short_reference_id ?? "";
   console.log(`  webhook  ${event.name} ${reference}`);
   const news: string | undefined = DECISIVE_EVENTS[event.name];
+  if (news === undefined) {
+    return;
+  }
+  if (attempt === undefined) {
+    // A payout already tied to an invoice wakes that invoice. Any other is one
+    // the sweep has not seen.
+    const invoiceId: string | undefined = engine.ledger.outsideInvoiceOf(
+      event.data.id ?? "",
+    );
+    if (invoiceId === undefined) {
+      watcher.sweepSoon();
+    } else {
+      agent.wake(invoiceId);
+    }
+    return;
+  }
   // A failed transfer is cancelled a few seconds later, and a status check may
   // have got there first. Either way the ledger already has the news.
-  if (
-    attempt === undefined ||
-    news === undefined ||
-    attempt.state === "paid" ||
-    attempt.state === "failed"
-  ) {
+  if (attempt.state === "paid" || attempt.state === "failed") {
     return;
   }
   note(
@@ -292,7 +313,7 @@ async function connectWebhooks(): Promise<void> {
 }
 
 function requireObligation(invoiceId: string): Obligation {
-  const obligation: Obligation | undefined = INVOICE_PATTERN.test(invoiceId)
+  const obligation: Obligation | undefined = INVOICE_ID_PATTERN.test(invoiceId)
     ? engine.ledger.obligation(invoiceId)
     : undefined;
   if (obligation === undefined) {

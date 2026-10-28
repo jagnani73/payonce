@@ -7,6 +7,9 @@ import type { AttemptKind } from "./ledger.js";
 // The bank outcome that pays a transfer. Any other outcome is the failure type
 // the simulator fails it with.
 export const PAID_OUTCOME: string = "PAID";
+// The bank outcome that leaves a transfer in SENT, so the agent's deadline for it
+// runs out.
+export const STAYS_IN_FLIGHT: string = "STAYS_IN_FLIGHT";
 
 const SETTLED_STATUSES: ReadonlySet<string> = new Set<string>([
   "PAID",
@@ -65,8 +68,12 @@ export class SandboxBank implements Bank {
   }
 
   // Pays the transfer, or fails it with the outcome as its failure type. A
-  // transfer that has already settled is left as it is.
+  // transfer that has already settled is left as it is, and so is any transfer
+  // when the outcome is STAYS_IN_FLIGHT.
   async settle(transferId: string, outcome: string): Promise<void> {
+    if (outcome === STAYS_IN_FLIGHT) {
+      return;
+    }
     const current: Transfer = await getTransfer(this.client, transferId);
     if (SETTLED_STATUSES.has(current.status)) {
       return;

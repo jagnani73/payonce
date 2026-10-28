@@ -3,6 +3,7 @@ import { getBankDetails } from "./airwallex/beneficiaries.js";
 import type { AirwallexClient } from "./airwallex/client.js";
 import {
   getTransfer,
+  listTransfersSince,
   type Transfer,
   type TransferBankDetails,
 } from "./airwallex/transfers.js";
@@ -18,7 +19,8 @@ import {
   resendCanFix,
   sameBankDetails,
 } from "./assess.js";
-import { decide } from "./decide.js";
+import { deadlineOf, describeDeadline, isOverdue } from "./deadlines.js";
+import { decide, OUTSIDE_PAYOUT_REASON } from "./decide.js";
 import {
   unverifiedSenders,
   type EmailFindings,
@@ -36,6 +38,8 @@ import {
   type Ledger,
   type LedgerEvent,
   type Obligation,
+  type OutsidePayout,
+  type PayoutState,
 } from "./ledger.js";
 import { formatMoney, toMinor } from "./money.js";
 import { sendAttempt, syncTransfer, wasRejected } from "./payments.js";
@@ -76,6 +80,7 @@ export interface Engine {
 
 interface Assessment {
   original: Transfer;
+  incident: Incident;
   findings: StoredFindings;
   unverified: string[];
   bankDetails: TransferBankDetails;
@@ -160,6 +165,95 @@ function capitalise(text: string): string {
 
 function money(obligation: Obligation): string {
   return formatMoney(obligation.amountMinor, obligation.currency);
+}
+
+// A payout's amount, payee and status, as the timeline shows it.
+export function payoutSummary(transfer: Transfer): string {
+  const failure: string =
+    transfer.failure?.code === undefined ? "" : `, ${transfer.failure.code}`;
+  const payee: string =
+    transfer.beneficiary?.bank_details?.account_name ?? "an unnamed payee";
+  return `${formatMoney(toMinor(transfer.transfer_amount), transfer.transfer_currency)} to ${payee}, ${transfer.status}${failure}`;
+}
+
+// A payout whose reference names an invoice PayOnce has may pay that invoice a
+// second time. It goes on the invoice's timeline, and the policy holds every
+// payment while it is live. A settled invoice is reopened for a person to check.
+// Call it in the invoice's turn. False when the payout was tied already.
+export function linkOutsidePayout(
+  engine: Engine,
+  invoiceId: string,
+  transfer: Transfer,
+): boolean {
+  const state: PayoutState = originalStateOf(transfer);
+  const linked: boolean = engine.ledger.linkOutsidePayout(invoiceId, {
+    transferId: transfer.id,
+    reference: transfer.short_reference_id,
+    state,
+  });
+  if (!linked) {
+    return false;
+  }
+  note(
+    engine.ledger,
+    invoiceId,
+    "warning",
+    `Payout ${transfer.short_reference_id} for this invoice was sent outside PayOnce: ${payoutSummary(transfer)}`,
+  );
+  if (engine.ledger.obligation(invoiceId)?.state === "settled" && state !== "failed") {
+    engine.ledger.escalate(invoiceId, OUTSIDE_PAYOUT_REASON);
+  }
+  return true;
+}
+
+// Looks in Airwallex for payouts naming this invoice that PayOnce has not seen,
+// and ties them to it. It runs before a replacement goes out, so a resend someone
+// made outside PayOnce a moment ago is not paid a second time. True when it tied
+// any.
+async function linkUnseenPayouts(engine: Engine, invoiceId: string): Promise<boolean> {
+  let linked: boolean = false;
+  const transfers: Transfer[] = await listTransfersSince(
+    engine.client,
+    engine.ledger.startedAt(),
+  );
+  for (const transfer of transfers) {
+    if (
+      !engine.ledger.knowsTransfer(transfer.request_id ?? "", transfer.id) &&
+      engine.ledger.obligationForReference(transfer.reference ?? "")?.invoiceId ===
+        invoiceId
+    ) {
+      linked = linkOutsidePayout(engine, invoiceId, transfer) || linked;
+    }
+  }
+  return linked;
+}
+
+// Reads each outside payout the bank has not finished with, and notes any it has
+// paid or failed since. Returns them all as they now stand.
+async function syncOutsidePayouts(
+  engine: Engine,
+  invoiceId: string,
+): Promise<OutsidePayout[]> {
+  for (const payout of engine.ledger.outsidePayouts(invoiceId)) {
+    if (payout.state === "paid" || payout.state === "failed") {
+      continue;
+    }
+    const transfer: Transfer = await getTransfer(engine.client, payout.transferId);
+    const state: PayoutState = originalStateOf(transfer);
+    if (state === payout.state) {
+      continue;
+    }
+    engine.ledger.recordOutsidePayout(payout.transferId, state);
+    if (state === "paid" || state === "failed") {
+      note(engine.ledger, invoiceId, "bank", `Payout sent outside PayOnce ${describe(transfer)}`);
+    }
+  }
+  return engine.ledger.outsidePayouts(invoiceId);
+}
+
+// A status PayOnce does not recognise counts as live.
+function anyLive(payouts: OutsidePayout[]): boolean {
+  return payouts.some((payout: OutsidePayout): boolean => payout.state !== "failed");
 }
 
 // The inbox: stores emails that arrived for an invoice, puts them on its timeline
@@ -255,14 +349,19 @@ async function assess(
     engine.client,
     obligation.currency,
   );
+  const originalState: OriginalTransferState = originalStateOf(original);
   const incident: Incident = {
     invoiceId: obligation.invoiceId,
     supplier: obligation.supplier,
     currency: obligation.currency,
     amountMinor: obligation.amountMinor,
     transferFeeMinor: feeMinor,
-    originalState: originalStateOf(original),
+    originalState,
+    bankOverdue: originalState === "in_flight" && isOverdue(original),
     resendCanFix: resendCanFix(original),
+    sentOutsidePayOnce: obligation.origin === "outside",
+    // The look that called this has just read them from Airwallex.
+    outsidePayoutLive: anyLive(engine.ledger.outsidePayouts(obligation.invoiceId)),
     replacementFailed: engine.ledger
       .attempts(obligation.invoiceId)
       .some(
@@ -324,7 +423,7 @@ async function assess(
     `${capitalise(decision.action)}: ${decision.reason}${held}`,
     "decision",
   );
-  return { original, findings, unverified, bankDetails, decision };
+  return { original, incident, findings, unverified, bankDetails, decision };
 }
 
 // Opening the attempt takes the duplicate lock, so this throws if the invoice
@@ -384,21 +483,60 @@ function close(engine: Engine, invoiceId: string): boolean {
   return true;
 }
 
-function waitForReplacement(engine: Engine, invoiceId: string, reference: string): void {
+// The time of the next look the agent takes by itself, in epoch milliseconds.
+// Null when it waits for news or for a person.
+type NextLook = number | null;
+
+const RETRY_FAILED_LOOK_MS: number = 60_000;
+
+// Leaves the invoice waiting on the bank until the transfer's deadline, when the
+// agent looks again if nothing has woken it before.
+function waitForBank(
+  engine: Engine,
+  invoiceId: string,
+  kind: AttemptKind,
+  transfer: Transfer,
+): NextLook {
   note(
     engine.ledger,
     invoiceId,
     "payment",
-    `Waiting for the bank to pay replacement ${reference}`,
+    kind === "replacement"
+      ? `Waiting for the bank to pay replacement ${transfer.short_reference_id}. If it has not paid or failed it within ${describeDeadline(transfer)} of sending, a person hears about it`
+      : `Waiting for the bank to pay or fail original ${transfer.short_reference_id}. If it has done neither within ${describeDeadline(transfer)} of sending, a person hears about it`,
     "waiting",
   );
+  // A deadline that cannot be read is due now, and the look then finds the
+  // transfer overdue.
+  const deadline: number = deadlineOf(transfer);
+  return Number.isFinite(deadline) ? deadline : Date.now();
+}
+
+// A replacement the bank sits on is never followed by another payment. A person
+// hears about it, and the incident still closes if the bank pays it.
+function replacementOverdue(
+  engine: Engine,
+  invoiceId: string,
+  replacement: Transfer,
+): NextLook {
+  const reason: string = "the bank has not paid or failed the replacement by its deadline";
+  engine.ledger.escalate(invoiceId, reason);
+  note(engine.ledger, invoiceId, "decision", `Escalate: ${reason}`, "decision");
+  note(
+    engine.ledger,
+    invoiceId,
+    "approval",
+    `Waiting on a person. Replacement ${replacement.short_reference_id} is still with the bank, so PayOnce sends nothing more`,
+    "waiting",
+  );
+  return null;
 }
 
 // The bank pays the replacement later. The agent hears about it the way it heard
 // about the original, and closes the incident then.
-async function replace(engine: Engine, obligation: Obligation): Promise<void> {
+async function replace(engine: Engine, obligation: Obligation): Promise<NextLook> {
   const replacement: Transfer = await pay(engine, obligation, "replacement");
-  waitForReplacement(engine, obligation.invoiceId, replacement.short_reference_id);
+  return waitForBank(engine, obligation.invoiceId, "replacement", replacement);
 }
 
 function termsOf(obligation: Obligation, assessment: Assessment): ApprovalTerms {
@@ -427,14 +565,44 @@ function escalate(
       ? assessment.decision.reason
       : obligation.escalationReason,
   );
+  if (assessment.incident.outsidePayoutLive) {
+    if (engine.ledger.voidOpenApprovals(obligation.invoiceId)) {
+      note(
+        engine.ledger,
+        obligation.invoiceId,
+        "approval",
+        "Approval request withdrawn: a payout for this invoice was sent outside PayOnce",
+      );
+    }
+    note(
+      engine.ledger,
+      obligation.invoiceId,
+      "approval",
+      "Waiting on a person. A payout sent outside PayOnce may already pay this invoice, so PayOnce sends nothing",
+      "waiting",
+    );
+    return;
+  }
+  // An invoice already paid once, by the original or a replacement, has nothing
+  // left to approve.
   const originalState: OriginalTransferState = originalStateOf(assessment.original);
+  if (originalState === "paid" || engine.ledger.paidOnce(obligation.invoiceId)) {
+    note(
+      engine.ledger,
+      obligation.invoiceId,
+      "approval",
+      "Waiting on a person to check with the supplier and close the incident. PayOnce will not send a second payment",
+      "waiting",
+    );
+    return;
+  }
   if (originalState !== "failed") {
     note(
       engine.ledger,
       obligation.invoiceId,
       "approval",
-      originalState === "paid"
-        ? "Waiting on a person to check with the supplier and close the incident. PayOnce will not send a second payment"
+      originalState === "in_flight"
+        ? `Waiting on a person. Original ${assessment.original.short_reference_id} is still with the bank, so PayOnce sends nothing more`
         : "Waiting on a person",
       "waiting",
     );
@@ -466,7 +634,7 @@ async function continueEscalated(
   engine: Engine,
   obligation: Obligation,
   originalId: string,
-): Promise<void> {
+): Promise<NextLook> {
   // Once an invoice has gone to a person, only an approval releases a payment and
   // only a person closes it, even if the policy would now do either unprompted.
   const assessment: Assessment = await assess(engine, obligation, originalId);
@@ -475,7 +643,7 @@ async function continueEscalated(
   );
   if (approval?.state !== "approved") {
     escalate(engine, obligation, assessment);
-    return;
+    return null;
   }
 
   const current: ApprovalTerms = termsOf(obligation, assessment);
@@ -489,9 +657,14 @@ async function continueEscalated(
       `Approval by ${approval.approver} is void: ${changedFields(approved, current).join(", ")} changed`,
     );
     escalate(engine, obligation, assessment);
-    return;
+    return null;
   }
 
+  // A payout tied to the invoice now is looked at before anything is sent, and the
+  // approval is left as it is until then.
+  if (await linkUnseenPayouts(engine, obligation.invoiceId)) {
+    return Date.now();
+  }
   // One approval covers one attempt, so it is spent before the payment is tried.
   engine.ledger.setApprovalState(approval.id, "used");
   note(
@@ -500,43 +673,66 @@ async function continueEscalated(
     "approval",
     `Approval by ${approval.approver} matches the current terms`,
   );
-  await replace(engine, obligation);
+  return replace(engine, obligation);
 }
 
-// Carries out a decision: replace, close, hand over to a person, or leave it
-// waiting.
+// Carries out a decision: replace, close, hand over to a person, or wait for the
+// bank until the original's deadline.
 async function act(
   engine: Engine,
   obligation: Obligation,
   assessment: Assessment,
-): Promise<void> {
-  if (assessment.decision.action === "replace") {
-    await replace(engine, obligation);
-    return;
-  }
-  if (assessment.decision.action === "escalate") {
-    escalate(engine, obligation, assessment);
-  }
-  if (assessment.decision.action === "close" && !close(engine, obligation.invoiceId)) {
-    note(
-      engine.ledger,
-      obligation.invoiceId,
-      "error",
-      "The ledger does not show this invoice as paid once, so the incident stays open",
-    );
+): Promise<NextLook> {
+  switch (assessment.decision.action) {
+    case "replace":
+      // A payout tied to the invoice now is looked at before anything is sent.
+      if (await linkUnseenPayouts(engine, obligation.invoiceId)) {
+        return Date.now();
+      }
+      return replace(engine, obligation);
+    case "wait":
+      return waitForBank(engine, obligation.invoiceId, "original", assessment.original);
+    case "escalate":
+      escalate(engine, obligation, assessment);
+      return null;
+    case "close":
+      if (!close(engine, obligation.invoiceId)) {
+        note(
+          engine.ledger,
+          obligation.invoiceId,
+          "error",
+          "The ledger does not show this invoice as paid once, so the incident stays open",
+        );
+      }
+      return null;
   }
 }
 
-// Looks at an invoice again, after a webhook, a status check, new emails or a
-// person's action. It syncs each payment with Airwallex, retrying an attempt that
-// has no transfer yet under its original request_id, and notes any payment the
-// bank has paid or failed since the last look. Then it reads new emails, decides
-// and acts. A replacement already out is waited on, never approved a second time.
-// An escalated invoice pays only on a matching approval.
+// Looks at an invoice again, after a webhook, a status check, new emails, a
+// person's action or a deadline. It syncs each payment with Airwallex, retrying an
+// attempt that has no transfer yet under its original request_id, and notes any
+// payment the bank has paid or failed since the last look. Then it reads new
+// emails, decides and acts. A replacement already out is waited on until its
+// deadline, never approved a second time. An escalated invoice pays only on a
+// matching approval.
 export async function resumeIncident(
   engine: Engine,
   invoiceId: string,
 ): Promise<void> {
+  let next: NextLook;
+  try {
+    next = await look(engine, invoiceId);
+  } catch (error: unknown) {
+    // A deadline already passed stays due, and the watcher has the agent try
+    // again a minute later rather than on every check.
+    const now: number = Date.now();
+    engine.ledger.postponeDueLook(invoiceId, now, now + RETRY_FAILED_LOOK_MS);
+    throw error;
+  }
+  engine.ledger.lookAt(invoiceId, next);
+}
+
+async function look(engine: Engine, invoiceId: string): Promise<NextLook> {
   const obligation: Obligation | undefined = engine.ledger.obligation(invoiceId);
   if (obligation === undefined) {
     throw new Error(`${invoiceId} is not in the ledger`);
@@ -570,30 +766,32 @@ export async function resumeIncident(
   }
 
   if (originalId === null) {
-    return;
+    return null;
   }
+  const outside: OutsidePayout[] = await syncOutsidePayouts(engine, invoiceId);
   await readNewEmails(engine, obligation);
   if (engine.ledger.paidOnce(invoiceId)) {
     // Closed already, by the policy or by a person.
     if (obligation.state === "settled") {
-      return;
+      return null;
     }
     // A paid replacement was sent on a decision already made, so it closes the
-    // incident. A paid original goes to the policy, which may want a person.
-    if (paidOriginal(engine.ledger, invoiceId) === undefined) {
+    // incident. A paid original goes to the policy, which may want a person. So
+    // does an invoice with a live payout sent outside PayOnce.
+    if (paidOriginal(engine.ledger, invoiceId) === undefined && !anyLive(outside)) {
       close(engine, invoiceId);
-      return;
+      return null;
     }
   }
   if (liveReplacement !== null) {
-    waitForReplacement(engine, invoiceId, liveReplacement.short_reference_id);
-    return;
+    return isOverdue(liveReplacement)
+      ? replacementOverdue(engine, invoiceId, liveReplacement)
+      : waitForBank(engine, invoiceId, "replacement", liveReplacement);
   }
   if (obligation.state === "escalated") {
-    await continueEscalated(engine, obligation, originalId);
-    return;
+    return continueEscalated(engine, obligation, originalId);
   }
-  await act(engine, obligation, await assess(engine, obligation, originalId));
+  return act(engine, obligation, await assess(engine, obligation, originalId));
 }
 
 // Shows the lock holding: a second payment for a settled invoice is refused.
@@ -624,9 +822,11 @@ function paidOriginal(ledger: Ledger, invoiceId: string): Attempt | undefined {
     );
 }
 
-// What a person is shown before closing an escalated invoice whose original the
-// bank reports as paid.
+// What a person is shown before closing an escalated invoice the bank reports as
+// paid once: by PayOnce's original or replacement, or by a payout sent outside
+// PayOnce after every payment PayOnce sent failed.
 export interface CloseReview {
+  kind: AttemptKind | "outside";
   reference: string | null;
   reason: string;
 }
@@ -636,10 +836,27 @@ export function pendingClose(
   invoiceId: string,
 ): CloseReview | undefined {
   const obligation: Obligation | undefined = ledger.obligation(invoiceId);
-  const paid: Attempt | undefined = paidOriginal(ledger, invoiceId);
-  return obligation?.state !== "escalated" || paid === undefined
-    ? undefined
-    : { reference: paid.reference, reason: obligation.escalationReason };
+  if (obligation?.state !== "escalated") {
+    return undefined;
+  }
+  const reason: string = obligation.escalationReason;
+  if (ledger.paidOnce(invoiceId)) {
+    const paid: Attempt | undefined = ledger
+      .attempts(invoiceId)
+      .find((attempt: Attempt): boolean => attempt.state === "paid");
+    return paid === undefined
+      ? undefined
+      : { kind: paid.kind, reference: paid.reference, reason };
+  }
+  if (ledger.paidOutside(invoiceId)) {
+    const paid: OutsidePayout | undefined = ledger
+      .outsidePayouts(invoiceId)
+      .find((payout: OutsidePayout): boolean => payout.state === "paid");
+    return paid === undefined
+      ? undefined
+      : { kind: "outside", reference: paid.reference, reason };
+  }
+  return undefined;
 }
 
 // Records a person closing such an invoice. It moves no money, so it is not bound
@@ -650,7 +867,7 @@ export function closeIncident(
   closedBy: string,
   finding: string,
 ): void {
-  if (pendingClose(ledger, invoiceId) === undefined || !ledger.settle(invoiceId)) {
+  if (pendingClose(ledger, invoiceId) === undefined || !ledger.settle(invoiceId, true)) {
     throw new Error(`${invoiceId} is not waiting on a person to close it`);
   }
   note(ledger, invoiceId, "closed", `Incident closed by ${closedBy}: ${finding}`);

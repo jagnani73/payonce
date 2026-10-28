@@ -22,7 +22,7 @@ function main(): void {
   }
 
   console.log(`${invoiceId} is paid and waiting on a person`);
-  console.log(`  original  ${review.reference ?? "no reference"} paid`);
+  console.log(`  ${review.kind.padEnd(9)} ${review.reference ?? "no reference"} paid`);
   console.log(`  because   ${review.reason}`);
   if (closedBy === undefined || finding === "") {
     console.log(`To close it: pnpm close ${invoiceId} <NAME> <NOTE>`);

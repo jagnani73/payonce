@@ -7,7 +7,13 @@ export interface Incident {
   amountMinor: number;
   transferFeeMinor: number;
   originalState: OriginalTransferState;
+  // The original is still in flight past the deadline for its transfer method.
+  bankOverdue: boolean;
   resendCanFix: boolean;
+  // Someone outside PayOnce sent the original, so they may be resending it too.
+  sentOutsidePayOnce: boolean;
+  // A payout for this invoice sent outside PayOnce is in flight or paid.
+  outsidePayoutLive: boolean;
   replacementFailed: boolean;
   supplierReportsNonReceipt: boolean;
   supplierAsksForNewBankDetails: boolean;

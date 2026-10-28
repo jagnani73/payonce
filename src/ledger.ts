@@ -4,6 +4,10 @@ import type { SupplierEmail } from "./emails.js";
 
 export const LEDGER_PATH: string = "payonce.db";
 
+// An invoice number PayOnce accepts. A found payout's reference becomes its
+// invoice number only when it fits.
+export const INVOICE_ID_PATTERN: RegExp = /^[A-Za-z0-9-]{1,40}$/;
+
 const SQLITE_CONSTRAINT_UNIQUE: number = 2067;
 const BUSY_TIMEOUT_MS: number = 5_000;
 
@@ -59,9 +63,21 @@ const SCHEMA: string = `
     name TEXT NOT NULL,
     received_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS outside_payouts (
+    transfer_id TEXT PRIMARY KEY,
+    invoice_id TEXT NOT NULL REFERENCES obligations(invoice_id),
+    found_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
 `;
 
 export type ObligationState = "open" | "settled" | "escalated";
+// Who sent the original: PayOnce, or someone outside it, such as a person in the
+// Airwallex web app. The sweep finds the second kind.
+export type ObligationOrigin = "payonce" | "outside";
 export type AttemptKind = "original" | "replacement";
 export type AttemptState = "pending" | "in_flight" | "paid" | "failed";
 export type ApprovalState = "requested" | "approved" | "used" | "void";
@@ -100,6 +116,7 @@ export interface NewObligation {
 }
 
 export interface Obligation extends NewObligation {
+  origin: ObligationOrigin;
   state: ObligationState;
   // Why the invoice last went to a person. Empty if it never has.
   escalationReason: string;
@@ -112,6 +129,27 @@ export interface Attempt {
   transferId: string | null;
   // The bank's short reference, as shown to people.
   reference: string | null;
+  state: AttemptState;
+  failureCode: string | null;
+}
+
+// What the bank last did with a payout sent outside PayOnce. unknown is a status
+// PayOnce does not recognise.
+export type PayoutState = "in_flight" | "paid" | "failed" | "unknown";
+
+// A payout sent outside PayOnce whose reference names an invoice in the ledger.
+export interface OutsidePayout {
+  transferId: string;
+  // The bank's short reference.
+  reference: string;
+  state: PayoutState;
+}
+
+// A payout someone sent outside PayOnce, taken on as an invoice's original.
+export interface FoundPayout {
+  requestId: string;
+  transferId: string;
+  reference: string;
   state: AttemptState;
   failureCode: string | null;
 }
@@ -154,12 +192,27 @@ interface ObligationRow {
   amount_minor: number;
   transfer_method: TransferMethod;
   reserve_floor_minor: number;
+  origin: ObligationOrigin;
   state: ObligationState;
   escalation_reason: string;
 }
 
 interface ColumnRow {
   name: string;
+}
+
+interface InvoiceRow {
+  invoice_id: string;
+}
+
+interface MetaRow {
+  value: string;
+}
+
+interface OutsideRow {
+  transfer_id: string;
+  reference: string;
+  state: PayoutState;
 }
 
 // Columns added after the first version of the ledger, by table. A database
@@ -170,12 +223,21 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     transfer_method: "TEXT NOT NULL DEFAULT 'LOCAL'",
     reserve_floor_minor: "INTEGER NOT NULL DEFAULT 0",
     escalation_reason: "TEXT NOT NULL DEFAULT ''",
+    origin: "TEXT NOT NULL DEFAULT 'payonce'",
+    // A found invoice's payout reference, when it could not be the invoice number.
+    payout_reference: "TEXT",
+    // When the agent next looks at the invoice by itself, as an ISO time.
+    look_at: "TEXT",
   },
   attempts: {
     reference: "TEXT",
   },
   events: {
     topic: "TEXT",
+  },
+  outside_payouts: {
+    reference: "TEXT NOT NULL DEFAULT ''",
+    state: "TEXT NOT NULL DEFAULT 'in_flight'",
   },
 };
 
@@ -218,6 +280,7 @@ function toObligation(row: ObligationRow): Obligation {
     amountMinor: row.amount_minor,
     transferMethod: row.transfer_method,
     reserveFloorMinor: row.reserve_floor_minor,
+    origin: row.origin,
     state: row.state,
     escalationReason: row.escalation_reason,
   };
@@ -264,6 +327,19 @@ export class Ledger {
         }
       }
     }
+    this.db
+      .prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('started_at', ?)")
+      .run(new Date().toISOString());
+  }
+
+  // When this ledger was first opened, as an ISO time. The sweep only looks at
+  // payouts made since, so payouts from an earlier ledger are not taken for ones
+  // made outside PayOnce.
+  startedAt(): string {
+    const row: MetaRow = this.db
+      .prepare("SELECT value FROM meta WHERE key = 'started_at'")
+      .get() as unknown as MetaRow;
+    return row.value;
   }
 
   openObligation(input: NewObligation): Obligation {
@@ -368,6 +444,168 @@ export class Ledger {
     return row === undefined ? undefined : toAttempt(row);
   }
 
+  // Records a payout found in Airwallex as the original of a new invoice. Both
+  // rows are written or neither is. The attempt takes the duplicate lock like
+  // any other.
+  // payoutReference is the payout's own reference when the invoice number had to
+  // be something else, so a later payout with that reference is still tied to it.
+  adoptPayout(
+    input: NewObligation,
+    payoutReference: string | null,
+    found: FoundPayout,
+  ): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      // A plain INSERT, so an invoice written by another process since the sweep
+      // checked fails here instead of gaining a second original.
+      this.db
+        .prepare(
+          `INSERT INTO obligations
+             (invoice_id, supplier, supplier_domain, beneficiary_id, currency,
+              amount_minor, transfer_method, reserve_floor_minor, origin,
+              payout_reference)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'outside', ?)`,
+        )
+        .run(
+          input.invoiceId,
+          input.supplier,
+          input.supplierDomain,
+          input.beneficiaryId,
+          input.currency,
+          input.amountMinor,
+          input.transferMethod,
+          input.reserveFloorMinor,
+          payoutReference,
+        );
+      this.db
+        .prepare(
+          `INSERT INTO attempts
+             (request_id, invoice_id, kind, transfer_id, reference, state, failure_code)
+           VALUES (?, ?, 'original', ?, ?, ?, ?)`,
+        )
+        .run(
+          found.requestId,
+          input.invoiceId,
+          found.transferId,
+          found.reference,
+          found.state,
+          found.failureCode,
+        );
+      this.db.exec("COMMIT");
+    } catch (error: unknown) {
+      this.db.exec("ROLLBACK");
+      if (isUniqueViolation(error)) {
+        throw new DuplicatePaymentError(input.invoiceId);
+      }
+      throw error;
+    }
+  }
+
+  // The invoice a payout's reference names: its invoice number, or the payout
+  // reference a found invoice was recorded with.
+  obligationForReference(reference: string): Obligation | undefined {
+    if (reference === "") {
+      return undefined;
+    }
+    const row: ObligationRow | undefined = this.db
+      .prepare(
+        `SELECT * FROM obligations WHERE invoice_id = ? OR payout_reference = ?
+          ORDER BY rowid LIMIT 1`,
+      )
+      .get(reference, reference) as unknown as ObligationRow | undefined;
+    return row === undefined ? undefined : toObligation(row);
+  }
+
+  // Ties a payout made outside PayOnce to the invoice its reference names. False
+  // when it was tied already.
+  linkOutsidePayout(invoiceId: string, payout: OutsidePayout): boolean {
+    const result: { changes: number | bigint } = this.db
+      .prepare(
+        `INSERT OR IGNORE INTO outside_payouts
+           (transfer_id, invoice_id, found_at, reference, state)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        payout.transferId,
+        invoiceId,
+        new Date().toISOString(),
+        payout.reference,
+        payout.state,
+      );
+    return Number(result.changes) === 1;
+  }
+
+  outsidePayouts(invoiceId: string): OutsidePayout[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT transfer_id, reference, state FROM outside_payouts
+            WHERE invoice_id = ? ORDER BY rowid`,
+        )
+        .all(invoiceId) as unknown as OutsideRow[]
+    ).map(
+      (row: OutsideRow): OutsidePayout => ({
+        transferId: row.transfer_id,
+        reference: row.reference,
+        state: row.state,
+      }),
+    );
+  }
+
+  recordOutsidePayout(transferId: string, state: PayoutState): void {
+    this.db
+      .prepare("UPDATE outside_payouts SET state = ? WHERE transfer_id = ?")
+      .run(state, transferId);
+  }
+
+  // The invoice an outside payout is tied to, if any.
+  outsideInvoiceOf(transferId: string): string | undefined {
+    const row: InvoiceRow | undefined = this.db
+      .prepare("SELECT invoice_id FROM outside_payouts WHERE transfer_id = ?")
+      .get(transferId) as unknown as InvoiceRow | undefined;
+    return row?.invoice_id;
+  }
+
+  // True when the transfer is one of PayOnce's attempts or a payout the sweep has
+  // already tied to an invoice.
+  knowsTransfer(requestId: string, transferId: string): boolean {
+    return (
+      this.attemptOf(requestId, transferId) !== undefined ||
+      this.db
+        .prepare("SELECT 1 FROM outside_payouts WHERE transfer_id = ?")
+        .get(transferId) !== undefined
+    );
+  }
+
+  // Null means the agent waits for news and does not look by itself.
+  lookAt(invoiceId: string, at: number | null): void {
+    this.db
+      .prepare("UPDATE obligations SET look_at = ? WHERE invoice_id = ?")
+      .run(at === null ? null : new Date(at).toISOString(), invoiceId);
+  }
+
+  // Moves a look that is already due to a later time. For a look that failed, so
+  // it is tried again later and not on every check.
+  postponeDueLook(invoiceId: string, now: number, until: number): void {
+    this.db
+      .prepare(
+        "UPDATE obligations SET look_at = ? WHERE invoice_id = ? AND look_at <= ?",
+      )
+      .run(new Date(until).toISOString(), invoiceId, new Date(now).toISOString());
+  }
+
+  // Open invoices whose next look is due.
+  dueLooks(now: number): string[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT invoice_id FROM obligations
+            WHERE look_at IS NOT NULL AND look_at <= ? AND state <> 'settled'`,
+        )
+        .all(new Date(now).toISOString()) as unknown as InvoiceRow[]
+    ).map((row: InvoiceRow): string => row.invoice_id);
+  }
+
   // Records a webhook event by its id. False when it has been seen before, since
   // Airwallex may deliver an event more than once.
   firstDelivery(eventId: string, name: string): boolean {
@@ -462,14 +700,21 @@ export class Ledger {
     return row?.findings;
   }
 
-  // A new request voids any earlier one for the invoice that is still open.
-  requestApproval(invoiceId: string, binding: string, terms: string): void {
-    this.db
+  // Voids a request or approval for the invoice that is still open. False when
+  // there was none.
+  voidOpenApprovals(invoiceId: string): boolean {
+    const result: { changes: number | bigint } = this.db
       .prepare(
         `UPDATE approvals SET state = 'void'
           WHERE invoice_id = ? AND state IN ('requested', 'approved')`,
       )
       .run(invoiceId);
+    return Number(result.changes) > 0;
+  }
+
+  // A new request voids any earlier one for the invoice that is still open.
+  requestApproval(invoiceId: string, binding: string, terms: string): void {
+    this.voidOpenApprovals(invoiceId);
     this.db
       .prepare("INSERT INTO approvals (invoice_id, binding, terms) VALUES (?, ?, ?)")
       .run(invoiceId, binding, terms);
@@ -509,21 +754,28 @@ export class Ledger {
     return paid === 1 && unresolved === 0;
   }
 
-  // Settles only when the invoice has been paid once.
-  settle(invoiceId: string): boolean {
-    if (!this.paidOnce(invoiceId)) {
+  // True when every payment PayOnce sent has failed and the bank reports a payout
+  // sent outside PayOnce as paid.
+  paidOutside(invoiceId: string): boolean {
+    return (
+      this.attempts(invoiceId).every((attempt: Attempt): boolean => attempt.state === "failed") &&
+      this.outsidePayouts(invoiceId).some(
+        (payout: OutsidePayout): boolean => payout.state === "paid",
+      )
+    );
+  }
+
+  // Settles only when the invoice has been paid once by PayOnce or, when a
+  // person closes it, by a payout sent outside PayOnce.
+  settle(invoiceId: string, byPerson: boolean = false): boolean {
+    if (!this.paidOnce(invoiceId) && !(byPerson && this.paidOutside(invoiceId))) {
       return false;
     }
     this.db
       .prepare("UPDATE obligations SET state = 'settled' WHERE invoice_id = ?")
       .run(invoiceId);
     // Nothing is left to approve on a settled invoice.
-    this.db
-      .prepare(
-        `UPDATE approvals SET state = 'void'
-          WHERE invoice_id = ? AND state IN ('requested', 'approved')`,
-      )
-      .run(invoiceId);
+    this.voidOpenApprovals(invoiceId);
     return true;
   }
 }
