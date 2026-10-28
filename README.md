@@ -154,11 +154,13 @@ The balance comes from Airwallex, with the age of the read. Money held for outgo
 
 Below that the panel lists payments already with the bank, payouts sent outside PayOnce and the fees kept on failed transfers. Airwallex takes a transfer out of available as soon as it is created, so the panel does not take these off again. Each is listed under the wallet the money left. A payout paid from another currency counts in the currency it was paid from, and a fee counts in the currency it was charged in.
 
-The panel reads Airwallex at most every 30 seconds, and only while the page is open. That read is for display. Before an automatic replacement, PayOnce reads the balance fresh and takes off the same committed money the panel does, so the panel's headroom and the agent's decision agree.
+The panel reads the balance from Airwallex when the page asks for it and the last read is 30 seconds old or more, so it reads nothing while no page is open. After a quiet spell the first answer can show a read several minutes old, with its age, while a new read runs. The page says so and picks up the new read a moment later.
+
+That read is for display. Before an automatic replacement, PayOnce reads the balance fresh and takes off the same committed money the panel does. The panel's headroom can still differ from what that check sees. The panel's balance may be older, and the panel takes off the currency's floor, while an invoice with a stricter floor of its own is held to that floor (the panel lists such invoices under the floor). The check for one invoice also leaves that invoice's own committed money out.
 
 If a read fails, the panel keeps the last good one, shows its age and says why the newer one failed. If no read has worked yet, it shows no headroom, because a headroom worked out from a missing balance would be wrong.
 
-PayOnce reads each transfer's fee and keeps it in the ledger, and fills in older failed transfers, up to five after each balance read. A transfer it cannot read waits 10 minutes before the next try, and the others go first. The fee line is called "Fees on failed transfers", with a note that the sandbox keeps the fee when a transfer fails. That rests on what the sandbox did with failed EUR SWIFT transfers, so the panel does not claim every rail works this way. Pay runs are not built yet, and their line says so.
+PayOnce reads each transfer's fee and keeps it in the ledger, and fills in older failed transfers, up to five after each balance read. A transfer it cannot read waits 10 minutes before the next try, and the others go first. The fee line is called "Fees on failed transfers". Once a fee on a failed transfer is on file, a note under it says the sandbox keeps the fee when a transfer fails. That rests on what the sandbox did with failed EUR SWIFT transfers, so the panel does not claim every rail works this way. Pay runs are not built yet, and their line says so.
 
 `pnpm cash` prints the same figures in the terminal after one fresh read. It exits with 1 when Airwallex could not be read, the floor setting is unreadable or a headroom is below 0, so a script can check it.
 

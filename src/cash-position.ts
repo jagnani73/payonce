@@ -239,7 +239,8 @@ export function payRunLines(_ledger: Ledger): CashLine[] | null {
 // balance yet, on every invoice but exceptInvoiceId: payments being sent with no
 // transfer yet, approvals not used or expired, and approved pay-run rows. The
 // policy takes it off before an automatic replacement, and the panel's headroom
-// takes off the same lines, so the two always agree.
+// takes off the same lines. The two can still differ: the panel's balance is
+// cached, its floor is the currency's, and it counts every invoice.
 export function committedMinor(
   ledger: Ledger,
   currency: string,
