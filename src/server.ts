@@ -17,11 +17,19 @@ import {
   chainReport,
   describeBreaks,
   describeLedger,
+  describeRunLedger,
   ledgerReport,
+  runAuditExport,
+  runChainReport,
+  runLedgerReport,
   type AuditExport,
   type AuditSnapshot,
   type ChainReport,
   type LedgerReport,
+  type RunAuditExport,
+  type RunAuditSnapshot,
+  type RunChainReport,
+  type RunLedgerReport,
 } from "./audit-trail.js";
 import {
   bankChangeForm,
@@ -477,6 +485,40 @@ function sendAudit(response: ServerResponse, invoiceId: string, format: string):
   response.end(auditCsv(audit));
 }
 
+// The same for a pay run's timeline.
+function runAuditSummary(runId: number): AuditSummary {
+  const snapshot: RunAuditSnapshot = engine.ledger.runAuditSnapshot(runId);
+  const report: RunChainReport = runChainReport(runId, snapshot.events);
+  const ledger: RunLedgerReport = runLedgerReport(snapshot);
+  const problem: string | null =
+    describeBreaks(report.breaks) ?? (ledger.intact ? null : describeRunLedger(ledger));
+  return {
+    lines: report.lines,
+    problem: problem === null ? null : problem.charAt(0).toUpperCase() + problem.slice(1),
+  };
+}
+
+function sendRunAudit(response: ServerResponse, raw: string, format: string): void {
+  const run: Run = requireRun(raw);
+  if (format !== "json" && format !== "csv") {
+    throw new HttpError(400, "The format is json or csv");
+  }
+  const audit: RunAuditExport = runAuditExport(
+    { runId: run.id, fileName: run.fileName, fileHash: run.fileHash, uploadedBy: run.uploadedBy, state: run.state },
+    engine.ledger.runAuditSnapshot(run.id),
+  );
+  if (format === "json") {
+    sendJson(response, 200, audit);
+    return;
+  }
+  response.writeHead(200, {
+    "Content-Type": "text/csv; charset=utf-8",
+    "Content-Disposition": `attachment; filename="run-${run.id}-audit.csv"`,
+    "X-Audit-Chain": audit.intact ? "intact" : "broken",
+  });
+  response.end(auditCsv(audit));
+}
+
 function incidentDetail(invoiceId: string): unknown {
   const obligation: Obligation = requireObligation(invoiceId);
   const findings: string | undefined = engine.ledger.findings(invoiceId);
@@ -803,6 +845,7 @@ function runDetail(raw: string): unknown {
             largest: largestTotal(terms.totals),
           },
     events: engine.ledger.runEvents(run.id),
+    audit: runAuditSummary(run.id),
     busy: runBusy(run),
     watching: runWatching(run),
   };
@@ -965,6 +1008,8 @@ async function route(
     const runId: string = parts[2];
     if (method === "GET" && parts.length === 3) {
       sendJson(response, 200, runDetail(runId));
+    } else if (method === "GET" && parts[3] === "audit" && parts.length === 4) {
+      sendRunAudit(response, runId, url.searchParams.get("format") ?? "json");
     } else if (method === "POST" && parts[3] === "approve" && parts.length === 4) {
       sendJson(response, 200, await approveRunByPerson(request, runId));
     } else if (method === "POST" && parts[3] === "check" && parts.length === 4) {

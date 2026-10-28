@@ -4,10 +4,14 @@ import {
   eventHash,
   GENESIS,
   nextLedgerHead,
+  runEventHash,
   storable,
   type AuditSnapshot,
   type ChainedEvent,
+  type ChainedRunEvent,
   type EventFields,
+  type RunAuditSnapshot,
+  type RunEventFields,
 } from "./audit-trail.js";
 import type { SupplierEmail } from "./emails.js";
 
@@ -484,6 +488,34 @@ interface EventRow {
   hash: string | null;
 }
 
+interface RunEventRow {
+  id: number;
+  run_id: number;
+  at: string;
+  kind: string;
+  message: string;
+  topic: string | null;
+  prev_hash: string | null;
+  hash: string | null;
+}
+
+interface RunHashRow extends HashRow {
+  run_id: number;
+}
+
+function toChainedRunEvent(row: RunEventRow): ChainedRunEvent {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    at: row.at,
+    kind: row.kind,
+    message: row.message,
+    topic: row.topic,
+    prevHash: row.prev_hash ?? null,
+    hash: row.hash ?? null,
+  };
+}
+
 function toChainedEvent(row: EventRow): ChainedEvent {
   return {
     id: row.id,
@@ -502,6 +534,10 @@ function toChainedEvent(row: EventRow): ChainedEvent {
 const LEDGER_HEAD_KEY: string = "events_head";
 const CHAIN_STARTED_KEY: string = "chain_started_at";
 const BACKFILLED_THROUGH_KEY: string = "chain_backfilled_through";
+// The same for pay run timelines, which are chained apart from invoice timelines.
+const RUN_HEAD_KEY: string = "run_events_head";
+const RUN_CHAIN_STARTED_KEY: string = "run_chain_started_at";
+const RUN_BACKFILLED_THROUGH_KEY: string = "run_chain_backfilled_through";
 
 interface OutsideRow {
   transfer_id: string;
@@ -567,6 +603,11 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
   events: {
     topic: "TEXT",
     // The hash of the invoice's line before this one, and this line's own.
+    prev_hash: "TEXT",
+    hash: "TEXT",
+  },
+  run_events: {
+    // The hash of the run's line before this one, and this line's own.
     prev_hash: "TEXT",
     hash: "TEXT",
   },
@@ -982,6 +1023,7 @@ export class Ledger {
       .prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('started_at', ?)")
       .run(new Date().toISOString());
     this.startChain();
+    this.startRunChain();
   }
 
   // Under the write lock, so two processes opening an older file at once do not
@@ -1060,6 +1102,66 @@ export class Ledger {
         insert.run(LEDGER_HEAD_KEY, ledgerHead);
         insert.run(CHAIN_STARTED_KEY, new Date().toISOString());
         insert.run(BACKFILLED_THROUGH_KEY, String(rows.at(-1)?.id ?? 0));
+      }
+      this.db.exec("COMMIT");
+    } catch (error: unknown) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  // True once pay run timelines are a hash chain, read the way chainStarted reads
+  // invoice timelines. A file opened read-only from before pay runs has no
+  // run_events table, and one from before this chain has no hash column.
+  runChainStarted(): boolean {
+    const hashColumn: boolean = (
+      this.db.prepare("PRAGMA table_info(run_events)").all() as unknown as ColumnRow[]
+    ).some((column: ColumnRow): boolean => column.name === "hash");
+    return (
+      this.metaValue(RUN_CHAIN_STARTED_KEY) !== null ||
+      this.metaValue(RUN_BACKFILLED_THROUGH_KEY) !== null ||
+      this.metaValue(RUN_HEAD_KEY) !== null ||
+      (hashColumn &&
+        this.db.prepare("SELECT 1 FROM run_events WHERE hash IS NOT NULL LIMIT 1").get() !==
+          undefined)
+    );
+  }
+
+  // True when the file has a run_events table with any line in it.
+  hasRunLines(): boolean {
+    const table: boolean =
+      (this.db.prepare("PRAGMA table_info(run_events)").all() as unknown as ColumnRow[]).length > 0;
+    return table && this.db.prepare("SELECT 1 FROM run_events LIMIT 1").get() !== undefined;
+  }
+
+  // Starts the chain of pay run timelines the way startChain starts the invoices':
+  // the lines already there are hashed once, in id order, and never again.
+  private startRunChain(): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      if (!this.runChainStarted()) {
+        const rows: RunEventRow[] = this.db
+          .prepare("SELECT * FROM run_events ORDER BY id")
+          .all() as unknown as RunEventRow[];
+        const update: StatementSync = this.db.prepare(
+          "UPDATE run_events SET prev_hash = ?, hash = ? WHERE id = ?",
+        );
+        const heads: Map<number, string> = new Map();
+        let runHead: string = GENESIS;
+        for (const row of rows) {
+          const event: ChainedRunEvent = toChainedRunEvent(row);
+          const prevHash: string = heads.get(event.runId) ?? GENESIS;
+          const hash: string = runEventHash(prevHash, event);
+          update.run(prevHash, hash, event.id);
+          heads.set(event.runId, hash);
+          runHead = nextLedgerHead(runHead, hash);
+        }
+        const insert: StatementSync = this.db.prepare(
+          "INSERT INTO meta (key, value) VALUES (?, ?)",
+        );
+        insert.run(RUN_HEAD_KEY, runHead);
+        insert.run(RUN_CHAIN_STARTED_KEY, new Date().toISOString());
+        insert.run(RUN_BACKFILLED_THROUGH_KEY, String(rows.at(-1)?.id ?? 0));
       }
       this.db.exec("COMMIT");
     } catch (error: unknown) {
@@ -2344,16 +2446,76 @@ export class Ledger {
     });
   }
 
+  // Chains one line to the run's timeline and adds it to the running hash of run
+  // lines, as appendEvent does for an invoice. The caller holds the write
+  // transaction.
   private addRunEventRow(runId: number, kind: EventKind, message: string, topic: string | null): void {
+    const last: HashRow | undefined = this.db
+      .prepare(
+        `SELECT hash FROM run_events WHERE run_id = ? AND hash IS NOT NULL
+          ORDER BY id DESC LIMIT 1`,
+      )
+      .get(runId) as unknown as HashRow | undefined;
+    const prevHash: string = last?.hash ?? GENESIS;
+    // Hashed as it will read back from the file.
+    const line: RunEventFields = {
+      runId,
+      at: new Date().toISOString(),
+      kind,
+      message: storable(message),
+      topic: topic === null ? null : storable(topic),
+    };
+    const hash: string = runEventHash(prevHash, line);
     this.db
-      .prepare("INSERT INTO run_events (run_id, at, kind, message, topic) VALUES (?, ?, ?, ?, ?)")
-      .run(runId, new Date().toISOString(), kind, message, topic);
+      .prepare(
+        `INSERT INTO run_events (run_id, at, kind, message, topic, prev_hash, hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(line.runId, line.at, line.kind, line.message, line.topic, prevHash, hash);
+    this.db
+      .prepare(
+        `INSERT INTO meta (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      )
+      .run(RUN_HEAD_KEY, nextLedgerHead(this.metaValue(RUN_HEAD_KEY) ?? GENESIS, hash));
   }
 
-  // A run's timeline is not hash-chained. Each released invoice's first line, which
-  // is, records the run and the approval that released it.
+  // A run's timeline is a hash chain of its own, with a running hash over every
+  // run's lines, so who uploaded, approved, checked, released or cancelled a run
+  // is as tamper-evident as an invoice's timeline.
   addRunEvent(runId: number, kind: EventKind, message: string, topic: string | null = null): void {
-    this.addRunEventRow(runId, kind, message, topic);
+    this.transaction((): void => {
+      this.addRunEventRow(runId, kind, message, topic);
+    });
+  }
+
+  // What an audit of run timelines checks, read in one transaction. runId null
+  // reads every run's lines.
+  runAuditSnapshot(runId: number | null): RunAuditSnapshot {
+    this.db.exec("BEGIN");
+    try {
+      const rows: RunEventRow[] = (
+        runId === null
+          ? this.db.prepare("SELECT * FROM run_events ORDER BY id").all()
+          : this.db.prepare("SELECT * FROM run_events WHERE run_id = ? ORDER BY id").all(runId)
+      ) as unknown as RunEventRow[];
+      const all: RunHashRow[] = this.db
+        .prepare("SELECT run_id, hash FROM run_events ORDER BY id")
+        .all() as unknown as RunHashRow[];
+      const snapshot: RunAuditSnapshot = {
+        events: rows.map(toChainedRunEvent),
+        hashes: all.map((row: RunHashRow): string | null => row.hash),
+        runs: new Set(all.map((row: RunHashRow): number => row.run_id)).size,
+        ledgerHead: this.metaValue(RUN_HEAD_KEY),
+        chainStartedAt: this.metaValue(RUN_CHAIN_STARTED_KEY),
+        backfilledThrough: Number(this.metaValue(RUN_BACKFILLED_THROUGH_KEY) ?? 0),
+      };
+      this.db.exec("COMMIT");
+      return snapshot;
+    } catch (error: unknown) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   runEvents(runId: number): LedgerEvent[] {

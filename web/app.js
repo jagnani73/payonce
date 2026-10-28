@@ -140,6 +140,7 @@ const els = {
   runRows: byId("run-rows"),
   runTimeline: byId("run-timeline"),
   runWorking: byId("run-working"),
+  runAudit: byId("run-audit"),
   runApproval: byId("run-approval"),
   runCash: byId("run-cash"),
   runCancel: byId("run-cancel"),
@@ -2843,6 +2844,31 @@ function renderRunTimeline(run) {
   els.runWorking.hidden = run.busy !== true;
 }
 
+// Under the run's timeline, as under an invoice's.
+function renderRunAudit(run) {
+  const runId = run.run.id;
+  const audit = run.audit ?? null;
+  if (!changed("runAudit", [runId, audit])) {
+    return;
+  }
+  if (audit === null) {
+    els.runAudit.hidden = true;
+    return;
+  }
+  const base = `/api/runs/${encodeURIComponent(String(runId))}/audit`;
+  els.runAudit.replaceChildren(
+    audit.problem === null
+      ? `Hash chain intact over ${audit.lines} ${audit.lines === 1 ? "line" : "lines"}. `
+      : h("strong", { class: "audit__broken" }, `Hash chain broken. ${audit.problem}. `),
+    "Download the run's audit trail as ",
+    h("a", { href: base, download: `run-${runId}-audit.json` }, "JSON"),
+    " or ",
+    h("a", { href: `${base}?format=csv`, download: `run-${runId}-audit.csv` }, "CSV"),
+    ".",
+  );
+  els.runAudit.hidden = false;
+}
+
 function runApprovalLead(approval, terms) {
   const count = Array.isArray(terms.rows) ? terms.rows.length : 0;
   const held = Array.isArray(terms.rows) ? terms.rows.filter((row) => row.heldFor?.length > 0).length : 0;
@@ -3272,6 +3298,7 @@ function renderRunMain() {
   renderRunHeader(run);
   renderRunRows(run);
   renderRunTimeline(run);
+  renderRunAudit(run);
   renderRunApproval(run);
   renderRunCash(run);
   renderRunCancel(run);

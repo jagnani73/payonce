@@ -126,11 +126,11 @@ The page shows the paid transfer and the reason, and takes a name and a note of 
 
 ## Audit trail
 
-Each incident's timeline is a hash chain. Every line stores the hash of the line before it on the same invoice, and a SHA-256 hash of its own content plus that previous hash. Editing, removing or inserting a line breaks the chain at that point. The ledger also keeps a running hash over every line in the order they were written. It catches two things one invoice's chain misses: lines removed from the end of a timeline, and every line of an invoice removed.
+Each incident's timeline is a hash chain, and so is each pay run's. Every line stores the hash of the line before it on the same invoice, and a SHA-256 hash of its own content plus that previous hash. Editing, removing or inserting a line breaks the chain at that point. The ledger also keeps a running hash over every line in the order they were written. It catches two things one invoice's chain misses: lines removed from the end of a timeline, and every line of an invoice removed. Pay run timelines have a running hash of their own.
 
 PayOnce writes each line, its hashes and the running hash in one database transaction. The terminal commands and the web server can write to the ledger at the same time, and the transaction stops two of them chaining from the same line.
 
-`pnpm run audit` checks every timeline and the running hash, and says where a chain breaks. `pnpm run audit INV-5001` checks one invoice and lists each break. Add `json` or `csv` to print the invoice's audit trail instead. (`pnpm audit` on its own runs pnpm's dependency audit.) The page shows the result under the timeline, with links to download the same audit trail as JSON or CSV. The JSON describes how each hash is made, so the trail can be checked without PayOnce. The CSV is for reading in a spreadsheet. A cell that starts with `=`, `+`, `-` or `@` gets a leading apostrophe there, so a supplier's email subject cannot run as a formula. Check hashes against the JSON.
+`pnpm run audit` checks every timeline and the running hash, and says where a chain breaks. `pnpm run audit INV-5001` checks one invoice and lists each break. Add `json` or `csv` to print the invoice's audit trail instead. `pnpm run audit run 7` checks pay run 7's timeline, with `json` or `csv` after it for the run's audit trail, and the check of the whole ledger covers every run. (`pnpm audit` on its own runs pnpm's dependency audit.) The page shows the result under an incident's or a run's timeline, with links to download the same audit trail as JSON or CSV. The JSON describes how each hash is made, so the trail can be checked without PayOnce. The CSV is for reading in a spreadsheet. A cell that starts with `=`, `+`, `-` or `@` gets a leading apostrophe there, so a supplier's email subject cannot run as a formula. Check hashes against the JSON.
 
 Lines written before the chain existed were hashed the first time the ledger was opened with it, and the export marks them. The chain catches a quiet edit to the file. It cannot stop someone who can write the file from rewriting a timeline and recomputing every hash after it. To show later that a timeline changed after a given day, keep that day's export, or just its last hash, somewhere else.
 
@@ -248,6 +248,7 @@ pnpm recover [OUTCOME] [INVOICE] [EMAILS] [SCENARIO] [NAME]
 pnpm approve <INVOICE> [REQUEST NAME]
 pnpm close <INVOICE> [NAME] [NOTE]
 pnpm run audit [INVOICE] [json|csv]
+pnpm run audit run <RUN> [json|csv]
 pnpm cash
 pnpm payrun upload <FILE> <NAME>
 pnpm payrun show <RUN>
@@ -339,7 +340,6 @@ The code holds amounts in minor units and converts at the Airwallex boundary. Th
 - A floor check on a single incident's first payment. Pay run rows have one.
 - Totals across currencies. They need exchange rates. A run's approver limits are compared with each currency's total on its own.
 - Editing a run, approving part of one, or scheduling one for a later date. Cancel it and upload a corrected file.
-- A hash chain on a run's own timeline. The first line of each invoice it releases is chained and names the run.
 - Recording a callback for a supplier outside an incident, so a run can pay a supplier who changed banks.
 - A webhook delivered by the sandbox. The receiver, the tunnel and the subscription work, and Airwallex records the events, but the sandbox has not sent one.
 - Real bank outcomes. The run uses the sandbox simulator to send, fail and pay transfers.

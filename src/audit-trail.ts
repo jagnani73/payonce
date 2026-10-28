@@ -8,6 +8,11 @@ export const HASH_METHOD: string =
   "SHA-256, in hex, of prevHash followed by the JSON object {at, invoice_id, kind, message, topic} as UTF-8, with the keys in that order and no spaces. Only quotes, backslashes and control characters are escaped, as JavaScript's JSON.stringify does; every other character is written as itself";
 export const LEDGER_HEAD_METHOD: string =
   "SHA-256, in hex, of the running hash followed by a line's hash, taken over every line in the ledger in id order, starting from the genesis";
+// A pay run's timeline is chained the same way, keyed by the run's number.
+export const RUN_HASH_METHOD: string =
+  "SHA-256, in hex, of prevHash followed by the JSON object {at, run_id, kind, message, topic} as UTF-8, with the keys in that order and no spaces. run_id is the run's number, written as a JSON number. Only quotes, backslashes and control characters are escaped, as JavaScript's JSON.stringify does; every other character is written as itself";
+export const RUN_LEDGER_HEAD_METHOD: string =
+  "SHA-256, in hex, of the running hash followed by a run line's hash, taken over every pay run line in the ledger in id order, starting from the genesis. It is kept apart from the running hash of invoice lines";
 
 // What a line's hash covers.
 export interface EventFields {
@@ -21,6 +26,21 @@ export interface EventFields {
 // A timeline line as stored. The hashes are null on a line written without them,
 // such as one written by a process still running code from before the chain.
 export interface ChainedEvent extends EventFields {
+  id: number;
+  prevHash: string | null;
+  hash: string | null;
+}
+
+// What a pay run line's hash covers.
+export interface RunEventFields {
+  runId: number;
+  at: string;
+  kind: string;
+  message: string;
+  topic: string | null;
+}
+
+export interface ChainedRunEvent extends RunEventFields {
   id: number;
   prevHash: string | null;
   hash: string | null;
@@ -42,6 +62,16 @@ export interface AuditSnapshot {
   backfilledThrough: number;
 }
 
+// The same for pay run timelines, which have a running hash of their own.
+export interface RunAuditSnapshot {
+  events: ChainedRunEvent[];
+  hashes: (string | null)[];
+  runs: number;
+  ledgerHead: string | null;
+  chainStartedAt: string | null;
+  backfilledThrough: number;
+}
+
 // Where an invoice's chain breaks. line counts from 1 along its timeline.
 export interface ChainBreak {
   line: number;
@@ -58,9 +88,24 @@ export interface ChainReport {
   breaks: ChainBreak[];
 }
 
+export interface RunChainReport {
+  runId: number;
+  lines: number;
+  head: string | null;
+  breaks: ChainBreak[];
+}
+
 export interface LedgerReport {
   lines: number;
   invoices: number;
+  stored: string | null;
+  computed: string;
+  intact: boolean;
+}
+
+export interface RunLedgerReport {
+  lines: number;
+  runs: number;
   stored: string | null;
   computed: string;
   intact: boolean;
@@ -95,18 +140,45 @@ export function eventHash(prevHash: string, event: EventFields): string {
   return sha256(prevHash + canonicalEvent(event));
 }
 
+export function canonicalRunEvent(event: RunEventFields): string {
+  return JSON.stringify({
+    at: event.at,
+    run_id: event.runId,
+    kind: event.kind,
+    message: event.message,
+    topic: event.topic,
+  });
+}
+
+export function runEventHash(prevHash: string, event: RunEventFields): string {
+  return sha256(prevHash + canonicalRunEvent(event));
+}
+
 // The ledger's running hash once a line with this hash joins any invoice's chain.
 export function nextLedgerHead(ledgerHead: string, hash: string): string {
   return sha256(ledgerHead + hash);
 }
 
+interface ChainLine {
+  id: number;
+  at: string;
+  kind: string;
+  topic: string | null;
+  message: string;
+  prevHash: string | null;
+  hash: string | null;
+}
+
 // Checks each line against the stored hash of the line before it and against its
 // own content, so one changed line shows up once and not on every line after it.
 // A line with no hash is skipped, as the ledger skips it when it adds the next.
-export function chainBreaks(events: ChainedEvent[]): ChainBreak[] {
+function breaksOf<E extends ChainLine>(
+  events: E[],
+  hashOf: (prevHash: string, event: E) => string,
+): ChainBreak[] {
   const breaks: ChainBreak[] = [];
   let previous: string = GENESIS;
-  events.forEach((event: ChainedEvent, index: number): void => {
+  events.forEach((event: E, index: number): void => {
     const line: number = index + 1;
     const found = (problem: string): void => {
       breaks.push({ line, id: event.id, at: event.at, problem });
@@ -122,12 +194,16 @@ export function chainBreaks(events: ChainedEvent[]): ChainBreak[] {
           : `does not follow line ${line - 1}: a line between them was removed or added, or line ${line - 1} was rewritten with a new hash`,
       );
     }
-    if (eventHash(event.prevHash, event) !== event.hash) {
+    if (hashOf(event.prevHash, event) !== event.hash) {
       found("was changed after it was written");
     }
     previous = event.hash;
   });
   return breaks;
+}
+
+export function chainBreaks(events: ChainedEvent[]): ChainBreak[] {
+  return breaksOf(events, eventHash);
 }
 
 export function chainReport(invoiceId: string, events: ChainedEvent[]): ChainReport {
@@ -152,18 +228,56 @@ export function chainReports(events: ChainedEvent[]): ChainReport[] {
   );
 }
 
-// The running hash catches what an invoice's own chain cannot: its last lines, or
-// all of them, removed.
-export function ledgerReport(snapshot: AuditSnapshot): LedgerReport {
+export function runChainReport(runId: number, events: ChainedRunEvent[]): RunChainReport {
+  return {
+    runId,
+    lines: events.length,
+    head: events.at(-1)?.hash ?? null,
+    breaks: breaksOf(events, runEventHash),
+  };
+}
+
+// One report per run that has lines, in the order its first line was written.
+export function runChainReports(events: ChainedRunEvent[]): RunChainReport[] {
+  const byRun: Map<number, ChainedRunEvent[]> = new Map();
+  for (const event of events) {
+    const lines: ChainedRunEvent[] = byRun.get(event.runId) ?? [];
+    lines.push(event);
+    byRun.set(event.runId, lines);
+  }
+  return [...byRun].map(
+    ([runId, lines]: [number, ChainedRunEvent[]]): RunChainReport => runChainReport(runId, lines),
+  );
+}
+
+function runningHash(hashes: (string | null)[]): string {
   let computed: string = GENESIS;
-  for (const hash of snapshot.hashes) {
+  for (const hash of hashes) {
     if (hash !== null) {
       computed = nextLedgerHead(computed, hash);
     }
   }
+  return computed;
+}
+
+// The running hash catches what an invoice's own chain cannot: its last lines, or
+// all of them, removed.
+export function ledgerReport(snapshot: AuditSnapshot): LedgerReport {
+  const computed: string = runningHash(snapshot.hashes);
   return {
     lines: snapshot.hashes.length,
     invoices: snapshot.invoices,
+    stored: snapshot.ledgerHead,
+    computed,
+    intact: snapshot.ledgerHead === computed,
+  };
+}
+
+export function runLedgerReport(snapshot: RunAuditSnapshot): RunLedgerReport {
+  const computed: string = runningHash(snapshot.hashes);
+  return {
+    lines: snapshot.hashes.length,
+    runs: snapshot.runs,
     stored: snapshot.ledgerHead,
     computed,
     intact: snapshot.ledgerHead === computed,
@@ -178,6 +292,16 @@ export function describeLedger(report: LedgerReport): string {
     return "the running hash is missing from the ledger, so lines removed from it cannot be ruled out";
   }
   return "the running hash does not match the lines, so lines were removed, reordered or rewritten somewhere in the ledger. A timeline with no breaks can still have lost its last lines, and this check cannot say which";
+}
+
+export function describeRunLedger(report: RunLedgerReport): string {
+  if (report.intact) {
+    return `${report.lines} ${report.lines === 1 ? "line" : "lines"} across ${report.runs} pay ${report.runs === 1 ? "run" : "runs"}, and their running hash matches`;
+  }
+  if (report.stored === null) {
+    return "the running hash of pay run lines is missing from the ledger, so run lines removed from it cannot be ruled out";
+  }
+  return "the running hash of pay run lines does not match them, so run lines were removed, reordered or rewritten somewhere in the ledger. A run timeline with no breaks can still have lost its last lines, and this check cannot say which";
 }
 
 // The first break, as one sentence, with a count of any others.
@@ -225,6 +349,22 @@ export interface AuditExport {
   ledger: LedgerReport;
 }
 
+function auditLines(events: ChainLine[], backfilledThrough: number): AuditLine[] {
+  return events.map(
+    (event: ChainLine, index: number): AuditLine => ({
+      line: index + 1,
+      id: event.id,
+      at: event.at,
+      kind: event.kind,
+      topic: event.topic,
+      message: event.message,
+      prevHash: event.prevHash,
+      hash: event.hash,
+      backfilled: event.id <= backfilledThrough,
+    }),
+  );
+}
+
 export function auditExport(invoice: AuditInvoice, snapshot: AuditSnapshot): AuditExport {
   const report: ChainReport = chainReport(invoice.invoiceId, snapshot.events);
   const ledger: LedgerReport = ledgerReport(snapshot);
@@ -240,19 +380,51 @@ export function auditExport(invoice: AuditInvoice, snapshot: AuditSnapshot): Aud
     exportedAt: new Date().toISOString(),
     method: { hash: HASH_METHOD, ledgerHead: LEDGER_HEAD_METHOD, genesis: GENESIS },
     chainStartedAt: snapshot.chainStartedAt,
-    lines: snapshot.events.map(
-      (event: ChainedEvent, index: number): AuditLine => ({
-        line: index + 1,
-        id: event.id,
-        at: event.at,
-        kind: event.kind,
-        topic: event.topic,
-        message: event.message,
-        prevHash: event.prevHash,
-        hash: event.hash,
-        backfilled: event.id <= snapshot.backfilledThrough,
-      }),
-    ),
+    lines: auditLines(snapshot.events, snapshot.backfilledThrough),
+    head: report.head,
+    intact: report.breaks.length === 0 && ledger.intact,
+    breaks: report.breaks,
+    ledger,
+  };
+}
+
+export interface AuditRun {
+  runId: number;
+  fileName: string;
+  fileHash: string;
+  uploadedBy: string;
+  state: string;
+}
+
+export interface RunAuditExport {
+  // The run as it stands. Only the lines are in the chain.
+  run: AuditRun;
+  exportedAt: string;
+  method: { hash: string; ledgerHead: string; genesis: string };
+  chainStartedAt: string | null;
+  lines: AuditLine[];
+  head: string | null;
+  intact: boolean;
+  breaks: ChainBreak[];
+  ledger: RunLedgerReport;
+}
+
+export function runAuditExport(run: AuditRun, snapshot: RunAuditSnapshot): RunAuditExport {
+  const report: RunChainReport = runChainReport(run.runId, snapshot.events);
+  const ledger: RunLedgerReport = runLedgerReport(snapshot);
+  return {
+    // Picked field by field, since a run passed here has more.
+    run: {
+      runId: run.runId,
+      fileName: run.fileName,
+      fileHash: run.fileHash,
+      uploadedBy: run.uploadedBy,
+      state: run.state,
+    },
+    exportedAt: new Date().toISOString(),
+    method: { hash: RUN_HASH_METHOD, ledgerHead: RUN_LEDGER_HEAD_METHOD, genesis: GENESIS },
+    chainStartedAt: snapshot.chainStartedAt,
+    lines: auditLines(snapshot.events, snapshot.backfilledThrough),
     head: report.head,
     intact: report.breaks.length === 0 && ledger.intact,
     breaks: report.breaks,
@@ -284,7 +456,7 @@ function csvCell(value: string | number | boolean | null): string {
 
 // The lines as CSV for a spreadsheet. A cell that would start a formula gets a
 // leading apostrophe, so the JSON is the form to check hashes against.
-export function auditCsv(audit: AuditExport): string {
+export function auditCsv(audit: { lines: AuditLine[] }): string {
   const rows: string[] = [CSV_COLUMNS.map(csvCell).join(",")];
   for (const line of audit.lines) {
     rows.push(
