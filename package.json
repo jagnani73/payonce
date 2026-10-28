@@ -13,7 +13,7 @@
     "board": "tsx src/board.ts",
     "payrun": "tsx --env-file=.env src/payrun.ts",
     "outbox": "tsx --env-file-if-exists=.env src/outbox.ts",
-    "outage": "tsx --env-file-if-exists=.env src/outage.ts",
+    "outage": "tsx src/outage.ts",
     "reset": "tsx src/reset.ts",
     "ui": "tsx --env-file=.env src/server.ts",
     "typecheck": "tsc --noEmit"

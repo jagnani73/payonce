@@ -14,6 +14,18 @@ import {
 
 const ENDED_SHOWN: number = 5;
 
+// Without a .env no approver list is set and the default rule applies, and
+// nothing is printed about it.
+function loadEnv(): void {
+  try {
+    process.loadEnvFile(".env");
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+}
+
 function show(view: OutageView): void {
   console.log(`Outage ${view.id} on ${view.rail}, ${view.state}`);
   console.log(`  ${view.text}`);
@@ -42,6 +54,7 @@ function describeHeld(item: HeldItem): string {
 // <ID> <NAME> <NOTE> ends one, as the page's button does. It writes only the
 // ledger: the server's watcher picks up what the outage held on its next check.
 function main(): void {
+  loadEnv();
   const command: string | undefined = process.argv[2];
   const policy: ApprovalPolicy = policyFromEnv();
   const ledger: Ledger = new Ledger(LEDGER_PATH);
