@@ -483,9 +483,17 @@ async function readNewEmails(engine: Engine, obligation: Obligation): Promise<vo
   let readBy: string | undefined = previous?.readBy;
   let emailsRead: number = readCount;
   let unread: boolean = false;
+  // What the emails read in this look said, apart from the invoice's findings so
+  // far, so the timeline does not pin an earlier email's finding on a new one.
+  let newNonReceipt: boolean = false;
+  let newBankDetails: boolean = false;
+  let newNotToPay: boolean = false;
   for (const email of thread.slice(readCount)) {
     try {
       const read: EmailFindings = await engine.reader.read([email]);
+      newNonReceipt = newNonReceipt || read.claimsNonReceipt;
+      newBankDetails = newBankDetails || read.asksForNewBankDetails;
+      newNotToPay = newNotToPay || read.asksNotToPay === true;
       claimsNonReceipt = claimsNonReceipt || read.claimsNonReceipt;
       asksForNewBankDetails = asksForNewBankDetails || read.asksForNewBankDetails;
       asksNotToPay = asksNotToPay || read.asksNotToPay === true;
@@ -518,7 +526,16 @@ async function readNewEmails(engine: Engine, obligation: Obligation): Promise<vo
     ...(readBy === undefined ? {} : { readBy }),
   };
   engine.ledger.saveFindings(invoiceId, JSON.stringify(findings));
-  note(engine.ledger, invoiceId, "email", `Emails read: ${findings.summary}`);
+  const count: number = emailsRead - readCount;
+  const said: string = summarise(newNonReceipt, newBankDetails, newNotToPay);
+  const soFar: string = `Findings for this invoice so far: ${findings.summary}`;
+  const which: string = `${count} ${readCount === 0 ? "" : "new "}${count === 1 ? "email" : "emails"}`;
+  note(
+    engine.ledger,
+    invoiceId,
+    "email",
+    count === 0 ? soFar : said === findings.summary ? `Read ${which}: ${said}` : `Read ${which}: ${said}. ${soFar}`,
+  );
 }
 
 // The floor as the cost line names it.
