@@ -64,10 +64,12 @@ import { MAX_EMAIL_BYTES, noteTexts, TOO_LARGE_TEXT, type ParsedEmail } from "./
 import type { EmailFindings, SupplierEmail } from "./emails.js";
 import { describeQuotes } from "./fx.js";
 import {
+  boardGroups,
   boardReport,
   CURRENCY_PATTERN,
   isBoardGroup,
   isBoardOrigin,
+  type BoardGroupOf,
   type BoardReport,
 } from "./incident-board.js";
 import {
@@ -499,6 +501,8 @@ function requireObligation(invoiceId: string): Obligation {
 }
 
 function listIncidents(): unknown {
+  // The board's group of each open invoice, so the list can say it too.
+  const groups: Map<string, BoardGroupOf> = boardGroups(engine.ledger);
   return {
     incidents: engine.ledger.obligations().map((obligation: Obligation) => ({
       invoiceId: obligation.invoiceId,
@@ -515,6 +519,7 @@ function listIncidents(): unknown {
       busy: isBusy(obligation.invoiceId),
       watching: isWatching(obligation.invoiceId),
       runId: engine.ledger.runRowOf(obligation.invoiceId)?.runId ?? null,
+      board: groups.get(obligation.invoiceId) ?? null,
     })),
   };
 }

@@ -935,7 +935,7 @@ function createIncidentNode(invoiceId) {
       "span",
       { class: "incident__top" },
       h("span", { class: "incident__id" }),
-      h("span", { class: "badge" }),
+      h("span", { class: "incident__marks" }, h("span", { class: "badge" }), h("span", { class: "tag", hidden: true })),
     ),
     h(
       "span",
@@ -962,6 +962,13 @@ function updateIncidentNode(node, incident) {
   setText(button.querySelector(".incident__id"), incident.invoiceId);
   setClass(badgeNode, badgeClass(stateEntry));
   setText(badgeNode, stateEntry?.label ?? humanize(incident.state));
+  // The board's group too, when it is not the catch-all and the badge does not say it already.
+  const group = incident.board !== null && typeof incident.board === "object" ? incident.board : null;
+  const groupNode = button.querySelector(".tag");
+  const groupText =
+    group !== null && group.group !== "open" && group.label !== (stateEntry?.label ?? null) ? String(group.label) : "";
+  setText(groupNode, groupText);
+  groupNode.hidden = groupText === "";
   setText(
     button.querySelector(".incident__amount"),
     formatMoney(incident.amountMinor, incident.currency),

@@ -393,6 +393,14 @@ input:read-only {
   white-space: nowrap;
 }
 
+.incident__marks {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px 6px;
+}
+
 .incident__meta {
   display: block;
   margin-top: 4px;
