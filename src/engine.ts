@@ -2614,12 +2614,17 @@ export async function resumeIncident(
 // currency's wallet has one last try, which fails it if Airwallex refuses its
 // quote and lists no transfer for it. Null then: nothing was sent, and a person
 // approves it on a new quote.
+//
+// Undefined, with nothing sent, when the ledger shows a payout for the invoice
+// sent outside PayOnce live, or the attempt no longer pending with no transfer,
+// just before the create call. Another process may have tied the payout, or
+// failed or recorded the attempt, while this one waited for the lock.
 async function retry(
   engine: Engine,
   obligation: Obligation,
   attempt: Attempt,
   original: Transfer | null,
-): Promise<Transfer | null> {
+): Promise<Transfer | null | undefined> {
   const approval: Approval | undefined = engine.ledger.approvalOf(attempt);
   const approved: ApprovalTerms | undefined =
     approval?.state === "used" ? (JSON.parse(approval.terms) as ApprovalTerms) : undefined;
@@ -2640,6 +2645,20 @@ async function retry(
     await requireAccount(engine, obligation, row.accountKey, "pay run was approved");
   }
   const lapsed: boolean = quoteLapsed(obligation, attempt);
+  const invoiceId: string = obligation.invoiceId;
+  if (
+    anyLive(engine.ledger.outsidePayouts(invoiceId)) ||
+    !engine.ledger
+      .attempts(invoiceId)
+      .some(
+        (current: Attempt): boolean =>
+          current.requestId === attempt.requestId &&
+          current.state === "pending" &&
+          current.transferId === null,
+      )
+  ) {
+    return undefined;
+  }
   try {
     return await sendAttempt(engine.client, engine.ledger, obligation, attempt, lapsed ? "lapsed" : "retry");
   } catch (error: unknown) {
@@ -2745,11 +2764,15 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
         return Date.now();
       }
       const paying: Obligation = obligation;
-      const sent: Transfer | null = await withCurrencyLock(
+      const sent: Transfer | null | undefined = await withCurrencyLock(
         engine.ledger,
         debitCurrency(paying),
-        (): Promise<Transfer | null> => retry(engine, paying, attempt, original),
+        (): Promise<Transfer | null | undefined> => retry(engine, paying, attempt, original),
       );
+      // The next look, at once, holds or records it as the ledger now stands.
+      if (sent === undefined) {
+        return Date.now();
+      }
       if (sent === null) {
         continue;
       }
