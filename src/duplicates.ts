@@ -10,12 +10,12 @@ const DIGITS: RegExp = /^[0-9]+$/;
 
 // An invoice number with case, spaces, dashes and other marks, and leading zeros
 // taken out. base also drops up to four letters after the last digit.
-interface InvoiceNumber {
+export interface InvoiceNumber {
   full: string;
   base: string;
 }
 
-function numberOf(invoiceNumber: string): InvoiceNumber {
+export function numberOf(invoiceNumber: string): InvoiceNumber {
   const runs: string[] = (invoiceNumber.toUpperCase().match(/[A-Z]+|[0-9]+/g) ?? []).map(
     (run: string): string => (DIGITS.test(run) ? run.replace(/^0+(?=[0-9])/, "") : run),
   );
@@ -49,7 +49,7 @@ export function sameNumberExactly(a: string, b: string): boolean {
 
 // The numbers an invoice is known by: its invoice number and, for a payout found
 // outside PayOnce, the reference it was sent with.
-function numbersOf(obligation: Obligation): string[] {
+export function numbersOf(obligation: Obligation): string[] {
   return [obligation.invoiceId, obligation.payoutReference].filter(
     (reference: string | null): reference is string => reference !== null,
   );
