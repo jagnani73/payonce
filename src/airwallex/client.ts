@@ -5,6 +5,11 @@ const DEFAULT_BASE_URL: string = "https://api.sandbox.airwallex.com";
 // reference and quick starts, and api-demo.airwallex.com, the older name of the
 // same sandbox. This code moves money, so it talks to nothing else.
 export const SANDBOX_HOSTS: readonly string[] = ["api.sandbox.airwallex.com", "api-demo.airwallex.com"];
+// The offline host, for running PayOnce with no Airwallex at all: every call fails
+// as Airwallex being unreachable. .invalid is reserved and never resolves, and no
+// public certificate can exist for it, so the key cannot leave over TLS.
+export const OFFLINE_HOST: string = "sandbox.invalid";
+const ALLOWED_HOSTS: readonly string[] = [...SANDBOX_HOSTS, OFFLINE_HOST];
 const TOKEN_REFRESH_MARGIN_MS: number = 60_000;
 const REQUEST_TIMEOUT_MS: number = 30_000;
 const MAX_ERROR_TEXT: number = 300;
@@ -112,18 +117,19 @@ export class AirwallexClient {
   private tokenExpiresAtMs: number = 0;
 
   constructor(baseUrl: string, clientId: string, apiKey: string) {
-    // This code moves money, so it refuses to talk to anything but the sandbox: https
-    // on the default port, with no user name or password in the address.
+    // This code moves money, so it refuses to talk to anything but the sandbox, or
+    // the offline host: https on the default port, with no user name or password in
+    // the address.
     const url: URL = new URL(baseUrl);
     if (
       url.protocol !== "https:" ||
-      !SANDBOX_HOSTS.includes(url.hostname) ||
+      !ALLOWED_HOSTS.includes(url.hostname) ||
       url.port !== "" ||
       url.username !== "" ||
       url.password !== ""
     ) {
       throw new Error(
-        `Refusing the Airwallex address in AWX_BASE_URL (host ${cleanLine(url.hostname, 100)}). PayOnce talks only to the sandbox: ${SANDBOX_HOSTS.map((host: string): string => `https://${host}`).join(" or ")}`,
+        `Refusing the Airwallex address in AWX_BASE_URL (host ${cleanLine(url.hostname, 100)}). PayOnce talks only to the sandbox: ${SANDBOX_HOSTS.map((host: string): string => `https://${host}`).join(" or ")}, or https://${OFFLINE_HOST} to run with no Airwallex`,
       );
     }
     this.baseUrl = baseUrl.replace(/\/+$/, "");
