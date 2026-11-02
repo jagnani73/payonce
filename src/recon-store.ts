@@ -1068,19 +1068,21 @@ export class ReconStore {
 
   // The newest refund missing break on each of these transfers, in any state,
   // newest first, for the outbox's refund trace. Nothing on a file reconciliation
-  // never opened.
+  // never opened. Looked up by key, refund-missing:<transfer id>, so the read
+  // stays on the key index however many breaks the ledger keeps.
   refundBreaks(transferIds: string[]): RefundBreak[] {
     if (transferIds.length === 0 || !this.hasTables()) {
       return [];
     }
+    const keys: string[] = transferIds.map((transferId: string): string => `refund-missing:${transferId}`);
     const rows: BreakRow[] = this.db
       .prepare(
-        `SELECT * FROM recon_breaks b
-          WHERE b.kind = 'refund-missing' AND b.transfer_id IN (${transferIds.map((): string => "?").join(", ")})
-            AND b.id = (SELECT MAX(id) FROM recon_breaks WHERE kind = 'refund-missing' AND transfer_id = b.transfer_id)
-          ORDER BY b.id DESC`,
+        `SELECT * FROM recon_breaks
+          WHERE id IN (SELECT MAX(id) FROM recon_breaks WHERE key IN (${keys.map((): string => "?").join(", ")}) GROUP BY key)
+            AND kind = 'refund-missing'
+          ORDER BY id DESC`,
       )
-      .all(...transferIds) as unknown as BreakRow[];
+      .all(...keys) as unknown as BreakRow[];
     const transfer: StatementSync = this.db.prepare("SELECT * FROM recon_transfers WHERE transfer_id = ?");
     return rows.map((row: BreakRow): RefundBreak => {
       const read: TransferRow | undefined = transfer.get(row.transfer_id) as unknown as TransferRow | undefined;
