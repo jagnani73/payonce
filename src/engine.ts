@@ -1487,8 +1487,9 @@ function neverSentAt(engine: Engine, obligation: Obligation, attempt: Attempt): 
 }
 
 // What pays an invoice when a pending attempt with no transfer may never have
-// been sent: a payout sent outside PayOnce that has paid it, or a transfer found
-// late that the bank has live. payment says so in PayOnce's words, then says what
+// been sent: a payout sent outside PayOnce that has paid it, a transfer found late
+// that the bank has live, or a paid transfer under another attempt's request id
+// that does not match the invoice. payment says so in PayOnce's words, then says what
 // marking the attempt failed leaves, reason is why the invoice waits for a person
 // meanwhile, hold how it waits, and afterFail what the look does once the attempt
 // is marked failed.
@@ -1521,6 +1522,20 @@ function lateTransferCause(engine: Engine, invoiceId: string, late: Attempt): Ne
     reason: LATE_TRANSFER_REASON,
     hold: (): NextLook => holdPaidTwice(engine, invoiceId, late),
     afterFail: (): NextLook => Date.now(),
+  };
+}
+
+// A paid transfer under the request id of another attempt that does not match the
+// invoice. Once the attempt is marked failed, a person can close the invoice from
+// the close card.
+function mismatchedCause(engine: Engine, invoiceId: string, mismatched: Attempt): NeverSentCause {
+  const reference: string = mismatched.mismatchedReference ?? mismatched.mismatchedTransferId ?? "";
+  return {
+    payment: `transfer ${reference} under the failed ${mismatched.kind}'s request id is paid but does not match this invoice`,
+    then: "a person can close the invoice",
+    reason: MISMATCHED_TRANSFER_REASON,
+    hold: (): NextLook => holdMismatched(engine, invoiceId, mismatched),
+    afterFail: (): NextLook => holdMismatched(engine, invoiceId, mismatched),
   };
 }
 
@@ -3097,7 +3112,12 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
       if (anyLive(outside)) {
         return holdRetryForOutsidePayout(engine, invoiceId, attempt);
       }
+      // A paid one is waited for as a paid payout sent outside PayOnce is, so the
+      // attempt is marked failed if it never became a transfer.
       const mismatched: Attempt | undefined = engine.ledger.attempts(invoiceId).find(mismatchedLive);
+      if (mismatched?.mismatchedStatus === "PAID") {
+        return failNeverSent(engine, obligation, attempt, mismatchedCause(engine, invoiceId, mismatched));
+      }
       if (mismatched !== undefined) {
         return holdMismatched(engine, invoiceId, mismatched);
       }
