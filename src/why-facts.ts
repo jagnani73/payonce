@@ -87,10 +87,13 @@ const UNPASSED_REASON: string = "(a reason PayOnce does not pass on)";
 const UNPASSED_CODE: string = "an error code PayOnce does not pass on";
 const A_PERSON: string = "a person";
 
-// The settings the facts quote, as PayOnce reads them now.
+// The settings the facts quote, as PayOnce reads them now. readers are the names
+// the stored findings may give for whoever read the emails: the models the reader
+// is set up with and the keyword reader (readerNamesFromEnv).
 export interface WhySettings {
   approvals: ApprovalPolicy;
   reserve: ReservePolicy;
+  readers: readonly string[];
 }
 
 export interface LegendEntry {
@@ -264,7 +267,11 @@ const STATUS_PATTERN: RegExp = /^[A-Z_]{1,30}$/;
 const CURRENCY_PATTERN: RegExp = /^[A-Z]{3}$/;
 const DATE_PATTERN: RegExp = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
 const COUNTRY_PATTERN: RegExp = /^[A-Z]{2}$/;
-const READ_BY_PATTERN: RegExp = /^[A-Za-z0-9._:/ -]{1,60}$/;
+const METHOD_PATTERN: RegExp = /^(?:LOCAL|SWIFT)$/;
+// A wallet or transfer method that is not a currency code or a method, as on a
+// payout found in Airwallex.
+const UNPASSED_WALLET: string = "(a wallet PayOnce does not pass on)";
+const UNPASSED_METHOD: string = "(a transfer method PayOnce does not pass on)";
 // What a line may hold once its rule has run. A rule written too loosely fails
 // here and the line becomes a stand-in.
 const SAFE_LINE: RegExp = /^[A-Za-z0-9 .,:;()'%=+\-/[\]"#_]*$/;
@@ -1395,7 +1402,7 @@ interface StoredFindings {
   emailsRead?: number;
 }
 
-function emailFacts(ledger: Ledger, obligation: Obligation, builder: FactsBuilder): EmailFacts {
+function emailFacts(ledger: Ledger, obligation: Obligation, builder: FactsBuilder, readers: readonly string[]): EmailFacts {
   // Only counted and checked: no address, subject or text is read into the facts.
   const emails: SupplierEmail[] = ledger.emails(obligation.invoiceId);
   const stored: string | undefined = ledger.findings(obligation.invoiceId);
@@ -1418,10 +1425,12 @@ function emailFacts(ledger: Ledger, obligation: Obligation, builder: FactsBuilde
     reportsNonReceipt: findings.claimsNonReceipt === true,
     asksForDifferentAccount: findings.asksForNewBankDetails === true,
     asksNotToPay: findings.asksNotToPay === true,
+    // Only a name PayOnce is set up with: the findings are stored JSON, and a model
+    // named in them is otherwise free text.
     readBy:
       stored === undefined
         ? null
-        : findings.readBy !== undefined && READ_BY_PATTERN.test(findings.readBy)
+        : typeof findings.readBy === "string" && readers.includes(findings.readBy)
           ? findings.readBy
           : "the email reader",
   };
@@ -1503,6 +1512,15 @@ function closeFacts(ledger: Ledger, obligation: Obligation, builder: FactsBuilde
 
 function cashFacts(ledger: Ledger, obligation: Obligation, settings: WhySettings): CashFacts {
   const wallet: string = debitCurrency(obligation);
+  if (!CURRENCY_PATTERN.test(wallet)) {
+    return {
+      wallet: UNPASSED_WALLET,
+      reserveFloor: "not passed on",
+      floorFrom: "nothing",
+      committedToOtherPayments: "not passed on",
+      balance: "not read for this explanation",
+    };
+  }
   const floor: number | null = floorFor(settings.reserve, obligation);
   const own: boolean =
     obligation.invoiceFloorMinor > 0 &&
@@ -1625,8 +1643,13 @@ export function whyFacts(
       origin: obligation.origin,
       fromPayRun: row === undefined ? null : { run: row.runId, row: row.line },
       amount: money(obligation.amountMinor, obligation.currency) ?? "",
-      paidFromWallet: crossCurrency(obligation) ? obligation.sourceCurrency : null,
-      transferMethod: obligation.transferMethod,
+      // Both come from Airwallex for a payout found there, so both are checked.
+      paidFromWallet: !crossCurrency(obligation)
+        ? null
+        : CURRENCY_PATTERN.test(obligation.sourceCurrency)
+          ? obligation.sourceCurrency
+          : UNPASSED_WALLET,
+      transferMethod: METHOD_PATTERN.test(obligation.transferMethod) ? obligation.transferMethod : UNPASSED_METHOD,
       dueDate: date(obligation.dueDate),
       startedBy: obligation.startedBy === null ? "not known" : aliases.person(obligation.startedBy),
       supplierDomainOnFile: obligation.supplierDomain !== "",
@@ -1659,7 +1682,7 @@ export function whyFacts(
       invoice,
       payments: ledger.attempts(invoiceId).map((attempt: Attempt): PaymentFacts => paymentFacts(ledger, obligation, attempt, now)),
       outsidePayouts: ledger.outsidePayouts(invoiceId).map(payoutFacts),
-      emails: emailFacts(ledger, obligation, builder),
+      emails: emailFacts(ledger, obligation, builder, settings.readers),
       approval: approvalFacts(ledger, obligation, builder),
       closeReview: closeFacts(ledger, obligation, builder),
       cash: cashFacts(ledger, obligation, settings),

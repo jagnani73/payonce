@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { policyFromEnv } from "./approvers.js";
 import { EXPLAIN_SYSTEM, ExplainError, explainerFromEnv, promptOf, shownAnswer, type Explainer, type ModelAnswer, type ShownAnswer } from "./explainer.js";
 import { Ledger, LEDGER_PATH } from "./ledger.js";
+import { readerNamesFromEnv } from "./reader.js";
 import { reserveFromEnv } from "./reserve.js";
 import { whyFacts, type LegendEntry, type WhyBuild } from "./why-facts.js";
 
@@ -68,6 +69,7 @@ async function main(): Promise<void> {
   const build: WhyBuild | undefined = whyFacts(ledger, invoiceId, {
     approvals: policyFromEnv(),
     reserve: reserveFromEnv(),
+    readers: readerNamesFromEnv(),
   });
   if (build === undefined) {
     fail(`${invoiceId} is not in the ledger`);

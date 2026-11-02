@@ -74,8 +74,11 @@ function readable(email: SupplierEmail): string {
   ].join("\n");
 }
 
+// The name findings carry when this reader read the emails.
+export const KEYWORD_READER_NAME: string = "keyword placeholder";
+
 export class KeywordReader implements EmailReader {
-  readonly name: string = "keyword placeholder";
+  readonly name: string = KEYWORD_READER_NAME;
 
   read(emails: SupplierEmail[]): Promise<EmailFindings> {
     const text: string = keywordText(emails.map(readable).join("\n"));

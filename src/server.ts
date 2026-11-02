@@ -126,7 +126,7 @@ import {
   type EndedOutage,
 } from "./outages.js";
 import { recordMissingFees } from "./payments.js";
-import { readerFromEnv } from "./reader.js";
+import { readerFromEnv, readerNamesFromEnv } from "./reader.js";
 import { describeFloors, reserveFromEnv } from "./reserve.js";
 import {
   DraftOpenError,
@@ -283,6 +283,8 @@ const agent: Dispatcher = new Dispatcher(engine);
 // Explains an incident on the reader's key and models. Null without
 // READER_API_KEY, and then the page's button says the model reader is off.
 const explainer: Explainer | null = explainerFromEnv();
+// The names "Ask why" passes on for whoever read an invoice's emails.
+const READER_NAMES: string[] = readerNamesFromEnv();
 const explainLimiter: ExplainLimiter = new ExplainLimiter();
 
 // Starts releasing an approved run in its turn and does not wait for it, because
@@ -1107,7 +1109,11 @@ async function askWhy(request: IncomingMessage, invoiceId: string): Promise<Show
   requireObligation(invoiceId);
   let build: WhyBuild | undefined;
   try {
-    build = whyFacts(engine.ledger, invoiceId, { approvals: engine.approvals, reserve: engine.reserve });
+    build = whyFacts(engine.ledger, invoiceId, {
+      approvals: engine.approvals,
+      reserve: engine.reserve,
+      readers: READER_NAMES,
+    });
   } catch (error: unknown) {
     throw new HttpError(
       500,
