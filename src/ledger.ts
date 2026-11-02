@@ -19,6 +19,7 @@ import type { ArrivalTerms } from "./arrival.js";
 import { failedStatus, FAILED_STATUS_LIST, type Debit } from "./assess.js";
 import type { EmailAttachment, SupplierEmail } from "./emails.js";
 import { oneLine } from "./printable.js";
+import { ReconStore } from "./recon-store.js";
 
 export const LEDGER_PATH: string = "payonce.db";
 
@@ -1827,6 +1828,7 @@ export class Ledger {
   private readonly hasMeta: boolean;
   // How far runningHashCheck has hashed the ledger's lines, in this process.
   private headProgress: HeadProgress | undefined;
+  private readonly reconStore: ReconStore;
 
   // readOnly opens an existing file as it is, without creating or upgrading it,
   // so a check cannot change what it checks.
@@ -1834,6 +1836,7 @@ export class Ledger {
     // The CLI and the web server can have the file open at once, so a write
     // waits for the other instead of failing on the first lock.
     this.db = new DatabaseSync(path, { timeout: BUSY_TIMEOUT_MS, readOnly });
+    this.reconStore = new ReconStore(this.db);
     if (readOnly) {
       this.hasMeta =
         (this.db.prepare("PRAGMA table_info(meta)").all() as unknown as ColumnRow[]).length > 0;
@@ -1852,6 +1855,7 @@ export class Ledger {
       .run(new Date().toISOString());
     this.startChain();
     this.startRunChain();
+    this.reconStore.ensure();
   }
 
   // Under the write lock, so two processes opening an older file at once do not
@@ -2105,6 +2109,12 @@ export class Ledger {
 
   close(): void {
     this.db.close();
+  }
+
+  // Reconciliation's tables and chain, on this connection. It reads the ledger's
+  // own tables only to match transfers, and writes none of them.
+  recon(): ReconStore {
+    return this.reconStore;
   }
 
   // Starts the chain of pay run timelines the way startChain starts the invoices':

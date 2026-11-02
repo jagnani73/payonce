@@ -159,20 +159,71 @@ export function nextLedgerHead(ledgerHead: string, hash: string): string {
   return sha256(ledgerHead + hash);
 }
 
-interface ChainLine {
+// Reconciliation's record is one chain over every break, with a running hash of
+// its own, so a line removed from its end is caught too.
+export const RECON_HASH_METHOD: string =
+  "SHA-256, in hex, of prevHash followed by the JSON object {at, break_id, kind, message} as UTF-8, with the keys in that order and no spaces. break_id is the break's number, written as a JSON number. Every reconciliation line is one chain in id order, so prevHash is the hash of the line before it, whatever break that line is about. Only quotes, backslashes and control characters are escaped, as JavaScript's JSON.stringify does";
+export const RECON_LEDGER_HEAD_METHOD: string =
+  "SHA-256, in hex, of the running hash followed by a reconciliation line's hash, over every reconciliation line in id order, starting from the genesis. It is kept apart from the running hashes of invoice and pay run lines";
+
+export interface ReconEventFields {
+  breakId: number;
+  at: string;
+  kind: string;
+  message: string;
+}
+
+export interface ChainedReconEvent extends ReconEventFields {
+  id: number;
+  prevHash: string | null;
+  hash: string | null;
+}
+
+export interface ReconAuditSnapshot {
+  events: ChainedReconEvent[];
+  ledgerHead: string | null;
+  chainStartedAt: string | null;
+}
+
+export interface ReconChainReport {
+  lines: number;
+  breaks: ChainBreak[];
+  stored: string | null;
+  computed: string;
+  intact: boolean;
+}
+
+export function canonicalReconEvent(event: ReconEventFields): string {
+  return JSON.stringify({
+    at: event.at,
+    break_id: event.breakId,
+    kind: event.kind,
+    message: event.message,
+  });
+}
+
+export function reconEventHash(prevHash: string, event: ReconEventFields): string {
+  return sha256(prevHash + canonicalReconEvent(event));
+}
+
+// What breaksOf checks on a line of any chain.
+interface HashedLine {
   id: number;
   at: string;
+  prevHash: string | null;
+  hash: string | null;
+}
+
+interface ChainLine extends HashedLine {
   kind: string;
   topic: string | null;
   message: string;
-  prevHash: string | null;
-  hash: string | null;
 }
 
 // Checks each line against the stored hash of the line before it and against its
 // own content, so one changed line shows up once and not on every line after it.
 // A line with no hash is skipped, as the ledger skips it when it adds the next.
-function breaksOf<E extends ChainLine>(
+function breaksOf<E extends HashedLine>(
   events: E[],
   hashOf: (prevHash: string, event: E) => string,
 ): ChainBreak[] {
@@ -292,6 +343,35 @@ export function describeLedger(report: LedgerReport): string {
     return "the running hash is missing from the ledger, so lines removed from it cannot be ruled out";
   }
   return "the running hash does not match the lines, so lines were removed, reordered or rewritten somewhere in the ledger. A timeline with no breaks can still have lost its last lines, and this check cannot say which";
+}
+
+// The chain line by line and the running hash, which catches the last lines
+// removed.
+export function reconChainReport(snapshot: ReconAuditSnapshot): ReconChainReport {
+  const breaks: ChainBreak[] = breaksOf(snapshot.events, reconEventHash);
+  const computed: string = runningHash(snapshot.events.map((event: ChainedReconEvent): string | null => event.hash));
+  return {
+    lines: snapshot.events.length,
+    breaks,
+    stored: snapshot.ledgerHead,
+    computed,
+    intact: breaks.length === 0 && snapshot.ledgerHead === computed,
+  };
+}
+
+// The problem with the chain as one sentence, or null when it verifies.
+export function reconChainProblem(report: ReconChainReport): string | null {
+  const broken: string | null = describeBreaks(report.breaks);
+  if (broken !== null) {
+    return broken;
+  }
+  if (report.stored === null) {
+    return "the running hash of reconciliation lines is missing from the ledger, so lines removed from it cannot be ruled out";
+  }
+  if (report.stored !== report.computed) {
+    return "the running hash of reconciliation lines does not match them, so lines were removed, reordered or rewritten";
+  }
+  return null;
 }
 
 export function describeRunLedger(report: RunLedgerReport): string {
