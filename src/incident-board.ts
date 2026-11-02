@@ -10,6 +10,7 @@ import {
 } from "./cash-position.js";
 import {
   CHANGED_BANK_DETAILS_REASON,
+  LAST_PAID_CHANGED_REASON,
   NEW_BANK_DETAILS_REASON,
   ORIGINAL_DEADLINE_REASON,
   OUTAGE_REASON,
@@ -78,7 +79,11 @@ const RAIL_NAME: RegExp = /^[A-Z]{3} [A-Z_]{1,20}$/;
 const AT_RISK: ReadonlySet<CashKind> = new Set<CashKind>([...FIRM_KINDS, ...WAITING_KINDS, "with-bank", "outside"]);
 const WITH_BANK: ReadonlySet<CashKind> = new Set<CashKind>(["with-bank", "outside"]);
 const DEADLINE_REASONS: readonly string[] = [ORIGINAL_DEADLINE_REASON, REPLACEMENT_DEADLINE_REASON];
-const BANK_DETAILS_REASONS: readonly string[] = [NEW_BANK_DETAILS_REASON, CHANGED_BANK_DETAILS_REASON];
+const BANK_DETAILS_REASONS: readonly string[] = [
+  NEW_BANK_DETAILS_REASON,
+  CHANGED_BANK_DETAILS_REASON,
+  LAST_PAID_CHANGED_REASON,
+];
 const MS_PER_MINUTE: number = 60_000;
 
 export type BoardReason =

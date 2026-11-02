@@ -15,6 +15,10 @@ export const UNREADABLE_CASH_REASON: string = "the cash position could not be re
 export const NEW_BANK_DETAILS_REASON: string = "supplier asked for payment to different bank details";
 export const CHANGED_BANK_DETAILS_REASON: string =
   "the supplier's bank details on file changed after the original payment";
+// Why a first payment is held when the record no longer holds the account
+// PayOnce last paid this supplier and no callback verified the one it holds.
+export const LAST_PAID_CHANGED_REASON: string =
+  "the supplier's bank details on file changed since PayOnce last paid this supplier";
 export const ORIGINAL_DEADLINE_REASON: string =
   "the bank has not paid or failed the original transfer by its deadline";
 // Why the agent sent a replacement it would have sent by itself to a person. It

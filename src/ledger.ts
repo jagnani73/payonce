@@ -494,6 +494,10 @@ export interface Attempt {
   // wallet. Null until it has been read since PayOnce kept them.
   mismatchedAmountMinor: number | null;
   mismatchedCurrency: string | null;
+  // The accountKey of the bank details it was decided or approved for. Its
+  // transfer and every retry are checked against it. Null on a found payout's,
+  // and on one from before it was kept that no approval or pay run row named.
+  accountKey: string | null;
 }
 
 // The quote an attempt is sent with, from the terms of the approval it was opened
@@ -1008,6 +1012,11 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     // debitOf reads it. Null until a read of it since the columns were added.
     mismatched_amount_minor: "INTEGER",
     mismatched_currency: "TEXT",
+    // The accountKey of the bank details the payment was decided or approved for,
+    // which its transfer and every retry are checked against. Null on a found
+    // payout's, and on attempts from before the column that no approval or pay run
+    // row named an account for.
+    account_key: "TEXT",
   },
   rail_failures: {
     // When the transfer failed by Airwallex's updated_at, or when PayOnce first
@@ -1081,6 +1090,7 @@ interface AttemptRow {
   mismatched_cleared_at: string | null;
   mismatched_amount_minor: number | null;
   mismatched_currency: string | null;
+  account_key: string | null;
 }
 
 export class DuplicatePaymentError extends Error {
@@ -1251,6 +1261,7 @@ function toAttempt(row: AttemptRow): Attempt {
     mismatchedClearedAt: row.mismatched_cleared_at ?? null,
     mismatchedAmountMinor: row.mismatched_amount_minor ?? null,
     mismatchedCurrency: row.mismatched_currency ?? null,
+    accountKey: row.account_key ?? null,
   };
 }
 
@@ -1822,6 +1833,25 @@ export class Ledger {
             if (table === "obligations" && name === "invoice_floor_minor") {
               this.db.exec(
                 "UPDATE obligations SET invoice_floor_minor = reserve_floor_minor WHERE reserve_floor_minor <> 0",
+              );
+            }
+            // An attempt from before the column keeps the account it was checked
+            // against when sent: the one its approval named, or a pay run row's.
+            // Any other went out unchecked, so it never counts as the account
+            // PayOnce last paid.
+            if (table === "attempts" && name === "account_key") {
+              this.db.exec(
+                `UPDATE attempts SET account_key =
+                   (SELECT json_extract(approvals.terms, '$.accountKey') FROM approvals
+                     WHERE approvals.id = attempts.approval_id)
+                 WHERE approval_id IS NOT NULL`,
+              );
+              this.db.exec(
+                `UPDATE attempts SET account_key =
+                   (SELECT run_rows.account_key FROM obligations
+                      JOIN run_rows ON run_rows.id = obligations.run_row_id
+                     WHERE obligations.invoice_id = attempts.invoice_id)
+                 WHERE account_key IS NULL AND kind = 'original'`,
               );
             }
             // A pending attempt with no transfer from before tries were kept may
@@ -2614,6 +2644,7 @@ export class Ledger {
     kind: AttemptKind,
     approvalId: number | null,
     quote: AttemptQuote | null,
+    accountKey: string | null,
     openedAt: string = new Date().toISOString(),
   ): void {
     // The unique index refuses a second attempt that is not failed. A transfer the
@@ -2625,8 +2656,8 @@ export class Ledger {
       this.db
         .prepare(
           `INSERT INTO attempts
-             (request_id, invoice_id, kind, state, quote_id, quote_valid_to, approval_id, opened_at)
-           VALUES (?, ?, ?, 'pending', ?, ?, ?, ?)`,
+             (request_id, invoice_id, kind, state, quote_id, quote_valid_to, approval_id, opened_at, account_key)
+           VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
         )
         .run(
           requestId,
@@ -2636,6 +2667,7 @@ export class Ledger {
           quote?.validTo ?? null,
           approvalId,
           openedAt,
+          accountKey,
         );
     } catch (error: unknown) {
       if (isUniqueViolation(error)) {
@@ -2662,21 +2694,26 @@ export class Ledger {
   // Opens a payment's attempt, which counts its money as committed. Only inside a
   // write transaction, and only while lease holds the lock of the wallet the
   // payment leaves, so a holder that lost its lease, or holds another wallet's
-  // lock, opens nothing. approvalId is the approval that released the payment:
+  // lock, opens nothing. released is the approval that released the payment:
   // the attempt keeps it, and a payment from another currency's wallet keeps the
   // quote in its terms, so a retry sends the same one. Such a payment is opened
-  // only on an approval with a quote. No payment is opened on a rail with an
-  // active outage: RailOutageError rolls the caller's transaction back, so an
-  // approval it would have spent stays approved.
+  // only on an approval with a quote. The attempt keeps the account it goes to:
+  // the one the approval's terms name, or else decided, the one the agent
+  // decided on. Every payment the engine opens names one. No payment is opened on
+  // a rail with an active outage: RailOutageError rolls the caller's transaction
+  // back, so an approval it would have spent stays approved.
   openAttempt(
     invoiceId: string,
     kind: AttemptKind,
     lease: Lease,
-    approvalId: number | null = null,
+    released: number | null,
+    decided: string | null,
   ): Attempt {
     if (!this.db.isTransaction) {
       throw new Error("An attempt is opened only inside a ledger transaction");
     }
+    // A caller that leaves either out opens it on no approval, or no account.
+    const approvalId: number | null = released ?? null;
     this.requireLease(lease);
     const obligation: Obligation | undefined = this.obligation(invoiceId);
     if (obligation !== undefined && lease.currency !== obligation.sourceCurrency) {
@@ -2690,6 +2727,7 @@ export class Ledger {
       throw new RailOutageError(outage, approvalId === null ? kind : "approved");
     }
     const quote: AttemptQuote | null = approvalId === null ? null : this.approvedQuote(approvalId);
+    const key: string | null = approvalId === null ? (decided ?? null) : this.approvedAccountKey(approvalId);
     if (obligation !== undefined && crossCurrency(obligation) && quote === null) {
       throw new Error(
         `${invoiceId} is paid from ${obligation.sourceCurrency}, so PayOnce pays it only on an approved exchange rate quote. Nothing was sent`,
@@ -2697,7 +2735,7 @@ export class Ledger {
     }
     const requestId: string = randomUUID();
     const openedAt: string = new Date().toISOString();
-    this.insertAttempt(requestId, invoiceId, kind, approvalId, quote, openedAt);
+    this.insertAttempt(requestId, invoiceId, kind, approvalId, quote, key, openedAt);
     return {
       requestId,
       invoiceId,
@@ -2726,7 +2764,16 @@ export class Ledger {
       mismatchedClearedAt: null,
       mismatchedAmountMinor: null,
       mismatchedCurrency: null,
+      accountKey: key,
     };
+  }
+
+  // The account an approval's terms name.
+  private approvedAccountKey(approvalId: number): string | null {
+    const row: { terms: string } | undefined = this.db
+      .prepare("SELECT terms FROM approvals WHERE id = ?")
+      .get(approvalId) as unknown as { terms: string } | undefined;
+    return row === undefined ? null : (JSON.parse(row.terms) as ApprovalTerms).accountKey;
   }
 
   // The quote in an approval's terms, for a payment from another currency's
@@ -2746,7 +2793,7 @@ export class Ledger {
   tryLock(invoiceId: string): void {
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      this.insertAttempt(randomUUID(), invoiceId, "replacement", null, null);
+      this.insertAttempt(randomUUID(), invoiceId, "replacement", null, null, null);
     } finally {
       this.db.exec("ROLLBACK");
     }
@@ -3212,7 +3259,7 @@ export class Ledger {
         this.db.exec("ROLLBACK");
         return undefined;
       }
-      const attempt: Attempt = this.openAttempt(invoiceId, "original", lease, approvalId);
+      const attempt: Attempt = this.openAttempt(invoiceId, "original", lease, approvalId, null);
       this.db.exec("COMMIT");
       return attempt;
     } catch (error: unknown) {
@@ -3791,7 +3838,7 @@ export class Ledger {
         this.db.exec("ROLLBACK");
         return undefined;
       }
-      const attempt: Attempt = this.openAttempt(invoiceId, "replacement", lease, approvalId);
+      const attempt: Attempt = this.openAttempt(invoiceId, "replacement", lease, approvalId, null);
       this.db.exec("COMMIT");
       return attempt;
     } catch (error: unknown) {
@@ -3997,20 +4044,30 @@ export class Ledger {
   }
 
   // The latest payment PayOnce sent this beneficiary that the bank paid, to the
-  // details it was meant for. Payouts sent outside PayOnce do not count, so a
-  // record changed and paid in the web app does not become the account on file.
-  lastPaidTransfer(beneficiaryId: string): { transferId: string; reference: string | null } | undefined {
-    const row: { transfer_id: string; reference: string | null } | undefined = this.db
+  // details it was decided or approved for, with that account's key. Only a
+  // checked payment counts: one that kept the account it was meant for and did
+  // not go elsewhere (misdirected). Payouts sent outside PayOnce do not count, so
+  // a record changed and paid in the web app does not become the account on
+  // file, and nor does a payment from before the account was kept that nothing
+  // checked.
+  lastPaidTransfer(
+    beneficiaryId: string,
+  ): { transferId: string; reference: string | null; accountKey: string } | undefined {
+    const row: { transfer_id: string; reference: string | null; account_key: string } | undefined = this.db
       .prepare(
-        `SELECT attempts.transfer_id, attempts.reference FROM attempts
+        `SELECT attempts.transfer_id, attempts.reference, attempts.account_key FROM attempts
            JOIN obligations ON obligations.invoice_id = attempts.invoice_id
           WHERE obligations.beneficiary_id = ? AND obligations.origin = 'payonce'
             AND attempts.state = 'paid' AND attempts.transfer_id IS NOT NULL
-            AND attempts.misdirected = 0
+            AND attempts.misdirected = 0 AND attempts.account_key IS NOT NULL
           ORDER BY attempts.rowid DESC LIMIT 1`,
       )
-      .get(beneficiaryId) as unknown as { transfer_id: string; reference: string | null } | undefined;
-    return row === undefined ? undefined : { transferId: row.transfer_id, reference: row.reference };
+      .get(beneficiaryId) as unknown as
+      | { transfer_id: string; reference: string | null; account_key: string }
+      | undefined;
+    return row === undefined
+      ? undefined
+      : { transferId: row.transfer_id, reference: row.reference, accountKey: row.account_key };
   }
 
   bankChange(id: number): BankChange | undefined {

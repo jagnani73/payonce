@@ -4,6 +4,7 @@ import { today, type ArrivalTerms } from "./arrival.js";
 import { deadlineMinutes } from "./deadlines.js";
 import {
   CHANGED_BANK_DETAILS_REASON,
+  LAST_PAID_CHANGED_REASON,
   NEW_BANK_DETAILS_REASON,
   ORIGINAL_DEADLINE_REASON,
 } from "./decide.js";
@@ -145,7 +146,8 @@ function aboutBankDetails(context: Context): boolean {
   return (
     context.findings?.asksForNewBankDetails === true ||
     reason.startsWith(NEW_BANK_DETAILS_REASON) ||
-    reason.startsWith(CHANGED_BANK_DETAILS_REASON)
+    reason.startsWith(CHANGED_BANK_DETAILS_REASON) ||
+    reason.startsWith(LAST_PAID_CHANGED_REASON)
   );
 }
 

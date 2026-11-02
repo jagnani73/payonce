@@ -45,6 +45,10 @@ export interface HeldEvidence {
   // The email evidence, as for a replacement. Only when the invoice has emails,
   // so every held invoice without one keeps its terms and its binding.
   emails?: string;
+  // The callback that verified the bank details on file, when they are not the
+  // ones PayOnce last paid this supplier. Only then, so every other held invoice
+  // keeps its terms and its binding.
+  bankChange?: BankChangeEvidence;
 }
 
 // The locked exchange rate a payment from another currency's wallet is sent
@@ -240,19 +244,20 @@ export function termsFor(
       failureCode: original.failure?.code ?? null,
       emails: emailSummary,
       reason: decision.reason,
-      bankChange:
-        bankChange === null
-          ? null
-          : {
-              id: bankChange.id,
-              invoiceId: bankChange.invoiceId,
-              calledBy: bankChange.calledBy,
-              numberCalled: bankChange.numberCalled,
-              calledAt: bankChange.calledAt,
-              spokeTo: bankChange.spokeTo,
-              confirmed: bankChange.confirmed,
-            },
+      bankChange: bankChange === null ? null : callbackEvidence(bankChange),
     },
+  };
+}
+
+function callbackEvidence(bankChange: BankChange): BankChangeEvidence {
+  return {
+    id: bankChange.id,
+    invoiceId: bankChange.invoiceId,
+    calledBy: bankChange.calledBy,
+    numberCalled: bankChange.numberCalled,
+    calledAt: bankChange.calledAt,
+    spokeTo: bankChange.spokeTo,
+    confirmed: bankChange.confirmed,
   };
 }
 
@@ -260,6 +265,8 @@ export function termsFor(
 // would go. fx is the quote a payment from another currency's wallet is approved
 // at. emails is the email evidence, null when the invoice has no emails. arrival
 // is when the payment usually arrives, given only for an invoice with a due date.
+// bankChange is the callback that verified those details when they are not the
+// ones PayOnce last paid this supplier, and null otherwise.
 export function heldTermsFor(
   obligation: Obligation,
   bankDetails: TransferBankDetails,
@@ -267,6 +274,7 @@ export function heldTermsFor(
   fx: FxTerms | null,
   emails: string | null,
   arrival: ArrivalTerms | null,
+  bankChange: BankChange | null = null,
 ): HeldPaymentTerms {
   return {
     action: "pay",
@@ -282,6 +290,7 @@ export function heldTermsFor(
       reason: obligation.escalationReason,
       duplicates,
       ...(emails === null ? {} : { emails }),
+      ...(bankChange === null ? {} : { bankChange: callbackEvidence(bankChange) }),
     },
   };
 }

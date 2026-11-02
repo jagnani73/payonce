@@ -32,6 +32,7 @@ import type { CashReport, CurrencyCash } from "./cash-position.js";
 import {
   BELOW_FLOOR_REASON,
   CHANGED_BANK_DETAILS_REASON,
+  LAST_PAID_CHANGED_REASON,
   NEW_BANK_DETAILS_REASON,
   NO_FLOOR_CLAUSE,
   NOT_TO_PAY_CLAUSE,
@@ -97,7 +98,11 @@ const SLACK_HOSTS: readonly string[] = ["hooks.slack.com"];
 const DISCORD_HOSTS: readonly string[] = ["discord.com", "discordapp.com"];
 const LOOPBACK_HOSTS: readonly string[] = ["127.0.0.1", "localhost", "[::1]"];
 const DEADLINE_REASONS: readonly string[] = [ORIGINAL_DEADLINE_REASON, REPLACEMENT_DEADLINE_REASON];
-const BANK_DETAILS_REASONS: readonly string[] = [NEW_BANK_DETAILS_REASON, CHANGED_BANK_DETAILS_REASON];
+const BANK_DETAILS_REASONS: readonly string[] = [
+  NEW_BANK_DETAILS_REASON,
+  CHANGED_BANK_DETAILS_REASON,
+  LAST_PAID_CHANGED_REASON,
+];
 const FLOOR_CLAUSES: readonly string[] = [BELOW_FLOOR_REASON, UNREADABLE_CASH_REASON, NO_FLOOR_CLAUSE];
 // Answers that mean the address is wrong or the webhook is gone, so posting again
 // cannot help.

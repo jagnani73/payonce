@@ -1985,12 +1985,13 @@ function buildApproval(invoiceId, approval, outage) {
           h(
             "span",
             { class: "terms__sub terms__sub--caution" },
-            "Not the account the original payment went to",
+            held ? "Not the account PayOnce last paid this supplier" : "Not the account the original payment went to",
           ),
       ),
       arrivalTerm(arrival),
       held
         ? [
+            term("Callback", bankChange === null ? null : callbackText(bankChange)),
             term("Why it was held", sentence(evidence.reason)),
             term(
               "Looks like a second bill for",
@@ -2693,7 +2694,8 @@ function inSentence(label) {
   return String(label).replace(/\b[A-Z][a-z]+\b/g, (word) => word.toLowerCase());
 }
 
-// A person can record a callback only while the invoice waits on them and every payment has failed.
+// A person can record a callback only while the invoice waits on them and every payment, if any, has failed.
+// The form says why when the server refuses one, such as for a supplier PayOnce has never paid.
 function bankChangeShown(detail) {
   const obligation = detail.obligation;
   const attempts = Array.isArray(detail.attempts) ? detail.attempts : [];
@@ -2701,7 +2703,6 @@ function bankChangeShown(detail) {
     obligation.state === "escalated" &&
     typeof obligation.supplierPhone === "string" &&
     obligation.supplierPhone.trim() !== "" &&
-    attempts.length > 0 &&
     attempts.every((attempt) => attempt.state === "failed")
   );
 }

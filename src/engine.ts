@@ -73,6 +73,7 @@ import { deadlineMinutes, deadlineOf, describeDeadline, isOverdue } from "./dead
 import {
   decide,
   floorReason,
+  LAST_PAID_CHANGED_REASON,
   namingNotToPay,
   NO_FLOOR_CLAUSE,
   NO_FLOOR_REASON,
@@ -224,6 +225,7 @@ export type Topic =
   | "approval"
   | "cost"
   | "bank-details"
+  | "last-paid"
   | "floor"
   | "second-bill"
   | "retry";
@@ -1217,12 +1219,28 @@ function checkRate(
   note(engine.ledger, obligation.invoiceId, "warning", capitalise(reason));
 }
 
-// Sends an attempt already written to the ledger.
+// A transfer is paid to the beneficiary record as it is when it is created, which
+// can change between the account check and the create call. One that went to
+// other details than the attempt was decided or approved for is marked
+// misdirected, so it never counts as the account PayOnce last paid this supplier,
+// and goes to a person. Checked wherever an attempt first gains a transfer: when
+// it is sent, when a retry creates it, and when it is found by its request_id.
+function checkAccount(engine: Engine, obligation: Obligation, attempt: Attempt, transfer: Transfer): void {
+  const sentTo: TransferBankDetails | undefined = transfer.beneficiary?.bank_details;
+  if (attempt.accountKey === null || sentTo === undefined || accountKeyOf(sentTo) === attempt.accountKey) {
+    return;
+  }
+  const reason: string = `${attempt.kind} ${transfer.short_reference_id} went to bank details that are not the ones it was decided or approved for`;
+  engine.ledger.markMisdirected(attempt.requestId);
+  engine.ledger.escalate(obligation.invoiceId, reason);
+  note(engine.ledger, obligation.invoiceId, "warning", capitalise(reason));
+}
+
+// Sends an attempt already written to the ledger, to the account it keeps.
 async function send(
   engine: Engine,
   obligation: Obligation,
   attempt: Attempt,
-  accountKey: string | null,
 ): Promise<Transfer> {
   const kind: AttemptKind = attempt.kind;
   let created: Transfer;
@@ -1250,15 +1268,8 @@ async function send(
     `${capitalise(kind)} ${created.short_reference_id} sent: ${money(obligation)} to ${obligation.supplier}${conversionText(created)}${fee}`,
   );
   checkRate(engine, obligation, attempt, created);
-  // The record could still change between the check and the transfer.
+  checkAccount(engine, obligation, attempt, created);
   const sentTo: TransferBankDetails | undefined = created.beneficiary?.bank_details;
-  if (accountKey !== null && sentTo !== undefined && accountKeyOf(sentTo) !== accountKey) {
-    const reason: string = `${kind} ${created.short_reference_id} went to bank details that are not the ones it was approved for`;
-    // So it never counts as the account PayOnce last paid this supplier.
-    engine.ledger.markMisdirected(attempt.requestId);
-    engine.ledger.escalate(obligation.invoiceId, reason);
-    note(engine.ledger, obligation.invoiceId, "warning", capitalise(reason));
-  }
   // When it usually arrives, counted from the day the transfer was created, which
   // is earlier than today for a pending attempt found by its request_id, against
   // the due date. Advice for people: nothing PayOnce decides reads it.
@@ -1546,6 +1557,37 @@ function holdRetryForOutsidePayout(engine: Engine, invoiceId: string, attempt: A
     "retry",
   );
   return holdForOutsidePayout(engine, invoiceId);
+}
+
+// Why a pending payment with no transfer goes to a person when the record no
+// longer holds the account it was decided or approved for. A fixed string, as
+// alerts post it.
+export const ACCOUNT_CHANGED_REASON: string =
+  "the supplier's bank details on file changed after this payment was decided or approved, so PayOnce does not send it again";
+
+// The record no longer holds the account a pending payment was decided or
+// approved for, so it is not sent again. Restoring those details in Airwallex
+// lets the next look send it. Once it is marked failed, the invoice is with a
+// person like any other whose payment failed: held before paying for an original,
+// or the policy's bank-details rule for a replacement.
+function accountChangedCause(engine: Engine, invoiceId: string): NeverSentCause {
+  const hold = (): NextLook => {
+    note(
+      engine.ledger,
+      invoiceId,
+      "approval",
+      "Waiting on a person. The bank details on file are not the ones this payment was decided or approved for, so PayOnce does not send it again. Restore those details in Airwallex and check again to send it",
+      "waiting",
+    );
+    return null;
+  };
+  return {
+    payment: "the bank details on file are not the ones it was decided or approved for",
+    then: "a person decides how to pay the invoice, or closes it without paying",
+    reason: ACCOUNT_CHANGED_REASON,
+    hold,
+    afterFail: (): NextLook => Date.now(),
+  };
 }
 
 // When a pending attempt with no transfer counts as never sent: a bank deadline
@@ -2242,7 +2284,7 @@ async function continueEscalated(
       "approval",
       `Approval by ${approval.approver} matches the current terms`,
     );
-    const replacement: Transfer = await send(engine, obligation, attempt, current.accountKey);
+    const replacement: Transfer = await send(engine, obligation, attempt);
     return waitForBank(engine, obligation.invoiceId, "replacement", replacement);
   });
 }
@@ -2385,6 +2427,18 @@ async function accountProblem(
     : "its bank details changed after the pay run was approved";
 }
 
+// True when PayOnce has paid this supplier before, to an account the record no
+// longer holds, and no callback verified the details on file. Reads only the
+// ledger.
+function newAccountUnverified(ledger: Ledger, obligation: Obligation, record: TransferBankDetails): boolean {
+  const last: { accountKey: string } | undefined = ledger.lastPaidTransfer(obligation.beneficiaryId);
+  return (
+    last !== undefined &&
+    last.accountKey !== accountKeyOf(record) &&
+    ledger.verifiedBankChange(obligation.beneficiaryId, bankDetailsKey(record)) === undefined
+  );
+}
+
 // Why a new invoice is held before paying because of other invoices: it looks
 // like a second bill for one, it has the number of another invoice to the same
 // supplier, for any amount, or a payout for it sent outside PayOnce is live.
@@ -2420,8 +2474,12 @@ function heldForOthers(
 // holds the invoice for a person, sends nothing and returns null. accountKey is
 // the account a pay run approved, and a pay run's row is held too when the
 // record no longer holds it, or when paying it would take cash below the floor.
-// A pay run's row is never paid from another currency's wallet. Call it in the
-// invoice's turn.
+// Any other first payment is decided on the record as it is read here, and is
+// held when PayOnce has paid this supplier before, to another account, and no
+// callback verified the one on file. A supplier PayOnce has never paid is not
+// held for this. The attempt keeps the account either way, so every retry is
+// checked against it. A pay run's row is never paid from another currency's
+// wallet. Call it in the invoice's turn.
 //
 // It holds the currency lock of the wallet the money leaves throughout. The reads
 // from Airwallex come first, with the beneficiary record last, and every check
@@ -2463,8 +2521,17 @@ export async function startPayment(
       await linkUnseenPayouts(engine, invoiceId);
       // Read last, so the record is checked as close to the attempt as a read
       // from Airwallex can be.
+      const record: TransferBankDetails | undefined =
+        accountKey === null
+          ? (await findBeneficiary(engine.client, obligation.beneficiaryId))?.beneficiary?.bank_details
+          : undefined;
       const wrongAccount: string | null =
-        accountKey === null ? null : await accountProblem(engine, obligation, accountKey);
+        accountKey !== null
+          ? await accountProblem(engine, obligation, accountKey)
+          : record === undefined
+            ? "the beneficiary is no longer in Airwallex"
+            : null;
+      const decidedKey: string | null = accountKey ?? (record === undefined ? null : accountKeyOf(record));
 
       const first: FirstPayment = engine.ledger.transaction((): FirstPayment => {
         // Another process may have held or paid it while Airwallex was read.
@@ -2480,6 +2547,12 @@ export async function startPayment(
         if (held !== undefined) {
           engine.ledger.holdBeforePaying(invoiceId, held.duplicateOf, held.reason);
           return held;
+        }
+        // An account PayOnce has not paid this supplier, when it has paid them
+        // another, waits for a callback, as a replacement does.
+        if (record !== undefined && newAccountUnverified(engine.ledger, now, record)) {
+          engine.ledger.holdBeforePaying(invoiceId, [], LAST_PAID_CHANGED_REASON);
+          return { kind: "held", duplicateOf: [], sameNumber: [], reason: LAST_PAID_CHANGED_REASON, detail: null };
         }
         // A supplier who wrote before anything was paid may be asking not to pay
         // it, or to pay elsewhere, so a person reads the email first. That
@@ -2502,14 +2575,18 @@ export async function startPayment(
             return { kind: "held", duplicateOf: [], sameNumber: [], reason: CASH_HOLD_REASON, detail: short };
           }
         }
-        return { kind: "send", obligation: now, attempt: engine.ledger.openAttempt(invoiceId, "original", lease) };
+        return {
+          kind: "send",
+          obligation: now,
+          attempt: engine.ledger.openAttempt(invoiceId, "original", lease, null, decidedKey),
+        };
       });
       if (first.kind === "held") {
         noteHold(engine, invoiceId, first);
         return null;
       }
       try {
-        const original: Transfer = await send(engine, first.obligation, first.attempt, accountKey);
+        const original: Transfer = await send(engine, first.obligation, first.attempt);
         // The look at its deadline is planned as soon as it is with the bank, so it
         // comes even if nothing wakes the invoice before, for example when the
         // sandbox bank's script fails.
@@ -2697,6 +2774,36 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
       "Waiting on a person. The bank details on file are not the ones the pay run approved, so PayOnce does not pay this invoice. Close it without paying, or restore the approved details in Airwallex and check again",
     );
   }
+  // Any other held invoice: an account PayOnce has not paid this supplier, when it
+  // has paid them another, is paid only once a person has called the supplier on
+  // the number on file and the record matches what they confirmed, as for a
+  // replacement. A pay run approved its row's account against the one PayOnce
+  // last paid already.
+  const last: { reference: string | null; transferId: string; accountKey: string } | undefined =
+    row === undefined ? engine.ledger.lastPaidTransfer(obligation.beneficiaryId) : undefined;
+  const bankChange: BankChange | null =
+    last === undefined || last.accountKey === accountKey
+      ? null
+      : (engine.ledger.verifiedBankChange(obligation.beneficiaryId, bankDetailsKey(bankDetails)) ?? null);
+  if (last !== undefined && last.accountKey !== accountKey) {
+    note(
+      engine.ledger,
+      invoiceId,
+      "warning",
+      `The bank details on file are not the ones PayOnce last paid this supplier, with ${last.reference ?? last.transferId}`,
+      "last-paid",
+    );
+    if (bankChange === null) {
+      return waitWithoutPaying(
+        engine,
+        invoiceId,
+        "the bank details on file have not been verified by a callback",
+        obligation.supplierPhone === null
+          ? "Waiting on a person. The bank details on file are not the ones PayOnce last paid this supplier, and no phone number is on file to verify them by calling the supplier back. Close the invoice without paying, or restore the details PayOnce last paid in Airwallex and check again"
+          : `Waiting on a person to call the supplier on ${obligation.supplierPhone}, the number on file, and record the callback. PayOnce pays an account it has not paid this supplier before only after that`,
+      );
+    }
+  }
   const onFile: string = duplicatesOnFile(engine.ledger, held);
   const duplicates: DuplicateEvidence[] = await duplicateEvidence(engine, held, accountKey);
   // Paid from another currency's wallet, it is approved at a quote. Nothing has
@@ -2709,6 +2816,7 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
     rate?.fx ?? null,
     evidence,
     arrivalOf(engine.ledger, obligation, bankDetails),
+    bankChange,
   );
   // A second bill paid to a different account from the first is the pattern of an
   // invoice resent with new bank details, so it needs two approvers.
@@ -2724,9 +2832,9 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
       "bank-details",
     );
   }
-  // A pay run row keeps the run's rules: two approvers for a payee PayOnce has
-  // never paid, and for an account it has not paid this supplier before.
-  const payee: SignoffRule | null = row === undefined ? null : await payeeRule(engine, obligation, accountKey);
+  // Two approvers for a payee PayOnce has never paid, and for an account it has
+  // not paid this supplier before, as for a pay run's row.
+  const payee: SignoffRule | null = payeeRule(engine, obligation, accountKey);
   const rule: SignoffRule =
     elsewhere !== undefined
       ? { needed: 2, why: `it pays a different account from the one ${elsewhere.invoiceId} was sent to` }
@@ -2778,33 +2886,20 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
       "approval",
       `Approval by ${approval.approver} matches the current terms, so PayOnce pays the invoice`,
     );
-    const original: Transfer = await send(
-      engine,
-      { ...held, state: "open" },
-      attempt,
-      terms.accountKey,
-    );
+    const original: Transfer = await send(engine, { ...held, state: "open" }, attempt);
     return waitForBank(engine, invoiceId, "original", original);
   });
 }
 
 // Two approvers for a payment to a beneficiary PayOnce has never paid, or to an
-// account it has not paid this supplier before. Null when PayOnce last paid this
-// very account.
-async function payeeRule(
-  engine: Engine,
-  obligation: Obligation,
-  accountKey: string,
-): Promise<SignoffRule | null> {
-  const last: { transferId: string } | undefined = engine.ledger.lastPaidTransfer(
-    obligation.beneficiaryId,
-  );
+// account it has not paid this supplier before, by the account its last checked
+// payment kept. Null when PayOnce last paid this very account.
+function payeeRule(engine: Engine, obligation: Obligation, accountKey: string): SignoffRule | null {
+  const last: { accountKey: string } | undefined = engine.ledger.lastPaidTransfer(obligation.beneficiaryId);
   if (last === undefined) {
     return { needed: 2, why: "PayOnce has never paid this beneficiary" };
   }
-  const details: TransferBankDetails | undefined = (await getTransfer(engine.client, last.transferId))
-    .beneficiary?.bank_details;
-  return details !== undefined && accountKeyOf(details) === accountKey
+  return last.accountKey === accountKey
     ? null
     : { needed: 2, why: "it pays an account PayOnce has not paid this supplier before" };
 }
@@ -2874,7 +2969,7 @@ async function replaceUnderLock(
     // already has a live payment.
     return (
       engine.ledger.activeOutage(obligation.currency, obligation.transferMethod) ??
-      engine.ledger.openAttempt(invoiceId, "replacement", lease)
+      engine.ledger.openAttempt(invoiceId, "replacement", lease, null, accountKey)
     );
   });
   if (next === null) {
@@ -2892,7 +2987,7 @@ async function replaceUnderLock(
       withFloorReason(engine, obligation, { ...assessment, incident, decision: next, paidDuplicate: paid }),
     );
   }
-  const replacement: Transfer = await send(engine, obligation, next, accountKey);
+  const replacement: Transfer = await send(engine, obligation, next);
   return waitForBank(engine, invoiceId, "replacement", replacement);
 }
 
@@ -3013,12 +3108,13 @@ export async function resumeIncident(
 
 // Sends an attempt still pending with no transfer again, under its request_id,
 // holding the currency lock of the wallet the money leaves. A retry pays the
-// record as it is now, so a replacement, an original paid on an approval after a
-// hold, or a pay run's original goes out only to the account it was approved or
-// decided for. The approval is the one the attempt was opened on, so a request
-// another process opened since does not count. A used approval names the account
-// before the run row does, since a person may have approved another account after
-// the row was held.
+// record as it is now, so every payment goes out only to the account it was
+// decided or approved for, which the attempt keeps. Throws AccountChangedError,
+// sending nothing, when the record no longer holds it. An attempt from before the
+// account was kept is checked as it was then: against the approval it was opened
+// on, so a request another process opened since does not count, then the run
+// row's account, since a person may have approved another account after the row
+// was held.
 //
 // Once its quote has run out a bank deadline ago, a payment from another
 // currency's wallet has one last try, which fails it if Airwallex refuses its
@@ -3042,7 +3138,14 @@ async function retry(
     approval?.state === "used" ? (JSON.parse(approval.terms) as ApprovalTerms) : undefined;
   const row: RunRow | undefined =
     obligation.runRowId === null ? undefined : engine.ledger.runRow(obligation.runRowId);
-  if (attempt.kind === "replacement") {
+  if (attempt.accountKey !== null) {
+    await requireAccount(
+      engine,
+      obligation,
+      attempt.accountKey,
+      attempt.approvalId === null ? "payment was decided" : "payment was approved",
+    );
+  } else if (attempt.kind === "replacement") {
     await requireAccount(
       engine,
       obligation,
@@ -3174,6 +3277,7 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
     if (existing !== undefined) {
       transfer = await syncTransfer(engine.client, engine.ledger, existing.id);
       checkRate(engine, obligation, attempt, transfer);
+      checkAccount(engine, obligation, attempt, transfer);
       engine.bank?.sent(invoiceId, attempt.kind, transfer.id);
     } else if (attempt.transferId === null) {
       // A payout sent outside PayOnce since the attempt was opened, for example in
@@ -3214,11 +3318,19 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
         return Date.now();
       }
       const paying: Obligation = obligation;
-      const sent: Transfer | null | undefined = await withCurrencyLock(
-        engine.ledger,
-        debitCurrency(paying),
-        (): Promise<Transfer | null | undefined> => retry(engine, paying, attempt, original),
-      );
+      let sent: Transfer | null | undefined;
+      try {
+        sent = await withCurrencyLock(
+          engine.ledger,
+          debitCurrency(paying),
+          (): Promise<Transfer | null | undefined> => retry(engine, paying, attempt, original),
+        );
+      } catch (error: unknown) {
+        if (!(error instanceof AccountChangedError)) {
+          throw error;
+        }
+        return failNeverSent(engine, obligation, attempt, accountChangedCause(engine, invoiceId));
+      }
       // The next look, at once, holds or records it as the ledger now stands.
       if (sent === undefined) {
         return Date.now();
@@ -3228,6 +3340,7 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
       }
       transfer = sent;
       checkRate(engine, obligation, attempt, transfer);
+      checkAccount(engine, obligation, attempt, transfer);
       engine.bank?.sent(invoiceId, attempt.kind, transfer.id);
     } else {
       transfer = await syncTransfer(engine.client, engine.ledger, attempt.transferId);

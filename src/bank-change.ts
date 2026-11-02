@@ -99,13 +99,28 @@ function withoutFingerprint(details: TransferBankDetails | undefined): TransferB
   return rest;
 }
 
-function originalOf(engine: Engine, invoiceId: string): Attempt | undefined {
+// The payment new bank details are compared with, and how people read it: the
+// invoice's original, or for an invoice held before paying, the payment PayOnce
+// last made to this supplier that the bank paid. Undefined when there is neither.
+interface ComparedPayment {
+  transferId: string;
+  what: string;
+}
+
+function comparedPayment(engine: Engine, obligation: Obligation): ComparedPayment | undefined {
   // An original Airwallex refused never became a transfer, so the one paid on an
   // approval after it is the one to compare with.
-  return engine.ledger
-    .attempts(invoiceId)
+  const original: Attempt | undefined = engine.ledger
+    .attempts(obligation.invoiceId)
     .filter((attempt: Attempt): boolean => attempt.kind === "original" && attempt.transferId !== null)
     .at(-1);
+  if (original?.transferId !== undefined && original.transferId !== null) {
+    return { transferId: original.transferId, what: "original payment" };
+  }
+  const last: { transferId: string } | undefined = engine.ledger.lastPaidTransfer(obligation.beneficiaryId);
+  return last === undefined
+    ? undefined
+    : { transferId: last.transferId, what: "payment PayOnce last made to this supplier" };
 }
 
 // True when another open invoice paid to the same beneficiary is about to pay it:
@@ -135,8 +150,9 @@ function anotherPaymentStarting(engine: Engine, obligation: Obligation): boolean
 }
 
 // Bank details can change only while the invoice is with a person and nothing
-// is with the bank or paid: every payment PayOnce sent has failed, no payout sent
-// outside PayOnce is live, and no other invoice to the supplier is about to pay.
+// is with the bank or paid: every payment PayOnce sent has failed, or it was held
+// before paying a supplier PayOnce has paid before, no payout sent outside
+// PayOnce is live, and no other invoice to the supplier is about to pay.
 function blockedReason(engine: Engine, obligation: Obligation): string | null {
   if (obligation.supplierPhone === null) {
     return "No phone number is on file for this supplier, so there is no number to call back";
@@ -147,8 +163,11 @@ function blockedReason(engine: Engine, obligation: Obligation): string | null {
       : "The incident is not waiting on a person";
   }
   const attempts: Attempt[] = engine.ledger.attempts(obligation.invoiceId);
-  if (attempts.length === 0 || attempts.some(liveAtBank)) {
+  if (attempts.some(liveAtBank)) {
     return "A payment for this invoice is still with the bank or paid, so its bank details stay as they are";
+  }
+  if (comparedPayment(engine, obligation) === undefined) {
+    return "PayOnce has not paid this supplier before, so there are no bank details to compare new ones with. Approve paying the account on file, or close the invoice without paying";
   }
   if (
     engine.ledger
@@ -195,8 +214,9 @@ function requireText(value: string, what: string, max: number): string {
 // bank details the supplier confirmed on it, then updates the supplier's record
 // in Airwallex. The details come only from the person: never from an email or
 // the reader. The agent then offers a replacement to the new account under new
-// terms, which two approvers must approve, and the person who recorded the
-// callback is not one of them. Call it in the invoice's turn, and have the agent
+// terms, or for an invoice held before paying the first payment to it, which two
+// approvers must approve, and the person who recorded the callback is not one of
+// them. Call it in the invoice's turn, and have the agent
 // look at the invoice afterwards whatever happens.
 export async function recordBankChange(
   engine: Engine,
@@ -220,11 +240,11 @@ export async function recordBankChange(
     );
   }
 
-  const originalAttempt: Attempt | undefined = originalOf(engine, invoiceId);
-  if (originalAttempt === undefined || originalAttempt.transferId === null) {
-    throw new Error("The original payment has no transfer to compare with");
+  const compared: ComparedPayment | undefined = comparedPayment(engine, obligation);
+  if (compared === undefined) {
+    throw new Error("PayOnce has no payment to this supplier to compare new bank details with");
   }
-  const original: Transfer = await getTransfer(engine.client, originalAttempt.transferId);
+  const original: Transfer = await getTransfer(engine.client, compared.transferId);
   const originalDetails: TransferBankDetails = original.beneficiary?.bank_details ?? {};
   const calledAtMs: number = Date.parse(input.calledAt);
   const sentAtMs: number = Date.parse(original.created_at);
@@ -233,7 +253,7 @@ export async function recordBankChange(
     calledAtMs > Date.now() + CLOCK_SKEW_MS ||
     (Number.isFinite(sentAtMs) && calledAtMs < sentAtMs)
   ) {
-    throw new Error("Enter when you called, after the original payment was sent");
+    throw new Error(`Enter when you called, after the ${compared.what} was sent`);
   }
 
   const record: BeneficiaryRecord = await getBeneficiary(engine.client, obligation.beneficiaryId);
@@ -244,14 +264,14 @@ export async function recordBankChange(
     }
   }
   // A person confirms only the fields on the form, so every other detail must be
-  // the one the original went to, or it would pass as verified unseen.
+  // the one the compared payment went to, or it would pass as verified unseen.
   const unconfirmed: string[] = Object.keys(withoutFingerprint(current)).filter(
     (name: string): boolean =>
       !(name in EDITABLE_FIELDS) && JSON.stringify(current[name]) !== JSON.stringify(originalDetails[name]),
   );
   if (unconfirmed.length > 0) {
     throw new Error(
-      `The supplier's record has other details that differ from the original payment (${unconfirmed.join(", ")}). Correct the record in Airwallex first`,
+      `The supplier's record has other details that differ from the ${compared.what} (${unconfirmed.join(", ")}). Correct the record in Airwallex first`,
     );
   }
   const entered: Record<string, string> = {};
@@ -268,7 +288,9 @@ export async function recordBankChange(
   const wanted: TransferBankDetails = { ...withoutFingerprint(current), ...entered };
   if (holdsAccount(originalDetails, entered)) {
     throw new Error(
-      "These are the details the original payment went to, so there is nothing to verify. Approve the replacement to the account on file instead",
+      compared.what === "original payment"
+        ? "These are the details the original payment went to, so there is nothing to verify. Approve the replacement to the account on file instead"
+        : `These are the details of the ${compared.what}, so there is nothing to verify. Approve paying the account on file instead`,
     );
   }
   const alreadyOnRecord: boolean = holdsAccount(current, entered);
