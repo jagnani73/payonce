@@ -48,7 +48,7 @@ const UNSAFE_CELL: RegExp =
 // cell, and every other format or default-ignorable character, bidi controls
 // included, is refused as before. The name is shown as any other is: printable
 // drops the two joiners, as it drops every format character.
-const NAME_JOINERS: RegExp = /[‌‍︀-️]/gu;
+const NAME_JOINERS: RegExp = /[\u{200c}\u{200d}\u{fe00}-\u{fe0f}]/gu;
 const UNSAFE_NAME: RegExp =
   /[\u0000-\u001f\u007f-\u009f\u2028\u2029\p{Cf}\p{Default_Ignorable_Code_Point}\u{e0000}-\u{e007f}]/gu;
 
