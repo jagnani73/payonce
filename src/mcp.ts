@@ -22,6 +22,7 @@ import {
   ToolRefusal,
   type CachedBalances,
 } from "./mcp-views.js";
+import { printableError, sayError } from "./printable.js";
 
 // A read-only Model Context Protocol server over stdio, so an agent such as
 // Claude can read PayOnce's ledger. It opens the ledger read-only for each call,
@@ -75,7 +76,7 @@ function loadAllowedEnv(): void {
       }
     }
   } catch {
-    console.error("PayOnce MCP: .env could not be read, so the default settings apply");
+    sayError("PayOnce MCP: .env could not be read, so the default settings apply");
   }
 }
 
@@ -116,7 +117,7 @@ function refused(error: unknown): CallToolResult {
   if (error instanceof ToolRefusal) {
     return toolError(error.message);
   }
-  console.error(error);
+  sayError(error);
   const sqlite: { code?: unknown; errcode?: unknown } =
     typeof error === "object" && error !== null ? (error as { code?: unknown; errcode?: unknown }) : {};
   if (sqlite.code === "ERR_SQLITE_ERROR") {
@@ -389,11 +390,11 @@ function createServer(): McpServer {
 }
 
 process.on("unhandledRejection", (reason: unknown): void => {
-  console.error("PayOnce MCP: unhandled rejection:", reason);
+  sayError(`PayOnce MCP: unhandled rejection: ${printableError(reason)}`);
 });
 
 serveStdio(createServer, {
   onerror: (error: Error): void => {
-    console.error("PayOnce MCP:", error.message);
+    sayError(`PayOnce MCP: ${error.message}`);
   },
 });
