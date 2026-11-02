@@ -40,6 +40,7 @@ import {
   UNREADABLE_CASH_REASON,
 } from "./decide.js";
 import {
+  LATE_TRANSFER_REASON,
   pendingApproval,
   pendingClose,
   REPLACEMENT_DEADLINE_REASON,
@@ -221,6 +222,9 @@ function needOf(
   if (pending !== undefined) {
     return pending.terms.action === "pay" ? "approve-held" : "approve";
   }
+  if (base.startsWith(LATE_TRANSFER_REASON)) {
+    return "twice";
+  }
   if (review !== undefined) {
     return review.kind === "duplicate" || review.kind === "unpaid" ? "held" : "close";
   }
@@ -263,7 +267,8 @@ function invoiceCondition(ledger: Ledger, obligation: Obligation): FoundConditio
   const review: CloseReview | undefined = pending === undefined ? pendingClose(ledger, invoiceId) : undefined;
   const base: string = baseReason(obligation.escalationReason);
   const need: InvoiceNeed = needOf(obligation, base, pending, review);
-  if (need !== "bank" && pending === undefined && approvedAndUnderway(ledger, invoiceId)) {
+  // A payment found late is news even while an approved one is with the bank.
+  if (need !== "bank" && need !== "twice" && pending === undefined && approvedAndUnderway(ledger, invoiceId)) {
     return null;
   }
   const terms: ApprovalTerms | undefined = pending?.terms;

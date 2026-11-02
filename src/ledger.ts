@@ -445,6 +445,9 @@ export interface Attempt {
   // When PayOnce last asked Airwallex to create its transfer. Null until the first
   // try, and on a found payout's.
   triedAt: string | null;
+  // When Airwallex listed a transfer under its request id after PayOnce had
+  // marked it failed with none. Null on every other attempt.
+  foundLateAt: string | null;
 }
 
 // The quote an attempt is sent with, from the terms of the approval it was opened
@@ -928,6 +931,9 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     opened_at: "TEXT",
     // When PayOnce last called Airwallex to create the transfer, as an ISO time.
     tried_at: "TEXT",
+    // When a transfer was found under its request id after PayOnce had marked it
+    // failed with none, as an ISO time.
+    found_late_at: "TEXT",
   },
   rail_failures: {
     // When the transfer failed by Airwallex's updated_at, or when PayOnce first
@@ -994,6 +1000,7 @@ interface AttemptRow {
   arrival: string | null;
   opened_at: string | null;
   tried_at: string | null;
+  found_late_at: string | null;
 }
 
 export class DuplicatePaymentError extends Error {
@@ -1085,6 +1092,7 @@ function toAttempt(row: AttemptRow): Attempt {
     arrival: row.arrival === null || row.arrival === undefined ? null : (JSON.parse(row.arrival) as ArrivalTerms),
     openedAt: row.opened_at ?? null,
     triedAt: row.tried_at ?? null,
+    foundLateAt: row.found_late_at ?? null,
   };
 }
 
@@ -2355,6 +2363,7 @@ export class Ledger {
       arrival: null,
       openedAt,
       triedAt: null,
+      foundLateAt: null,
     };
   }
 
@@ -2603,7 +2612,11 @@ export class Ledger {
   }
 
   // A null state leaves the stored state as it is, and a null fee, amount,
-  // creation time or bank status the stored one.
+  // creation time or bank status the stored one. An attempt the ledger has as
+  // failed whose transfer the bank shows live while another payment for the
+  // invoice holds the duplicate lock keeps its failed state, so the lock still
+  // holds one live payment, and the rest is recorded: bank_status says what the
+  // bank shows.
   record(
     requestId: string,
     transferId: string,
@@ -2617,33 +2630,56 @@ export class Ledger {
     bankCreatedAt: string | null = null,
     bankStatus: string | null = null,
   ): void {
-    const result: { changes: number | bigint } = this.db
-      .prepare(
-        `UPDATE attempts
-            SET transfer_id = ?, reference = ?, state = COALESCE(?, state),
-                failure_code = ?, fee_minor = COALESCE(?, fee_minor),
-                fee_currency = COALESCE(?, fee_currency),
-                amount_minor = COALESCE(?, amount_minor), currency = COALESCE(?, currency),
-                bank_created_at = COALESCE(?, bank_created_at),
-                bank_status = COALESCE(?, bank_status)
-          WHERE request_id = ?`,
-      )
-      .run(
-        transferId,
-        reference,
-        state,
-        failureCode,
-        feeMinor,
-        feeCurrency,
-        amountMinor,
-        currency,
-        bankCreatedAt,
-        bankStatus,
-        requestId,
-      );
+    const update = (written: AttemptState | null): { changes: number | bigint } =>
+      this.db
+        .prepare(
+          `UPDATE attempts
+              SET transfer_id = ?, reference = ?, state = COALESCE(?, state),
+                  failure_code = ?, fee_minor = COALESCE(?, fee_minor),
+                  fee_currency = COALESCE(?, fee_currency),
+                  amount_minor = COALESCE(?, amount_minor), currency = COALESCE(?, currency),
+                  bank_created_at = COALESCE(?, bank_created_at),
+                  bank_status = COALESCE(?, bank_status)
+            WHERE request_id = ?`,
+        )
+        .run(
+          transferId,
+          reference,
+          written,
+          failureCode,
+          feeMinor,
+          feeCurrency,
+          amountMinor,
+          currency,
+          bankCreatedAt,
+          bankStatus,
+          requestId,
+        );
+    let result: { changes: number | bigint };
+    try {
+      result = update(state);
+    } catch (error: unknown) {
+      if (!isUniqueViolation(error)) {
+        throw error;
+      }
+      result = update(null);
+    }
     if (Number(result.changes) !== 1) {
       throw new Error(`No payment attempt has request_id ${requestId}`);
     }
+  }
+
+  // Marks an attempt PayOnce had failed with no transfer as one Airwallex now
+  // lists a transfer for, before that transfer is recorded on it. False when the
+  // attempt has a transfer or is not failed, as when another step recorded it.
+  foundLate(requestId: string, at: number): boolean {
+    const result: { changes: number | bigint } = this.db
+      .prepare(
+        `UPDATE attempts SET found_late_at = ?
+          WHERE request_id = ? AND state = 'failed' AND transfer_id IS NULL`,
+      )
+      .run(new Date(at).toISOString(), requestId);
+    return Number(result.changes) === 1;
   }
 
   // Failed transfers, PayOnce's and payouts sent outside it, whose fee has not

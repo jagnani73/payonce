@@ -60,6 +60,7 @@ import {
   attemptStateOf,
   bankDetailsKey,
   debitOf,
+  failedStatus,
   feeOf,
   originalStateOf,
   resendCanFix,
@@ -407,6 +408,12 @@ export function linkOutsidePayout(
   return true;
 }
 
+// Why an invoice waits for a person when a transfer Airwallex listed late under
+// the request id of a payment PayOnce had marked failed may pay it a second time.
+// A fixed string, because alerts post escalation reasons.
+export const LATE_TRANSFER_REASON: string =
+  "a payment PayOnce marked as never sent reached the bank, so the supplier may have been paid twice";
+
 // The attempt a transfer Airwallex lists belongs to, when the ledger has no
 // transfer on it: one still pending whose create went unanswered, or one marked
 // failed because Airwallex listed nothing under its request id at the time.
@@ -417,29 +424,88 @@ export function unrecordedAttemptOf(ledger: Ledger, transfer: Transfer): Attempt
   return attempt?.requestId === requestId && attempt.transferId === null ? attempt : undefined;
 }
 
+// A payment the bank has not failed that PayOnce found late, while another payment
+// for the invoice, PayOnce's or one sent outside it, has not failed either: the
+// supplier may have been paid twice. Late is a transfer recorded on an attempt
+// PayOnce had marked failed with none, or one the ledger keeps failed while the
+// bank shows it live, because another payment holds the duplicate lock.
+export function paidTwice(ledger: Ledger, invoiceId: string): Attempt | undefined {
+  const attempts: Attempt[] = ledger.attempts(invoiceId);
+  const late: Attempt | undefined = attempts.find(
+    (attempt: Attempt): boolean =>
+      attempt.transferId !== null &&
+      (attempt.state === "failed"
+        ? attempt.bankStatus !== null && !failedStatus(attempt.bankStatus)
+        : attempt.foundLateAt !== null),
+  );
+  if (late === undefined) {
+    return undefined;
+  }
+  const other: boolean =
+    attempts.some(
+      (attempt: Attempt): boolean => attempt.requestId !== late.requestId && attempt.state !== "failed",
+    ) || anyLive(ledger.outsidePayouts(invoiceId));
+  return other ? late : undefined;
+}
+
+// Nothing more is sent while two payments may both pay the invoice, and any open
+// request is withdrawn. The invoice waits for a person with a reason the policy
+// never replaces, because the look holds it here before the policy runs, so the
+// alert and the close card name it.
+function holdPaidTwice(engine: Engine, invoiceId: string, late: Attempt): NextLook {
+  engine.ledger.escalate(invoiceId, LATE_TRANSFER_REASON);
+  if (engine.ledger.voidOpenApprovals(invoiceId)) {
+    note(
+      engine.ledger,
+      invoiceId,
+      "approval",
+      "Approval request withdrawn: the supplier may have been paid twice",
+    );
+  }
+  note(
+    engine.ledger,
+    invoiceId,
+    "approval",
+    `Waiting on a person. ${capitalise(late.kind)} ${late.reference ?? late.transferId ?? ""} and another payment for this invoice may both pay the supplier, so PayOnce sends nothing`,
+    "waiting",
+  );
+  return null;
+}
+
 // Records a transfer Airwallex lists only now under the request id of an attempt
 // PayOnce had marked failed with none on it, in the state the bank gives it, and
 // says so on the timeline. A pending attempt is left to its look, which lists it
-// by request id and checks its transfer as it does any payment it sends. A closed
-// invoice the transfer may still pay is reopened for a person. True when it
-// recorded one, and the caller then looks at the invoice again.
+// by request id and checks its transfer as it does any payment it sends. When
+// another payment for the invoice has not failed either, the line is a warning
+// and the invoice waits for a person with LATE_TRANSFER_REASON, reopened if it
+// was closed. Any other closed invoice the transfer may still pay is reopened
+// too. True when it recorded one, and the caller then looks at the invoice
+// again.
 export async function recordLateTransfer(engine: Engine, transfer: Transfer): Promise<boolean> {
   const attempt: Attempt | undefined = unrecordedAttemptOf(engine.ledger, transfer);
-  if (attempt?.state !== "failed") {
+  if (attempt?.state !== "failed" || !engine.ledger.foundLate(attempt.requestId, Date.now())) {
     return false;
   }
   const invoiceId: string = attempt.invoiceId;
   const recorded: Transfer = await syncTransfer(engine.client, engine.ledger, transfer.id);
   const live: boolean = attemptStateOf(recorded) !== "failed";
-  const twice: boolean = live && anyLive(engine.ledger.outsidePayouts(invoiceId));
+  const twice: boolean = paidTwice(engine.ledger, invoiceId) !== undefined;
+  // Live at the bank, but the ledger keeps it failed: another payment holds the lock.
+  const kept: boolean =
+    live && engine.ledger.attemptOf(attempt.requestId, recorded.id)?.state === "failed";
+  const other: string = anyLive(engine.ledger.outsidePayouts(invoiceId))
+    ? "A payout sent outside PayOnce for this invoice"
+    : "Another payment PayOnce sent for this invoice";
   note(
     engine.ledger,
     invoiceId,
     twice ? "warning" : "bank",
-    `${capitalise(attempt.kind)} payment PayOnce had marked failed is a transfer after all: Airwallex now lists ${describe(recorded)} under its request id${twice ? ". A payout sent outside PayOnce for this invoice is on file too, so the supplier may be paid twice" : ""}`,
+    `${capitalise(attempt.kind)} payment PayOnce had marked failed is a transfer after all: Airwallex now lists ${describe(recorded)} under its request id${twice ? `. ${other} has not failed either, so the supplier may have been paid twice` : ""}${kept ? `. PayOnce still lists the ${attempt.kind} as failed, because it keeps one live payment per invoice` : ""}`,
   );
   const state: ObligationState | undefined = engine.ledger.obligation(invoiceId)?.state;
-  if (live && (state === "settled" || state === "rejected")) {
+  if (twice) {
+    engine.ledger.escalate(invoiceId, LATE_TRANSFER_REASON);
+  } else if (live && (state === "settled" || state === "rejected")) {
     engine.ledger.escalate(
       invoiceId,
       `${attempt.kind} ${recorded.short_reference_id} was found in Airwallex after the invoice was closed`,
@@ -2664,9 +2730,10 @@ export async function resumeIncident(
 // approves it on a new quote.
 //
 // Undefined, with nothing sent, when the ledger shows a payout for the invoice
-// sent outside PayOnce live, the invoice closed, or the attempt no longer pending
-// with no transfer, just before the create call. Another process may have tied
-// the payout, closed the invoice, or failed or recorded the attempt, while this
+// sent outside PayOnce live, a payment found late that may pay it (paidTwice),
+// the invoice closed, or the attempt no longer pending with no transfer, just
+// before the create call. Another process may have tied the payout, recorded the
+// late transfer, closed the invoice, or failed or recorded the attempt, while this
 // one waited for the lock.
 async function retry(
   engine: Engine,
@@ -2699,6 +2766,7 @@ async function retry(
   if (
     (state !== "open" && state !== "escalated") ||
     anyLive(engine.ledger.outsidePayouts(invoiceId)) ||
+    paidTwice(engine.ledger, invoiceId) !== undefined ||
     !engine.ledger
       .attempts(invoiceId)
       .some(
@@ -2799,9 +2867,14 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
       // the Airwallex web app while its create call went unanswered, may already
       // pay the invoice, so the attempt is not sent again while one is live. One
       // tied just now that has already failed holds nothing: the next look, at
-      // once, sends the attempt, as before any other payment.
+      // once, sends the attempt, as before any other payment. Nor is it sent
+      // while a payment found late may pay the invoice.
       const linked: boolean = await linkUnseenPayouts(engine, invoiceId);
       const outside: OutsidePayout[] = await syncOutsidePayouts(engine, invoiceId);
+      const twice: Attempt | undefined = paidTwice(engine.ledger, invoiceId);
+      if (twice !== undefined) {
+        return holdPaidTwice(engine, invoiceId, twice);
+      }
       const paidBy: OutsidePayout | undefined = outside.find(
         (payout: OutsidePayout): boolean => payout.state === "paid",
       );
@@ -2834,7 +2907,13 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
       transfer = await syncTransfer(engine.client, engine.ledger, attempt.transferId);
     }
     const state: AttemptState | null = attemptStateOf(transfer);
-    if (state !== attempt.state && (state === "paid" || state === "failed")) {
+    // Not for a transfer the ledger keeps failed while another payment holds the
+    // duplicate lock: paidTwice holds the invoice for a person below.
+    if (
+      state !== attempt.state &&
+      (state === "paid" || state === "failed") &&
+      engine.ledger.attemptOf(attempt.requestId, transfer.id)?.state === state
+    ) {
       note(engine.ledger, invoiceId, "bank", `${capitalise(attempt.kind)} ${describe(transfer)}`);
     }
     // After the bank line, so an outage this failure declares reads after it.
@@ -2869,6 +2948,12 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
   // reopened it when it was recorded.
   if (obligation.state === "settled" || obligation.state === "rejected") {
     return null;
+  }
+  // Before the policy, so its reason is not replaced, and before a paid payment
+  // could close the incident.
+  const twice: Attempt | undefined = paidTwice(engine.ledger, invoiceId);
+  if (twice !== undefined) {
+    return holdPaidTwice(engine, invoiceId, twice);
   }
   if (engine.ledger.paidOnce(invoiceId)) {
     // A paid replacement was sent on a decision already made, so it closes the

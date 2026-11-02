@@ -46,6 +46,11 @@ export function originalStateOf(transfer: Transfer): OriginalTransferState {
   return "unknown";
 }
 
+// True for a status in which the bank has failed the transfer.
+export function failedStatus(status: string): boolean {
+  return FAILED_STATUSES.has(status);
+}
+
 // Null means the status is not recognised, so the ledger keeps what it had.
 export function attemptStateOf(transfer: Transfer): AttemptState | null {
   const state: OriginalTransferState = originalStateOf(transfer);

@@ -9,12 +9,14 @@ import { RAIL_FAILURE_CODES } from "./outages.js";
 export type AlertFormat = "slack" | "discord";
 
 // What an invoice waits on, first match wins: an approval of paying a held
-// invoice, an approval of a replacement, a person closing a paid one, a person
-// deciding on a held one nobody can approve yet, the bank's deadline, a payout
-// sent outside PayOnce, a call to the supplier, or anything else.
+// invoice, an approval of a replacement, a person checking a payment found late
+// that may pay it a second time, a person closing a paid one, a person deciding
+// on a held one nobody can approve yet, the bank's deadline, a payout sent
+// outside PayOnce, a call to the supplier, or anything else.
 export type InvoiceNeed =
   | "approve-held"
   | "approve"
+  | "twice"
   | "close"
   | "held"
   | "bank"
@@ -179,6 +181,7 @@ const IDENTIFIER: RegExp = /^[A-Za-z0-9-]{1,40}$/;
 const NEED_TITLES: Record<InvoiceNeed, string> = {
   "approve-held": "is held: approve paying it or close it",
   approve: "needs an approval",
+  twice: "may have been paid twice",
   close: "is paid and needs a person to close it",
   held: "is held before paying and needs a person",
   bank: "",
@@ -328,7 +331,7 @@ function invoiceMessage(facts: InvoiceAlertFacts, base: string): AlertMessage {
         : []),
     ],
     ...invoiceLink(invoice, known, base),
-    urgent: facts.need === "bank",
+    urgent: facts.need === "bank" || facts.need === "twice",
   };
 }
 
