@@ -1895,6 +1895,39 @@ export class Ledger {
     return table && this.db.prepare("SELECT 1 FROM run_events LIMIT 1").get() !== undefined;
   }
 
+  // The tables in SCHEMA and the columns in ADDED_COLUMNS this file lacks, as
+  // "table" or "table.column". It only reads, so a read-only open can tell a
+  // ledger an older PayOnce wrote, which a reader must not upgrade.
+  schemaGaps(): string[] {
+    const columnsOf = (table: string): string[] =>
+      (this.db.prepare(`PRAGMA table_info(${table})`).all() as unknown as ColumnRow[]).map(
+        (column: ColumnRow): string => column.name,
+      );
+    const gaps: string[] = [];
+    for (const match of SCHEMA.matchAll(/CREATE TABLE IF NOT EXISTS (\w+)/g)) {
+      const table: string = match[1] ?? "";
+      if (columnsOf(table).length === 0) {
+        gaps.push(table);
+      }
+    }
+    for (const [table, columns] of Object.entries(ADDED_COLUMNS)) {
+      const existing: string[] = columnsOf(table);
+      if (existing.length === 0) {
+        continue;
+      }
+      for (const name of Object.keys(columns)) {
+        if (!existing.includes(name)) {
+          gaps.push(`${table}.${name}`);
+        }
+      }
+    }
+    return gaps;
+  }
+
+  close(): void {
+    this.db.close();
+  }
+
   // Starts the chain of pay run timelines the way startChain starts the invoices':
   // the lines already there are hashed once, in id order, and never again.
   private startRunChain(): void {
