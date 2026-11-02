@@ -92,6 +92,13 @@ const PLAIN: RegExp[] = [
   /^cautions\[\]\.text$/,
   /^invoices\[\]\.board\.(label|why|also\[\])$/,
   /^invoices\[\]\.emails\.findings\.summary$/,
+  // metrics: FAILURE_WORDS and metrics.ts's fixed labels by failure code,
+  // RAIL_FAILURE_CODES' labels, REASON_LABELS by reason code and KIND_LABELS by
+  // break kind. Every other string in its answer is a code, currency or time.
+  /^failures\.rows\[\]\.label$/,
+  /^outages\.rows\[\]\.codes\[\]\.label$/,
+  /^incidents\.reasons\[\]\.label$/,
+  /^recon\.rows\[\]\.label$/,
 ];
 
 // PayOnce's words for a server whose floors are unreadable, in place of the
