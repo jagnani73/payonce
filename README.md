@@ -331,9 +331,37 @@ A status check runs every 15 seconds in case an event is late or lost, and every
 
 Install cloudflared with `winget install --id Cloudflare.cloudflared`, or set `CLOUDFLARED` to the path of `cloudflared.exe`. Set `WEBHOOK_URL` to use a public address you already have, or `WEBHOOKS=off` to skip webhooks. Anyone who learns the tunnel's address can send it requests, so the receiver prints the requests it refuses at most once a minute, with a count, so they cannot scroll the timeline off the terminal.
 
+## Reconciliation
+
+PayOnce follows the status of each transfer it knows about. Reconciliation reads the wallets themselves, so it can see a refund that never came, a debit with no transfer behind it, or a balance that does not add up. It reads Airwallex's own record of each wallet with GETs, matches it with the transfers and with PayOnce's ledger, and lists what it cannot explain as a break for a person. It never moves money and never changes an invoice, an approval, a binding, the cash panel or the board.
+
+A check reads, in this order: the balances, every movement in the cash account in windows of at most seven days (Airwallex refuses a longer range), the balances again, the transfers created since the ledger started, and by id up to five transfers that movements name and the listing did not have. The first check, and one a day after that, reads every window since the ledger started. The others read the last seven days, which also picks up a movement posted late. Airwallex dates movements at +0800 in the sandbox, and PayOnce keeps each time as UTC.
+
+Each wallet has to add up. Every movement's balance must follow from the one before it, and the last one must equal Airwallex's available balance. When the balance moved between the two balance reads, the closing check waits for the next check. A movement is matched to its transfer by the transfer's id, and the transfer to the ledger by id only: an attempt's own transfer, a transfer kept beside an attempt, or a payout sent outside PayOnce that is tied to an invoice. Holds are left out, as Airwallex's bank feed guide says.
+
+| Break | What it means | How it ends |
+| --- | --- | --- |
+| Refund missing | A failed transfer's money has not come back a bank deadline after it failed | By itself when the refund lands |
+| Debit missing | A transfer Airwallex lists has not taken money a bank deadline after it was created | By itself when the debit posts |
+| Paid, then returned | PayOnce recorded the payment as paid, and Airwallex now shows it failed or gave the money back. The invoice is not reopened | A person |
+| Payout tied to no invoice | A payout sent outside PayOnce took money and no invoice explains it | By itself when the sweep ties it to an invoice, otherwise a person |
+| Debited more than once, debit differs, fee differs, refund differs | The wallet does not show what the transfer says | A person |
+| Money came back unexpectedly | A refund for a transfer Airwallex does not show as failed | A person |
+| Money in or out that no transfer explains | A deposit, an adjustment or anything else with no transfer behind it | A person |
+| Movements do not add up, balance differs | The running balance breaks, or ends away from the available balance | By itself |
+| Movement PayOnce cannot read | An amount, balance, time or currency PayOnce cannot read | By itself |
+
+A movement whose transfer is still inside its window, or has not been read yet, is listed as waiting and is not a break. A break that waits for a person opens only when two checks in a row find the same facts, so a transfer that fails between two reads does not open one by mistake.
+
+To explain breaks, open Reconciliation in the top bar, tick breaks of one kind, give your name and a note, and press Explain. The explanation covers those breaks with the facts the page showed. If a break's facts change later, such as a refund landing on a payout you explained, it opens again. `pnpm reconcile explain` does the same in the terminal, with the short fingerprints it printed. Anyone with a name may explain a break, as anyone may close an incident, because explaining moves no money.
+
+Every break found, changed, cleared or explained goes on a hash chain of its own, with its own running hash, and `pnpm run audit` checks it after the invoice and pay run chains.
+
+`pnpm ui` runs a check a minute after it starts and then every `RECON_EVERY_MINUTES` (10 by default, 0 for never). Check now on the page starts one, at most once a minute. A check that fails a read records the error and changes no break. With alerts on, the open breaks share one alert, which posts again only when a break opens or its facts change.
+
 ## Alerts
 
-PayOnce can post to a Slack or Discord channel when something needs a person. It alerts on an invoice that is escalated, held or waiting on an approval, a bank deadline that has passed, a payout sent outside PayOnce, a payment PayOnce had marked as never sent that turned up and may have paid the supplier twice, a pay run waiting for approval, supplier emails waiting in the inbox for a person, an audit trail that no longer verifies, a currency whose headroom has gone below 0, and a rail outage, once when it is declared and once when a person ends it. An outage alert names the rail, the failure codes, the payees counted and the bank's references, and never who ended it or their note.
+PayOnce can post to a Slack or Discord channel when something needs a person. It alerts on an invoice that is escalated, held or waiting on an approval, a bank deadline that has passed, a payout sent outside PayOnce, a payment PayOnce had marked as never sent that turned up and may have paid the supplier twice, a pay run waiting for approval, supplier emails waiting in the inbox for a person, an audit trail that no longer verifies, a currency whose headroom has gone below 0, reconciliation breaks that need a person, and a rail outage, once when it is declared and once when a person ends it. An outage alert names the rail, the failure codes, the payees counted and the bank's references, and never who ended it or their note.
 
 Set `ALERT_WEBHOOK_URL` to a Slack incoming webhook (`https://hooks.slack.com/services/...`) or a Discord webhook (`https://discord.com/api/webhooks/...` or the same on `discordapp.com`, with `ALERT_FORMAT=discord`). PayOnce takes no other address. If the setting is wrong, the start-up line says why and nothing is posted. With no address set, PayOnce makes no alert calls at all. Treat the address as a password and keep it in `.env`. PayOnce prints its host and never the rest.
 
@@ -429,12 +457,17 @@ pnpm outbox <INVOICE> dismiss <DRAFT> <NAME> [NOTE]
 pnpm outage
 pnpm outage end <ID> <NAME> <NOTE>
 pnpm supplier [RECORD|INVOICE]
+pnpm reconcile [offline]
+pnpm reconcile show [CURRENCY]
+pnpm reconcile explain <ID[,ID...]> [NAME NOTE --facts=FP[,FP...]]
 pnpm mcp
 pnpm ask <INVOICE> [facts]
 pnpm reset
 ```
 
 `pnpm ask` asks the model why PayOnce did what it did on one invoice (see [Ask this incident why](#ask-this-incident-why)). With `facts` it prints the facts and the system message exactly as they would be sent, then the legend of labels, which stays on this machine, and asks nothing. It opens the ledger read-only and never calls Airwallex, so it refuses a ledger an older PayOnce wrote: open that ledger once with `pnpm ui` or `pnpm board` first. It strips control and format characters from names and invoice numbers after it swaps the labels back, as `pnpm board` does.
+
+`pnpm reconcile` runs one check against Airwallex and prints the report: each wallet, the breaks that need a person, what is waiting and the last explanations. `offline` matches what the ledger holds again with no Airwallex call, `show` prints the last report from the ledger alone without creating or upgrading a file, and `explain` lists breaks with their facts or explains them. The check and `offline` exit 1 when the check failed, a wallet does not add up or a break waits on a person, so a script can check the result.
 
 `pnpm outage` lists the active outages and the last few ended, with the payouts each counted and what it held. `pnpm outage end` ends one, as the button on the page does. It writes only the ledger, and the server's watcher picks up what the outage held on its next check.
 
@@ -576,6 +609,9 @@ Quit Claude Desktop fully and start it again. It writes the server's stderr to `
 | `src/why-facts.ts` | The facts a model gets to explain an incident: PayOnce's own fields, the reasons and timeline lines it recognises, and labels for people and other invoices |
 | `src/explainer.ts` | Asks the model reader's models to explain an incident, checks and cleans the answer, and keeps the page's limits |
 | `src/drafts.ts` | Messages to send: the templates, which ones fit an incident, and drafts that keep their hash |
+| `src/recon-match.ts` | Reconciliation's matcher, the break kinds and their wording |
+| `src/recon-store.ts` | Reconciliation's tables, its runs, its breaks and their hash chain |
+| `src/reconcile.ts` | One reconciliation check, the server's timer, the report and a person's explanation |
 | `src/alerts.ts` | Alerts: the webhook setting, what needs a person, and posting with retries |
 | `src/alert-payloads.ts` | What an alert says, and its Slack and Discord message shapes |
 | `src/server.ts` | Local web server and JSON API |
@@ -584,8 +620,8 @@ Quit Claude Desktop fully and start it again. It writes the server's stderr to `
 | `src/mcp-text.ts` | Marks the text PayOnce did not write in an MCP answer, and masks phone numbers |
 | `src/money.ts` | Major and minor units, and amounts as people read them, for two-decimal currencies |
 | `src/printable.ts` | Cleans every line PayOnce prints to a terminal, so a name or an error cannot move the cursor or write the clipboard |
-| `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/audit.ts`, `src/cash.ts`, `src/board.ts`, `src/payrun.ts`, `src/outbox.ts`, `src/outage.ts`, `src/ask.ts`, `src/reset.ts`, `src/index.ts` | The commands |
-| `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, exchange rate quotes, balances and their cache for the cash panel, the webhook subscription and the simulation calls |
+| `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/audit.ts`, `src/cash.ts`, `src/board.ts`, `src/payrun.ts`, `src/outbox.ts`, `src/outage.ts`, `src/ask.ts`, `src/recon-cli.ts`, `src/reset.ts`, `src/index.ts` | The commands |
+| `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, exchange rate quotes, balances and their cache for the cash panel, balance history, the webhook subscription and the simulation calls |
 | `web/` | The page: plain HTML, CSS and JavaScript with no build step |
 | `fixtures/emails/` | Sample supplier emails |
 | `fixtures/pay-run-example.csv` | A sample pay run file |
@@ -622,6 +658,9 @@ A ledger from before PayOnce kept which account each payment went to keeps that 
 - A mail client's layout. PayOnce reads every character it can, but not the order a client draws them in.
 - Ending an outage by itself, probing a rail to see whether it works again, or declaring an outage by hand. A person ends every outage.
 - Releasing only the rows of a pay run that do not pay on a rail with an outage. The whole run waits.
+- Reading financial transactions for reconciliation. Balance history has the running balance that shows a wallet adds up, and needs no other API scope.
+- Reconciliation on the incident page, the board or the cash panel, in the MCP server, or as an export. It has a page of its own and `pnpm reconcile`.
+- Checking the refund of a failed converting transfer. The simulator cannot fail one, so reconciliation accepts that refund in either wallet, and that path is not verified in the sandbox.
 - Counting an outage's failures from a webhook or from the status check. A look at the invoice and the sweep count them, so a failure can take up to one sweep, 30 seconds, to count.
 - Grouping failures by bank. Several payees at one bank that fail together still declare an outage on the whole rail.
 - Currencies with no decimals or three, such as JPY or KWD. Amounts are handled for two-decimal currencies only.
