@@ -2099,6 +2099,11 @@ input[type="file"] {
   overflow-wrap: anywhere;
 }
 
+/* One line of text and links, which the grid would split into rows. */
+.supplier-item--line {
+  display: block;
+}
+
 .supplier-item__top {
   display: flex;
   flex-wrap: wrap;

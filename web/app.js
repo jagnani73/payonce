@@ -5430,7 +5430,7 @@ function supplierEmails(detail) {
         inbox.map((upload) =>
           h(
             "li",
-            { class: "supplier-item" },
+            { class: "supplier-item supplier-item--line" },
             h("a", { href: `#inbox/${upload.uploadId}` }, `Email ${upload.uploadId}`),
             " names ",
             joinedNodes(upload.invoices.map(invoiceLink)),
@@ -5517,7 +5517,7 @@ function supplierOutages(detail) {
         outages.holds.map((hold) =>
           h(
             "li",
-            { class: "supplier-item" },
+            { class: "supplier-item supplier-item--line" },
             `Outage ${hold.outageId}${hold.rail === null ? "" : ` on ${hold.rail}`} held `,
             hold.invoiceId !== null ? invoiceLink(hold.invoiceId) : runLink(hold.runId),
             ` (${HOLD_WORDS[hold.what] ?? humanize(hold.what)}) `,
@@ -5534,7 +5534,7 @@ function supplierOutages(detail) {
         outages.failures.map((failure) =>
           h(
             "li",
-            { class: "supplier-item" },
+            { class: "supplier-item supplier-item--line" },
             failure.reference === null ? "A payout" : h("span", { class: "mono" }, failure.reference),
             ` failed with ${failure.code === null ? "a code PayOnce does not show" : `${failure.code} (${failure.codeWords ?? "rail failure"})`} `,
             whenNode(failure.failedAt),
