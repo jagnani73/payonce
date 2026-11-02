@@ -972,6 +972,11 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     last_quote: "TEXT",
     // When the supplier expects the money, as YYYY-MM-DD.
     due_date: "TEXT",
+    // When the invoice first went to a person, as an ISO time, written only by
+    // the obligation_escalated_at trigger (TIME_TRIGGERS). For the metrics only:
+    // nothing PayOnce decides reads it. '' on an invoice already sent to a person
+    // when the column was added, whose first time is not known.
+    escalated_at: "TEXT",
   },
   approvals: {
     requested_at: "TEXT",
@@ -1031,6 +1036,12 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     // decides reads them. Null until read since the columns were added.
     sent_key: "TEXT",
     sent_ending: "TEXT",
+    // When PayOnce first recorded the attempt failed, and first recorded it paid,
+    // as ISO times, written only by TIME_TRIGGERS. For a found payout's original,
+    // when PayOnce took it on. For the metrics only: nothing PayOnce decides reads
+    // them. '' on an attempt already failed, or paid, when the column was added.
+    failed_at: "TEXT",
+    paid_at: "TEXT",
   },
   rail_failures: {
     // When the transfer failed by Airwallex's updated_at, or when PayOnce first
@@ -1077,6 +1088,51 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     sent_key: "TEXT",
     sent_ending: "TEXT",
   },
+};
+
+// The first time an invoice went to a person, and an attempt was first recorded
+// failed or paid, for the metrics. Each trigger writes only its own column, only
+// while it is null, on the row that changed, found by rowid: no constraint, no
+// RAISE and no SELECT, so it cannot fail the statement it runs in. Created under
+// the write lock that adds the columns, on every writable open. recursive_triggers
+// stays off, and no trigger updates a state, so none sets off another. They fire
+// for an older PayOnce sharing the file too.
+const NOW_ISO: string = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
+const TIME_TRIGGERS: string = `
+  CREATE TRIGGER IF NOT EXISTS obligation_escalated_at AFTER UPDATE OF state ON obligations
+    WHEN NEW.state = 'escalated' AND OLD.state <> 'escalated' AND NEW.escalated_at IS NULL
+  BEGIN
+    UPDATE obligations SET escalated_at = COALESCE(escalated_at, ${NOW_ISO}) WHERE rowid = NEW.rowid;
+  END;
+  CREATE TRIGGER IF NOT EXISTS attempt_failed_at AFTER UPDATE OF state ON attempts
+    WHEN NEW.state = 'failed' AND OLD.state <> 'failed' AND NEW.failed_at IS NULL
+  BEGIN
+    UPDATE attempts SET failed_at = COALESCE(failed_at, ${NOW_ISO}) WHERE rowid = NEW.rowid;
+  END;
+  CREATE TRIGGER IF NOT EXISTS attempt_paid_at AFTER UPDATE OF state ON attempts
+    WHEN NEW.state = 'paid' AND OLD.state <> 'paid' AND NEW.paid_at IS NULL
+  BEGIN
+    UPDATE attempts SET paid_at = COALESCE(paid_at, ${NOW_ISO}) WHERE rowid = NEW.rowid;
+  END;
+  CREATE TRIGGER IF NOT EXISTS attempt_failed_at_insert AFTER INSERT ON attempts
+    WHEN NEW.state = 'failed' AND NEW.failed_at IS NULL
+  BEGIN
+    UPDATE attempts SET failed_at = COALESCE(failed_at, ${NOW_ISO}) WHERE rowid = NEW.rowid;
+  END;
+  CREATE TRIGGER IF NOT EXISTS attempt_paid_at_insert AFTER INSERT ON attempts
+    WHEN NEW.state = 'paid' AND NEW.paid_at IS NULL
+  BEGIN
+    UPDATE attempts SET paid_at = COALESCE(paid_at, ${NOW_ISO}) WHERE rowid = NEW.rowid;
+  END;
+`;
+
+// What a row already in that state when its time column is added gets: '', a time
+// not known, which no trigger overwrites and the metrics count as not on file.
+const TIME_NOT_KNOWN: Record<string, string> = {
+  "obligations.escalated_at":
+    "UPDATE obligations SET escalated_at = '' WHERE state = 'escalated' OR escalation_reason <> ''",
+  "attempts.failed_at": "UPDATE attempts SET failed_at = '' WHERE state = 'failed' OR found_late_at IS NOT NULL",
+  "attempts.paid_at": "UPDATE attempts SET paid_at = '' WHERE state = 'paid'",
 };
 
 // What the account_key backfill reads of an attempt.
@@ -1890,9 +1946,14 @@ export class Ledger {
                 )
                 .run(new Date().toISOString());
             }
+            const notKnown: string | undefined = TIME_NOT_KNOWN[`${table}.${name}`];
+            if (notKnown !== undefined) {
+              this.db.exec(notKnown);
+            }
           }
         }
       }
+      this.db.exec(TIME_TRIGGERS);
       // Once every column is there, in the same write lock as the column add.
       if (accountKeyAdded) {
         this.backfillAccountKeys();
