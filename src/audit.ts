@@ -8,6 +8,8 @@ import {
   describeLedger,
   describeRunLedger,
   ledgerReport,
+  reconChainProblem,
+  reconChainReport,
   runAuditExport,
   runChainReport,
   runChainReports,
@@ -17,6 +19,7 @@ import {
   type ChainBreak,
   type ChainReport,
   type LedgerReport,
+  type ReconChainReport,
   type RunAuditExport,
   type RunAuditSnapshot,
   type RunChainReport,
@@ -131,6 +134,31 @@ function auditRuns(snapshot: RunAuditSnapshot): boolean {
   );
 }
 
+// Re-checks reconciliation's chain, one chain over every break, and its running
+// hash.
+function auditRecon(ledger: Ledger): boolean {
+  if (!ledger.recon().hasTables()) {
+    say("This ledger has no reconciliation");
+    return true;
+  }
+  const report: ReconChainReport = reconChainReport(ledger.recon().auditSnapshot());
+  const problem: string | null = reconChainProblem(report);
+  say(
+    `Reconciliation: ${report.lines} ${report.lines === 1 ? "line" : "lines"}, ${problem === null ? "the chain is intact and its running hash matches" : "the chain does not verify"}`,
+  );
+  for (const found of report.breaks) {
+    say(`  line ${String(found.line).padEnd(4)} ${found.at}  ${found.problem}`);
+  }
+  if (report.breaks.length === 0 && problem !== null) {
+    say(`  ${problem}`);
+  }
+  say(`  head     ${short(report.stored)}`);
+  if (report.stored !== report.computed) {
+    say(`  lines    give ${short(report.computed)}`);
+  }
+  return problem === null;
+}
+
 // JSON writes what a terminal could act on as \uXXXX and still parses to the same
 // messages, so it is always written that way. A CSV goes to a file or a pipe as it
 // is, because whoever checks the hashes needs every message exactly, and is made
@@ -178,7 +206,8 @@ function mainRun(ledger: Ledger, raw: string | undefined, format: string | undef
   }
 }
 
-// Without an invoice it checks the whole ledger, pay run timelines included.
+// Without an invoice it checks the whole ledger, pay run timelines and
+// reconciliation's record included.
 // With one it checks that invoice's timeline, or prints its audit trail as JSON
 // or CSV. "run" and a run's number do the same for a pay run. A run number is
 // digits, which are never a format, so "run 7" cannot be an invoice called run.
@@ -219,6 +248,7 @@ function main(): void {
       say(NOT_CHAINED);
       intact = false;
     }
+    intact = auditRecon(ledger) && intact;
     process.exitCode = intact ? 0 : 1;
     return;
   }
