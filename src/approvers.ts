@@ -41,13 +41,15 @@ export interface Barred {
 
 // What a name typed into PayOnce may hold once trimmed, with runs of spaces
 // collapsed: ASCII letters, digits, spaces, dots, hyphens, apostrophes and
-// underscores, 1 to 80 of them. Anything else, such as a zero-width space or a
-// Cyrillic letter that looks Latin, could pass on screen for someone else's name.
-// Underscores are in it for login names, which pnpm recover uses by default.
-const NAME_PATTERN: RegExp = /^[A-Za-z0-9 .'_-]{1,80}$/;
+// underscores, 1 to 80 of them, at least one a letter or a digit. Anything else,
+// such as a zero-width space or a Cyrillic letter that looks Latin, could pass on
+// screen for someone else's name, and a name of marks alone, such as "-" or ".",
+// has no letters or digits to tell it from another. Underscores are in it for
+// login names, which pnpm recover uses by default.
+const NAME_PATTERN: RegExp = /^(?=[^A-Za-z0-9]*[A-Za-z0-9])[A-Za-z0-9 .'_-]{1,80}$/;
 export const MAX_NAME_LENGTH: number = 80;
 export const NAME_RULE: string =
-  "A name takes only the letters A to Z, digits, spaces, dots, hyphens, apostrophes and underscores, up to 80 characters";
+  "A name takes only the letters A to Z, digits, spaces, dots, hyphens, apostrophes and underscores, up to 80 characters, with at least one letter or digit";
 
 // A name PayOnce refuses, with words for the person who typed it.
 export class NameError extends Error {
