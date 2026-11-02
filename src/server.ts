@@ -326,12 +326,29 @@ const ALLOWED_HOSTS: ReadonlySet<string> = new Set<string>([
 // The server has no login, so it only answers its own page. The Host check stops
 // DNS rebinding. For writes, the Origin check and the JSON content type stop
 // another site open in the same browser from starting or approving a payment.
-function guard(request: IncomingMessage, method: string): void {
+// A browser says where a request comes from. A page on another site, even one
+// that cannot read the answer, could still make the server do the work of an
+// answer on every load, or read Airwallex for it, so an API GET it sends is
+// refused. The page's own requests are same-origin, and a typed address or a
+// bookmark is none. The CLI and curl send neither header.
+function crossSite(request: IncomingMessage, host: string): boolean {
+  const site: string | string[] | undefined = request.headers["sec-fetch-site"];
+  const origin: string | undefined = request.headers.origin;
+  return (
+    (site !== undefined && site !== "same-origin" && site !== "none") ||
+    (origin !== undefined && origin !== `http://${host}`)
+  );
+}
+
+function guard(request: IncomingMessage, method: string, pathname: string): void {
   const host: string = request.headers.host ?? "";
   if (!ALLOWED_HOSTS.has(host)) {
     throw new HttpError(403, "Forbidden");
   }
   if (method === "GET") {
+    if (pathname.startsWith("/api/") && crossSite(request, host)) {
+      throw new HttpError(403, "Forbidden");
+    }
     return;
   }
   const contentType: string = request.headers["content-type"] ?? "";
@@ -1622,7 +1639,7 @@ async function route(
   const url: URL = new URL(request.url ?? "/", `http://${HOST}`);
   const pathname: string = url.pathname;
   const parts: string[] = pathname.split("/").filter(Boolean);
-  guard(request, method);
+  guard(request, method, pathname);
 
   if (parts[0] !== "api") {
     if (method !== "GET") {
