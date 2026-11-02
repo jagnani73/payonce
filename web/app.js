@@ -1334,6 +1334,13 @@ async function resumeIncident(invoiceId) {
   }
 }
 
+// What a timeline line is drawn from. Whether its time is today is part of it,
+// so after midnight yesterday's lines are drawn again with their day.
+function eventSignature(event) {
+  const date = parseDate(event.at);
+  return JSON.stringify([event.kind, event.at, event.message, date !== null && isToday(date)]);
+}
+
 function createEventNode(event, key, signature) {
   const known = Object.hasOwn(EVENT_KINDS, event.kind);
   const kind = known ? event.kind : "other";
@@ -1397,7 +1404,7 @@ function renderTimeline(detail) {
     events,
     (event, index) => String(event.id ?? `row-${index}`),
     (node, event, key) => {
-      const signature = JSON.stringify([event.kind, event.at, event.message]);
+      const signature = eventSignature(event);
       if (node !== null && node.dataset.signature === signature) {
         return node;
       }
@@ -3785,7 +3792,7 @@ function renderRunTimeline(run) {
     events,
     (event, index) => String(event.id ?? `row-${index}`),
     (node, event, key) => {
-      const signature = JSON.stringify([event.kind, event.at, event.message]);
+      const signature = eventSignature(event);
       if (node !== null && node.dataset.signature === signature) {
         return node;
       }
