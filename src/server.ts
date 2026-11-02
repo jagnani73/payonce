@@ -109,6 +109,7 @@ import {
   type Match,
 } from "./intake.js";
 import { KeywordReader } from "./keyword-reader.js";
+import { isPeriod, metricsReport, PERIOD_PROBLEM, type MetricsReport } from "./metrics.js";
 import {
   approvePayment,
   closeIncident,
@@ -1034,6 +1035,30 @@ function board(params: URLSearchParams): BoardReport {
   });
 }
 
+// The last three metrics answers, by period, the ledger's change stamp and the
+// minute, since durations still running and requests open now move with the clock.
+const METRICS_KEPT: number = 3;
+const metricsCache: Map<string, MetricsReport> = new Map();
+
+function metrics(params: URLSearchParams): MetricsReport {
+  const period: string = params.get("period") ?? "7d";
+  if (!isPeriod(period)) {
+    throw new HttpError(400, PERIOD_PROBLEM);
+  }
+  const now: number = Date.now();
+  const key: string = `${period}|${engine.ledger.changeStamp()}|${Math.floor(now / 60_000)}`;
+  const kept: MetricsReport | undefined = metricsCache.get(key);
+  if (kept !== undefined) {
+    return kept;
+  }
+  const report: MetricsReport = metricsReport(engine.ledger, period, now);
+  metricsCache.set(key, report);
+  for (const old of [...metricsCache.keys()].slice(0, Math.max(0, metricsCache.size - METRICS_KEPT))) {
+    metricsCache.delete(old);
+  }
+  return report;
+}
+
 // One supplier record by its beneficiary id, from the ledger alone.
 function supplier(raw: string): SupplierDetail {
   const detail: SupplierDetail | null = supplierDetail(engine.ledger, raw);
@@ -1812,6 +1837,8 @@ async function route(
     sendJson(response, 200, cash(false));
   } else if (method === "GET" && pathname === "/api/board") {
     sendJson(response, 200, board(url.searchParams));
+  } else if (method === "GET" && pathname === "/api/metrics") {
+    sendJson(response, 200, metrics(url.searchParams));
   } else if (method === "GET" && pathname === "/api/suppliers") {
     sendJson(response, 200, supplierList(engine.ledger));
   } else if (method === "GET" && parts[1] === "suppliers" && parts[2] !== undefined && parts.length === 3) {
