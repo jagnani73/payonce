@@ -464,7 +464,13 @@ export function noteMismatchedTransfer(engine: Engine, transfer: Transfer): bool
   if (
     attempt.state !== "failed" ||
     unrecordedAttemptOf(engine.ledger, transfer) !== undefined ||
-    !engine.ledger.addMismatched(requestId, transfer.id, transfer.short_reference_id, transfer.status ?? null)
+    !engine.ledger.addMismatched(
+      requestId,
+      transfer.id,
+      transfer.short_reference_id,
+      transfer.status ?? null,
+      debitOf(transfer),
+    )
   ) {
     return false;
   }
@@ -483,7 +489,7 @@ export function noteMismatchedTransfer(engine: Engine, transfer: Transfer): bool
 // does not match the invoice, with a bank line when it is paid or failed. True
 // when the status changed.
 function syncMismatched(engine: Engine, attempt: Attempt, transfer: Transfer): boolean {
-  if (!engine.ledger.setMismatchedStatus(transfer.id, transfer.status)) {
+  if (!engine.ledger.setMismatchedStatus(transfer.id, transfer.status, debitOf(transfer))) {
     return false;
   }
   const state: AttemptState | null = attemptStateOf(transfer);

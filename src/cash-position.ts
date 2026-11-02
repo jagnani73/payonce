@@ -4,6 +4,7 @@ import {
   crossCurrency,
   isExpired,
   liveAtBank,
+  mismatchedLive,
   withBank,
   type Approval,
   type Attempt,
@@ -262,6 +263,22 @@ export function cashLines(
             attempt.feeCurrency,
           ),
         );
+      }
+      // A transfer under the attempt's request id that does not match the invoice
+      // left the wallet it was sent from like any payment with the bank, until the
+      // bank pays or fails it. Before its amount was read, the invoice's stands in.
+      if (mismatchedLive(attempt) && attempt.mismatchedStatus !== "PAID") {
+        lines.push({
+          kind: "with-bank",
+          invoiceId,
+          currency: attempt.mismatchedCurrency ?? wallet,
+          amountMinor: attempt.mismatchedAmountMinor ?? obligation.amountMinor,
+          feeMinor: 0,
+          feeKnown: false,
+          reference: attempt.mismatchedReference,
+          estimated: attempt.mismatchedAmountMinor === null,
+          runId: null,
+        });
       }
     }
     for (const payout of payouts) {

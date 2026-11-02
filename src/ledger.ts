@@ -15,7 +15,7 @@ import {
 } from "./audit-trail.js";
 import type { ApprovalTerms, FxTerms } from "./approval.js";
 import type { ArrivalTerms } from "./arrival.js";
-import { failedStatus, FAILED_STATUS_LIST } from "./assess.js";
+import { failedStatus, FAILED_STATUS_LIST, type Debit } from "./assess.js";
 import type { EmailAttachment, SupplierEmail } from "./emails.js";
 
 export const LEDGER_PATH: string = "payonce.db";
@@ -476,6 +476,10 @@ export interface Attempt {
   // When a person closed the invoice after it was found. Until then PayOnce never
   // closes the invoice by itself.
   mismatchedClearedAt: string | null;
+  // What that transfer took from the wallet it left before the fee, and that
+  // wallet. Null until it has been read since PayOnce kept them.
+  mismatchedAmountMinor: number | null;
+  mismatchedCurrency: string | null;
 }
 
 // The quote an attempt is sent with, from the terms of the approval it was opened
@@ -970,6 +974,10 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     mismatched_reference: "TEXT",
     mismatched_status: "TEXT",
     mismatched_cleared_at: "TEXT",
+    // What that transfer took from its wallet before the fee, and the wallet, as
+    // debitOf reads it. Null until a read of it since the columns were added.
+    mismatched_amount_minor: "INTEGER",
+    mismatched_currency: "TEXT",
   },
   rail_failures: {
     // When the transfer failed by Airwallex's updated_at, or when PayOnce first
@@ -1041,6 +1049,8 @@ interface AttemptRow {
   mismatched_reference: string | null;
   mismatched_status: string | null;
   mismatched_cleared_at: string | null;
+  mismatched_amount_minor: number | null;
+  mismatched_currency: string | null;
 }
 
 export class DuplicatePaymentError extends Error {
@@ -1209,6 +1219,8 @@ function toAttempt(row: AttemptRow): Attempt {
     mismatchedReference: row.mismatched_reference ?? null,
     mismatchedStatus: row.mismatched_status ?? null,
     mismatchedClearedAt: row.mismatched_cleared_at ?? null,
+    mismatchedAmountMinor: row.mismatched_amount_minor ?? null,
+    mismatchedCurrency: row.mismatched_currency ?? null,
   };
 }
 
@@ -2489,6 +2501,8 @@ export class Ledger {
       mismatchedReference: null,
       mismatchedStatus: null,
       mismatchedClearedAt: null,
+      mismatchedAmountMinor: null,
+      mismatchedCurrency: null,
     };
   }
 
@@ -3058,23 +3072,40 @@ export class Ledger {
   }
 
   // Ties a transfer Airwallex lists under the request id of an attempt marked
-  // failed with none, which does not match its invoice, to that attempt. False
-  // when the attempt already has one, has a transfer, or is not failed.
-  addMismatched(requestId: string, transferId: string, reference: string, status: string | null): boolean {
+  // failed with none, which does not match its invoice, to that attempt, with what
+  // it took from its wallet (debit). False when the attempt already has one, has
+  // a transfer, or is not failed.
+  addMismatched(
+    requestId: string,
+    transferId: string,
+    reference: string,
+    status: string | null,
+    debit: Debit | null = null,
+  ): boolean {
     const result: { changes: number | bigint } = this.db
       .prepare(
         `UPDATE attempts
-            SET mismatched_transfer_id = ?, mismatched_reference = ?, mismatched_status = ?
+            SET mismatched_transfer_id = ?, mismatched_reference = ?, mismatched_status = ?,
+                mismatched_amount_minor = ?, mismatched_currency = ?
           WHERE request_id = ? AND state = 'failed' AND transfer_id IS NULL
             AND mismatched_transfer_id IS NULL`,
       )
-      .run(transferId, reference, status, requestId);
+      .run(transferId, reference, status, debit?.minor ?? null, debit?.currency ?? null, requestId);
     return Number(result.changes) === 1;
   }
 
-  // The status a look or the sweep last read for such a transfer. True when it
+  // The status a look or the sweep last read for such a transfer, and what it
+  // took from its wallet, which a null debit leaves as it is. True when the status
   // changed.
-  setMismatchedStatus(transferId: string, status: string): boolean {
+  setMismatchedStatus(transferId: string, status: string, debit: Debit | null = null): boolean {
+    this.db
+      .prepare(
+        `UPDATE attempts
+            SET mismatched_amount_minor = COALESCE(?, mismatched_amount_minor),
+                mismatched_currency = COALESCE(?, mismatched_currency)
+          WHERE mismatched_transfer_id = ?`,
+      )
+      .run(debit?.minor ?? null, debit?.currency ?? null, transferId);
     const result: { changes: number | bigint } = this.db
       .prepare(
         `UPDATE attempts SET mismatched_status = ?
