@@ -53,13 +53,21 @@ const SQLITE_BUSY: number = 5;
 const RUN_ID_MAX: number = 9_999_999_999;
 const TOOLS_TTL_MS: number = 3_600_000;
 
+// A line of .env that sets one of the allowed settings.
+const ALLOWED_LINE: RegExp = new RegExp(`^\\s*(export\\s+)?(${ENV_ALLOWED.join("|")})\\s*=`);
+
+// Only the lines that set an allowed key are parsed, so the credentials and every
+// other setting in .env are never parsed into values here.
 function loadAllowedEnv(): void {
   const path: string = resolve(ROOT, ".env");
   if (!existsSync(path)) {
     return;
   }
   try {
-    const parsed: NodeJS.Dict<string> = parseEnv(readFileSync(path, "utf8"));
+    const lines: string[] = readFileSync(path, "utf8")
+      .split(/\r?\n/)
+      .filter((line: string): boolean => ALLOWED_LINE.test(line));
+    const parsed: NodeJS.Dict<string> = parseEnv(lines.join("\n"));
     for (const key of ENV_ALLOWED) {
       if (process.env[key] === undefined && parsed[key] !== undefined) {
         process.env[key] = parsed[key];
