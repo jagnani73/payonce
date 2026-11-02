@@ -202,7 +202,7 @@ Each incident's timeline is a hash chain, and so is each pay run's. Every line s
 
 PayOnce writes each line, its hashes and the running hash in one database transaction. The terminal commands and the web server can write to the ledger at the same time, and the transaction stops two of them chaining from the same line.
 
-`pnpm run audit` checks every timeline and the running hash, and says where a chain breaks. `pnpm run audit INV-5001` checks one invoice and lists each break. Add `json` or `csv` to print the invoice's audit trail instead. `pnpm run audit run 7` checks pay run 7's timeline, with `json` or `csv` after it for the run's audit trail, and the check of the whole ledger covers every run. (`pnpm audit` on its own runs pnpm's dependency audit.) The page shows the result under an incident's or a run's timeline, with links to download the same audit trail as JSON or CSV. The JSON describes how each hash is made, so the trail can be checked without PayOnce. The CSV is for reading in a spreadsheet. A cell that starts with `=`, `+`, `-` or `@` gets a leading apostrophe there, so a supplier's email subject cannot run as a formula. Check hashes against the JSON.
+`pnpm run audit` checks every timeline and the running hash, and says where a chain breaks. `pnpm run audit INV-5001` checks one invoice and lists each break. Add `json` or `csv` to print the invoice's audit trail instead. `pnpm run audit run 7` checks pay run 7's timeline, with `json` or `csv` after it for the run's audit trail, and the check of the whole ledger covers every run. (`pnpm audit` on its own runs pnpm's dependency audit.) The page shows the result under an incident's or a run's timeline, with links to download the same audit trail as JSON or CSV. The JSON describes how each hash is made, so the trail can be checked without PayOnce. The CSV is for reading in a spreadsheet. A cell that starts with `=`, `+`, `-` or `@` gets a leading apostrophe there, so a supplier's email subject cannot run as a formula. Check hashes against the JSON. In the terminal, `json` writes any character that could act on the screen as an escape, and the text still parses back the same. `csv` is cleaned only when it prints straight to the screen, so a file you save keeps every message exactly.
 
 Lines written before the chain existed were hashed the first time the ledger was opened with it, and the export marks them. The chain catches a quiet edit to the file. It cannot stop someone who can write the file from rewriting a timeline and recomputing every hash after it. To show later that a timeline changed after a given day, keep that day's export, or just its last hash, somewhere else.
 
@@ -307,7 +307,7 @@ An event counts only if its signature checks out with the subscription's secret,
 
 A status check runs every 15 seconds in case an event is late or lost, and every 3 seconds when webhooks are off. In the sandbox, Airwallex records an event for every status change but leaves each one queued and never sends it, even a test event sent from its own web app, so the status check finds every change. A request from outside through the tunnel does reach the receiver.
 
-Install cloudflared with `winget install --id Cloudflare.cloudflared`, or set `CLOUDFLARED` to the path of `cloudflared.exe`. Set `WEBHOOK_URL` to use a public address you already have, or `WEBHOOKS=off` to skip webhooks.
+Install cloudflared with `winget install --id Cloudflare.cloudflared`, or set `CLOUDFLARED` to the path of `cloudflared.exe`. Set `WEBHOOK_URL` to use a public address you already have, or `WEBHOOKS=off` to skip webhooks. Anyone who learns the tunnel's address can send it requests, so the receiver prints the requests it refuses at most once a minute, with a count, so they cannot scroll the timeline off the terminal.
 
 ## Alerts
 
@@ -382,7 +382,7 @@ pnpm ui
 
 Open `http://127.0.0.1:4310`. The page opens on the [incident board](#incident-board). `docs/demo.md` walks through four incidents in under five minutes. Choose a payment, a bank outcome and a supplier email thread, then start an incident. The page follows it step by step. The agent waits for a webhook or a status check after each bank outcome, so an incident takes up to a minute in the sandbox. When an incident is waiting on a person, the approval card shows the terms and takes a name. If the bank has paid the invoice, a close card takes a name and a note instead. "Check again" continues an incident that stopped part-way.
 
-The server has no login. It listens on this machine only and accepts changes only from its own page.
+The server has no login. It listens on this machine only and accepts changes only from its own page. It also refuses reads that another website's page sends from your browser, while the page itself, a typed address, `curl` and the terminal commands work as before.
 
 ### The terminal
 
@@ -555,6 +555,8 @@ Quit Claude Desktop fully and start it again. It writes the server's stderr to `
 | `src/mcp.ts` | The read-only MCP server over stdio, and the only file that imports the MCP SDK |
 | `src/mcp-views.ts` | What the MCP tools answer, from the ledger alone |
 | `src/mcp-text.ts` | Marks the text PayOnce did not write in an MCP answer, and masks phone numbers |
+| `src/money.ts` | Major and minor units, and amounts as people read them, for two-decimal currencies |
+| `src/printable.ts` | Cleans every line PayOnce prints to a terminal, so a name or an error cannot move the cursor or write the clipboard |
 | `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/audit.ts`, `src/cash.ts`, `src/board.ts`, `src/payrun.ts`, `src/outbox.ts`, `src/outage.ts`, `src/ask.ts`, `src/reset.ts`, `src/index.ts` | The commands |
 | `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, exchange rate quotes, balances and their cache for the cash panel, the webhook subscription and the simulation calls |
 | `web/` | The page: plain HTML, CSS and JavaScript with no build step |
