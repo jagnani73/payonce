@@ -29,6 +29,27 @@ export const NOT_TO_PAY_REASON: string = "supplier asked to hold, cancel or not 
 export const PARTLY_UNREAD_REASON: string = "part of a supplier email could not be read";
 // How the ask not to pay reads when it is added to another reason.
 export const NOT_TO_PAY_CLAUSE: string = "the supplier asks to hold, cancel or not pay this invoice";
+// The policy's other reasons. Exported so the explanation of an incident can
+// recognise them as PayOnce's own words. The strings are the ones stored in
+// escalation reasons and approval terms, so no binding changes.
+export const UNVERIFIED_SENDER_REASON: string =
+  "an email came from an address that does not match the supplier on file";
+export const EMAILS_UNREAD_REASON: string = "supplier emails are on file that could not be read";
+export const UNKNOWN_STATUS_REASON: string =
+  "original transfer is in a status the policy does not recognise";
+export const NON_RECEIPT_REASON: string =
+  "original transfer settled but the supplier reports non-receipt";
+export const SETTLED_REASON: string =
+  "original transfer settled and no supplier email reports it missing";
+export const IN_FLIGHT_REASON: string =
+  "original transfer is still in flight, a replacement risks a double payment";
+export const REPLACEMENT_FAILED_REASON: string = "a replacement payment failed as well";
+export const NOT_RESENDABLE_REASON: string = "original failed for a reason a resend cannot fix";
+export const SENT_OUTSIDE_REASON: string =
+  "the original was sent outside PayOnce, so a person approves any replacement";
+export const TWO_APPROVERS_REASON: string = "a replacement this large needs two approvers";
+export const REPLACE_REASON: string =
+  "original failed, a resend can fix it and the beneficiary details are unchanged";
 
 // The reason with the ask not to pay added, while that finding is on file and the
 // reason does not already name it. A person can still approve paying the invoice.
@@ -100,14 +121,14 @@ export function decide(incident: Incident): Decision {
   if (incident.emailFromUnverifiedSender) {
     return {
       action: "escalate",
-      reason: "an email came from an address that does not match the supplier on file",
+      reason: UNVERIFIED_SENDER_REASON,
     };
   }
 
   if (incident.emailsUnread) {
     return {
       action: "escalate",
-      reason: "supplier emails are on file that could not be read",
+      reason: EMAILS_UNREAD_REASON,
     };
   }
 
@@ -121,7 +142,7 @@ export function decide(incident: Incident): Decision {
   if (incident.originalState === "unknown") {
     return {
       action: "escalate",
-      reason: "original transfer is in a status the policy does not recognise",
+      reason: UNKNOWN_STATUS_REASON,
     };
   }
 
@@ -131,11 +152,11 @@ export function decide(incident: Incident): Decision {
     return incident.supplierReportsNonReceipt
       ? {
           action: "escalate",
-          reason: "original transfer settled but the supplier reports non-receipt",
+          reason: NON_RECEIPT_REASON,
         }
       : {
           action: "close",
-          reason: "original transfer settled and no supplier email reports it missing",
+          reason: SETTLED_REASON,
         };
   }
 
@@ -147,7 +168,7 @@ export function decide(incident: Incident): Decision {
         }
       : {
           action: "wait",
-          reason: "original transfer is still in flight, a replacement risks a double payment",
+          reason: IN_FLIGHT_REASON,
         };
   }
 
@@ -156,14 +177,14 @@ export function decide(incident: Incident): Decision {
   if (incident.replacementFailed) {
     return {
       action: "escalate",
-      reason: "a replacement payment failed as well",
+      reason: REPLACEMENT_FAILED_REASON,
     };
   }
 
   if (!incident.resendCanFix) {
     return {
       action: "escalate",
-      reason: "original failed for a reason a resend cannot fix",
+      reason: NOT_RESENDABLE_REASON,
     };
   }
 
@@ -173,7 +194,7 @@ export function decide(incident: Incident): Decision {
   if (incident.sentOutsidePayOnce) {
     return {
       action: "escalate",
-      reason: "the original was sent outside PayOnce, so a person approves any replacement",
+      reason: SENT_OUTSIDE_REASON,
     };
   }
 
@@ -187,7 +208,7 @@ export function decide(incident: Incident): Decision {
   if (incident.sourceAmountMinor > incident.twoApproversAboveMinor) {
     return {
       action: "escalate",
-      reason: "a replacement this large needs two approvers",
+      reason: TWO_APPROVERS_REASON,
     };
   }
 
@@ -208,6 +229,6 @@ export function decide(incident: Incident): Decision {
 
   return {
     action: "replace",
-    reason: "original failed, a resend can fix it and the beneficiary details are unchanged",
+    reason: REPLACE_REASON,
   };
 }
