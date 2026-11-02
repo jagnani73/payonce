@@ -95,7 +95,8 @@ function adopt(engine: Engine, transfer: Transfer, state: FoundState): string | 
       feeCurrency: fee?.currency ?? null,
       amountMinor: debit?.minor ?? null,
       currency: debit?.currency ?? null,
-      // Where it went, for the supplier view only.
+      // Where it went, for the supplier view only. sentToOf never throws, so odd
+      // bank details cannot stop the payout being taken on.
       ...sentToOf(transfer.beneficiary?.bank_details),
     },
   );

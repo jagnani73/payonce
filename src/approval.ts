@@ -308,15 +308,30 @@ export function accountKeyOf(details: TransferBankDetails | undefined): string {
 // Airwallex text in the field can never pass for one.
 const ENDING: RegExp = /^[A-Za-z0-9]{1,4}$/;
 
+export interface SentTo {
+  sentKey: string | null;
+  sentEnding: string | null;
+}
+
+const NOT_SENT_TO: SentTo = { sentKey: null, sentEnding: null };
+
 // Where a transfer went, for the supplier view only: the accountKey of its bank
 // details and the last four characters of the account number or IBAN. Both null
-// when the transfer carries no bank details, and the ending null when it is not
-// letters and digits. Nothing PayOnce decides reads them.
-export function sentToOf(details: TransferBankDetails | undefined): { sentKey: string | null; sentEnding: string | null } {
-  if (details === undefined || Object.keys(details).length === 0) {
-    return { sentKey: null, sentEnding: null };
+// when the transfer carries no bank details, or details that are not an object,
+// such as null, and the ending null when it is not letters and digits. Nothing
+// PayOnce decides reads them, and it never throws, so tying a payout, the check
+// before a payment and recording a transfer never stop on what Airwallex sent
+// here.
+export function sentToOf(details: unknown): SentTo {
+  if (details === null || typeof details !== "object" || Array.isArray(details) || Object.keys(details).length === 0) {
+    return NOT_SENT_TO;
   }
-  return { sentKey: accountKeyOf(details), sentEnding: endingOf(details) };
+  try {
+    const bankDetails: TransferBankDetails = details as TransferBankDetails;
+    return { sentKey: accountKeyOf(bankDetails), sentEnding: endingOf(bankDetails) };
+  } catch {
+    return NOT_SENT_TO;
+  }
 }
 
 export function endingOf(details: { account_number?: unknown; iban?: unknown }): string | null {

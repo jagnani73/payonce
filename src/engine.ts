@@ -380,7 +380,8 @@ function payoutMoney(transfer: Transfer): PayoutMoney {
     currency: debit?.currency ?? null,
     feeMinor: fee?.minor ?? null,
     feeCurrency: fee?.currency ?? null,
-    // Where it went, for the supplier view only.
+    // Where it went, for the supplier view only. sentToOf never throws, so odd
+    // bank details cannot stop the payout being tied or the check before a payment.
     ...sentToOf(transfer.beneficiary?.bank_details),
   };
 }
