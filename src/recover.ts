@@ -51,12 +51,14 @@ async function main(): Promise<void> {
   const scenarioId: string = process.argv[5] ?? DEFAULT_SCENARIO;
   // Who started the incident. The login name stands in when none is given.
   const given: string = process.argv.slice(6).join(" ").trim();
+  const login: string = userInfo().username;
   let startedBy: string;
   try {
-    startedBy = personName(given || userInfo().username);
+    startedBy = personName(given || login);
   } catch (error: unknown) {
+    const rule: string = error instanceof Error ? error.message : String(error);
     console.log(
-      `${error instanceof Error ? error.message : String(error)}. ${given === "" ? "The login name is not one, so give" : "Give"} the name of who starts the incident after the scenario`,
+      `${given === "" ? `Your login name, ${JSON.stringify(login)}, is not a name PayOnce takes. ${rule}` : rule}. Give the name of who starts the incident as NAME: pnpm recover OUTCOME INVOICE EMAILS SCENARIO NAME`,
     );
     process.exitCode = 1;
     return;

@@ -16,8 +16,8 @@ import {
   APPROVED_USE_WITHIN_MS,
   checkSigner,
   eligibleApprovers,
+  knownName,
   personName,
-  sameName,
   signoffProblem,
   type ApprovalPolicy,
   type Approver,
@@ -29,7 +29,7 @@ import { bankDetailsKey } from "./assess.js";
 import { committedAcross, committedByInvoice, type CommittedExcept } from "./cash-position.js";
 import { withCurrencyLocks } from "./currency-lock.js";
 import type { Dispatcher } from "./dispatcher.js";
-import { likelyDuplicates, sameBillAndNumber, sameNumberExactly, type Bill } from "./duplicates.js";
+import { likelyDuplicates, sameBillAndNumber, sameNumberExactly, sameSupplier, type Bill } from "./duplicates.js";
 import { lineWanted, type Engine } from "./engine.js";
 import {
   alreadyInLedger,
@@ -235,7 +235,7 @@ function checkRow(
         (other: Obligation): boolean =>
           sameNumberExactly(other.invoiceId, invoiceId) &&
           (other.beneficiaryId === row.beneficiaryId ||
-            (payeeName !== null && sameName(other.supplier, payeeName))),
+            (payeeName !== null && sameSupplier(other.supplier, payeeName))),
       );
     if (same !== undefined) {
       reasons.push(alreadyInLedger(invoiceId));
@@ -635,13 +635,15 @@ export function largestTotal(terms: RunTerms): { amountMinor: number; currency: 
 
 // How many approvers a run needs, and why: two for a payee PayOnce has never
 // paid, for an account a callback verified, for a supplier_domain with a
-// caution (domainChecks), and when any currency's total is above
-// TWO_APPROVERS_ABOVE.
+// caution (domainChecks), when any currency's total is above
+// TWO_APPROVERS_ABOVE, and when the uploader's name, stored before names were
+// checked, does not follow the name rule, so the uploader cannot be barred.
 export function runRule(
   policy: ApprovalPolicy,
   rows: CheckedRow[],
   amount: PaymentAmount,
   domains: DomainCheck[],
+  uploadedBy: string,
 ): SignoffRule {
   const pay: PayRow[] = payRows(rows);
   const fresh: PayRow | undefined = pay.find((row: PayRow): boolean => row.newPayee);
@@ -676,21 +678,34 @@ export function runRule(
       why: `the ${amount.currency} total is above ${formatMoney(policy.twoApproversAboveMinor, amount.currency)}`,
     };
   }
+  if (knownName(uploadedBy) === null) {
+    return { needed: 2, why: "PayOnce does not know who uploaded this run" };
+  }
   return { needed: 1, why: "" };
 }
 
 // Who may not approve the run: whoever uploaded it, and everyone who recorded the
-// callback for an account a row pays.
+// callback for an account a row pays. A name stored before names were checked
+// that does not follow the name rule bars nobody (knownName): runRule asks for
+// two approvers for such an uploader, and a row to a callback-verified account
+// needs two already.
 export function runBarred(ledger: Ledger, terms: RunTerms): Barred[] {
-  const barred: Barred[] = [{ name: terms.uploadedBy, why: "uploaded this run" }];
+  const barred: Barred[] = [];
+  const uploader: string | null = knownName(terms.uploadedBy);
+  if (uploader !== null) {
+    barred.push({ name: uploader, why: "uploaded this run" });
+  }
   for (const row of terms.rows) {
     const change: BankChange | undefined =
       row.bankChange === null ? undefined : ledger.bankChange(row.bankChange);
     if (change?.appliedKey === null || change === undefined) {
       continue;
     }
-    for (const name of ledger.bankChangeRecorders(row.beneficiaryId, change.appliedKey)) {
-      barred.push({ name, why: `recorded the callback for the bank details row ${row.line} pays` });
+    for (const stored of ledger.bankChangeRecorders(row.beneficiaryId, change.appliedKey)) {
+      const name: string | null = knownName(stored);
+      if (name !== null) {
+        barred.push({ name, why: `recorded the callback for the bank details row ${row.line} pays` });
+      }
     }
   }
   return barred;
@@ -842,7 +857,7 @@ function settleRunRequest(
   }
   let binding: string = bindingOf(terms);
   const amount: PaymentAmount = runAmount(terms);
-  const rule: SignoffRule = runRule(policy, rows, amount, domainChecks(ledger, terms));
+  const rule: SignoffRule = runRule(policy, rows, amount, domainChecks(ledger, terms), terms.uploadedBy);
   const eligible: Approver[] = eligibleApprovers(policy, amount, runBarred(ledger, terms));
   if (policy.problem !== null || eligible.length < rule.needed) {
     if (ledger.voidOpenRunApprovals(run.id)) {
@@ -1131,7 +1146,7 @@ export async function releaseRun(engine: Engine, agent: Dispatcher, runId: numbe
   } else {
     const problem: string | null = signoffProblem(
       engine.approvals,
-      runRule(engine.approvals, check.rows, amount, domainChecks(ledger, terms)),
+      runRule(engine.approvals, check.rows, amount, domainChecks(ledger, terms), terms.uploadedBy),
       approval,
       amount,
       runBarred(ledger, terms),

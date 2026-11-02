@@ -40,13 +40,14 @@ export interface Barred {
 }
 
 // What a name typed into PayOnce may hold once trimmed, with runs of spaces
-// collapsed: ASCII letters, digits, spaces, dots, hyphens and apostrophes, 1 to
-// 80 of them. Anything else, such as a zero-width space or a Cyrillic letter that
-// looks Latin, could pass on screen for someone else's name.
-const NAME_PATTERN: RegExp = /^[A-Za-z0-9 .'-]{1,80}$/;
+// collapsed: ASCII letters, digits, spaces, dots, hyphens, apostrophes and
+// underscores, 1 to 80 of them. Anything else, such as a zero-width space or a
+// Cyrillic letter that looks Latin, could pass on screen for someone else's name.
+// Underscores are in it for login names, which pnpm recover uses by default.
+const NAME_PATTERN: RegExp = /^[A-Za-z0-9 .'_-]{1,80}$/;
 export const MAX_NAME_LENGTH: number = 80;
 export const NAME_RULE: string =
-  "A name takes only the letters A to Z, digits, spaces, dots, hyphens and apostrophes, up to 80 characters";
+  "A name takes only the letters A to Z, digits, spaces, dots, hyphens, apostrophes and underscores, up to 80 characters";
 
 // A name PayOnce refuses, with words for the person who typed it.
 export class NameError extends Error {
@@ -70,19 +71,48 @@ export function personName(typed: string, missing: string = "Enter your name"): 
   return name;
 }
 
-// Names are typed by people, so case and spacing do not make a different person.
-// Both are compared in their normal form. Characters that draw nothing, such as
-// zero-width spaces, soft hyphens and bidi controls, are dropped first, so a name
-// stored before names were checked compares as it reads.
+// A name as PayOnce stored it, when it follows NAME_RULE, in the form personName
+// records. Null for null and for a name stored before names were checked that
+// does not, such as one with a zero-width space in it: PayOnce cannot tell whose
+// it is, so it counts as not known.
+export function knownName(stored: string | null): string | null {
+  if (stored === null) {
+    return null;
+  }
+  const name: string = stored.trim().replace(/ {2,}/g, " ");
+  return NAME_PATTERN.test(name) ? name : null;
+}
+
+// What makes two names one person to PayOnce: the letters and digits only,
+// lowercased, with runs of spaces collapsed, so "Alex." and "alex" are the same
+// person. Null for a name knownName does not take.
+function personKey(name: string): string | null {
+  const known: string | null = knownName(name);
+  return known === null
+    ? null
+    : known
+        .toLowerCase()
+        .replace(/[^a-z0-9 ]/g, "")
+        .replace(/ +/g, " ")
+        .trim();
+}
+
+// True when two names are the same person: both follow NAME_RULE and have the
+// same personKey. A name that does not follow it is the same as no one.
 export function sameName(a: string, b: string): boolean {
-  const key = (name: string): string =>
-    name
-      .normalize("NFKC")
-      .replace(/[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, "")
-      .trim()
-      .replace(/\s+/g, " ")
-      .toLowerCase();
-  return key(a) === key(b);
+  const key: string | null = personKey(a);
+  return key !== null && key === personKey(b);
+}
+
+// An APPROVERS entry as it can be read back in a message: anything outside
+// printable ASCII, such as a zero-width space, is written as its code point.
+function visible(text: string): string {
+  return [...text]
+    .map((char: string): string => {
+      const code: number = char.codePointAt(0) ?? 0;
+      return code >= 0x20 && code <= 0x7e ? char : `\\u{${code.toString(16).toUpperCase()}}`;
+    })
+    .join("");
 }
 
 function parseApprovers(raw: string): Approver[] {
@@ -95,15 +125,20 @@ function parseApprovers(raw: string): Approver[] {
     const name: string = colon < 0 ? "" : entry.slice(0, colon).trim().replace(/\s+/g, " ");
     const limit: number = colon < 0 ? Number.NaN : Number(entry.slice(colon + 1).trim());
     if (name === "" || !Number.isFinite(limit) || limit <= 0) {
-      throw new Error(`"${entry.trim()}" is not a name and a limit, such as Alex:50000`);
+      throw new Error(`"${visible(entry.trim())}" is not a name and a limit, such as Alex:50000`);
     }
     // An approver types their name to approve, so a listed name follows the same
     // rule, or nobody could ever approve as it.
     if (!NAME_PATTERN.test(name)) {
-      throw new Error(`"${name}" is not a name PayOnce takes. ${NAME_RULE}`);
+      throw new Error(`"${visible(name)}" is not a name PayOnce takes. ${NAME_RULE}`);
     }
-    if (approvers.some((approver: Approver): boolean => sameName(approver.name, name))) {
-      throw new Error(`${name} is listed twice`);
+    const twin: Approver | undefined = approvers.find((approver: Approver): boolean => sameName(approver.name, name));
+    if (twin !== undefined) {
+      throw new Error(
+        twin.name === name
+          ? `${name} is listed twice`
+          : `${twin.name} and ${name} are the same name to PayOnce, which compares names by their letters and digits only`,
+      );
     }
     approvers.push({ name, limitMinor: toMinor(limit) });
   }
@@ -162,7 +197,8 @@ export function describePolicy(policy: ApprovalPolicy): string {
 
 // Two approvers are needed for a payment to an account the original did not go
 // to, whatever the amount, and for one whose starter PayOnce does not know, since
-// the requester rule cannot be checked then.
+// the requester rule cannot be checked then. A starter stored under a name that
+// does not follow NAME_RULE counts as not known (knownName).
 export function signoffsNeeded(
   policy: ApprovalPolicy,
   amount: PaymentAmount,
@@ -172,7 +208,7 @@ export function signoffsNeeded(
   if (newAccount) {
     return { needed: 2, why: "it pays an account the original payment did not go to" };
   }
-  if (startedBy === null) {
+  if (knownName(startedBy) === null) {
     return { needed: 2, why: "PayOnce does not know who started this payment" };
   }
   if (amount.minor > policy.twoApproversAboveMinor) {

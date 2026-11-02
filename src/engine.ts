@@ -40,6 +40,7 @@ import {
   APPROVED_USE_WITHIN_MS,
   checkSigner,
   eligibleApprovers,
+  knownName,
   personName,
   signoffProblem,
   signoffsNeeded,
@@ -1449,12 +1450,16 @@ function termsOf(obligation: Obligation, assessment: Assessment): ReplacementTer
 
 // The people who may not approve a payment of this invoice to the account with
 // this accountKey, and why: whoever started the incident, and everyone who
-// recorded a callback verifying that account.
+// recorded a callback verifying that account. A name stored before names were
+// checked that does not follow the name rule bars nobody (knownName): such a
+// starter counts as not known, so signoffsNeeded asks for two approvers, and a
+// payment to a callback-verified account needs two already.
 function barredFrom(ledger: Ledger, obligation: Obligation, accountKey: string | undefined): Barred[] {
   const barred: Barred[] = [];
-  if (obligation.startedBy !== null) {
+  const starter: string | null = knownName(obligation.startedBy);
+  if (starter !== null) {
     barred.push({
-      name: obligation.startedBy,
+      name: starter,
       why: obligation.runRowId === null ? "started this incident" : "uploaded the pay run it came from",
     });
   }
@@ -1462,8 +1467,11 @@ function barredFrom(ledger: Ledger, obligation: Obligation, accountKey: string |
     if (accountKey === undefined || keyHash(detailsKey) !== accountKey) {
       continue;
     }
-    for (const name of ledger.bankChangeRecorders(obligation.beneficiaryId, detailsKey)) {
-      barred.push({ name, why: "recorded the callback for the new bank details" });
+    for (const stored of ledger.bankChangeRecorders(obligation.beneficiaryId, detailsKey)) {
+      const name: string | null = knownName(stored);
+      if (name !== null) {
+        barred.push({ name, why: "recorded the callback for the new bank details" });
+      }
     }
   }
   return barred;

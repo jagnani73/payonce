@@ -8,7 +8,7 @@ import {
   type HeldPaymentTerms,
   type ReplacementTerms,
 } from "./approval.js";
-import { sameName, type ApprovalPolicy, type Barred } from "./approvers.js";
+import { knownName, sameName, type ApprovalPolicy, type Barred } from "./approvers.js";
 import { HOLIDAYS_NOTE, type ArrivalTerms } from "./arrival.js";
 import { committedMinor } from "./cash-position.js";
 import { deadlineMinutes } from "./deadlines.js";
@@ -1656,7 +1656,7 @@ export function whyFacts(
           : UNPASSED_WALLET,
       transferMethod: METHOD_PATTERN.test(obligation.transferMethod) ? obligation.transferMethod : UNPASSED_METHOD,
       dueDate: date(obligation.dueDate),
-      startedBy: obligation.startedBy === null ? "not known" : aliases.person(obligation.startedBy),
+      startedBy: knownName(obligation.startedBy) === null ? "not known" : aliases.person(obligation.startedBy),
       supplierDomainOnFile: obligation.supplierDomain !== "",
       supplierPhoneOnFile: obligation.supplierPhone !== null,
       heldBeforePaying: heldBeforePaying(ledger, obligation),

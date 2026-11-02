@@ -1,5 +1,4 @@
 import type { Transfer } from "./airwallex/transfers.js";
-import { sameName } from "./approvers.js";
 import type { Ledger, Obligation } from "./ledger.js";
 import { toMinor } from "./money.js";
 
@@ -59,6 +58,22 @@ function knownAs(obligation: Obligation, reference: string): boolean {
   return numbersOf(obligation).some((number: string): boolean => sameInvoiceNumber(number, reference));
 }
 
+// Two supplier names are the same supplier when they read the same, case and
+// spacing aside. Characters that draw nothing, such as zero-width spaces, soft
+// hyphens and bidi controls, are dropped and both are compared in NFKC, so a name
+// cannot pass for another supplier's by a character nobody sees. People's names
+// are compared by sameName in approvers.ts instead.
+export function sameSupplier(a: string, b: string): boolean {
+  const key = (name: string): string =>
+    name
+      .normalize("NFKC")
+      .replace(/[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .toLowerCase();
+  return key(a) === key(b);
+}
+
 export interface Bill {
   supplier: string;
   beneficiaryId: string;
@@ -70,7 +85,7 @@ function sameBill(obligation: Bill, bill: Bill): boolean {
   return (
     obligation.currency === bill.currency &&
     obligation.amountMinor === bill.amountMinor &&
-    (obligation.beneficiaryId === bill.beneficiaryId || sameName(obligation.supplier, bill.supplier))
+    (obligation.beneficiaryId === bill.beneficiaryId || sameSupplier(obligation.supplier, bill.supplier))
   );
 }
 
@@ -113,7 +128,7 @@ export function sameNumberForSupplier(ledger: Ledger, obligation: Obligation): O
         other.invoiceId !== obligation.invoiceId &&
         other.state !== "rejected" &&
         (other.beneficiaryId === obligation.beneficiaryId ||
-          sameName(other.supplier, obligation.supplier)) &&
+          sameSupplier(other.supplier, obligation.supplier)) &&
         numbersOf(obligation).some((number: string): boolean => knownAs(other, number)),
     )
     .reverse();
