@@ -745,60 +745,127 @@ function listOf(items: string[]): string {
 
 // ---------- timeline lines ----------
 
+// Where a line comes from: its kind, and its topic after a slash when it has one.
+// Every rule and fixed line names the sources PayOnce writes it from, and passes
+// a line from no other. An error line holds any error's message and a callback
+// line starts with a name a person typed, so without this either could read as a
+// decision, a bank line or a closing line.
+type Source = string;
+
+const DECISION: Source = "decision/decision";
+const WAITING: Source = "approval/waiting";
+const APPROVAL: Source = "approval";
+const SIGNOFF: Source = "approval/approval";
+const PAYMENT: Source = "payment";
+const PAYMENT_WAITING: Source = "payment/waiting";
+const WARNING: Source = "warning";
+const BANK: Source = "bank";
+// An error line passes only through a rule that gives PayOnce's own words for
+// one of PayOnce's own errors. None of those rules keeps the line as written.
+const ERROR: Source = "error";
+const LOCK: Source = "lock";
+const CLOSED: Source = "closed";
+const CALLBACK: Source = "callback";
+const EMAIL: Source = "email";
+const OUTAGE: Source = "outage";
+const OUTAGE_WAITING: Source = "outage/waiting";
+const OUTBOX: Source = "outbox/outbox";
+
+function sourceOf(event: LedgerEvent): Source {
+  if (event.topic === null) {
+    return event.kind;
+  }
+  return `${event.kind}/${event.topic.startsWith("outbox:") ? "outbox" : event.topic}`;
+}
+
 interface LineRule {
+  from: readonly Source[];
   test: RegExp;
   line: (match: RegExpExecArray, builder: FactsBuilder) => string;
 }
 
-function keep(source: string): LineRule {
-  return { test: pattern(source), line: (match: RegExpExecArray): string => match[0] };
+function keep(from: readonly Source[], source: string): LineRule {
+  return { from, test: pattern(source), line: (match: RegExpExecArray): string => match[0] };
 }
 
-function rule(source: string, line: LineRule["line"]): LineRule {
-  return { test: pattern(source), line };
+function rule(from: readonly Source[], source: string, line: LineRule["line"]): LineRule {
+  return { from, test: pattern(source), line };
 }
 
-// Lines PayOnce writes with no slot at all, kept as written.
-const FIXED_LINES: ReadonlySet<string> = new Set<string>([
-  "Waiting on a person",
-  "Waiting on a person. A payout sent outside PayOnce may already pay this invoice, so PayOnce sends nothing",
-  "Waiting on a person to check with the supplier and close the incident. PayOnce will not send a second payment",
-  "Waiting on a person to check the exchange rate a payment went out at and close the incident. PayOnce will not send another payment",
-  "Waiting on a person. The bank details on file are not the ones the original went to, and no phone number is on file to verify them by calling the supplier back",
-  "Waiting on a person. Supplier emails are on file that PayOnce could not read yet, so it asks nobody to approve paying this invoice. It tries reading them again in a minute",
-  "Waiting on a person. A supplier email arrived while PayOnce read the others, so it asks nobody to approve paying this invoice until it has read that one too",
-  "Waiting on a person. The beneficiary is no longer in Airwallex, so there is nothing to pay it to. Close the invoice without paying",
-  "Waiting on a person. The bank details on file are not the ones the pay run approved, so PayOnce does not pay this invoice. Close it without paying, or restore the approved details in Airwallex and check again",
-  "The supplier's bank details on file are not the ones the original payment went to",
-  "Approval request withdrawn: a transfer that does not match this invoice is live under one of its request ids",
-  "Approval request withdrawn: the supplier may have been paid twice",
-  "Approval request withdrawn: a payout for this invoice was sent outside PayOnce",
-  "Approval request withdrawn: nobody on the approver list can approve it",
-  "Approval request withdrawn: the terms changed, so PayOnce takes a new exchange rate quote and opens a new request",
-  "Approval request withdrawn: the bank details on file have not been verified by a callback",
-  "Approval request withdrawn: it was for the old bank details",
-  `Approval request withdrawn: ${EMAILS_UNREAD_REASON}`,
-  "Approval request withdrawn: the beneficiary is no longer in Airwallex",
-  "Approval request withdrawn: the bank details on file are not the ones the pay run approved",
-  "Approval request expired before anyone approved it, so PayOnce opened a new one",
-  "Approval request expired before enough people approved it, so PayOnce opened a new one",
-  "Approval terms now count the supplier emails on file and name no sender address, so the open approval no longer matches them",
-  "Approval terms now count the supplier emails on file and name no sender address, so the open request no longer matches them",
-  "Incident closed: the original failed and one replacement was paid",
-  "Incident closed: the original payment arrived",
-  "The ledger does not show this invoice as paid once, so the incident stays open",
-  "PayOnce could not confirm whether the supplier's record changed. Record the callback again once Airwallex answers",
-  "This incident is closed. The email is on file and does not reopen it",
-  "A replacement and its transfer fee would now leave cash above the reserve floor",
-  "A replacement and its transfer fee would now leave cash above the reserve floor. An approval of a request that named the floor still counts",
-  "The reserve floor setting could not be read, so PayOnce did not pay this invoice",
-  "Pay again not sent. The incident is closed, so PayOnce pays nothing more for this invoice",
-  "Pay again not sent. A person closed this invoice without paying, because it was a second bill for another invoice",
-  "Pay again not sent. A person closed this invoice without paying, as a second bill for another",
-  "Pay again not sent. A payout sent outside PayOnce may already pay this invoice",
-  "Pay again not sent. PayOnce is holding this invoice before paying it, so it pays only on an approval",
-  "Pay again not sent. No payment for this invoice is live, so a replacement goes through the policy, and through a person's approval once the invoice is with a person",
-  "Pay again refused by the duplicate lock. An invoice can have one live payment",
+function fixedFrom(from: readonly Source[], lines: readonly string[]): [string, readonly Source[]][] {
+  return lines.map((line: string): [string, readonly Source[]] => [line, from]);
+}
+
+// Lines PayOnce writes with no slot at all, kept as written, each with the
+// sources it is written from.
+const FIXED_LINES: ReadonlyMap<string, readonly Source[]> = new Map<string, readonly Source[]>([
+  ...fixedFrom(
+    [WAITING],
+    [
+      "Waiting on a person",
+      "Waiting on a person. A payout sent outside PayOnce may already pay this invoice, so PayOnce sends nothing",
+      "Waiting on a person. A payout sent outside PayOnce may also pay this invoice, which PayOnce has paid once. Check it with the supplier and close the incident. PayOnce will not send a second payment",
+      "Waiting on a person to check with the supplier and close the incident. PayOnce will not send a second payment",
+      "Waiting on a person to check the exchange rate a payment went out at and close the incident. PayOnce will not send another payment",
+      "Waiting on a person. The bank details on file are not the ones the original went to, and no phone number is on file to verify them by calling the supplier back",
+      "Waiting on a person. Supplier emails are on file that PayOnce could not read yet, so it asks nobody to approve paying this invoice. It tries reading them again in a minute",
+      "Waiting on a person. A supplier email arrived while PayOnce read the others, so it asks nobody to approve paying this invoice until it has read that one too",
+      "Waiting on a person. The beneficiary is no longer in Airwallex, so there is nothing to pay it to. Close the invoice without paying",
+      "Waiting on a person. The bank details on file are not the ones the pay run approved, so PayOnce does not pay this invoice. Close it without paying, or restore the approved details in Airwallex and check again",
+    ],
+  ),
+  ...fixedFrom(["warning/bank-details"], ["The supplier's bank details on file are not the ones the original payment went to"]),
+  ...fixedFrom(
+    [APPROVAL],
+    [
+      "Approval request withdrawn: a transfer that does not match this invoice is live under one of its request ids",
+      "Approval request withdrawn: the supplier may have been paid twice",
+      "Approval request withdrawn: a payout for this invoice was sent outside PayOnce",
+      "Approval request withdrawn: nobody on the approver list can approve it",
+      "Approval request withdrawn: the terms changed, so PayOnce takes a new exchange rate quote and opens a new request",
+      "Approval request withdrawn: the bank details on file have not been verified by a callback",
+      "Approval request withdrawn: it was for the old bank details",
+      `Approval request withdrawn: ${EMAILS_UNREAD_REASON}`,
+      "Approval request withdrawn: the beneficiary is no longer in Airwallex",
+      "Approval request withdrawn: the bank details on file are not the ones the pay run approved",
+      "Approval request expired before anyone approved it, so PayOnce opened a new one",
+      "Approval request expired before enough people approved it, so PayOnce opened a new one",
+      "Approval terms now count the supplier emails on file and name no sender address, so the open approval no longer matches them",
+      "Approval terms now count the supplier emails on file and name no sender address, so the open request no longer matches them",
+    ],
+  ),
+  ...fixedFrom(
+    [CLOSED],
+    ["Incident closed: the original failed and one replacement was paid", "Incident closed: the original payment arrived"],
+  ),
+  ...fixedFrom(
+    [ERROR],
+    [
+      "The ledger does not show this invoice as paid once, so the incident stays open",
+      "PayOnce could not confirm whether the supplier's record changed. Record the callback again once Airwallex answers",
+    ],
+  ),
+  ...fixedFrom([EMAIL], ["This incident is closed. The email is on file and does not reopen it"]),
+  ...fixedFrom(
+    ["payment/floor"],
+    [
+      "A replacement and its transfer fee would now leave cash above the reserve floor",
+      "A replacement and its transfer fee would now leave cash above the reserve floor. An approval of a request that named the floor still counts",
+    ],
+  ),
+  ...fixedFrom(["warning/cost"], ["The reserve floor setting could not be read, so PayOnce did not pay this invoice"]),
+  ...fixedFrom(
+    [WARNING],
+    [
+      "Pay again not sent. The incident is closed, so PayOnce pays nothing more for this invoice",
+      "Pay again not sent. A person closed this invoice without paying, because it was a second bill for another invoice",
+      "Pay again not sent. A person closed this invoice without paying, as a second bill for another",
+      "Pay again not sent. A payout sent outside PayOnce may already pay this invoice",
+      "Pay again not sent. PayOnce is holding this invoice before paying it, so it pays only on an approval",
+      "Pay again not sent. No payment for this invoice is live, so a replacement goes through the policy, and through a person's approval once the invoice is with a person",
+    ],
+  ),
+  ...fixedFrom([LOCK], ["Pay again refused by the duplicate lock. An invoice can have one live payment"]),
 ]);
 
 const HELD_SUFFIXES: readonly string[] = [
@@ -834,7 +901,7 @@ function bankFailure(code: string | undefined): string {
 const LINE_RULES: readonly LineRule[] = [
   // Decisions: the action and the reason, through the grammar. The arrival clause
   // is dropped, because the arrival is in the facts as fields.
-  rule("(Wait|Replace|Escalate|Close): ([\\s\\S]+)", (match: RegExpExecArray, builder: FactsBuilder): string => {
+  rule([DECISION], "(Wait|Replace|Escalate|Close): ([\\s\\S]+)", (match: RegExpExecArray, builder: FactsBuilder): string => {
     let body: string = match[2] ?? "";
     for (const marker of ARRIVAL_MARKERS) {
       const at: number = body.indexOf(marker);
@@ -847,60 +914,82 @@ const LINE_RULES: readonly LineRule[] = [
   }),
 
   // Waiting lines.
-  keep(`Waiting for the bank to pay or fail original ${REF}\\. If it has done neither within ${DURATION} of sending, a person hears about it`),
-  keep(`Waiting for the bank to pay replacement ${REF}(?:\\. If it has not paid or failed it within ${DURATION} of sending, a person hears about it)?`),
-  keep(`Waiting on a person\\. (?:${KIND_CAP}) ${REF} is still with the bank, so PayOnce sends nothing more`),
-  keep(`Waiting on a person\\. Transfer (?:${REF_OR_ID})?, under the (?:${KIND})'s request id, is paid but does not match this invoice\\. Check it with the supplier and close the incident\\. PayOnce sends nothing more`),
-  keep(`Waiting on a person\\. Transfer (?:${REF_OR_ID})?, under the (?:${KIND})'s request id, does not match this invoice and is still with the bank, so PayOnce sends nothing`),
-  keep(`Waiting on a person\\. (?:${KIND_CAP}) (?:${REF_OR_ID})? and another payment for this invoice may both pay the supplier, so PayOnce sends nothing`),
+  keep([PAYMENT_WAITING], `Waiting for the bank to pay or fail original ${REF}\\. If it has done neither within ${DURATION} of sending, a person hears about it`),
+  keep([PAYMENT_WAITING], `Waiting for the bank to pay replacement ${REF}(?:\\. If it has not paid or failed it within ${DURATION} of sending, a person hears about it)?`),
+  keep([WAITING], `Waiting on a person\\. (?:${KIND_CAP}) ${REF} is still with the bank, so PayOnce sends nothing more`),
+  keep([WAITING], `Waiting on a person\\. Transfer (?:${REF_OR_ID})?, under the (?:${KIND})'s request id, is paid but does not match this invoice\\. Check it with the supplier and close the incident\\. PayOnce sends nothing more`),
+  keep([WAITING], `Waiting on a person\\. Transfer (?:${REF_OR_ID})?, under the (?:${KIND})'s request id, does not match this invoice and is still with the bank, so PayOnce sends nothing`),
+  keep([WAITING], `Waiting on a person\\. (?:${KIND_CAP}) (?:${REF_OR_ID})? and another payment for this invoice may both pay the supplier, so PayOnce sends nothing`),
+  keep(
+    [WAITING],
+    `Waiting on a person to check (?:transfer|transfers) ${REF_OR_ID}(?:(?:, | and )${REF_OR_ID})*, listed under this invoice's request (?:id|ids), which (?:does|do) not match it, and close the incident\\. PayOnce will not send a second payment`,
+  ),
   rule(
+    [WAITING],
     "Waiting on a person\\. Approvals are refused: [\\s\\S]*",
     (): string => "Waiting on a person. Approvals are refused because the APPROVERS setting cannot be used",
   ),
+  // approveOrWait's line in engine.ts when too few people on the list could
+  // approve: the reason goes through the grammar, so another invoice in it is an
+  // alias, and the names that can approve become aliases.
   rule(
-    `Waiting on a person\\. (A replacement of ${MONEY}|Paying ${MONEY} for this invoice)(, about ${MONEY},)? needs (one approver|(${N}) approvers, because ([\\s\\S]+?),) and (nobody on the approver list can|only ([\\s\\S]+) can) approve it\\. Change APPROVERS, restart and check again`,
+    [WAITING],
+    `Waiting on a person\\. (?<payment>A replacement of ${MONEY}|Paying ${MONEY} for this invoice)(?<about>, about ${MONEY},)? needs (?:one approver|(?<count>${N}) approvers, because (?<why>[\\s\\S]+?),) and (?:nobody on the approver list can|only (?<able>[\\s\\S]+) can) approve it\\. Change APPROVERS, restart and check again`,
     (match: RegExpExecArray, builder: FactsBuilder): string => {
-      const needs: string = match[5] === undefined ? "one approver" : `${match[5]} approvers, because ${builder.why(match[6] ?? "")},`;
-      const able: string = match[8] === undefined ? "nobody on the approver list can" : `only ${builder.aliases.peopleText(match[8])} can`;
-      return `Waiting on a person. ${match[1] ?? ""}${match[2] ?? ""} needs ${needs} and ${able} approve it. Change APPROVERS, restart and check again`;
+      const slots: Record<string, string | undefined> = match.groups ?? {};
+      const needs: string =
+        slots["count"] === undefined
+          ? "one approver"
+          : `${slots["count"]} approvers, because ${builder.why(slots["why"] ?? "")},`;
+      const able: string =
+        slots["able"] === undefined ? "nobody on the approver list can" : `only ${builder.aliases.peopleText(slots["able"])} can`;
+      return `Waiting on a person. ${slots["payment"] ?? ""}${slots["about"] ?? ""} needs ${needs} and ${able} approve it. Change APPROVERS, restart and check again`;
     },
   ),
   rule(
+    [WAITING],
     `Waiting on a person to approve (${MONEY}) to [\\s\\S]+? \\(the account on file\\)(${PAID_WITH})?`,
     (match: RegExpExecArray): string => `Waiting on a person to approve a replacement of ${match[1] ?? ""}${match[2] ?? ""}`,
   ),
   rule(
+    [WAITING],
     `Waiting on (${N}) approvers for (${MONEY}) to [\\s\\S]+? \\(the account on file\\)(${PAID_WITH})?, because ([\\s\\S]+)`,
     (match: RegExpExecArray, builder: FactsBuilder): string =>
       `Waiting on ${match[1] ?? ""} approvers for a replacement of ${match[2] ?? ""}${match[3] ?? ""}, because ${builder.why(match[4] ?? "")}`,
   ),
   rule(
+    [WAITING],
     `Waiting on a person to approve paying (${MONEY}) to [\\s\\S]+? \\(the account on file\\)(${PAID_WITH})?, or to close the invoice without paying`,
     (match: RegExpExecArray): string =>
       `Waiting on a person to approve paying ${match[1] ?? ""} for this invoice${match[2] ?? ""}, or to close the invoice without paying`,
   ),
   rule(
+    [WAITING],
     `Waiting on (${N}) approvers to pay (${MONEY}) to [\\s\\S]+? \\(the account on file\\)(${PAID_WITH})?, because ([\\s\\S]+), or on a person to close the invoice without paying`,
     (match: RegExpExecArray, builder: FactsBuilder): string =>
       `Waiting on ${match[1] ?? ""} approvers to pay ${match[2] ?? ""} for this invoice${match[3] ?? ""}, because ${builder.why(match[4] ?? "")}, or on a person to close the invoice without paying`,
   ),
   rule(
+    [WAITING],
     "Waiting on a person\\. ([\\s\\S]+) closed this invoice without paying, so PayOnce asks nobody to approve paying it",
     (match: RegExpExecArray, builder: FactsBuilder): string =>
       `Waiting on a person. ${capitalise(builder.aliases.person(match[1] ?? ""))} closed this invoice without paying, so PayOnce asks nobody to approve paying it`,
   ),
   rule(
+    [WAITING],
     "Waiting on a person to close it again\\. ([\\s\\S]+) closed this invoice without paying, and PayOnce asks nobody to approve paying it",
     (match: RegExpExecArray, builder: FactsBuilder): string =>
       `Waiting on a person to close it again. ${capitalise(builder.aliases.person(match[1] ?? ""))} closed this invoice without paying, and PayOnce asks nobody to approve paying it`,
   ),
   rule(
+    [WAITING],
     "Waiting on a person to call the supplier on [\\s\\S]+, the number on file, and record the callback\\. PayOnce pays an account the original did not go to only after that",
     (): string =>
       "Waiting on a person to call the supplier on the number on file and record the callback. PayOnce pays an account the original did not go to only after that",
   ),
-  keep(`Waiting for its turn in pay run ${N}\\. The server sends the run's first payments one at a time`),
+  keep([PAYMENT_WAITING], `Waiting for its turn in pay run ${N}\\. The server sends the run's first payments one at a time`),
   rule(
+    [OUTAGE_WAITING],
     `(Waiting on a person to end outage ${N} on ${CUR} (?:${METHOD})\\. PayOnce checks again every minute)(?:\\. The approval by ([\\s\\S]+) is kept and counts until (${CLOCK}))?`,
     (match: RegExpExecArray, builder: FactsBuilder): string =>
       match[2] === undefined
@@ -910,106 +999,117 @@ const LINE_RULES: readonly LineRule[] = [
 
   // The cost of a replacement and the floor.
   keep(
+    ["payment/cost", "warning/cost"],
     `A replacement(?: of ${MONEY})? costs ${MONEY}(?: with a second ${MONEY} transfer fee)?(?:, and ${MONEY} is committed to other payments not sent yet)?\\. Cash after it: ${MONEY}, (?:no reserve floor is set for ${CUR}|reserve floor ${MONEY}|the reserve floor setting could not be read)`,
   ),
-  keep(`Paying it now would leave ${MONEY}, ${MONEY} below the reserve floor of ${MONEY}`),
+  keep(["warning/cost"], `Paying it now would leave ${MONEY}, ${MONEY} below the reserve floor of ${MONEY}`),
   rule(
+    ["warning/floor", "warning/second-bill"],
     "Also, ([\\s\\S]+?)(\\. The approval request says this too(?:, and only an approval of that request releases a replacement)?)?",
     (match: RegExpExecArray, builder: FactsBuilder): string => `Also, ${builder.reason(match[1] ?? "")}${match[2] ?? ""}`,
   ),
 
   // Bank details and second bills.
-  rule(`The account on file for this invoice is not the one (${INV}) was (sent|paid) to`, (match: RegExpExecArray, builder: FactsBuilder): string =>
+  rule(["warning/bank-details"], `The account on file for this invoice is not the one (${INV}) was (sent|paid) to`, (match: RegExpExecArray, builder: FactsBuilder): string =>
     `The account on file for this invoice is not the one ${builder.aliases.invoice(match[1] ?? "") ?? "another invoice"} was ${match[2] ?? "sent"} to`,
   ),
   rule(
+    [WARNING],
     `(${INV}) has the same invoice number as this invoice, for the same supplier, so PayOnce held it before paying`,
     (match: RegExpExecArray, builder: FactsBuilder): string =>
       `${capitalise(builder.aliases.invoice(match[1] ?? "") ?? "another invoice")} has the same invoice number as this invoice, for the same supplier, so PayOnce held it before paying`,
   ),
-  rule(`(${INV}) looks like a second bill for this invoice, so PayOnce held it before paying`, (match: RegExpExecArray, builder: FactsBuilder): string =>
+  rule([WARNING], `(${INV}) looks like a second bill for this invoice, so PayOnce held it before paying`, (match: RegExpExecArray, builder: FactsBuilder): string =>
     `${capitalise(builder.aliases.invoice(match[1] ?? "") ?? "another invoice")} looks like a second bill for this invoice, so PayOnce held it before paying`,
   ),
   rule(
+    [WARNING],
     `This invoice also looks like a second bill for (${INV_LIST}): the same supplier and amount, and the same invoice number apart from case, spacing, leading zeros or letters added at the end`,
     (match: RegExpExecArray, builder: FactsBuilder): string =>
       `This invoice also looks like a second bill for ${builder.aliases.invoiceList(match[1] ?? "") ?? "other invoices"}: the same supplier and amount, and the same invoice number apart from case, spacing, leading zeros or letters added at the end`,
   ),
-  rule(`(${INV}) was closed without paying by ([\\s\\S]+), as a second bill for this invoice`, (match: RegExpExecArray, builder: FactsBuilder): string =>
+  rule([WARNING], `(${INV}) was closed without paying by ([\\s\\S]+), as a second bill for this invoice`, (match: RegExpExecArray, builder: FactsBuilder): string =>
     `${capitalise(builder.aliases.invoice(match[1] ?? "") ?? "another invoice")} was closed without paying by ${builder.aliases.person(match[2] ?? "")}, as a second bill for this invoice`,
   ),
 
   // Payments PayOnce sends. The supplier's name, which for a pay run row or a
   // found payout is the account name in Airwallex, is dropped.
-  rule(`(${KIND_CAP}) (${REF}) sent: (${MONEY}) to [\\s\\S]*`, (match: RegExpExecArray): string =>
+  rule([PAYMENT], `(${KIND_CAP}) (${REF}) sent: (${MONEY}) to [\\s\\S]*`, (match: RegExpExecArray): string =>
     `${match[1] ?? ""} ${match[2] ?? ""} sent: ${match[3] ?? ""}`,
   ),
   keep(
+    [PAYMENT, WARNING],
     `(?:${KIND_CAP}) ${REF} (?:usually arrives (?:on ${DATE}|between ${DATE} and ${DATE})\\. (?:${ROUTE}) takes (?:${DAYS})(?:\\. Due ${DATE}, so it should arrive in time|\\. Due ${DATE}, so it may arrive late|\\. Due ${DATE}, so even at its fastest it arrives late|\\. The due date, ${DATE}, has already passed)?\\. ${escapeRegExp(HOLIDAYS_NOTE)}|has no arrival estimate, because PayOnce has no figures for (?:${METHOD})(?: to [A-Z]{2})?(?:\\. Due ${DATE})?)`,
   ),
-  rule(`(${KIND_CAP}) (${REF}) (?:usually arrives|has no arrival estimate)[\\s\\S]*`, (match: RegExpExecArray): string =>
+  rule([PAYMENT, WARNING], `(${KIND_CAP}) (${REF}) (?:usually arrives|has no arrival estimate)[\\s\\S]*`, (match: RegExpExecArray): string =>
     `${match[1] ?? ""} ${match[2] ?? ""}: PayOnce recorded when it usually arrives`,
   ),
-  keep(`(?:${KIND_CAP}) ${REF} went to bank details that are not the ones it was approved for`),
-  rule(`(${KIND_CAP}) (${REF} went out[\\s\\S]*)`, (match: RegExpExecArray, builder: FactsBuilder): string =>
+  keep([WARNING], `(?:${KIND_CAP}) ${REF} went to bank details that are not the ones it was approved for`),
+  rule([WARNING], `(${KIND_CAP}) (${REF} went out[\\s\\S]*)`, (match: RegExpExecArray, builder: FactsBuilder): string =>
     capitalise(builder.reason(`${(match[1] ?? "").toLowerCase()} ${match[2] ?? ""}`)),
   ),
-  keep(`Quote for ${MONEY}: ${MONEY} at ${RATE}, ${PCT} from mid-market, held until [0-9]{2}:[0-9]{2} UTC(?:\\. The last request's quote was ${RATE} \\(${MONEY}\\))?`),
-  keep(`(?:${KIND_CAP}) payment marked failed: Airwallex lists no transfer under its request id a bank deadline after it was last tried, and (?:${CAUSE})\\. PayOnce sent nothing for it, so (?:${THEN})`),
-  keep(`(?:${KIND_CAP}) payment not sent again: (?:${CAUSE})\\. If Airwallex still lists no transfer for the (?:${KIND}) at [0-9]{2}:[0-9]{2} UTC, a bank deadline after it was last tried, PayOnce marks it failed and (?:${THEN})`),
-  keep(`(?:${KIND_CAP}) payment not sent again: a payout for this invoice was sent outside PayOnce and may already pay it\\. The (?:${KIND}) stays open under its request id, and a later look sends it only if that payout fails`),
+  keep([PAYMENT], `Quote for ${MONEY}: ${MONEY} at ${RATE}, ${PCT} from mid-market, held until [0-9]{2}:[0-9]{2} UTC(?:\\. The last request's quote was ${RATE} \\(${MONEY}\\))?`),
+  keep(["payment/retry"], `(?:${KIND_CAP}) payment marked failed: Airwallex lists no transfer under its request id a bank deadline after it was last tried, and (?:${CAUSE})\\. PayOnce sent nothing for it, so (?:${THEN})`),
+  keep(["warning/retry"], `(?:${KIND_CAP}) payment not sent again: (?:${CAUSE})\\. If Airwallex still lists no transfer for the (?:${KIND}) at [0-9]{2}:[0-9]{2} UTC, a bank deadline after it was last tried, PayOnce marks it failed and (?:${THEN})`),
+  keep(["warning/retry"], `(?:${KIND_CAP}) payment not sent again: a payout for this invoice was sent outside PayOnce and may already pay it\\. The (?:${KIND}) stays open under its request id, and a later look sends it only if that payout fails`),
   rule(
+    [PAYMENT],
     `(${KIND_CAP}) payment never became a transfer: its exchange rate quote ran out, and Airwallex refused a last try under the same request id and lists no transfer with it \\(([^()]*)\\)\\. Nothing was sent, so it needs a new approval on a new quote`,
     (match: RegExpExecArray): string =>
       `${match[1] ?? ""} payment never became a transfer: its exchange rate quote ran out, and Airwallex refused a last try under the same request id and lists no transfer with it (${/^[0-9]{3}$/.test(match[2] ?? "") ? (match[2] ?? "") : (failureText(match[2]) ?? UNPASSED_CODE)}). Nothing was sent, so it needs a new approval on a new quote`,
   ),
   keep(
+    [WARNING],
     `(?:${KIND_CAP}) payment PayOnce had marked failed has a transfer under its request id that does not match this invoice: Airwallex lists ${REF} ${STATUS} under it with another reference, amount or currency\\. PayOnce did not record it as the (?:${KIND}), sends nothing for this invoice while the bank has it, and a person checks it`,
   ),
   rule(
+    [WARNING, BANK],
     `(${KIND_CAP}) payment PayOnce had marked failed is a transfer after all: Airwallex now lists (${REF}) (${STATUS})(?:, (\\S+)[\\s\\S]*?)? under its request id(\\. (?:A payout sent outside PayOnce for this invoice|Another payment PayOnce sent for this invoice) has not failed either, so the supplier may have been paid twice)?(\\. PayOnce still lists the (?:${KIND}) as failed, because it keeps one live payment per invoice)?`,
     (match: RegExpExecArray): string =>
       `${match[1] ?? ""} payment PayOnce had marked failed is a transfer after all: Airwallex now lists ${match[2] ?? ""} ${match[3] ?? ""}${bankFailure(match[4])} under its request id${match[5] ?? ""}${match[6] ?? ""}`,
   ),
 
   // What the bank did. Airwallex's failure message is dropped.
-  rule(`(${KIND_CAP}) (${REF}) (${STATUS})(?:, (\\S+)[\\s\\S]*)?`, (match: RegExpExecArray): string =>
+  rule([BANK], `(${KIND_CAP}) (${REF}) (${STATUS})(?:, (\\S+)[\\s\\S]*)?`, (match: RegExpExecArray): string =>
     `${match[1] ?? ""} ${match[2] ?? ""} ${match[3] ?? ""}${bankFailure(match[4])}`,
   ),
-  rule(`Payout sent outside PayOnce (${REF}) (${STATUS})(?:, (\\S+)[\\s\\S]*)?`, (match: RegExpExecArray): string =>
+  rule([BANK], `Payout sent outside PayOnce (${REF}) (${STATUS})(?:, (\\S+)[\\s\\S]*)?`, (match: RegExpExecArray): string =>
     `Payout sent outside PayOnce ${match[1] ?? ""} ${match[2] ?? ""}${bankFailure(match[3])}`,
   ),
   rule(
+    [BANK],
     `Transfer under the (${KIND})'s request id that does not match this invoice: (${REF}) (${STATUS})(?:, (\\S+)[\\s\\S]*)?`,
     (match: RegExpExecArray): string =>
       `Transfer under the ${match[1] ?? ""}'s request id that does not match this invoice: ${match[2] ?? ""} ${match[3] ?? ""}${bankFailure(match[4])}`,
   ),
-  keep(`Webhook from Airwallex: (?:${KIND}) ${REF} (?:${WEBHOOK_NEWS})\\. Checking it`),
-  rule(`Found payout (${REF}), sent outside PayOnce: [\\s\\S]*`, (match: RegExpExecArray): string =>
+  keep([BANK], `Webhook from Airwallex: (?:${KIND}) ${REF} (?:${WEBHOOK_NEWS})\\. Checking it`),
+  rule([BANK], `Found payout (${REF}), sent outside PayOnce: [\\s\\S]*`, (match: RegExpExecArray): string =>
     `Found payout ${match[1] ?? ""}, sent outside PayOnce`,
   ),
-  rule(`Payout (${REF}) for this invoice was sent outside PayOnce: [\\s\\S]*`, (match: RegExpExecArray): string =>
+  rule([WARNING], `Payout (${REF}) for this invoice was sent outside PayOnce: [\\s\\S]*`, (match: RegExpExecArray): string =>
     `Payout ${match[1] ?? ""} for this invoice was sent outside PayOnce`,
   ),
-  rule(`Payout (${REF}) was sent outside PayOnce with reference [\\s\\S]*`, (match: RegExpExecArray): string =>
+  rule([WARNING], `Payout (${REF}) was sent outside PayOnce with reference [\\s\\S]*`, (match: RegExpExecArray): string =>
     `Payout ${match[1] ?? ""} was sent outside PayOnce with a reference that nearly matches this invoice's number, to the same supplier for the same amount`,
   ),
   rule(
+    [WARNING],
     `Its reference [\\s\\S]* nearly matches (${INV}), which is closed\\. Check it is not the same bill before approving a replacement`,
     (match: RegExpExecArray, builder: FactsBuilder): string =>
       `Its reference nearly matches ${builder.aliases.invoice(match[1] ?? "") ?? "another invoice"}, which is closed. Check it is not the same bill before approving a replacement`,
   ),
 
   // Approvals. Names become aliases, and the pay-to account is dropped.
-  rule("Approval by ([\\s\\S]+?) expired before it was used", (match: RegExpExecArray, builder: FactsBuilder): string =>
+  rule([APPROVAL], "Approval by ([\\s\\S]+?) expired before it was used", (match: RegExpExecArray, builder: FactsBuilder): string =>
     `Approval by ${builder.aliases.peopleText(match[1] ?? "")} expired before it was used`,
   ),
   rule(
+    [APPROVAL],
     `Approval by ([\\s\\S]+?) is void: ((?:${CHANGED_FIELD})(?:, (?:${CHANGED_FIELD}))*) changed`,
     (match: RegExpExecArray, builder: FactsBuilder): string =>
       `Approval by ${builder.aliases.peopleText(match[1] ?? "")} is void: ${match[2] ?? ""} changed`,
   ),
-  rule("Approval by ([\\s\\S]+?) is void: ([\\s\\S]+)", (match: RegExpExecArray, builder: FactsBuilder): string => {
+  rule([APPROVAL], "Approval by ([\\s\\S]+?) is void: ([\\s\\S]+)", (match: RegExpExecArray, builder: FactsBuilder): string => {
     const problem: string = match[2] ?? "";
     const needs: RegExpExecArray | null = /^it now needs ([0-9]{1,3}) approvers, because ([\s\S]+)$/.exec(problem);
     const said: string =
@@ -1020,113 +1120,128 @@ const LINE_RULES: readonly LineRule[] = [
           : "the approval policy now refuses it";
     return `Approval by ${builder.aliases.peopleText(match[1] ?? "")} is void: ${said}`;
   }),
-  rule("Approval by ([\\s\\S]+?) matches the current terms(, so PayOnce pays the invoice)?", (match: RegExpExecArray, builder: FactsBuilder): string =>
+  rule([APPROVAL], "Approval by ([\\s\\S]+?) matches the current terms(, so PayOnce pays the invoice)?", (match: RegExpExecArray, builder: FactsBuilder): string =>
     `Approval by ${builder.aliases.peopleText(match[1] ?? "")} matches the current terms${match[2] ?? ""}`,
   ),
   rule(
+    [APPROVAL],
     "Approval by ([\\s\\S]+?) no longer counts: the terms changed, so PayOnce (takes a new exchange rate quote and opens a new request|opened a new request)",
     (match: RegExpExecArray, builder: FactsBuilder): string =>
       `Approval by ${builder.aliases.peopleText(match[1] ?? "")} no longer counts: the terms changed, so PayOnce ${match[2] ?? ""}`,
   ),
-  rule("Approval request withdrawn: ([\\s\\S]+) closed this invoice without paying", (match: RegExpExecArray, builder: FactsBuilder): string =>
+  rule([APPROVAL], "Approval request withdrawn: ([\\s\\S]+) closed this invoice without paying", (match: RegExpExecArray, builder: FactsBuilder): string =>
     `Approval request withdrawn: ${builder.aliases.person(match[1] ?? "")} closed this invoice without paying`,
   ),
-  rule("Approved by ([\\s\\S]+)", (match: RegExpExecArray, builder: FactsBuilder): string =>
+  rule([SIGNOFF], "Approved by ([\\s\\S]+)", (match: RegExpExecArray, builder: FactsBuilder): string =>
     `Approved by ${builder.aliases.peopleBefore(match[1] ?? "", ": ")}`,
   ),
-  rule(`([\\s\\S]+) approved [\\s\\S]+\\. It needs (${N}) more (approvers?)`, (match: RegExpExecArray, builder: FactsBuilder): string =>
+  rule([SIGNOFF], `([\\s\\S]+) approved [\\s\\S]+\\. It needs (${N}) more (approvers?)`, (match: RegExpExecArray, builder: FactsBuilder): string =>
     `${capitalise(builder.aliases.peopleBefore(match[0], " approved "))} approved. It needs ${match[2] ?? ""} more ${match[3] ?? "approvers"}`,
   ),
-  rule(`Opened from pay run (${N}), row (${N}) \\([\\s\\S]*`, (match: RegExpExecArray): string =>
+  rule([APPROVAL], `Opened from pay run (${N}), row (${N}) \\([\\s\\S]*`, (match: RegExpExecArray): string =>
     `Opened from pay run ${match[1] ?? ""}, row ${match[2] ?? ""}, released on the run's approved request`,
   ),
 
   // Closing.
   rule(
+    [CLOSED],
     "Closed without paying again\\. (Every payment for this invoice has failed at the bank|The payout sent outside PayOnce failed), and ([\\s\\S]+) had already closed (it|this invoice) without paying",
     (match: RegExpExecArray, builder: FactsBuilder): string =>
       `Closed without paying again. ${match[1] ?? ""}, and ${builder.aliases.person(match[2] ?? "")} had already closed ${match[3] ?? "it"} without paying`,
   ),
-  rule("Closed without paying by [\\s\\S]*", (_match: RegExpExecArray, builder: FactsBuilder): string => builder.closedWithoutPaying()),
-  rule("Incident closed by ([\\s\\S]*)", (match: RegExpExecArray, builder: FactsBuilder): string =>
+  rule([CLOSED], "Closed without paying by [\\s\\S]*", (_match: RegExpExecArray, builder: FactsBuilder): string => builder.closedWithoutPaying()),
+  rule([CLOSED], "Incident closed by ([\\s\\S]*)", (match: RegExpExecArray, builder: FactsBuilder): string =>
     `Incident closed by ${builder.aliases.peopleBefore(match[1] ?? "", ": ")}. Their note is not passed on`,
   ),
 
-  // The duplicate lock.
+  // The duplicate lock. The second line is how older code wrote a refusal.
   keep(
+    [LOCK],
     `Pay again refused by the duplicate lock(?:: (?:${KIND}) (?:${REF}|with no reference yet) is (?:pending|in flight|paid|failed|live at the bank)|: transfer (?:${REF_OR_ID})? under the (?:${KIND})'s request id is live at the bank)\\. An invoice can have one live payment`,
   ),
-  rule(`Second payment refused: (${INV}) already has a live payment`, (match: RegExpExecArray, builder: FactsBuilder): string =>
+  rule([LOCK], `Second payment refused: (${INV}) already has a live payment`, (match: RegExpExecArray, builder: FactsBuilder): string =>
     `Second payment refused: ${builder.aliases.invoice(match[1] ?? "") ?? "another invoice"} already has a live payment`,
-  ),
-  rule(`(${INV}) already has a live payment`, (match: RegExpExecArray, builder: FactsBuilder): string =>
-    `${capitalise(builder.aliases.invoice(match[1] ?? "") ?? "another invoice")} already has a live payment`,
   ),
 
   // Emails: what PayOnce found, never what the email said or who sent it.
-  rule("Email from [\\s\\S]*, upload ([0-9]{1,9}), uploaded by [\\s\\S]*", (match: RegExpExecArray): string =>
+  rule([EMAIL], "Email from [\\s\\S]*, upload ([0-9]{1,9}), uploaded by [\\s\\S]*", (match: RegExpExecArray): string =>
     `Upload ${match[1] ?? ""}, an email, was delivered to this invoice by a person`,
   ),
-  rule("Email from [\\s\\S]*", (): string => "An email from the sample thread was put on file"),
-  rule("Read ([0-9]{1,6}) (new )?(emails?): ([\\s\\S]+?)(?:\\. Findings for this invoice so far: ([\\s\\S]+))?", (match: RegExpExecArray): string => {
+  rule([EMAIL], "Email from [\\s\\S]*", (): string => "An email from the sample thread was put on file"),
+  rule([EMAIL], "Read ([0-9]{1,6}) (new )?(emails?): ([\\s\\S]+?)(?:\\. Findings for this invoice so far: ([\\s\\S]+))?", (match: RegExpExecArray): string => {
     const said: string | null = summaryText(match[4]);
     const soFar: string | null = match[5] === undefined ? null : summaryText(match[5]);
     return `Read ${match[1] ?? ""} ${match[2] ?? ""}${match[3] ?? ""}: ${said ?? "(findings PayOnce does not pass on)"}${match[5] === undefined ? "" : `. Findings for this invoice so far: ${soFar ?? "(findings PayOnce does not pass on)"}`}`;
   }),
-  rule("(Findings for this invoice so far|Emails read): ([\\s\\S]+)", (match: RegExpExecArray): string =>
+  rule([EMAIL], "(Findings for this invoice so far|Emails read): ([\\s\\S]+)", (match: RegExpExecArray): string =>
     `${match[1] ?? ""}: ${summaryText(match[2]) ?? "(findings PayOnce does not pass on)"}`,
   ),
-  rule("Sender [\\s\\S]* does not match the supplier's domain on file \\([\\s\\S]*\\)", (): string =>
+  rule([WARNING], "Sender [\\s\\S]* does not match the supplier's domain on file \\([\\s\\S]*\\)", (): string =>
     "An email's sender does not match the supplier's domain on file",
   ),
-  rule("Replies to this email go to [\\s\\S]*, which does not match the supplier's domain on file \\([\\s\\S]*\\)", (): string =>
+  rule([WARNING], "Replies to this email go to [\\s\\S]*, which does not match the supplier's domain on file \\([\\s\\S]*\\)", (): string =>
     "An email's Reply-To address does not match the supplier's domain on file",
   ),
-  rule("No supplier domain is on file for this invoice, so (sender|Reply-To address) [\\s\\S]* cannot be checked", (match: RegExpExecArray): string =>
+  rule([WARNING], "No supplier domain is on file for this invoice, so (sender|Reply-To address) [\\s\\S]* cannot be checked", (match: RegExpExecArray): string =>
     `No supplier domain is on file for this invoice, so an email's ${match[1] ?? "sender"} cannot be checked`,
   ),
-  rule("Part of upload ([0-9]{1,9}) could not be read, so a person reads it: [\\s\\S]*", (match: RegExpExecArray): string =>
+  rule([WARNING], "Part of upload ([0-9]{1,9}) could not be read, so a person reads it: [\\s\\S]*", (match: RegExpExecArray): string =>
     `Part of upload ${match[1] ?? ""} could not be read, so a person reads it`,
   ),
-  rule(`Upload ([0-9]{1,9}) names (${INV}(?:, ${INV})*), not this invoice`, (match: RegExpExecArray, builder: FactsBuilder): string =>
+  rule([WARNING], `Upload ([0-9]{1,9}) names (${INV}(?:, ${INV})*), not this invoice`, (match: RegExpExecArray, builder: FactsBuilder): string =>
     `Upload ${match[1] ?? ""} names ${builder.aliases.invoiceList(match[2] ?? "") ?? "other invoices"}, not this invoice`,
   ),
-  keep("Upload [0-9]{1,9} has the same Message-ID as upload [0-9]{1,9}, which says something different"),
+  keep([WARNING], "Upload [0-9]{1,9} has the same Message-ID as upload [0-9]{1,9}, which says something different"),
 
-  // Errors PayOnce writes in its own words. Any other error line is a stand-in.
-  rule("Supplier emails could not be read: [\\s\\S]*", (): string =>
+  // Errors PayOnce writes in its own words, each given in fixed words that hold
+  // only a currency, a kind of payment, an outage's number and rail or an alias.
+  // Any other error line is a stand-in.
+  rule([ERROR], "Supplier emails could not be read: [\\s\\S]*", (): string =>
     "The email reader could not read a supplier email, so the thread counts as unread",
   ),
-  keep(`Other ${CUR} payments held the ${CUR} lock for the ${N} seconds PayOnce waits for its turn, so it sent nothing\\. It tries again in a minute`),
-  keep(`The ${CUR} lock ran out before the payment was recorded, so PayOnce sent nothing\\. It tries again in a minute`),
-  keep(
-    "The supplier's bank details changed after the (?:decision|replacement was approved|payment was approved|pay run was approved), so PayOnce sent nothing\\. Check again to look at the new details",
+  rule([ERROR], `Other (${CUR}) payments held the (?:${CUR}) lock for the ${N} seconds PayOnce waits for its turn, so it sent nothing\\. It tries again in a minute`, (match: RegExpExecArray): string =>
+    `Other ${match[1] ?? ""} payments held the ${match[1] ?? ""} lock for as long as PayOnce waits for its turn, so it sent nothing. It tries again in a minute`,
   ),
-  keep(`Outage ${N} on ${CUR} (?:${METHOD}) is active, so PayOnce opened no payment on it`),
-  rule(`(${KIND_CAP}) payment was refused and nothing was sent\\.[\\s\\S]*`, (match: RegExpExecArray): string =>
+  rule([ERROR], `The (${CUR}) lock ran out before the payment was recorded, so PayOnce sent nothing\\. It tries again in a minute`, (match: RegExpExecArray): string =>
+    `The ${match[1] ?? ""} lock ran out before the payment was recorded, so PayOnce sent nothing. It tries again in a minute`,
+  ),
+  rule(
+    [ERROR],
+    "The supplier's bank details changed after the (decision|replacement was approved|payment was approved|pay run was approved), so PayOnce sent nothing\\. Check again to look at the new details",
+    (match: RegExpExecArray): string =>
+      `The supplier's bank details changed after the ${match[1] ?? "decision"}, so PayOnce sent nothing. Check again to look at the new details`,
+  ),
+  rule([ERROR], `Outage (${N}) on (${CUR}) (${METHOD}) is active, so PayOnce opened no payment on it`, (match: RegExpExecArray): string =>
+    `Outage ${match[1] ?? ""} on ${match[2] ?? ""} ${match[3] ?? ""} is active, so PayOnce opened no payment on it`,
+  ),
+  rule([ERROR], `(${KIND_CAP}) payment was refused and nothing was sent\\.[\\s\\S]*`, (match: RegExpExecArray): string =>
     `${match[1] ?? ""} payment was refused and nothing was sent`,
   ),
-  rule(`(${KIND_CAP}) payment request did not complete, so the transfer may or may not exist\\.[\\s\\S]*`, (match: RegExpExecArray): string =>
+  rule([ERROR], `(${KIND_CAP}) payment request did not complete, so the transfer may or may not exist\\.[\\s\\S]*`, (match: RegExpExecArray): string =>
     `${match[1] ?? ""} payment request did not complete, so the transfer may or may not exist`,
   ),
-  rule("Airwallex refused the new bank details, so the record is unchanged: [\\s\\S]*", (): string =>
+  rule([ERROR], `(${INV}) already has a live payment`, (match: RegExpExecArray, builder: FactsBuilder): string =>
+    `${capitalise(builder.aliases.invoice(match[1] ?? "") ?? "another invoice")} already has a live payment`,
+  ),
+  rule([ERROR], "Airwallex refused the new bank details, so the record is unchanged: [\\s\\S]*", (): string =>
     "Airwallex refused the new bank details, so the record is unchanged",
   ),
-  rule("The supplier's record in Airwallex does not hold the new [\\s\\S]*", (): string =>
+  rule([ERROR], "The supplier's record in Airwallex does not hold the new [\\s\\S]*", (): string =>
     "The supplier's record in Airwallex does not hold the new bank details. PayOnce pays no new account until a callback matches the record",
   ),
 
   // Callbacks: who recorded one, never the number, who they spoke to or what was said.
-  rule("([\\s\\S]+?) called the supplier on [\\s\\S]*", (match: RegExpExecArray, builder: FactsBuilder): string =>
+  rule([CALLBACK], "([\\s\\S]+?) called the supplier on [\\s\\S]*", (match: RegExpExecArray, builder: FactsBuilder): string =>
     `${capitalise(builder.aliases.peopleBefore(match[0], " called the supplier on "))} recorded a callback to the supplier on the number on file`,
   ),
-  rule("Supplier's bank details updated in Airwallex: [\\s\\S]*", (): string => "Supplier's bank details updated in Airwallex"),
-  rule("The supplier's record in Airwallex already holds these details, and the callback verifies them: [\\s\\S]*", (): string =>
+  rule([CALLBACK], "Supplier's bank details updated in Airwallex: [\\s\\S]*", (): string => "Supplier's bank details updated in Airwallex"),
+  rule([CALLBACK], "The supplier's record in Airwallex already holds these details, and the callback verifies them: [\\s\\S]*", (): string =>
     "The supplier's record in Airwallex already holds these details, and the callback verifies them",
   ),
 
   // Rail outages.
   rule(
+    [OUTAGE],
     `Outage (${N}) declared on (${CUR}) (${METHOD}): payouts to (${N}) payees failed with (${RAIL_CODES}) within (${N}) minutes \\(([\\s\\S]*)\\)\\. PayOnce opens no new payment on ${CUR} (?:${METHOD}) until a person ends the outage`,
     (match: RegExpExecArray): string => {
       const references: string[] = (match[7] ?? "").split(", ");
@@ -1134,24 +1249,25 @@ const LINE_RULES: readonly LineRule[] = [
       return `Outage ${match[1] ?? ""} declared on ${match[2] ?? ""} ${match[3] ?? ""}: payouts to ${match[4] ?? ""} payees failed with ${match[5] ?? ""} within ${match[6] ?? ""} minutes${named}. PayOnce opens no new payment on ${match[2] ?? ""} ${match[3] ?? ""} until a person ends the outage`;
     },
   ),
-  keep(`${OUTAGE_LEAD}(?:${HOLD_ENDINGS})`),
+  keep([OUTAGE], `${OUTAGE_LEAD}(?:${HOLD_ENDINGS})`),
   rule(
+    [OUTAGE],
     `Outage (${N}) on (${CUR}) (${METHOD}) ended by ([\\s\\S]*)\\. It was declared at (${CLOCK})\\.( No approver list was set, so any named person could end it\\.)? PayOnce opens payments on ${CUR} (?:${METHOD}) again( and looks at this invoice now|\\. This invoice is already closed, so PayOnce sends nothing for it)`,
     (match: RegExpExecArray, builder: FactsBuilder): string =>
       `Outage ${match[1] ?? ""} on ${match[2] ?? ""} ${match[3] ?? ""} ended by ${builder.aliases.peopleBefore(match[4] ?? "", ": ")}. Their note is not passed on. It was declared at ${match[5] ?? ""}.${match[6] ?? ""} PayOnce opens payments on ${match[2] ?? ""} ${match[3] ?? ""} again${match[7] ?? ""}`,
   ),
 
   // The outbox: what was drafted, never the text, names or notes.
-  rule(`Draft (${N}) for the (supplier|bank) created by [\\s\\S]*: "([\\s\\S]*)"\\. Text SHA-256 [0-9a-f]{64}\\. PayOnce does not send it`, (match: RegExpExecArray): string =>
+  rule([OUTBOX], `Draft (${N}) for the (supplier|bank) created by [\\s\\S]*: "([\\s\\S]*)"\\. Text SHA-256 [0-9a-f]{64}\\. PayOnce does not send it`, (match: RegExpExecArray): string =>
     DRAFT_LABELS.includes(match[3] ?? "")
       ? `Draft ${match[1] ?? ""} for the ${match[2] ?? ""} created: "${match[3] ?? ""}". PayOnce does not send it`
       : `Draft ${match[1] ?? ""} for the ${match[2] ?? ""} created. PayOnce does not send it`,
   ),
-  rule(`Draft (${N}) copied(?: by [\\s\\S]*)?`, (match: RegExpExecArray): string => `Draft ${match[1] ?? ""} copied`),
-  rule(`Draft (${N}) marked sent by [\\s\\S]*`, (match: RegExpExecArray): string =>
+  rule([OUTBOX], `Draft (${N}) copied(?: by [\\s\\S]*)?`, (match: RegExpExecArray): string => `Draft ${match[1] ?? ""} copied`),
+  rule([OUTBOX], `Draft (${N}) marked sent by [\\s\\S]*`, (match: RegExpExecArray): string =>
     `Draft ${match[1] ?? ""} marked sent by a person. PayOnce did not send it`,
   ),
-  rule(`Draft (${N}) dismissed by [\\s\\S]*`, (match: RegExpExecArray): string => `Draft ${match[1] ?? ""} dismissed`),
+  rule([OUTBOX], `Draft (${N}) dismissed by [\\s\\S]*`, (match: RegExpExecArray): string => `Draft ${match[1] ?? ""} dismissed`),
 ];
 
 // ---------- the builder ----------
@@ -1201,12 +1317,17 @@ class FactsBuilder {
     return `Closed without paying by ${by}${matches.length === 0 ? "" : `, as a second bill for ${listOf(matches)}`}. Their note is not passed on`;
   }
 
-  // The line as it is passed on, or null for a stand-in.
+  // The line as it is passed on, or null for a stand-in. Only rules for the line's
+  // own kind and topic are tried.
   line(event: LedgerEvent): string | null {
-    if (FIXED_LINES.has(event.message)) {
+    const source: Source = sourceOf(event);
+    if (FIXED_LINES.get(event.message)?.includes(source) === true) {
       return event.message;
     }
     for (const lineRule of LINE_RULES) {
+      if (!lineRule.from.includes(source)) {
+        continue;
+      }
       const match: RegExpExecArray | null = lineRule.test.exec(event.message);
       if (match === null) {
         continue;
