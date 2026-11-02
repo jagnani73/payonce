@@ -72,6 +72,7 @@ export const ORIGIN_LABELS: Record<BoardOrigin, string> = {
 };
 
 export const CURRENCY_PATTERN: RegExp = /^[A-Z]{3}$/;
+const RAIL_NAME: RegExp = /^[A-Z]{3} [A-Z_]{1,20}$/;
 
 // Money that can still leave a wallet. A fee kept on a failed transfer has left.
 const AT_RISK: ReadonlySet<CashKind> = new Set<CashKind>([...FIRM_KINDS, ...WAITING_KINDS, "with-bank", "outside"]);
@@ -453,8 +454,15 @@ function invoiceTouch(
   return null;
 }
 
+// The rail as why and also name it. Airwallex gives the currency and the method,
+// and those lines hold only PayOnce's own words and figures, so a rail that is
+// not a currency code and a method is not named there.
+function railName(mark: BoardOutageMark): string {
+  return RAIL_NAME.test(mark.rail) ? mark.rail : "a rail PayOnce cannot name";
+}
+
 function outageLead(mark: BoardOutageMark): string {
-  return `Outage ${mark.id} on ${mark.rail}`;
+  return `Outage ${mark.id} on ${railName(mark)}`;
 }
 
 // An invoice the outage holds is in the person group with the outage's reason,
@@ -469,7 +477,7 @@ function outageSituation(ledger: Ledger, invoiceId: string, mark: BoardOutageMar
       return situation(
         "person",
         "outage-approved",
-        `The payment is approved, and outage ${mark.id} on ${mark.rail} holds it. PayOnce sends it once a person ends the outage, if the approval still counts`,
+        `The payment is approved, and outage ${mark.id} on ${railName(mark)} holds it. PayOnce sends it once a person ends the outage, if the approval still counts`,
       );
     case "replacement": {
       const latest: Approval | undefined = ledger.latestApproval(invoiceId);
@@ -766,7 +774,7 @@ function rankedBoard(ledger: Ledger, now: number): Board {
         ? situation(
             "person",
             "outage-run",
-            `Pay run ${run.id} is approved, and outage ${mark.id} on ${mark.rail} holds its release. PayOnce releases the whole run once a person ends the outage, if the approval still counts`,
+            `Pay run ${run.id} is approved, and outage ${mark.id} on ${railName(mark)} holds its release. PayOnce releases the whole run once a person ends the outage, if the approval still counts`,
           )
         : runSituation(run, status, ledger.latestRunApproval(run.id));
     for (const row of rows) {
