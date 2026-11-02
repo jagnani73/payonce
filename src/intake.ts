@@ -47,8 +47,9 @@ const WORKER_START_MS: number = 15_000;
 const TOO_SLOW: string = `PayOnce gave up reading this email because it took more than ${PARSE_BUDGET_MS / 1000} seconds, and did not keep it. Read it in your mail client instead, and report it, because no email should take this long`;
 const TOO_MUCH_MEMORY: string = `PayOnce gave up reading this email because it needed more than ${PARSE_HEAP_MB} MB of memory, and did not keep it. Read it in your mail client instead, and report it, because no email should need this much`;
 
-// Every waiting upload holds its bytes, up to 2 MB, so only this many wait behind
-// the one being parsed.
+// Every waiting upload holds its bytes, up to 2 MB, and one whose body is still
+// being read holds up to 3 MB of it, so only this many wait behind the one being
+// parsed, those being read included.
 const MAX_WAITING_PARSES: number = 4;
 
 // Refused when MAX_WAITING_PARSES uploads already wait, before anything is kept.
@@ -61,23 +62,36 @@ export class ParserBusyError extends Error {
 
 // One parse at a time, so uploads arriving together cost one worker's memory.
 let parsing: Promise<unknown> = Promise.resolve();
-// Uploads taken and not yet answered, the one being parsed included.
+// Uploads taken and not yet answered, the one being parsed and those whose body
+// is still being read included.
 let taken: number = 0;
 
-// Parses an upload in a worker thread, off the thread that runs the agent and
-// the page. Throws EmailRefusedError for an email PayOnce cannot read, or one
-// that took longer than PARSE_BUDGET_MS or more than PARSE_HEAP_MB to read, and
-// ParserBusyError when too many uploads already wait.
-export function parseUpload(raw: Buffer, source: UploadSource): Promise<ParsedEmail> {
+// Takes a place for an upload before its body is read, so a body being read
+// counts against MAX_WAITING_PARSES as one waiting to be parsed does. Throws
+// ParserBusyError when too many are taken. The function it returns gives the
+// place back, once, when the upload has been answered.
+export function takeParsePlace(): () => void {
   if (taken > MAX_WAITING_PARSES) {
-    return Promise.reject(new ParserBusyError());
+    throw new ParserBusyError();
   }
   taken += 1;
-  const next: Promise<ParsedEmail> = parsing
-    .then((): Promise<ParsedEmail> => parseInWorker(raw, source))
-    .finally((): void => {
+  let given: boolean = false;
+  return (): void => {
+    if (!given) {
+      given = true;
       taken -= 1;
-    });
+    }
+  };
+}
+
+// Parses an upload in a worker thread, off the thread that runs the agent and
+// the page. The caller holds a place from takeParsePlace until it is answered.
+// Throws EmailRefusedError for an email PayOnce cannot read, or one that took
+// longer than PARSE_BUDGET_MS or more than PARSE_HEAP_MB to read.
+export function parseUpload(raw: Buffer, source: UploadSource): Promise<ParsedEmail> {
+  const next: Promise<ParsedEmail> = parsing.then(
+    (): Promise<ParsedEmail> => parseInWorker(raw, source),
+  );
   parsing = next.catch((): void => undefined);
   return next;
 }

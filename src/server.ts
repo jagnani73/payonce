@@ -85,6 +85,7 @@ import {
   EmailRefusedError,
   parseUpload,
   ParserBusyError,
+  takeParsePlace,
   storeUpload,
   UploadNotWaitingError,
   type Match,
@@ -1380,8 +1381,23 @@ function uploadDetail(raw: string): unknown {
 
 // The page sends the file's bytes, or the pasted source as UTF-8, base64 inside
 // JSON, so the guard's Origin and content type checks cover an upload and
-// nothing parses multipart.
+// nothing parses multipart. Its place in the parse queue is taken before the
+// body is read, so bodies still being read count as waiting too.
 async function addUpload(request: IncomingMessage): Promise<unknown> {
+  let giveBack: () => void;
+  try {
+    giveBack = takeParsePlace();
+  } catch (error: unknown) {
+    throw error instanceof ParserBusyError ? new HttpError(503, error.message) : error;
+  }
+  try {
+    return await readUpload(request);
+  } finally {
+    giveBack();
+  }
+}
+
+async function readUpload(request: IncomingMessage): Promise<unknown> {
   // A body too large to hold a 2 MB email gets the parser's wording, not a
   // generic one.
   const body: Record<string, unknown> = await readJson(request, MAX_INBOX_BODY_BYTES, TOO_LARGE_TEXT);
@@ -1406,9 +1422,6 @@ async function addUpload(request: IncomingMessage): Promise<unknown> {
   } catch (error: unknown) {
     if (error instanceof EmailRefusedError) {
       throw new HttpError(error.tooLarge ? 413 : 400, error.message);
-    }
-    if (error instanceof ParserBusyError) {
-      throw new HttpError(503, error.message);
     }
     if (error instanceof DuplicateUploadError) {
       throw new HttpError(409, error.message, {
