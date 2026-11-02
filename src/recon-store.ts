@@ -11,6 +11,8 @@ import {
 import { oneLine } from "./printable.js";
 import type {
   BreakKind,
+  ClearReason,
+  ClosedInvoice,
   FoundBreak,
   LedgerTransfer,
   MatchResult,
@@ -19,9 +21,10 @@ import type {
 } from "./recon-match.js";
 
 // Reconciliation's tables, on the ledger's own connection. They hold a copy of
-// what Airwallex last showed (wallet_movements, recon_transfers), the runs, the
-// breaks a person sees, and recon_events, the hash chain of what PayOnce found
-// and what people said about it. Nothing here touches an invoice: the ledger's
+// what Airwallex last showed (wallet_movements, recon_transfers), the transfers
+// Airwallex refused to show (recon_lookups), the runs, the breaks a person sees,
+// and recon_events, the hash chain of what PayOnce found and what people said
+// about it. Nothing here touches an invoice: the ledger's
 // tables are only read, to match transfers by id.
 const RECON_SCHEMA: string = `
   CREATE TABLE IF NOT EXISTS wallet_movements (
@@ -53,7 +56,13 @@ const RECON_SCHEMA: string = `
     fee_minor INTEGER,
     fee_currency TEXT,
     failed_seen_ms INTEGER,
-    read_at TEXT NOT NULL
+    read_at TEXT NOT NULL,
+    paid_seen_ms INTEGER
+  );
+  CREATE TABLE IF NOT EXISTS recon_lookups (
+    transfer_id TEXT PRIMARY KEY,
+    refused_ms INTEGER NOT NULL,
+    status INTEGER NOT NULL
   );
   CREATE TABLE IF NOT EXISTS recon_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,12 +118,16 @@ const COMMITTED_RUN_KEY: string = "recon_committed_run";
 const FULL_READ_KEY: string = "recon_full_read_at";
 // Lines that say a break is new or has new facts. The alert follows them.
 const NEWS_KINDS: readonly string[] = ["found", "changed", "reopened"];
+const CLEARED_BECAUSE: Record<ClearReason, string> = {
+  airwallex: "Airwallex's records no longer show it",
+  tied: "the sweep tied the payout to an invoice",
+};
 
 export type RanFrom = "server" | "terminal";
 export type ReconMode = "live" | "offline";
 export type ReconOutcome = "committed" | "stale" | "failed";
-// pending: found once, opened when the next run finds it too. open: waits for a
-// person, or to clear by itself. explained: a person said what it is, bound to
+// pending: found once, opened when the next live run finds it too. open: waits
+// for a person, or to clear by itself. explained: a person said what it is, bound to
 // the facts they were shown. cleared: no longer found.
 export type BreakState = "pending" | "open" | "explained" | "cleared";
 
@@ -158,9 +171,21 @@ export interface WindowRead {
   movements: Movement[];
 }
 
+// A transfer a movement names that Airwallex refused to show, with the status it
+// answered.
+export interface RefusedLookup {
+  transferId: string;
+  status: number;
+}
+
 export interface ReconWrite {
   windows: WindowRead[];
+  // The range the read replaces: a stored movement posted in it that no window
+  // listed is deleted.
+  replaceFromMs: number;
+  replaceToMs: number;
   transfers: ReconTransfer[];
+  refused: RefusedLookup[];
   fullRead: boolean;
   reads: number;
 }
@@ -171,7 +196,9 @@ export interface ReconSnapshot {
   movements: Movement[];
   transfers: ReconTransfer[];
   ledger: LedgerTransfer[];
-  // The facts of the open or explained break on each key.
+  closed: ClosedInvoice[];
+  refused: Set<string>;
+  // The facts of the pending, open or explained break on each key.
   prior: Map<string, string>;
 }
 
@@ -182,8 +209,14 @@ export interface ReconDecision {
 
 export interface CommitRules {
   decide: (snapshot: ReconSnapshot) => ReconDecision;
-  byItself: (kind: BreakKind) => boolean;
+  // Whether a kind opens on the first live run that finds it.
+  atOnce: (kind: BreakKind) => boolean;
+  // Why a break no longer found clears, or null when it stays for a person.
+  cleared: (kind: BreakKind, subject: string, result: MatchResult) => ClearReason | null;
   describe: (kind: BreakKind, facts: string) => string;
+  // False for a match with no new read: it opens nothing, and what it finds new
+  // waits as found once for the next live run.
+  live: boolean;
 }
 
 export interface BreakChanges {
@@ -233,8 +266,18 @@ export class ReconKindsError extends Error {
   }
 }
 
+export interface KindTotal {
+  kind: BreakKind;
+  count: number;
+}
+
 export interface ReconAlertState {
-  open: ReconBreak[];
+  // Every open break, counted in full.
+  open: number;
+  kinds: KindTotal[];
+  currencies: string[];
+  // The open break with the highest number.
+  newestOpen: ReconBreak | undefined;
   // The newest line saying a break is new or has new facts, in any state.
   newest: number;
 }
@@ -266,6 +309,7 @@ interface TransferRow {
   fee_minor: number | null;
   fee_currency: string | null;
   failed_seen_ms: number | null;
+  paid_seen_ms: number | null;
 }
 
 interface RunRow {
@@ -355,6 +399,7 @@ function toTransfer(row: TransferRow): ReconTransfer {
     feeMinor: row.fee_minor,
     feeCurrency: row.fee_currency,
     failedSeenMs: row.failed_seen_ms,
+    paidSeenMs: row.paid_seen_ms,
   };
 }
 
@@ -402,20 +447,29 @@ export class ReconStore {
     this.db = db;
   }
 
-  // Creates the tables and starts the chain, once. There is nothing to backfill,
-  // so the running hash starts at the genesis, and only while no line exists: a
-  // running hash removed later stays missing, and the audit says so.
+  // Creates the tables and starts the chain, once, under the write lock, so two
+  // processes opening a file at once do not both add a column. There is nothing
+  // to backfill, so the running hash starts at the genesis, and only while no line
+  // exists: a running hash removed later stays missing, and the audit says so.
   ensure(): void {
-    this.db.exec(RECON_SCHEMA);
-    this.db
-      .prepare("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)")
-      .run(RECON_CHAIN_STARTED_KEY, new Date().toISOString());
-    this.db
-      .prepare(
-        `INSERT OR IGNORE INTO meta (key, value)
-         SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM recon_events)`,
-      )
-      .run(RECON_HEAD_KEY, GENESIS);
+    this.within("BEGIN IMMEDIATE", (): void => {
+      this.db.exec(RECON_SCHEMA);
+      const columns: string[] = (
+        this.db.prepare("PRAGMA table_info(recon_transfers)").all() as unknown as ColumnRow[]
+      ).map((column: ColumnRow): string => column.name);
+      if (!columns.includes("paid_seen_ms")) {
+        this.db.exec("ALTER TABLE recon_transfers ADD COLUMN paid_seen_ms INTEGER");
+      }
+      this.db
+        .prepare("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)")
+        .run(RECON_CHAIN_STARTED_KEY, new Date().toISOString());
+      this.db
+        .prepare(
+          `INSERT OR IGNORE INTO meta (key, value)
+           SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM recon_events)`,
+        )
+        .run(RECON_HEAD_KEY, GENESIS);
+    });
   }
 
   // False on a file opened read-only that no PayOnce with reconciliation opened.
@@ -501,6 +555,30 @@ export class ReconStore {
     ).map(toMovement);
   }
 
+  // When Airwallex last refused to show each transfer a movement names, for the
+  // ones no run has read since.
+  refusedLookups(): Map<string, number> {
+    return new Map(
+      (
+        this.db
+          .prepare(
+            `SELECT transfer_id, refused_ms FROM recon_lookups
+              WHERE transfer_id NOT IN (SELECT transfer_id FROM recon_transfers)`,
+          )
+          .all() as unknown as { transfer_id: string; refused_ms: number }[]
+      ).map((row: { transfer_id: string; refused_ms: number }): [string, number] => [row.transfer_id, row.refused_ms]),
+    );
+  }
+
+  // When the last live run that was recorded matched what it read.
+  lastLiveAt(): number | null {
+    const row: { finished_at: string | null } | undefined = this.db
+      .prepare("SELECT finished_at FROM recon_runs WHERE mode = 'live' AND outcome = 'committed' ORDER BY id DESC LIMIT 1")
+      .get() as { finished_at: string | null } | undefined;
+    const at: number = Date.parse(row?.finished_at ?? "");
+    return Number.isFinite(at) ? at : null;
+  }
+
   private snapshotRows(): ReconSnapshot {
     const started: string | null = this.meta("started_at");
     const movements: Movement[] = (
@@ -543,6 +621,11 @@ export class ReconStore {
     for (const payout of payouts) {
       ledger.push({ transferId: payout.transfer_id, invoiceId: payout.invoice_id, how: "outside", paid: payout.state === "paid" });
     }
+    const closed: ClosedInvoice[] = (
+      this.db
+        .prepare("SELECT invoice_id, COALESCE(source_currency, currency) AS currency FROM obligations WHERE state = 'settled'")
+        .all() as unknown as { invoice_id: string; currency: string }[]
+    ).map((row: { invoice_id: string; currency: string }): ClosedInvoice => ({ invoiceId: row.invoice_id, currency: row.currency }));
     const prior: Map<string, string> = new Map();
     for (const row of this.db
       .prepare(
@@ -553,7 +636,15 @@ export class ReconStore {
       .all() as unknown as { key: string; facts: string }[]) {
       prior.set(row.key, row.facts);
     }
-    return { startedMs: Date.parse(started ?? ""), movements, transfers, ledger, prior };
+    return {
+      startedMs: Date.parse(started ?? ""),
+      movements,
+      transfers,
+      ledger,
+      closed,
+      refused: new Set(this.refusedLookups().keys()),
+      prior,
+    };
   }
 
   // What the matcher works on now, from the ledger alone, in one read.
@@ -576,15 +667,19 @@ export class ReconStore {
          source_id = excluded.source_id, source_type = excluded.source_type,
          transaction_type = excluded.transaction_type, read_at = excluded.read_at`,
     );
-    for (const window of write.windows) {
-      // A window read to its last page is Airwallex's whole record for it, so a
-      // movement it no longer lists goes. Both ends compare UTC milliseconds.
-      const listed: Set<string> = new Set(window.movements.map((movement: Movement): string => movement.id));
-      for (const row of inWindow.all(window.fromMs, window.toMs) as unknown as { id: string }[]) {
-        if (!listed.has(row.id)) {
-          remove.run(row.id);
-        }
+    // Windows read to their last page are Airwallex's whole record for the range
+    // they replace, so a movement none of them lists goes. Windows overlap, so the
+    // range is taken as a whole: a movement one window lists on its edge and the
+    // next leaves out stays. Both ends compare UTC milliseconds.
+    const listed: Set<string> = new Set(
+      write.windows.flatMap((window: WindowRead): string[] => window.movements.map((movement: Movement): string => movement.id)),
+    );
+    for (const row of inWindow.all(write.replaceFromMs, write.replaceToMs) as unknown as { id: string }[]) {
+      if (!listed.has(row.id)) {
+        remove.run(row.id);
       }
+    }
+    for (const window of write.windows) {
       for (const movement of window.movements) {
         upsert.run(
           movement.id,
@@ -603,8 +698,8 @@ export class ReconStore {
     const transfer: StatementSync = this.db.prepare(
       `INSERT INTO recon_transfers
          (transfer_id, found, short_reference, status, method, created_ms, updated_ms, debit_minor, debit_currency,
-          transfer_minor, transfer_currency, fee_minor, fee_currency, failed_seen_ms, read_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          transfer_minor, transfer_currency, fee_minor, fee_currency, failed_seen_ms, paid_seen_ms, read_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(transfer_id) DO UPDATE SET found = excluded.found, short_reference = excluded.short_reference,
          status = excluded.status, method = excluded.method, created_ms = excluded.created_ms,
          updated_ms = excluded.updated_ms, debit_minor = excluded.debit_minor,
@@ -612,9 +707,12 @@ export class ReconStore {
          transfer_currency = excluded.transfer_currency, fee_minor = excluded.fee_minor,
          fee_currency = excluded.fee_currency,
          failed_seen_ms = COALESCE(recon_transfers.failed_seen_ms, excluded.failed_seen_ms),
+         paid_seen_ms = COALESCE(recon_transfers.paid_seen_ms, excluded.paid_seen_ms),
          read_at = excluded.read_at`,
     );
+    const answered: StatementSync = this.db.prepare("DELETE FROM recon_lookups WHERE transfer_id = ?");
     for (const item of write.transfers) {
+      answered.run(item.transferId);
       transfer.run(
         item.transferId,
         item.found ? 1 : 0,
@@ -630,9 +728,30 @@ export class ReconStore {
         item.feeMinor,
         item.feeCurrency,
         item.failedSeenMs,
+        item.paidSeenMs,
         at,
       );
     }
+    const refused: StatementSync = this.db.prepare(
+      `INSERT INTO recon_lookups (transfer_id, refused_ms, status) VALUES (?, ?, ?)
+       ON CONFLICT(transfer_id) DO UPDATE SET refused_ms = excluded.refused_ms, status = excluded.status`,
+    );
+    for (const item of write.refused) {
+      refused.run(item.transferId, now, item.status);
+    }
+  }
+
+  // A transfer the ledger records as paid now is known to have been paid, so a
+  // look that later reads it as failed cannot hide a payment that came back.
+  private notePaid(now: number): void {
+    this.db
+      .prepare(
+        `UPDATE recon_transfers SET paid_seen_ms = ? WHERE paid_seen_ms IS NULL AND transfer_id IN (
+           SELECT transfer_id FROM attempts WHERE state = 'paid' AND transfer_id IS NOT NULL
+           UNION SELECT mismatched_transfer_id FROM attempts WHERE mismatched_status = 'PAID'
+           UNION SELECT transfer_id FROM outside_payouts WHERE state = 'paid')`,
+      )
+      .run(now);
   }
 
   // Chains one line. The caller holds the write transaction.
@@ -673,10 +792,13 @@ export class ReconStore {
   }
 
   // Compares what a run found with the breaks on file and writes only what
-  // differs, with one chained line for each change. A person kind is opened
-  // only when two runs in a row find the same facts. One open break per key: new
-  // facts update it. An explanation holds for the facts it was given on, and
-  // only while they are found without a gap.
+  // differs, with one chained line for each change. A kind that does not open at
+  // once opens only when two live runs in a row find the same facts, and a run
+  // with no new read opens nothing. One open break per key: new facts update it.
+  // A kind that waits for a person never clears by itself: only an explanation
+  // ends it, and the sweep tying a payout ends its untied break. An explanation
+  // holds for the facts it was given on, and only while they are found without a
+  // gap.
   private recordBreaks(result: MatchResult, now: number, rules: CommitRules): BreakChanges {
     const at: string = new Date(now).toISOString();
     const changes: BreakChanges = { opened: 0, pending: 0, changed: 0, cleared: 0, gone: 0 };
@@ -711,13 +833,13 @@ export class ReconStore {
       const row: BreakRow | undefined = live.get(item.key);
       if (row !== undefined) {
         if (row.state === "pending") {
-          if (row.fingerprint === item.fingerprint) {
+          if (row.fingerprint !== item.fingerprint) {
+            update.run(item.facts, item.fingerprint, item.currency, item.invoiceId, item.transferId, row.id);
+            this.db.prepare("UPDATE recon_breaks SET found_at = ? WHERE id = ?").run(at, row.id);
+          } else if (rules.live) {
             this.db.prepare("UPDATE recon_breaks SET state = 'open', opened_at = ? WHERE id = ?").run(at, row.id);
             this.appendLine(row.id, "found", `Break ${row.id} found: ${text(item)}`, at);
             changes.opened += 1;
-          } else {
-            update.run(item.facts, item.fingerprint, item.currency, item.invoiceId, item.transferId, row.id);
-            this.db.prepare("UPDATE recon_breaks SET found_at = ? WHERE id = ?").run(at, row.id);
           }
           continue;
         }
@@ -727,12 +849,12 @@ export class ReconStore {
           changes.changed += 1;
         } else if (row.gone_at !== null) {
           this.db.prepare("UPDATE recon_breaks SET gone_at = NULL WHERE id = ?").run(row.id);
-          this.appendLine(row.id, "back", `Break ${row.id}: Airwallex's records show this again`, at);
+          this.appendLine(row.id, "back", `Break ${row.id} is found again`, at);
         }
         continue;
       }
       const before: BreakRow | undefined = explained.get(item.key);
-      if (before !== undefined && before.fingerprint === item.fingerprint) {
+      if (before !== undefined && (before.fingerprint === item.fingerprint || !rules.live)) {
         continue;
       }
       if (before !== undefined) {
@@ -748,7 +870,7 @@ export class ReconStore {
         changes.opened += 1;
         continue;
       }
-      if (rules.byItself(item.kind)) {
+      if (rules.live && rules.atOnce(item.kind)) {
         const id: number = this.insertBreak(item, "open", at);
         this.appendLine(id, "found", `Break ${id} found: ${text(item)}`, at);
         changes.opened += 1;
@@ -766,20 +888,14 @@ export class ReconStore {
         this.db.prepare("DELETE FROM recon_breaks WHERE id = ? AND state = 'pending'").run(row.id);
         continue;
       }
-      if (rules.byItself(row.kind) || result.present.has(row.subject)) {
+      const reason: ClearReason | null = rules.cleared(row.kind, row.subject, result);
+      if (reason !== null) {
         this.db.prepare("UPDATE recon_breaks SET state = 'cleared', cleared_at = ? WHERE id = ?").run(at, row.id);
-        this.appendLine(
-          row.id,
-          "cleared",
-          rules.byItself(row.kind)
-            ? `Break ${row.id} cleared: Airwallex's records no longer show it`
-            : `Break ${row.id} cleared: PayOnce's records now explain it`,
-          at,
-        );
+        this.appendLine(row.id, "cleared", `Break ${row.id} cleared: ${CLEARED_BECAUSE[reason]}`, at);
         changes.cleared += 1;
       } else if (row.gone_at === null) {
         this.db.prepare("UPDATE recon_breaks SET gone_at = ? WHERE id = ?").run(at, row.id);
-        this.appendLine(row.id, "gone", `Break ${row.id}: Airwallex's records no longer show this. It still waits for a person`, at);
+        this.appendLine(row.id, "gone", `Break ${row.id} is no longer found. It still waits for a person to explain it`, at);
         changes.gone += 1;
       }
     }
@@ -788,13 +904,12 @@ export class ReconStore {
       if (found.has(row.key) || result.unchecked.has(row.key)) {
         continue;
       }
+      const reason: ClearReason | null = rules.cleared(row.kind, row.subject, result);
       this.db.prepare("UPDATE recon_breaks SET gone_at = ? WHERE id = ?").run(at, row.id);
       this.appendLine(
         row.id,
         "ended",
-        rules.byItself(row.kind) || result.present.has(row.subject)
-          ? `Explained break ${row.id} is no longer found: PayOnce's and Airwallex's records now agree`
-          : `Explained break ${row.id}: Airwallex's records no longer show this`,
+        `Explained break ${row.id} is no longer found${reason === null ? "" : `: ${CLEARED_BECAUSE[reason]}`}`,
         at,
       );
     }
@@ -819,6 +934,7 @@ export class ReconStore {
       if (write !== null) {
         this.storeRead(write, now);
       }
+      this.notePaid(now);
       const decision: ReconDecision = rules.decide(this.snapshotRows());
       const changes: BreakChanges = this.recordBreaks(decision.result, now, rules);
       this.db
@@ -895,6 +1011,23 @@ export class ReconStore {
     ).map(toBreak);
   }
 
+  // Breaks in these states by kind, counted in full, the kind with the newest
+  // break first.
+  kindTotals(states: BreakState[]): KindTotal[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT kind, COUNT(*) AS count FROM recon_breaks WHERE state IN (${states.map((): string => "?").join(", ")})
+            GROUP BY kind ORDER BY MAX(COALESCE(explained_at, opened_at, found_at)) DESC, MAX(id) DESC`,
+        )
+        .all(...states) as unknown as KindTotal[]
+    ).map((row: KindTotal): KindTotal => ({ kind: row.kind, count: Number(row.count) }));
+  }
+
+  countBreaks(states: BreakState[]): number {
+    return this.kindTotals(states).reduce((total: number, row: KindTotal): number => total + row.count, 0);
+  }
+
   breaksById(ids: number[]): ReconBreak[] {
     return ids
       .map((id: number): BreakRow | undefined =>
@@ -951,14 +1084,28 @@ export class ReconStore {
     }));
   }
 
-  // The open breaks, and the newest line saying any break is new or has new
-  // facts, whatever state that break is in now. A break clearing or explained
-  // adds no such line, so it never moves the alert.
+  // The open breaks counted in full, and the newest line saying any break is new
+  // or has new facts, whatever state that break is in now. A break clearing or
+  // explained adds no such line, so it never moves the alert.
   alertState(): ReconAlertState {
-    const open: ReconBreak[] = this.breaks(["open"]);
+    const kinds: KindTotal[] = this.kindTotals(["open"]);
+    const currencies: string[] = (
+      this.db
+        .prepare("SELECT DISTINCT currency FROM recon_breaks WHERE state = 'open' ORDER BY currency")
+        .all() as unknown as { currency: string }[]
+    ).map((row: { currency: string }): string => row.currency);
+    const newestOpen: BreakRow | undefined = this.db
+      .prepare("SELECT * FROM recon_breaks WHERE state = 'open' ORDER BY id DESC LIMIT 1")
+      .get() as unknown as BreakRow | undefined;
     const row: { newest: number | null } = this.db
       .prepare(`SELECT MAX(id) AS newest FROM recon_events WHERE kind IN (${NEWS_KINDS.map((): string => "?").join(", ")})`)
       .get(...NEWS_KINDS) as unknown as { newest: number | null };
-    return { open, newest: row.newest ?? 0 };
+    return {
+      open: kinds.reduce((total: number, entry: KindTotal): number => total + entry.count, 0),
+      kinds,
+      currencies,
+      newestOpen: newestOpen === undefined ? undefined : toBreak(newestOpen),
+      newest: row.newest ?? 0,
+    };
   }
 }

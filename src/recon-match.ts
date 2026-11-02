@@ -42,7 +42,7 @@ export const BREAK_KINDS: readonly BreakKind[] = [
 ];
 
 // These close on the first run whose reads no longer show them. Every other kind
-// stays open until a person explains it.
+// stays open until a person explains it, however the reads change.
 const BY_ITSELF: ReadonlySet<BreakKind> = new Set<BreakKind>([
   "debit-missing",
   "refund-missing",
@@ -51,8 +51,42 @@ const BY_ITSELF: ReadonlySet<BreakKind> = new Set<BreakKind>([
   "balance-differs",
 ]);
 
+// These open on the first live run that finds them, since each waits out its
+// window first. Every other kind opens only when two live runs in a row find the
+// same facts.
+const AT_ONCE: ReadonlySet<BreakKind> = new Set<BreakKind>(["debit-missing", "refund-missing"]);
+
+// Every kind whose subject is a transfer, which a transfer held for a run keeps.
+const TRANSFER_KINDS: readonly BreakKind[] = [
+  "debit-missing",
+  "debited-twice",
+  "debit-differs",
+  "fee-differs",
+  "refund-missing",
+  "refund-differs",
+  "refund-unexpected",
+  "paid-then-returned",
+  "untied-payout",
+];
+
 export function clearsByItself(kind: BreakKind): boolean {
   return BY_ITSELF.has(kind);
+}
+
+export function opensAtOnce(kind: BreakKind): boolean {
+  return AT_ONCE.has(kind);
+}
+
+// Why a break no longer found clears: Airwallex's records no longer show a kind
+// that clears by itself, or the sweep has tied a payout to an invoice. Null keeps
+// it open for a person.
+export type ClearReason = "airwallex" | "tied";
+
+export function clearReason(kind: BreakKind, subject: string, result: MatchResult): ClearReason | null {
+  if (clearsByItself(kind)) {
+    return "airwallex";
+  }
+  return kind === "untied-payout" && result.tied.has(subject) ? "tied" : null;
 }
 
 export function isBreakKind(value: unknown): value is BreakKind {
@@ -134,6 +168,9 @@ export interface ReconTransfer {
   feeCurrency: string | null;
   // When a run first read it failed or cancelled.
   failedSeenMs: number | null;
+  // When a run first read it paid, or first found the ledger recording it paid.
+  // Kept, so a payment later read as failed is still known to have been paid.
+  paidSeenMs: number | null;
 }
 
 // A transfer PayOnce's ledger holds, matched by transfer id only: an attempt's
@@ -144,6 +181,12 @@ export interface LedgerTransfer {
   invoiceId: string;
   how: "attempt" | "mismatched" | "outside";
   paid: boolean;
+}
+
+// An invoice the ledger closed as paid (settled), with the wallet it is paid from.
+export interface ClosedInvoice {
+  invoiceId: string;
+  currency: string;
 }
 
 // Available balances read just before and just after the history, by currency.
@@ -158,10 +201,13 @@ export interface MatchInput {
   movements: Movement[];
   transfers: ReconTransfer[];
   ledger: LedgerTransfer[];
+  closed: ClosedInvoice[];
+  // Transfers movements name that Airwallex refused to show, not read since.
+  refused: Set<string>;
   // Null when nothing was read, as offline.
   balances: Map<string, BalancePair> | null;
-  // Facts of the open or explained break on each key, for the ones that carry
-  // something over.
+  // Facts of the pending, open or explained break on each key, for the ones that
+  // carry something over.
   prior: Map<string, string>;
 }
 
@@ -213,9 +259,15 @@ export interface RefundUnexpectedFacts {
 export interface PaidReturnedFacts {
   kind: "paid-then-returned";
   currency: string;
-  transferId: string;
+  // Null when only the invoice shows it: the ledger closed it as paid, and none of
+  // its payments is recorded as paid now.
+  transferId: string | null;
   reference: string | null;
   invoiceId: string;
+  // How the ledger holds the transfer: its own payment, a transfer kept beside an
+  // attempt because it does not match the invoice, or a payout sent outside
+  // PayOnce. Null with no transfer.
+  payment: LedgerTransfer["how"] | null;
   // Null while only the transfer's status says it failed.
   returnedMinor: number | null;
   movements: string[];
@@ -242,6 +294,9 @@ export interface UnreadableFacts {
   kind: "unreadable-movement";
   currency: string;
   movementId: string;
+  // The transfer it names, which waits while the movement cannot be read. Null
+  // when its source cannot be read either, so its wallet's transfers wait.
+  transferId: string | null;
 }
 
 export interface GapFacts {
@@ -285,7 +340,7 @@ export interface FoundBreak {
   fingerprint: string;
 }
 
-export type WaitingKind = "debit" | "refund" | "untied" | "unread" | "unfunded";
+export type WaitingKind = "debit" | "refund" | "untied" | "unread" | "refused" | "unfunded";
 
 // Something inside its window, which is not a break yet. dueAt is when it
 // becomes one, null when no time is set.
@@ -320,6 +375,7 @@ export interface WalletSummary {
   status: WalletStatus;
   // How the wallet's movements are explained.
   payonce: number;
+  mismatched: number;
   outside: number;
   untied: number;
   before: number;
@@ -330,6 +386,7 @@ export interface WalletSummary {
 
 export type MovementHow =
   | "payonce"
+  | "mismatched"
   | "outside"
   | "untied"
   | "before"
@@ -347,9 +404,9 @@ export interface MovementLabel {
 
 export interface MatchResult {
   breaks: FoundBreak[];
-  // Transfer ids and movement ids Airwallex still shows. A person kind no longer
-  // found whose subject is here is explained now, so it clears.
-  present: Set<string>;
+  // Transfer ids the ledger ties to an invoice. A payout tied to no invoice that
+  // is here now was tied by the sweep, so its break clears.
+  tied: Set<string>;
   // Keys this run could not check, which keep the state they had.
   unchecked: Set<string>;
   wallets: WalletSummary[];
@@ -486,7 +543,6 @@ export function match(input: MatchInput): MatchResult {
   const waiting: WaitingItem[] = [];
   const labels: Map<string, MovementLabel> = new Map();
   const unchecked: Set<string> = new Set();
-  const present: Set<string> = new Set();
   const unread: Set<string> = new Set();
 
   const transfers: Map<string, ReconTransfer> = new Map();
@@ -495,7 +551,6 @@ export function match(input: MatchInput): MatchResult {
     known.add(transfer.transferId);
     if (transfer.found) {
       transfers.set(transfer.transferId, transfer);
-      present.add(transfer.transferId);
     }
   }
   const tied: Map<string, LedgerTransfer> = new Map();
@@ -505,19 +560,27 @@ export function match(input: MatchInput): MatchResult {
     }
   }
 
+  // A movement PayOnce cannot read may be any of its transfer's movements, so
+  // that transfer waits for this run: none of its breaks opens, changes or
+  // clears. With no source to read, every transfer in its wallet waits, or in
+  // every wallet when its currency cannot be read either.
+  const heldTransfers: Set<string> = new Set();
+  const heldWallets: Set<string> = new Set();
   const reconciled: Movement[] = [];
   for (const movement of input.movements) {
-    present.add(movement.id);
-    if (movement.sourceId !== null) {
-      present.add(movement.sourceId);
-    }
     if (!readable(movement)) {
       labels.set(movement.id, { how: "unreadable", invoiceId: null, reference: null });
+      if (movement.sourceId !== null) {
+        heldTransfers.add(movement.sourceId);
+      } else {
+        heldWallets.add(movement.currency);
+      }
       breaks.push(
-        found("unreadable-movement", movement.id, movement.currency, null, null, {
+        found("unreadable-movement", movement.id, movement.currency, null, movement.sourceId, {
           kind: "unreadable-movement",
           currency: movement.currency,
           movementId: movement.id,
+          transferId: movement.sourceId,
         }),
       );
       continue;
@@ -544,12 +607,13 @@ export function match(input: MatchInput): MatchResult {
 
   // Every transfer created since the ledger started, against the movements that
   // name it.
+  const returnedInvoices: Set<string> = new Set();
   for (const transfer of transfers.values()) {
     const movements: Movement[] = bySource.get(transfer.transferId) ?? [];
     const tie: LedgerTransfer | undefined = tied.get(transfer.transferId);
     const reference: string | null = transfer.reference;
     const before: boolean = transfer.createdMs !== null && transfer.createdMs < input.startedMs;
-    const how: MovementHow = tie === undefined ? (before ? "before" : "untied") : tie.how === "outside" ? "outside" : "payonce";
+    const how: MovementHow = tie === undefined ? (before ? "before" : "untied") : tie.how === "attempt" ? "payonce" : tie.how;
     for (const movement of movements) {
       labels.set(movement.id, { how, invoiceId: tie?.invoiceId ?? null, reference });
     }
@@ -559,9 +623,19 @@ export function match(input: MatchInput): MatchResult {
     const credits: Movement[] = main.filter((movement: Movement): boolean => (movement.amountMinor ?? 0) > 0);
     const failed: boolean = transfer.status !== null && FAILED.has(transfer.status);
     const wallet: string = transfer.debitCurrency ?? debits[0]?.currency ?? "";
+    if (heldTransfers.has(transfer.transferId) || heldWallets.has(wallet) || heldWallets.has("")) {
+      for (const kind of TRANSFER_KINDS) {
+        unchecked.add(`${kind}:${transfer.transferId}`);
+      }
+      continue;
+    }
 
-    // PayOnce recorded it paid, and Airwallex shows it failed or gave money back.
-    if (tie?.paid === true && (failed || credits.length > 0)) {
+    // Paid, by the ledger now or by what a run read or found before, and Airwallex
+    // now shows it failed or gave money back. What was read before is kept, so a
+    // look that later records the payment as failed does not hide it.
+    const returned: boolean = tie !== undefined && (tie.paid || transfer.paidSeenMs !== null) && (failed || credits.length > 0);
+    if (tie !== undefined && returned) {
+      returnedInvoices.add(tie.invoiceId);
       breaks.push(
         found("paid-then-returned", transfer.transferId, credits[0]?.currency ?? wallet, tie.invoiceId, transfer.transferId, {
           kind: "paid-then-returned",
@@ -569,6 +643,7 @@ export function match(input: MatchInput): MatchResult {
           transferId: transfer.transferId,
           reference,
           invoiceId: tie.invoiceId,
+          payment: tie.how,
           returnedMinor: credits.length === 0 ? null : sum(credits),
           movements: ids(credits),
         }),
@@ -723,7 +798,7 @@ export function match(input: MatchInput): MatchResult {
           );
         }
       }
-    } else if (credits.length > 0 && tie?.paid !== true) {
+    } else if (credits.length > 0 && !returned) {
       const shown: string = credits[0]?.currency ?? debitCurrency;
       breaks.push(
         found("refund-unexpected", transfer.transferId, shown, tie?.invoiceId ?? null, transfer.transferId, {
@@ -746,12 +821,26 @@ export function match(input: MatchInput): MatchResult {
     const source: string | null = movement.sourceId;
     const tie: LedgerTransfer | undefined = source === null ? undefined : tied.get(source);
     if (tie !== undefined) {
-      labels.set(movement.id, { how: tie.how === "outside" ? "outside" : "payonce", invoiceId: tie.invoiceId, reference: null });
+      labels.set(movement.id, { how: tie.how === "attempt" ? "payonce" : tie.how, invoiceId: tie.invoiceId, reference: null });
+      continue;
+    }
+    if (source !== null && heldTransfers.has(source)) {
+      labels.set(movement.id, { how: "waiting", invoiceId: null, reference: null });
+      unchecked.add(`unexplained-credit:${movement.id}`);
+      unchecked.add(`unexplained-debit:${movement.id}`);
       continue;
     }
     if (source !== null && namesTransfer(movement) && !known.has(source)) {
+      const refused: boolean = input.refused.has(source);
       labels.set(movement.id, { how: "waiting", invoiceId: null, reference: null });
-      waiting.push({ kind: "unread", currency: movement.currency, reference: null, amountMinor: movement.amountMinor, status: null, dueAt: null });
+      waiting.push({
+        kind: refused ? "refused" : "unread",
+        currency: movement.currency,
+        reference: null,
+        amountMinor: movement.amountMinor,
+        status: null,
+        dueAt: null,
+      });
       unread.add(source);
       continue;
     }
@@ -765,6 +854,37 @@ export function match(input: MatchInput): MatchResult {
         movementId: movement.id,
         amountMinor: Math.abs(amount),
         type: movement.transactionType,
+      }),
+    );
+  }
+
+  // An invoice the ledger closed as paid that none of its payments pays now, as
+  // when a look later reads its paid payment as failed. Left out when a break
+  // names one of its transfers, now or on file.
+  const paidNow: Set<string> = new Set();
+  const namedOnFile: Set<string> = new Set();
+  for (const entry of input.ledger) {
+    if (entry.paid) {
+      paidNow.add(entry.invoiceId);
+    }
+    if (input.prior.has(`paid-then-returned:${entry.transferId}`)) {
+      namedOnFile.add(entry.invoiceId);
+    }
+  }
+  for (const invoice of input.closed) {
+    if (paidNow.has(invoice.invoiceId) || returnedInvoices.has(invoice.invoiceId) || namedOnFile.has(invoice.invoiceId)) {
+      continue;
+    }
+    breaks.push(
+      found("paid-then-returned", `invoice:${invoice.invoiceId}`, invoice.currency, invoice.invoiceId, null, {
+        kind: "paid-then-returned",
+        currency: invoice.currency,
+        transferId: null,
+        reference: null,
+        invoiceId: invoice.invoiceId,
+        payment: null,
+        returnedMinor: null,
+        movements: [],
       }),
     );
   }
@@ -801,6 +921,7 @@ export function match(input: MatchInput): MatchResult {
       availableMinor: pair?.after ?? null,
       status: "empty",
       payonce: 0,
+      mismatched: 0,
       outside: 0,
       untied: 0,
       before: 0,
@@ -818,6 +939,7 @@ export function match(input: MatchInput): MatchResult {
       const label: MovementLabel | undefined = labels.get(movement.id);
       const how: MovementHow = label?.how ?? "unexplained";
       if (how === "payonce") summary.payonce += 1;
+      else if (how === "mismatched") summary.mismatched += 1;
       else if (how === "outside") summary.outside += 1;
       else if (how === "untied") summary.untied += 1;
       else if (how === "before") summary.before += 1;
@@ -830,8 +952,15 @@ export function match(input: MatchInput): MatchResult {
       continue;
     }
     if (all.some((movement: Movement): boolean => !readable(movement))) {
+      // The running balance cannot be followed, so a gap found before neither
+      // clears nor changes.
       summary.status = "unreadable";
       unchecked.add(differsKey);
+      for (const [key, facts] of input.prior) {
+        if (key.startsWith("balance-gap:") && factsCurrency(facts) === currency) {
+          unchecked.add(key);
+        }
+      }
       continue;
     }
     const ordered: Movement[] = [...all].sort(chronological);
@@ -907,7 +1036,15 @@ export function match(input: MatchInput): MatchResult {
     }
   }
 
-  return { breaks, present, unchecked, wallets, waiting, labels, unread: [...unread] };
+  return { breaks, tied: new Set(tied.keys()), unchecked, wallets, waiting, labels, unread: [...unread] };
+}
+
+function factsCurrency(raw: string): unknown {
+  try {
+    return (JSON.parse(raw) as { currency?: unknown }).currency;
+  } catch {
+    return null;
+  }
 }
 
 // ---------- wording ----------
@@ -996,10 +1133,22 @@ export function breakText(kind: BreakKind, raw: string): string {
       return `${sentence(transfer)} failed. ${money("foundMinor")} came back to ${wallet}, and PayOnce expected ${money("expectedMinor")}.`;
     case "refund-unexpected":
       return `${money("foundMinor")} came back to ${wallet} for ${transfer}, which Airwallex does not show as failed.`;
-    case "paid-then-returned":
-      return facts["returnedMinor"] === null
-        ? `PayOnce recorded ${transfer} on ${invoiceOf(facts["invoiceId"])} as paid, and Airwallex now shows it failed. The supplier may not have been paid.`
-        : `${sentence(transfer)} on ${invoiceOf(facts["invoiceId"])}, which PayOnce recorded as paid, came back: ${money("returnedMinor")} returned to ${wallet}. The supplier may not have been paid.`;
+    case "paid-then-returned": {
+      const invoice: string = invoiceOf(facts["invoiceId"]);
+      if (facts["transferId"] === null) {
+        return `PayOnce closed ${invoice} as paid, and none of its payments is recorded as paid now. The supplier may not have been paid.`;
+      }
+      const back: string =
+        facts["returnedMinor"] === null
+          ? "and Airwallex now shows it failed"
+          : `then ${money("returnedMinor")} came back to ${wallet}`;
+      if (facts["payment"] === "mismatched") {
+        return `${sentence(transfer)}, kept beside a payment on ${invoice} because it does not match the invoice, was recorded as paid, ${back}.`;
+      }
+      const which: string =
+        facts["payment"] === "outside" ? `${transfer}, sent outside PayOnce for ${invoice},` : `${transfer} on ${invoice}`;
+      return `${sentence(which)} was recorded as paid, ${back}. The supplier may not have been paid.`;
+    }
     case "untied-payout": {
       const refunded: unknown = facts["refundedMinor"];
       const back: string = typeof refunded === "number" && refunded > 0 ? ` ${money("refundedMinor")} came back.` : "";
@@ -1009,8 +1158,15 @@ export function breakText(kind: BreakKind, raw: string): string {
       return `${money("amountMinor")} came into ${wallet} as ${typeWords(facts["type"])}, and no transfer explains it.`;
     case "unexplained-debit":
       return `${money("amountMinor")} left ${wallet} as ${typeWords(facts["type"])}, and no transfer explains it.`;
-    case "unreadable-movement":
-      return `A movement in ${wallet} has an amount, balance, time or currency PayOnce cannot read.`;
+    case "unreadable-movement": {
+      const waits: string =
+        typeof facts["transferId"] === "string"
+          ? "the transfer it names"
+          : typeof cur === "string" && CURRENCY.test(cur)
+            ? "that wallet's transfers"
+            : "any transfer";
+      return `A movement in ${wallet} has an amount, balance, time or currency PayOnce cannot read. Until it can, PayOnce does not match ${waits}.`;
+    }
     case "balance-gap":
       return `${walletOwn(cur)} movements do not add up: after one movement the balance reads ${money("foundMinor")}, and the movements before it give ${money("expectedMinor")}.`;
     case "balance-differs": {
@@ -1038,6 +1194,8 @@ export function waitingText(item: WaitingItem): string {
       return `${sentence(transfer)}, sent outside PayOnce, is tied to no invoice yet. The sweep may still tie it.`;
     case "unread":
       return `A movement of ${amount} in ${wallet} names a transfer PayOnce has not read yet.`;
+    case "refused":
+      return `A movement of ${amount} in ${wallet} names a transfer Airwallex refused to show. PayOnce asks again on a later check.`;
     case "unfunded": {
       const status: string | null = shownStatus(item.status);
       return `${sentence(transfer)} is ${status ?? "not funded yet"}, so no debit is expected yet.`;

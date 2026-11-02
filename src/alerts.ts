@@ -70,8 +70,7 @@ import {
 import { formatMoney } from "./money.js";
 import { say, sayWarning } from "./printable.js";
 import { shownCurrency, shownInvoice, shownReference } from "./recon-match.js";
-import type { ReconAlertState, ReconBreak } from "./recon-store.js";
-import { kindCounts, type KindCount } from "./reconcile.js";
+import type { KindTotal, ReconAlertState, ReconBreak } from "./recon-store.js";
 import { runStatus } from "./runs.js";
 
 // How often the server looks for conditions that need a person, how long a new
@@ -502,11 +501,7 @@ function inboxCondition(inbox: InboxWaiting): FoundCondition | null {
 // fingerprint is the newest line saying a break is new or has new facts, in any
 // state, so a new or changed break alerts and one clearing or explained does not.
 function reconCondition(state: ReconAlertState): FoundCondition | null {
-  const newest: ReconBreak | undefined = state.open.reduce<ReconBreak | undefined>(
-    (latest: ReconBreak | undefined, item: ReconBreak): ReconBreak =>
-      latest === undefined || item.id > latest.id ? item : latest,
-    undefined,
-  );
+  const newest: ReconBreak | undefined = state.newestOpen;
   if (newest === undefined) {
     return null;
   }
@@ -518,18 +513,14 @@ function reconCondition(state: ReconAlertState): FoundCondition | null {
   }
   const facts: ReconAlertFacts = {
     kind: "recon",
-    open: state.open.length,
-    kinds: kindCounts(state.open).map((entry: KindCount): { kind: string; count: number } => ({
+    open: state.open,
+    kinds: state.kinds.map((entry: KindTotal): { kind: string; count: number } => ({
       kind: entry.kind,
       count: entry.count,
     })),
-    currencies: [
-      ...new Set(
-        state.open
-          .map((item: ReconBreak): string | null => shownCurrency(item.currency))
-          .filter((code: string | null): code is string => code !== null),
-      ),
-    ].sort(),
+    currencies: state.currencies
+      .map((code: string): string | null => shownCurrency(code))
+      .filter((code: string | null): code is string => code !== null),
     newestKind: newest.kind,
     newestCurrency: shownCurrency(newest.currency),
     newestInvoice: shownInvoice(newest.invoiceId),
@@ -758,7 +749,7 @@ export class Alerts {
     }
     const recorded: RecordedConditions = this.ledger.recordConditions(
       found,
-      summaryOf(found, inbox, recon.open.length),
+      summaryOf(found, inbox, recon.open),
       now,
       SETTLE_MS,
       CLEAR_AFTER_MS,

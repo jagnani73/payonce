@@ -11,10 +11,12 @@ import type { Ledger } from "./ledger.js";
 import { readMinor } from "./money.js";
 import {
   breakText,
+  clearReason,
   clearsByItself,
   KIND_ACTIONS,
   KIND_LABELS,
   match,
+  opensAtOnce,
   shownCurrency,
   shownInvoice,
   shownReference,
@@ -34,6 +36,7 @@ import type {
   CommitResult,
   CommitRules,
   ExplainItem,
+  KindTotal,
   RanFrom,
   ReconBreak,
   ReconMode,
@@ -41,6 +44,7 @@ import type {
   ReconSnapshot,
   ReconStore,
   ReconWrite,
+  RefusedLookup,
   WindowRead,
 } from "./recon-store.js";
 
@@ -58,6 +62,16 @@ const AHEAD_MS: number = 10 * MS_PER_MINUTE;
 const FULL_READ_EVERY_MS: number = 24 * 60 * MS_PER_MINUTE;
 // Transfers movements name that the listing did not have, read by id per run.
 const LOOKUPS_PER_RUN: number = 5;
+// A transfer Airwallex refused to show is asked for again only this long after,
+// as recordMissingFees does with a fee it could not read.
+const REFUSED_RETRY_MS: number = 10 * MS_PER_MINUTE;
+// Refused with any of these, a lookup stops the run, as every other failed read
+// does: the key or its scope is wrong, or Airwallex asks PayOnce to slow down.
+const STOP_STATUSES: readonly number[] = [401, 403, 429];
+// Consecutive windows overlap by this much, so a movement on an edge is read
+// whichever end of a range Airwallex counts. Movements are kept by id, so one
+// read twice is stored once.
+export const WINDOW_OVERLAP_MS: number = MS_PER_MINUTE;
 const DEFAULT_EVERY_MINUTES: number = 10;
 const MAX_EVERY_MINUTES: number = 1440;
 const FIRST_RUN_AFTER_MS: number = MS_PER_MINUTE;
@@ -68,6 +82,8 @@ const MAX_NOTE: number = 200;
 export const MAX_EXPLAINED_AT_ONCE: number = 200;
 const EXPLAINED_SHOWN: number = 50;
 export const MOVEMENTS_SHOWN: number = 500;
+// The open breaks the report lists. It counts every one.
+export const MAX_OPEN_SHOWN: number = 500;
 // A full recheck of the chain at most once a minute, as the alert loop's audit.
 const AUDIT_EVERY_MS: number = 60_000;
 
@@ -158,9 +174,10 @@ function ceilSecond(ms: number): number {
 }
 
 // The windows a run reads. A full read covers every window since the ledger
-// started. Any other read covers the last seven days, which also picks up a
-// movement posted late within the week. Ends are whole seconds, so a movement
-// Airwallex dates to the second is in exactly one window.
+// started, each starting a minute before the last one ends, so a movement on an
+// edge is in both whether Airwallex counts the start or the end of a range. Any
+// other read covers the last seven days, which also picks up a movement posted
+// late within the week. Ends are whole seconds.
 export function windowsFor(startedMs: number, now: number, full: boolean): { fromMs: number; toMs: number }[] {
   const end: number = ceilSecond(now) + AHEAD_MS;
   const start: number = floorSecond(startedMs);
@@ -168,10 +185,30 @@ export function windowsFor(startedMs: number, now: number, full: boolean): { fro
     return [{ fromMs: Math.max(start, end - HISTORY_WINDOW_MS), toMs: end }];
   }
   const windows: { fromMs: number; toMs: number }[] = [];
-  for (let from: number = start; from < end; from += HISTORY_WINDOW_MS) {
-    windows.push({ fromMs: from, toMs: Math.min(from + HISTORY_WINDOW_MS, end) });
+  if (start >= end) {
+    return windows;
   }
-  return windows;
+  for (let from: number = start; ; ) {
+    const to: number = Math.min(from + HISTORY_WINDOW_MS, end);
+    windows.push({ fromMs: from, toMs: to });
+    if (to >= end) {
+      return windows;
+    }
+    from = to - WINDOW_OVERLAP_MS;
+  }
+}
+
+// The range a read replaces in what is stored. A seven-day read leaves alone the
+// first minute of its window, which earlier reads covered from inside a window,
+// so a movement exactly on its start is not dropped if Airwallex leaves the start
+// out.
+export function replacedRange(windows: { fromMs: number; toMs: number }[], full: boolean): { fromMs: number; toMs: number } {
+  if (windows.length === 0) {
+    return { fromMs: 0, toMs: 0 };
+  }
+  const from: number = Math.min(...windows.map((window: { fromMs: number }): number => window.fromMs));
+  const to: number = Math.max(...windows.map((window: { toMs: number }): number => window.toMs));
+  return { fromMs: full ? from : Math.min(from + WINDOW_OVERLAP_MS, to), toMs: to };
 }
 
 function hashOf(value: unknown): string {
@@ -236,6 +273,7 @@ export function reconTransferOf(transfer: Transfer, now: number): ReconTransfer 
     feeMinor: feeCurrency === null ? null : (fee?.minor ?? null),
     feeCurrency,
     failedSeenMs: status !== null && failedStatus(status) ? now : null,
+    paidSeenMs: status === "PAID" ? now : null,
   };
 }
 
@@ -255,6 +293,7 @@ function missingTransfer(transferId: string): ReconTransfer {
     feeMinor: null,
     feeCurrency: null,
     failedSeenMs: null,
+    paidSeenMs: null,
   };
 }
 
@@ -265,8 +304,10 @@ function availableOf(balances: Balance[]): Map<string, number | null> {
 // Reads, in this order: the balances, the history of every window, the balances
 // again, then the transfers since the ledger started, then by id the few
 // transfers movements name that the listing did not have. A movement whose
-// transfer has not been read is waiting, never a break. Any failed read stops the
-// run.
+// transfer has not been read is waiting, never a break. A transfer Airwallex
+// refuses to show by id (a 4xx but 401, 403, 404 and 429) is recorded as refused
+// and asked for again only REFUSED_RETRY_MS later, so the others get their turn.
+// Any other failed read stops the run.
 export async function readAirwallex(
   client: AirwallexClient,
   store: ReconStore,
@@ -278,7 +319,8 @@ export async function readAirwallex(
   const before: Map<string, number | null> = availableOf(await getBalances(client));
   reads.count += 1;
   const windows: WindowRead[] = [];
-  for (const window of windowsFor(Date.parse(startedAt), now, full)) {
+  const ranges: { fromMs: number; toMs: number }[] = windowsFor(Date.parse(startedAt), now, full);
+  for (const window of ranges) {
     const items: HistoryItem[] = await listBalanceHistory(client, window.fromMs, window.toMs, reads);
     windows.push({
       ...window,
@@ -320,7 +362,15 @@ export async function readAirwallex(
       unread.push(source);
     }
   }
-  for (const transferId of unread.slice(0, LOOKUPS_PER_RUN)) {
+  // Never refused first, in the order movements name them, then the ones refused
+  // longest ago, once their wait is over.
+  const refusedAt: Map<string, number> = store.refusedLookups();
+  const lastRefused = (transferId: string): number => refusedAt.get(transferId) ?? 0;
+  const due: string[] = unread
+    .filter((transferId: string): boolean => !refusedAt.has(transferId) || lastRefused(transferId) <= now - REFUSED_RETRY_MS)
+    .sort((a: string, b: string): number => lastRefused(a) - lastRefused(b));
+  const refused: RefusedLookup[] = [];
+  for (const transferId of due.slice(0, LOOKUPS_PER_RUN)) {
     try {
       const transfer: Transfer = await getTransfer(client, transferId);
       reads.count += 1;
@@ -333,10 +383,26 @@ export async function readAirwallex(
         transfers.push(missingTransfer(transferId));
         continue;
       }
+      if (error instanceof AirwallexError && error.status >= 400 && error.status < 500 && !STOP_STATUSES.includes(error.status)) {
+        refused.push({ transferId, status: error.status });
+        continue;
+      }
       throw error;
     }
   }
-  return { write: { windows, transfers, fullRead: full, reads: reads.count }, balances };
+  const replaced: { fromMs: number; toMs: number } = replacedRange(ranges, full);
+  return {
+    write: {
+      windows,
+      replaceFromMs: replaced.fromMs,
+      replaceToMs: replaced.toMs,
+      transfers,
+      refused,
+      fullRead: full,
+      reads: reads.count,
+    },
+    balances,
+  };
 }
 
 // ---------- one run ----------
@@ -349,20 +415,26 @@ export interface RunSummary {
   unread: number;
 }
 
+function matchSnapshot(snapshot: ReconSnapshot, now: number, balances: Map<string, BalancePair> | null): MatchResult {
+  return match({
+    now,
+    startedMs: snapshot.startedMs,
+    movements: snapshot.movements,
+    transfers: snapshot.transfers,
+    ledger: snapshot.ledger,
+    closed: snapshot.closed,
+    refused: snapshot.refused,
+    balances,
+    prior: snapshot.prior,
+  });
+}
+
 function decideWith(
   now: number,
   balances: Map<string, BalancePair> | null,
 ): (snapshot: ReconSnapshot) => { result: MatchResult; summary: string } {
   return (snapshot: ReconSnapshot) => {
-    const result: MatchResult = match({
-      now,
-      startedMs: snapshot.startedMs,
-      movements: snapshot.movements,
-      transfers: snapshot.transfers,
-      ledger: snapshot.ledger,
-      balances,
-      prior: snapshot.prior,
-    });
+    const result: MatchResult = matchSnapshot(snapshot, now, balances);
     const summary: RunSummary = {
       wallets: result.wallets,
       waiting: result.waiting,
@@ -374,8 +446,8 @@ function decideWith(
   };
 }
 
-function rules(now: number, balances: Map<string, BalancePair> | null): CommitRules {
-  return { decide: decideWith(now, balances), byItself: clearsByItself, describe: breakText };
+function rules(at: number, balances: Map<string, BalancePair> | null, live: boolean): CommitRules {
+  return { decide: decideWith(at, balances), atOnce: opensAtOnce, cleared: clearReason, describe: breakText, live };
 }
 
 export type RunOutcome =
@@ -397,9 +469,13 @@ export function fullReadDue(ledger: Ledger, now: number): boolean {
 }
 
 // Records what a run read, unless a run that started later has already been
-// recorded.
+// recorded. With no read it matches as of the last live run, so a window that has
+// run out since cannot open a break from what was read then, and it opens nothing.
 export function commitRun(ledger: Ledger, run: ReconRun, read: ReconRead | null, now: number = Date.now()): RunOutcome {
-  const committed: CommitResult = ledger.recon().commit(run.id, read?.write ?? null, now, rules(now, read?.balances ?? null));
+  const at: number = read !== null ? now : (ledger.recon().lastLiveAt() ?? Date.parse(ledger.startedAt()));
+  const committed: CommitResult = ledger
+    .recon()
+    .commit(run.id, read?.write ?? null, now, rules(at, read?.balances ?? null, read !== null));
   if (committed.stale) {
     return { outcome: "stale", run };
   }
@@ -426,8 +502,9 @@ export async function reconcileOnce(
   return commitRun(ledger, run, read, now());
 }
 
-// Matches what the ledger already holds again, with no Airwallex call. The
-// closing balance is not checked, since no balance is read.
+// Matches what the ledger already holds again, with no Airwallex call, as of the
+// last live run. The closing balance is not checked, since no balance is read,
+// and nothing opens: what it finds new waits for the next live run.
 export function reconcileOffline(ledger: Ledger, ranFrom: RanFrom, now: number = Date.now()): RunOutcome {
   const run: ReconRun = beginRun(ledger, ranFrom, "offline", now);
   return commitRun(ledger, run, null, now);
@@ -553,7 +630,10 @@ export interface ReconReport {
   // The latest run, when it failed or found a newer run already recorded.
   lastProblem: RunView | null;
   wallets: WalletSummary[];
+  // The newest open breaks, at most MAX_OPEN_SHOWN. openCount and byKind count
+  // every one.
   open: BreakView[];
+  openCount: number;
   byKind: KindCount[];
   pending: number;
   waiting: WaitingView[];
@@ -638,12 +718,12 @@ export function reconAudit(store: ReconStore, now: number = Date.now()): { lines
   return result;
 }
 
-export function kindCounts(open: ReconBreak[]): KindCount[] {
-  const counts: Map<BreakKind, number> = new Map();
-  for (const item of open) {
-    counts.set(item.kind, (counts.get(item.kind) ?? 0) + 1);
-  }
-  return [...counts].map(([kind, count]: [BreakKind, number]): KindCount => ({ kind, label: KIND_LABELS[kind], count }));
+export function kindCounts(totals: KindTotal[]): KindCount[] {
+  return totals.map((total: KindTotal): KindCount => ({
+    kind: total.kind,
+    label: KIND_LABELS[total.kind] ?? "Break",
+    count: total.count,
+  }));
 }
 
 // The report from the ledger alone: the last run, each wallet, what waits on a
@@ -653,7 +733,8 @@ export function reconReport(ledger: Ledger, runner: ReconRunner | null = null): 
   const last: ReconRun | undefined = store.lastCommitted();
   const latest: ReconRun | undefined = store.runs(5).find((run: ReconRun): boolean => run.outcome !== null);
   const summary: RunSummary | null = summaryOf(last);
-  const open: ReconBreak[] = store.breaks(["open"]);
+  const open: ReconBreak[] = store.breaks(["open"], MAX_OPEN_SHOWN);
+  const totals: KindTotal[] = store.kindTotals(["open"]);
   return {
     built: true,
     startedAt: ledger.startedAt(),
@@ -663,8 +744,9 @@ export function reconReport(ledger: Ledger, runner: ReconRunner | null = null): 
     lastProblem: latest !== undefined && latest.outcome !== "committed" && (last === undefined || latest.id > last.id) ? runView(latest) : null,
     wallets: summary?.wallets ?? [],
     open: open.map(breakView),
-    byKind: kindCounts(open),
-    pending: store.breaks(["pending"]).length,
+    openCount: totals.reduce((total: number, entry: KindTotal): number => total + entry.count, 0),
+    byKind: kindCounts(totals),
+    pending: store.countBreaks(["pending"]),
     waiting: (summary?.waiting ?? []).map(
       (item: WaitingItem): WaitingView => ({ text: waitingText(item), currency: shownCurrency(item.currency), dueAt: item.dueAt }),
     ),
@@ -690,15 +772,7 @@ export interface MovementView {
 export function movementsView(ledger: Ledger, currency: string, now: number = Date.now()): MovementView[] {
   const store: ReconStore = ledger.recon();
   const snapshot: ReconSnapshot = store.snapshot();
-  const result: MatchResult = match({
-    now,
-    startedMs: snapshot.startedMs,
-    movements: snapshot.movements,
-    transfers: snapshot.transfers,
-    ledger: snapshot.ledger,
-    balances: null,
-    prior: snapshot.prior,
-  });
+  const result: MatchResult = matchSnapshot(snapshot, now, null);
   const open: ReconBreak[] = store.breaks(["open"]);
   const bySubject: Map<string, number> = new Map();
   for (const item of open) {
