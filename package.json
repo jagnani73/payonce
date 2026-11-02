@@ -3,6 +3,10 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=24",
+    "pnpm": ">=12"
+  },
   "scripts": {
     "dev": "tsx src/index.ts",
     "recover": "tsx --env-file=.env src/recover.ts",
