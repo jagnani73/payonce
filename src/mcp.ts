@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { basename, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseEnv } from "node:util";
 import { McpServer, type CallToolResult, type ToolAnnotations } from "@modelcontextprotocol/server";
@@ -50,6 +50,7 @@ const SERVER_TIMEOUT_MS: number = 1_500;
 const MAX_ANSWER_BYTES: number = 4 * 1024 * 1024;
 const MAX_ERROR_CHARS: number = 200;
 const SQLITE_BUSY: number = 5;
+const SQLITE_READONLY_ROLLBACK: number = 776;
 const RUN_ID_MAX: number = 9_999_999_999;
 const TOOLS_TTL_MS: number = 3_600_000;
 
@@ -122,12 +123,28 @@ function refused(error: unknown): CallToolResult {
     if (typeof sqlite.errcode === "number" && (sqlite.errcode & 0xff) === SQLITE_BUSY) {
       return toolError("The ledger is busy with a write. Try again in a moment");
     }
+    // A journal left by a write that never finished, which only a writer can roll back.
+    if (sqlite.errcode === SQLITE_READONLY_ROLLBACK) {
+      return toolError(
+        "A write to the ledger was interrupted before it finished, so it cannot be read as it is. The next pnpm ui or pnpm board rolls that write back. Ask again after that",
+      );
+    }
     const message: string = error instanceof Error ? error.message : String(error);
     return toolError(
       `PayOnce could not read the ledger: ${capped(defanged(message), MAX_ERROR_CHARS, (char: string): string => char)}`,
     );
   }
   return toolError(`PayOnce could not answer this: ${error instanceof Error ? error.name : "unknown error"}`);
+}
+
+// Where the ledger was looked for, as a path from the PayOnce folder, or only
+// the file's name when PAYONCE_LEDGER names another folder, whose path can hold
+// the user's name.
+function ledgerPlace(): string {
+  const inRoot: string = relative(ROOT, LEDGER_FILE);
+  return inRoot !== "" && !inRoot.startsWith("..") && !isAbsolute(inRoot)
+    ? `${inRoot.replaceAll("\\", "/")} in the PayOnce folder`
+    : `${basename(LEDGER_FILE)} in the folder PAYONCE_LEDGER names`;
 }
 
 // Opens the ledger read-only for one call and closes it again, so pnpm reset can
@@ -137,7 +154,7 @@ function answer(read: (ledger: Ledger) => unknown): CallToolResult {
   try {
     if (!existsSync(LEDGER_FILE)) {
       throw new ToolRefusal(
-        `There is no PayOnce ledger at ${LEDGER_FILE} yet. PayOnce creates it the first time pnpm ui, pnpm recover or pnpm board runs`,
+        `There is no PayOnce ledger at ${ledgerPlace()} yet. PayOnce creates it the first time pnpm ui, pnpm recover or pnpm board runs`,
       );
     }
     const ledger: Ledger = new Ledger(LEDGER_FILE, true);
