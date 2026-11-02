@@ -133,6 +133,19 @@ import {
 import { recordMissingFees } from "./payments.js";
 import { oneLine, printableError, say, sayError, sayWarning } from "./printable.js";
 import { readerFromEnv, readerNamesFromEnv } from "./reader.js";
+import { ReconChangedError, ReconKindsError, ReconUnknownError } from "./recon-store.js";
+import {
+  describeReconSetting,
+  explainBreaks,
+  ExplainInputError,
+  explainItems,
+  movementsView,
+  reconReport,
+  ReconRunner,
+  reconSettingFromEnv,
+  type BreakView,
+  type ReconSetting,
+} from "./reconcile.js";
 import { describeFloors, reserveFromEnv } from "./reserve.js";
 import {
   DraftOpenError,
@@ -317,6 +330,10 @@ function startRelease(runId: number): void {
 }
 
 const watcher: Watcher = new Watcher(engine, agent, CHECK_EVERY_MS, SWEEP_EVERY_MS, startRelease);
+// Reconciliation reads Airwallex on its own timer, never in an invoice's turn,
+// and takes no currency lease, because it moves no money and changes no invoice.
+const reconSetting: ReconSetting = reconSettingFromEnv();
+const reconRunner: ReconRunner = new ReconRunner(client, ledger, reconSetting.everyMs);
 // After each read it fills in the fees of failed transfers the ledger has none for.
 // That writes only fee columns, so it runs outside the invoices' turns.
 const balances: BalanceCache = new BalanceCache(
@@ -1136,6 +1153,60 @@ async function endOutageByPerson(request: IncomingMessage, raw: string): Promise
   return { ok: true, invoices, runs };
 }
 
+// Reconciliation's routes. The report and the movements read the ledger alone.
+// A person explains breaks of one kind, bound to the facts the page showed.
+async function reconcileRoute(
+  request: IncomingMessage,
+  method: string,
+  parts: string[],
+  url: URL,
+): Promise<[number, unknown]> {
+  if (method === "GET" && parts.length === 2) {
+    return [200, reconReport(engine.ledger, reconRunner)];
+  }
+  if (method === "GET" && parts[2] === "movements" && parts.length === 3) {
+    const currency: string = url.searchParams.get("currency") ?? "";
+    if (!CURRENCY_PATTERN.test(currency)) {
+      throw new HttpError(400, "Name a wallet by its three capital letters, such as USD");
+    }
+    return [200, { currency, movements: movementsView(engine.ledger, currency) }];
+  }
+  if (method === "POST" && parts[2] === "run" && parts.length === 3) {
+    const started: "started" | "running" | "soon" = reconRunner.checkNow();
+    if (started === "running") {
+      throw new HttpError(409, "A check is already running");
+    }
+    if (started === "soon") {
+      throw new HttpError(429, "A check started less than a minute ago. Try again in a minute", {}, { "Retry-After": "60" });
+    }
+    return [202, { started: true }];
+  }
+  if (method === "POST" && parts[2] === "explain" && parts.length === 3) {
+    const body: Record<string, unknown> = await readJson(request);
+    try {
+      const explained: BreakView[] = explainBreaks(
+        engine.ledger,
+        explainItems(body["breaks"]),
+        typed(body, "explainedBy"),
+        typed(body, "note"),
+      );
+      return [200, { explained: explained.map((item: BreakView): number => item.id) }];
+    } catch (error: unknown) {
+      if (error instanceof NameError || error instanceof ExplainInputError || error instanceof ReconKindsError) {
+        throw new HttpError(400, error.message);
+      }
+      if (error instanceof ReconUnknownError) {
+        throw new HttpError(404, error.message, { unknown: error.ids });
+      }
+      if (error instanceof ReconChangedError) {
+        throw new HttpError(409, error.message, { changed: error.ids });
+      }
+      throw error;
+    }
+  }
+  throw new HttpError(404, "Not found");
+}
+
 // Has the agent look at an incident again. It cannot send a second live payment,
 // and an escalated invoice still needs its approval.
 function resume(invoiceId: string): unknown {
@@ -1745,6 +1816,9 @@ async function route(
     sendJson(response, 200, supplierList(engine.ledger));
   } else if (method === "GET" && parts[1] === "suppliers" && parts[2] !== undefined && parts.length === 3) {
     sendJson(response, 200, supplier(parts[2]));
+  } else if (parts[1] === "reconcile") {
+    const [status, body] = await reconcileRoute(request, method, parts, url);
+    sendJson(response, status, body);
   } else if (method === "GET" && pathname === "/api/inbox") {
     sendJson(response, 200, {
       uploads: engine.ledger.uploads(INBOX_OTHERS_SHOWN).map(uploadSummary),
@@ -1934,10 +2008,12 @@ server.listen(PORT, HOST, (): void => {
   say(describeQuotes());
   say(describeOutageRule(outageRuleFromEnv()));
   say(describeAlerts(alertSetting));
+  say(describeReconSetting(reconSetting));
   // The first page load then has balances to show.
   balances.refreshIfOld();
   pickUpInterrupted();
   watcher.start();
   alerts?.start();
+  reconRunner.start();
   void connectWebhooks();
 });
