@@ -188,6 +188,12 @@ const els = {
   inboxDismiss: byId("inbox-dismiss"),
   boardButton: byId("board-button"),
   reconButton: byId("recon-button"),
+  metricsButton: byId("metrics-button"),
+  metrics: byId("metrics"),
+  metricsAsOf: byId("metrics-asof"),
+  metricsError: byId("metrics-error"),
+  metricsCards: byId("metrics-cards"),
+  metricsPeriods: [...document.querySelectorAll("#metrics [data-period]")],
   recon: byId("recon"),
   reconCheck: byId("recon-check"),
   reconError: byId("recon-error"),
@@ -331,11 +337,22 @@ const state = {
   reconExplainError: null,
   reconDrafts: new Map(),
   reconMovements: new Map(),
+  // The metrics as /api/metrics last returned them, when, and the period picked,
+  // which is kept in memory only.
+  metrics: null,
+  metricsError: null,
+  metricsAt: 0,
+  metricsPeriod: "7d",
 };
 
 // "#recon" is the reconciliation view. An invoice called recon is written
 // "#%72econ", so the two never meet.
 const RECON_ID = "recon/";
+// "#metrics" is the metrics view, and an invoice called metrics is "#%6Detrics".
+const METRICS_ID = "metrics/";
+// The metrics are read when the view opens and then every 30 seconds while it
+// is on screen, not on every poll.
+const METRICS_EVERY_MS = 30000;
 
 // Signatures of what each section last drew, so an unchanged poll touches nothing.
 const painted = new Map();
@@ -894,6 +911,10 @@ async function loadDetail() {
     await loadRecon();
     return;
   }
+  if (id === METRICS_ID) {
+    await loadMetrics();
+    return;
+  }
   try {
     const detail = await api(incidentPath(id));
     if (state.selectedId !== id) {
@@ -1005,6 +1026,9 @@ function idFromHash() {
   if (raw === "recon") {
     return RECON_ID;
   }
+  if (raw === "metrics") {
+    return METRICS_ID;
+  }
   try {
     return decodeURIComponent(raw);
   } catch {
@@ -1038,9 +1062,13 @@ function setSelected(id) {
         ? "#recon"
         : id === "recon"
           ? "#%72econ"
-          : runIdOf(id) !== null || inboxIdOf(id) !== null || supplierKeyOf(id) !== null
-            ? `#${id}`
-            : `#${encodeURIComponent(id)}`;
+          : id === METRICS_ID
+            ? "#metrics"
+            : id === "metrics"
+              ? "#%6Detrics"
+              : runIdOf(id) !== null || inboxIdOf(id) !== null || supplierKeyOf(id) !== null
+                ? `#${id}`
+                : `#${encodeURIComponent(id)}`;
   if (window.location.hash !== hash) {
     window.history.replaceState(null, "", hash === "" ? window.location.pathname : hash);
   }
@@ -3206,7 +3234,21 @@ async function submitBankChange(invoiceId) {
   }
 }
 
+// The metrics view draws itself. Leaving it, it stays on screen until another
+// view, or its loading placeholder, is shown.
 function renderMain() {
+  if (state.selectedId === METRICS_ID) {
+    renderMetricsMain();
+    return;
+  }
+  els.metricsButton.removeAttribute("aria-current");
+  renderViews();
+  if (mainViews().some((node) => node !== els.metrics && !node.hidden)) {
+    els.metrics.hidden = true;
+  }
+}
+
+function renderViews() {
   const id = state.selectedId;
   if (id === null) {
     els.boardButton.setAttribute("aria-current", "true");
@@ -7070,6 +7112,495 @@ function syncReconCheck() {
   setText(els.reconCheck, state.reconChecking || running ? "Checking" : "Check now");
 }
 
+// ---------- metrics ----------
+
+const METRICS_PERIOD_WORDS = {
+  "7d": "the last 7 days",
+  "30d": "the last 30 days",
+  all: "since the ledger started",
+};
+
+const METRICS_PAYMENT_WORDS = {
+  first: "first payment",
+  "first-approved": "first payment, approved",
+  "replacement-auto": "replacement by PayOnce",
+  "replacement-approved": "replacement, approved",
+};
+
+const METRICS_STAGE_WORDS = {
+  bank: "Failed at the bank",
+  refused: "Refused by Airwallex",
+  "never-created": "Never created",
+};
+
+const METRICS_HOW_WORDS = {
+  "first-time": "paid the first time",
+  replaced: "replaced by PayOnce",
+  "person-paid": "paid after a person",
+  "not-paid": "closed without paying",
+};
+
+const METRICS_GROUP_WORDS = {
+  "paid-first-time": "Paid the first time",
+  "recovered-by-itself": "Recovered by PayOnce alone",
+  "with-a-person": "With a person",
+};
+
+// An amount as formatMoney writes it, which a table aligns with the numbers.
+const MONEY_CELL = /^-?[0-9][0-9,]*\.[0-9]{2} [A-Z]{3}$/;
+
+function mainViews() {
+  return [
+    els.board,
+    els.detail,
+    els.runDetail,
+    els.inboxDetail,
+    els.supplierDetail,
+    els.recon,
+    els.placeholder,
+    els.metrics,
+  ];
+}
+
+function showOnlyView(shown) {
+  for (const node of mainViews()) {
+    node.hidden = node !== shown;
+  }
+}
+
+async function loadMetrics() {
+  const period = state.metricsPeriod;
+  const due =
+    state.metrics === null ||
+    state.metrics.period !== period ||
+    state.metricsAt < state.selectedAt ||
+    Date.now() - state.metricsAt >= METRICS_EVERY_MS;
+  if (!due) {
+    return;
+  }
+  try {
+    const report = await api(`/api/metrics?period=${encodeURIComponent(period)}`);
+    if (report === null || typeof report !== "object" || report.period !== period || !Array.isArray(report.payments?.rows)) {
+      throw new Error("The server sent metrics this page could not read.");
+    }
+    if (state.metricsPeriod === period) {
+      state.metrics = report;
+      state.metricsError = null;
+    }
+  } catch (error) {
+    state.metricsError = error.message;
+  }
+  state.metricsAt = Date.now();
+}
+
+function durationWords(seconds) {
+  if (typeof seconds !== "number") {
+    return "none";
+  }
+  if (seconds < 60) {
+    return `${seconds} s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes} min`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return minutes % 60 === 0 ? `${hours} h` : `${hours} h ${minutes % 60} min`;
+  }
+  const days = Math.floor(hours / 24);
+  return hours % 24 === 0 ? `${days} d` : `${days} d ${hours % 24} h`;
+}
+
+// Median with its n, p90 (shown from n 10), and the longest.
+function spreadCells(spread) {
+  if (spread.n === 0) {
+    return ["none measured", "", ""];
+  }
+  return [
+    `${durationWords(spread.medianSeconds)} (n ${spread.n})`,
+    spread.p90Seconds === null ? "" : durationWords(spread.p90Seconds),
+    durationWords(spread.maxSeconds),
+  ];
+}
+
+function percentWords(part, whole, percent) {
+  return percent === null ? `${part} of ${whole}` : `${part} of ${whole} (${percent}%)`;
+}
+
+function metricsTable(caption, head, rows, empty) {
+  if (rows.length === 0) {
+    return h("p", { class: "empty" }, empty);
+  }
+  return h(
+    "div",
+    { class: "metrics-scroll" },
+    h(
+      "table",
+      { class: "metrics-table" },
+      h("caption", null, caption),
+      h("thead", null, h("tr", null, head.map((cell) => h("th", { scope: "col" }, cell)))),
+      h(
+        "tbody",
+        null,
+        rows.map((row) =>
+          h(
+            "tr",
+            null,
+            row.map((cell, index) =>
+              index === 0
+                ? h("th", { scope: "row" }, cell)
+                : h("td", { class: typeof cell === "number" || MONEY_CELL.test(String(cell)) ? "num" : null }, cell),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+// What a table left out: rows a time it needs is missing for, and rows whose
+// currency PayOnce cannot read.
+function metricsNote(notOnFile, unreadable = 0) {
+  const parts = [
+    notOnFile > 0 && `${notOnFile} left out because a time they need is not on file.`,
+    unreadable > 0 && `${unreadable} left out of the money because their currency cannot be read.`,
+  ].filter((part) => part !== false);
+  return parts.length === 0 ? null : h("p", { class: "hint" }, parts.join(" "));
+}
+
+function metricsCard(key, title, ...children) {
+  const id = `metrics-${key}-title`;
+  return h("section", { class: "card metrics-card", "aria-labelledby": id }, h("h2", { id }, title), ...children);
+}
+
+function spreadNote(label, spread) {
+  if (spread.n === 0 && spread.notOnFile === 0) {
+    return null;
+  }
+  const [median, p90, longest] = spreadCells(spread);
+  return [label, median, p90, longest];
+}
+
+function paymentsCard(table) {
+  const firstTime =
+    table.firstTime.length === 0
+      ? "The bank paid or failed no first payment in this period."
+      : `Paid the first time: ${table.firstTime
+          .map((row) => `${row.currency} ${percentWords(row.paid, row.ended, row.percent)}`)
+          .join("; ")}. This counts the first payments the bank has paid or failed.`;
+  const twice =
+    table.paidMoreThanOnce.length === 0
+      ? "Paid more than once, since the ledger started: none."
+      : `Paid more than once, since the ledger started: ${table.paidMoreThanOnce
+          .map(
+            (row) =>
+              `${row.currency} ${row.invoices} ${row.invoices === 1 ? "invoice" : "invoices"}, ${formatMoney(row.extraMinor, row.currency)} more than owed`,
+          )
+          .join("; ")}.`;
+  const bankTime = table.bankTimeToPay
+    .map((row) => spreadNote(`${row.currency} ${row.method}`, row))
+    .filter((row) => row !== null);
+  const bankMissing = table.bankTimeToPay.reduce((sum, row) => sum + row.notOnFile, 0);
+  return metricsCard(
+    "payments",
+    "Payments sent",
+    metricsTable(
+      "By when the transfer was created",
+      ["Payment", "Sent", "Paid", "Failed", "With the bank", "Paid out", "From pay runs"],
+      table.rows.map((row) => [
+        `${row.currency} ${METRICS_PAYMENT_WORDS[row.what] ?? row.what}`,
+        row.sent,
+        row.paid,
+        row.failed,
+        row.withBank,
+        formatMoney(row.paidMinor, row.currency),
+        row.fromPayRuns,
+      ]),
+      "No payments sent in this period.",
+    ),
+    h("p", null, firstTime),
+    h("p", { class: table.paidMoreThanOnce.length === 0 ? null : "form-error" }, twice),
+    bankTime.length > 0 &&
+      metricsTable(
+        "Bank time to pay: from PayOnce's last call to create the transfer to when it recorded it paid",
+        ["Rail", "Median", "p90", "Longest"],
+        bankTime,
+        "",
+      ),
+    metricsNote(table.notOnFile + bankMissing, table.unreadable),
+  );
+}
+
+function failuresCard(table) {
+  return metricsCard(
+    "failures",
+    "Failures by rail and code",
+    metricsTable(
+      "By when the transfer was created, or when PayOnce tried to create it",
+      ["Rail", "Where", "Code", "What it means", "PayOnce", "Outside PayOnce", "Counts toward an outage", "A resend can fix it"],
+      table.rows.map((row) => [
+        `${row.currency} ${row.method}`,
+        METRICS_STAGE_WORDS[row.stage] ?? row.stage,
+        row.code,
+        row.label,
+        row.payonce,
+        row.outside,
+        row.rail ? "Yes" : "No",
+        row.resendable ? "Yes" : "No",
+      ]),
+      "No failures in this period.",
+    ),
+    table.outsidePayoutsFailed > 0 &&
+      h(
+        "p",
+        null,
+        `Payouts sent outside PayOnce that failed, by when PayOnce tied them to an invoice: ${table.outsidePayoutsFailed}.`,
+      ),
+    metricsNote(table.notOnFile, table.unreadable),
+  );
+}
+
+function incidentsCard(table) {
+  const started = table.started;
+  const times = [
+    ...table.timeToClose.map((spread) =>
+      spreadNote(`${METRICS_GROUP_WORDS[spread.group] ?? spread.group}, from the first line`, spread),
+    ),
+    ...table.afterFailure.map((spread) =>
+      spreadNote(`${METRICS_GROUP_WORDS[spread.group] ?? spread.group}, from the first failure`, spread),
+    ),
+    spreadNote("With a person, from when it first went to one", table.withPerson),
+  ].filter((row) => row !== null);
+  const timesMissing = [...table.timeToClose, ...table.afterFailure, table.withPerson].reduce(
+    (sum, spread) => sum + spread.notOnFile,
+    0,
+  );
+  return metricsCard(
+    "incidents",
+    "Incidents",
+    h(
+      "p",
+      null,
+      `Started, by the first line on their timeline: ${started.single} single, ${started.payRun} from pay runs, ${started.found} found in Airwallex.`,
+    ),
+    metricsNote(started.notOnFile),
+    metricsTable(
+      "Closed, by when they closed",
+      ["How it closed", "Count", "Amount", "From pay runs", "Found in Airwallex"],
+      table.closed.map((row) => [
+        `${row.currency} ${METRICS_HOW_WORDS[row.how] ?? row.how}`,
+        row.count,
+        formatMoney(row.amountMinor, row.currency),
+        row.fromPayRuns,
+        row.found,
+      ]),
+      "No incidents closed in this period.",
+    ),
+    times.length > 0 &&
+      metricsTable("How long the closed ones took", ["Closed", "Median", "p90", "Longest"], times, ""),
+    table.reasons.length > 0 &&
+      metricsTable(
+        "Why they needed a person: the reason on file when they closed",
+        ["Reason", "Paid", "Not paid"],
+        table.reasons.map((row) => [row.label, row.paid, row.notPaid]),
+        "",
+      ),
+    h(
+      "p",
+      { class: "hint" },
+      "An invoice counts as needing a person when PayOnce sent it to one, even if the bank then settled it before anyone acted.",
+    ),
+    metricsNote(table.notOnFile + timesMissing, table.unreadable),
+  );
+}
+
+function approvalsCard(table) {
+  return metricsCard(
+    "approvals",
+    "Approvals",
+    metricsTable(
+      "By when a request got the signoff that completed it",
+      ["Requests", "Given", "Two approvers", "Spent", "Voided", "Waiting to be used", "Time to approve", "p90", "Longest"],
+      table.rows.map((row) => [
+        row.of === "run" ? "Pay runs" : "Invoices",
+        row.given,
+        row.twoApprovers,
+        row.spent,
+        row.voided,
+        row.waiting,
+        ...spreadCells(row.wait),
+      ]),
+      "",
+    ),
+    h("p", null, `Waiting for a person now: ${table.openNow} ${table.openNow === 1 ? "request" : "requests"}.`),
+    h(
+      "p",
+      { class: "hint" },
+      "Time to approve runs from the first request to the signoff that completed one, across the requests that renewed in between.",
+    ),
+    metricsNote(table.rows.reduce((sum, row) => sum + row.notOnFile + row.wait.notOnFile, 0)),
+  );
+}
+
+function feesCard(table) {
+  return metricsCard(
+    "fees",
+    "Fees lost",
+    metricsTable(
+      "Fees kept on failed transfers, by when the transfer was created",
+      ["Wallet", "Transfers", "Fees kept", "Not read yet", "PayOnce", "Outside PayOnce"],
+      table.rows.map((row) => [
+        row.currency,
+        row.transfers,
+        formatMoney(row.feeMinor, row.currency),
+        row.notRead,
+        row.payonce,
+        row.outside,
+      ]),
+      "No fees lost in this period.",
+    ),
+    metricsNote(table.notOnFile, table.unreadable),
+  );
+}
+
+function duplicatesCard(table) {
+  return metricsCard(
+    "duplicates",
+    "Duplicates held",
+    metricsTable(
+      "Invoices held as a likely second bill, by the first line on their timeline",
+      ["Currency", "Held", "Closed without paying", "Not paid twice", "Paid on approval", "Still held"],
+      table.rows.map((row) => [
+        row.currency,
+        row.held,
+        row.stopped,
+        formatMoney(row.stoppedMinor, row.currency),
+        row.paid,
+        row.stillHeld,
+      ]),
+      "No invoices held as a likely duplicate in this period.",
+    ),
+    metricsNote(table.notOnFile, table.unreadable),
+  );
+}
+
+function outageHeldWords(held) {
+  const parts = [
+    held.original > 0 && `${held.original} first ${held.original === 1 ? "payment" : "payments"}`,
+    held.replacement > 0 && `${held.replacement} ${held.replacement === 1 ? "replacement" : "replacements"}`,
+    held.approved > 0 && `${held.approved} approved ${held.approved === 1 ? "payment" : "payments"}`,
+    held.run > 0 && `${held.run} pay ${held.run === 1 ? "run" : "runs"}`,
+  ].filter((part) => part !== false);
+  return parts.length === 0 ? "Nothing" : parts.join(", ");
+}
+
+function outagesCard(table) {
+  return metricsCard(
+    "outages",
+    "Rail outages",
+    metricsTable(
+      "Outages running at any time in the period",
+      ["Outage", "Declared", "Ended", "Lasted", "Payees", "Codes", "Held"],
+      table.rows.map((row) => [
+        `${row.id} on ${row.currency} ${row.method}`,
+        zonedTime(row.declaredAt) ?? "not on file",
+        row.active ? "Still active" : (zonedTime(row.endedAt) ?? "not on file"),
+        durationWords(row.seconds),
+        row.payees,
+        row.codes.length === 0 ? "none on file" : row.codes.map((code) => `${code.code} ${code.label}`).join(", "),
+        outageHeldWords(row.held),
+      ]),
+      "No outages in this period.",
+    ),
+    table.byRail.length > 0 &&
+      metricsTable(
+        "By rail",
+        ["Rail", "Outages", "In all", "Longest"],
+        table.byRail.map((row) => [
+          `${row.currency} ${row.method}`,
+          row.outages,
+          durationWords(row.totalSeconds),
+          durationWords(row.longestSeconds),
+        ]),
+        "",
+      ),
+    metricsNote(table.notOnFile, table.unreadable),
+  );
+}
+
+function reconCard(table) {
+  const link = h("p", null, h("a", { href: "#recon" }, "Open reconciliation"));
+  if (!table.ran) {
+    return metricsCard("recon", "Reconciliation breaks", h("p", { class: "empty" }, "Reconciliation has not run on this ledger."), link);
+  }
+  const resolve = spreadNote("Time to resolve", table.resolve);
+  return metricsCard(
+    "recon",
+    "Reconciliation breaks",
+    metricsTable(
+      "By when the break opened",
+      ["Kind", "Clears by itself", "Found", "Explained", "Cleared", "Open"],
+      table.rows.map((row) => [row.label, row.byItself ? "Yes" : "No", row.found, row.explained, row.cleared, row.open]),
+      "No breaks opened in this period.",
+    ),
+    resolve !== null && metricsTable("From opening to explained or cleared", ["", "Median", "p90", "Longest"], [resolve], ""),
+    link,
+    metricsNote(table.notOnFile + table.resolve.notOnFile),
+  );
+}
+
+function renderMetricsAsOf(report) {
+  const loading = report.period !== state.metricsPeriod;
+  els.metricsAsOf.replaceChildren(
+    h(
+      "span",
+      null,
+      `Showing ${METRICS_PERIOD_WORDS[report.period] ?? report.period}`,
+      report.from !== null && [", from ", zonedTime(report.from)],
+      ". As of ",
+      zonedTime(report.builtAt),
+      loading ? `. Loading ${METRICS_PERIOD_WORDS[state.metricsPeriod] ?? state.metricsPeriod}.` : ".",
+    ),
+  );
+}
+
+function renderMetricsMain() {
+  els.metricsButton.setAttribute("aria-current", "true");
+  els.boardButton.removeAttribute("aria-current");
+  els.reconButton.removeAttribute("aria-current");
+  for (const button of els.metricsPeriods) {
+    button.setAttribute("aria-pressed", String(button.dataset.period === state.metricsPeriod));
+  }
+  const report = state.metrics;
+  if (report === null) {
+    if (state.metricsError === null && Date.now() - state.selectedAt < LOADING_DELAY_MS) {
+      return;
+    }
+    setText(els.placeholderTitle, state.metricsError === null ? "Loading metrics" : "Could not load metrics");
+    setText(els.placeholderText, state.metricsError ?? "");
+    showMessage(els.connection, null);
+    showOnlyView(els.placeholder);
+    return;
+  }
+  showMessage(els.connection, null);
+  showMessage(els.metricsError, state.metricsError === null ? null : `Could not refresh the metrics. ${state.metricsError}`);
+  renderMetricsAsOf(report);
+  if (changed("metrics", { ...report, to: null, builtAt: null, from: report.period === "all" ? report.from : null })) {
+    els.metricsCards.replaceChildren(
+      paymentsCard(report.payments),
+      failuresCard(report.failures),
+      incidentsCard(report.incidents),
+      approvalsCard(report.approvals),
+      feesCard(report.fees),
+      duplicatesCard(report.duplicates),
+      outagesCard(report.outages),
+      reconCard(report.recon),
+    );
+  }
+  showOnlyView(els.metrics);
+}
+
 function renderReconMain() {
   const report = state.recon;
   if (report === null) {
@@ -7236,6 +7767,19 @@ els.reconButton.addEventListener("click", () => {
   window.scrollTo(0, 0);
   select(RECON_ID);
 });
+els.metricsButton.addEventListener("click", () => {
+  window.scrollTo(0, 0);
+  select(METRICS_ID);
+});
+for (const button of els.metricsPeriods) {
+  button.addEventListener("click", () => {
+    if (state.metricsPeriod !== button.dataset.period) {
+      state.metricsPeriod = button.dataset.period;
+      render();
+      refresh();
+    }
+  });
+}
 els.reconCheck.addEventListener("click", checkRecon);
 for (const [name, select] of [
   ["group", els.boardGroup],

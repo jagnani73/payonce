@@ -2339,6 +2339,98 @@ input[type="file"] {
   overflow-wrap: anywhere;
 }
 
+/* Metrics */
+
+.metrics__periods {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.metrics__periods .button[aria-pressed="true"] {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.metrics__asof {
+  margin-top: -8px;
+}
+
+.metrics__cards {
+  display: grid;
+  gap: 16px;
+}
+
+.metrics-card {
+  display: grid;
+  gap: 10px;
+}
+
+.metrics-card .hint {
+  margin-top: 0;
+}
+
+.metrics-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* On a phone a table keeps a readable width and scrolls inside its card. */
+.metrics-table {
+  width: 100%;
+  min-width: 34em;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.metrics-table caption {
+  padding-bottom: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: left;
+}
+
+.metrics-table th,
+.metrics-table td {
+  padding: 6px 10px 6px 0;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.metrics-table thead th {
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.metrics-table tbody th {
+  font-weight: 600;
+}
+
+.metrics-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* At phone width the top bar's buttons wrap onto another line instead of
+   widening the page. The sidebar is not sticky at this width. */
+@media (max-width: 560px) {
+  .topbar {
+    flex-wrap: wrap;
+    row-gap: 8px;
+    height: auto;
+    min-height: var(--topbar-h);
+    padding: 8px 16px;
+  }
+
+  .brand {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+}
+
 @media (max-width: 1180px) {
   .detail__grid {
     grid-template-columns: minmax(0, 1fr);

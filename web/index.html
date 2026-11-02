@@ -64,6 +64,7 @@
         <span class="brand__what">Payment incident agent</span>
         <button id="board-button" class="board-nav" type="button">Incident board</button>
         <button id="recon-button" class="board-nav" type="button">Reconciliation</button>
+        <button id="metrics-button" class="board-nav" type="button">Metrics</button>
       </div>
       <p class="sandbox-note">Sandbox only. No real money.</p>
     </header>
@@ -267,6 +268,23 @@
           <section id="recon-waiting" class="card" aria-labelledby="recon-waiting-title" hidden></section>
           <section id="recon-explained" class="card" aria-labelledby="recon-explained-title" hidden></section>
           <p id="recon-audit" class="footnote audit" hidden></p>
+        </article>
+
+        <article id="metrics" class="board metrics" aria-labelledby="metrics-title" hidden>
+          <header class="board__head">
+            <div>
+              <h1 id="metrics-title">Metrics</h1>
+              <p class="board__lead">How payments and incidents went, from the ledger alone. Each table counts by the time it names, so the tables do not add up to each other. Amounts are never added across currencies.</p>
+            </div>
+            <div class="metrics__periods" role="group" aria-label="Period">
+              <button class="button button--small" type="button" data-period="7d" aria-pressed="true">Last 7 days</button>
+              <button class="button button--small" type="button" data-period="30d" aria-pressed="false">Last 30 days</button>
+              <button class="button button--small" type="button" data-period="all" aria-pressed="false">Since the ledger started</button>
+            </div>
+          </header>
+          <p id="metrics-asof" class="hint metrics__asof"></p>
+          <p id="metrics-error" class="banner" role="status" hidden></p>
+          <div id="metrics-cards" class="metrics__cards"></div>
         </article>
 
         <article id="detail" class="detail" hidden>
