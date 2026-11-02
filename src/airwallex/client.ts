@@ -1,10 +1,16 @@
 import { cleanLine } from "../eml.js";
 
 const DEFAULT_BASE_URL: string = "https://api.sandbox.airwallex.com";
+// The sandbox API hosts Airwallex documents: api.sandbox.airwallex.com in its API
+// reference and quick starts, and api-demo.airwallex.com, the older name of the
+// same sandbox. This code moves money, so it talks to nothing else.
+export const SANDBOX_HOSTS: readonly string[] = ["api.sandbox.airwallex.com", "api-demo.airwallex.com"];
 const TOKEN_REFRESH_MARGIN_MS: number = 60_000;
 const REQUEST_TIMEOUT_MS: number = 30_000;
 const MAX_ERROR_TEXT: number = 300;
 const ERROR_CODE: RegExp = /^[A-Za-z0-9_.-]{1,64}$/;
+const REDIRECT_TEXT: string =
+  "Airwallex answered with a redirect, which PayOnce never follows, so the API key and token go only to the sandbox host";
 
 export type HttpMethod = "GET" | "POST";
 
@@ -66,8 +72,11 @@ async function send<T>(
   let response: Response;
   let text: string;
   try {
+    // A redirect would carry x-client-id and x-api-key, or the token, to whatever
+    // host it names, so none is followed.
     response = await fetch(url, {
       ...init,
+      redirect: "manual",
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     text = await response.text();
@@ -75,6 +84,9 @@ async function send<T>(
     throw new AirwallexUnreachableError(request, error);
   }
 
+  if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400)) {
+    throw new AirwallexError(request, response.status, {}, REDIRECT_TEXT);
+  }
   if (!response.ok) {
     let body: ErrorBody = {};
     try {
@@ -100,9 +112,19 @@ export class AirwallexClient {
   private tokenExpiresAtMs: number = 0;
 
   constructor(baseUrl: string, clientId: string, apiKey: string) {
-    // This code moves money, so it refuses to talk to anything but the sandbox.
-    if (!new URL(baseUrl).hostname.includes("sandbox")) {
-      throw new Error(`Refusing non-sandbox Airwallex host: ${baseUrl}`);
+    // This code moves money, so it refuses to talk to anything but the sandbox: https
+    // on the default port, with no user name or password in the address.
+    const url: URL = new URL(baseUrl);
+    if (
+      url.protocol !== "https:" ||
+      !SANDBOX_HOSTS.includes(url.hostname) ||
+      url.port !== "" ||
+      url.username !== "" ||
+      url.password !== ""
+    ) {
+      throw new Error(
+        `Refusing the Airwallex address in AWX_BASE_URL (host ${cleanLine(url.hostname, 100)}). PayOnce talks only to the sandbox: ${SANDBOX_HOSTS.map((host: string): string => `https://${host}`).join(" or ")}`,
+      );
     }
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.clientId = clientId;
