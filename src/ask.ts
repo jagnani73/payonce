@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { policyFromEnv } from "./approvers.js";
 import { EXPLAIN_SYSTEM, ExplainError, explainerFromEnv, promptOf, shownAnswer, type Explainer, type ModelAnswer, type ShownAnswer } from "./explainer.js";
 import { Ledger, LEDGER_PATH } from "./ledger.js";
+import { printable, printableJson, say, sayError, sayWarning } from "./printable.js";
 import { readerNamesFromEnv } from "./reader.js";
 import { reserveFromEnv } from "./reserve.js";
 import { whyFacts, type LegendEntry, type WhyBuild } from "./why-facts.js";
@@ -17,17 +18,8 @@ const USAGE: string = `Usage: pnpm ask <INVOICE> [facts]
 Without facts, asks the model reader's models why PayOnce did what it did on the invoice.
 With facts, prints the facts and the legend exactly as they would be sent, and asks nothing.`;
 const WIDTH: number = 80;
-// As pnpm board prints names: control characters, which could move the cursor
-// or colour the terminal, and line breaks become spaces, and format characters
-// (bidi controls, zero-width characters and the rest of Unicode's Cf), which
-// could reverse or hide part of a line, and the rest of the tag block are
-// dropped. Applied after the legend swaps names and invoice numbers back in.
-const CONTROL: RegExp = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
-const HIDDEN: RegExp = /[\p{Cf}\u{e0000}-\u{e007f}]/gu;
-
-function printable(text: string): string {
-  return text.replace(HIDDEN, "").replace(CONTROL, " ").trim();
-}
+// Every line goes through printable.ts, as pnpm board prints names. The answer
+// is cleaned after the legend swaps names and invoice numbers back in.
 
 function loadEnv(): void {
   try {
@@ -40,7 +32,7 @@ function loadEnv(): void {
 }
 
 function fail(message: string): never {
-  console.error(message);
+  sayError(message);
   process.exit(1);
 }
 
@@ -95,17 +87,18 @@ async function main(): Promise<void> {
     fail(`${shownId} is not in the ledger`);
   }
   if (build.unrecognised > 0) {
-    console.warn(`  why      ${build.unrecognised} unrecognised reason${build.unrecognised === 1 ? "" : "s"} on ${shownId}`);
+    sayWarning(`  why      ${build.unrecognised} unrecognised reason${build.unrecognised === 1 ? "" : "s"} on ${shownId}`);
   }
 
   if (mode === "facts") {
-    console.log("System message:");
-    console.log(EXPLAIN_SYSTEM);
-    console.log("");
-    console.log("User message:");
-    console.log(promptOf(build.facts));
-    console.log("");
-    console.log(legendText(build.legend));
+    say("System message:");
+    say(EXPLAIN_SYSTEM);
+    say();
+    say("User message:");
+    // Escaped, not dropped, so what is printed parses back to what is sent.
+    say(printableJson(promptOf(build.facts)));
+    say();
+    say(legendText(build.legend));
     return;
   }
 
@@ -121,7 +114,7 @@ async function main(): Promise<void> {
   } catch (error: unknown) {
     // Not process.exit: a request socket may still be closing, and exiting under
     // it trips an assertion in Node on Windows.
-    console.error(error instanceof ExplainError ? error.message : `No model gave an explanation: ${String(error)}`);
+    sayError(error instanceof ExplainError ? error.message : `No model gave an explanation: ${String(error)}`);
     process.exitCode = 1;
     return;
   }
@@ -130,18 +123,18 @@ async function main(): Promise<void> {
     (sum: number, count: number): number => sum + count,
     0,
   );
-  console.log(`${shownId}: why PayOnce did what it did`);
-  console.log(wrapped(printable(shown.explanation)));
+  say(`${shownId}: why PayOnce did what it did`);
+  say(wrapped(printable(shown.explanation)));
   if (shown.notInFacts !== "") {
-    console.log("");
-    console.log(wrapped(`Not in the records: ${printable(shown.notInFacts)}`));
+    say();
+    say(wrapped(`Not in the records: ${printable(shown.notInFacts)}`));
   }
   if (shown.aliasesLeft) {
-    console.log("");
-    console.log(legendText(shown.legend));
+    say();
+    say(legendText(shown.legend));
   }
-  console.log("");
-  console.log(
+  say();
+  say(
     wrapped(
       `Written by ${printable(shown.model)} from PayOnce's records for this invoice (${build.asOf.lines} timeline lines, ${left} not passed on)${shown.cut ? ", shortened to fit" : ""}. A model can be wrong: the timeline is the record.`,
     ),

@@ -8,6 +8,7 @@ import {
   redactKey,
   REQUEST_TIMEOUT_MS,
 } from "./model-reader.js";
+import { printable, sayWarning } from "./printable.js";
 import { readerSettingsFromEnv, type ReaderSettings } from "./reader.js";
 import type { LegendEntry, WhyBuild, WhyFacts } from "./why-facts.js";
 
@@ -216,7 +217,7 @@ export class Explainer {
       } catch (error: unknown) {
         failure = this.redact(error instanceof Error ? error.message : String(error));
         limited = limited && error instanceof ModelError && error.status === 429;
-        console.warn(`  why      ${model} gave no answer after ${Date.now() - started} ms: ${failure}`);
+        sayWarning(`  why      ${model} gave no answer after ${Date.now() - started} ms: ${printable(failure)}`);
         if (keyRefused(error)) {
           break;
         }
