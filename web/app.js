@@ -2231,7 +2231,9 @@ function buildReview(invoiceId, review, emailSummary) {
       ? "replacement"
       : review.kind === "outside"
         ? "payout sent outside PayOnce"
-        : "original payment";
+        : review.kind === "mismatched"
+          ? "transfer listed under this invoice's request id"
+          : "original payment";
   const draft = state.closeDrafts.get(invoiceId) ?? { closedBy: "", finding: "" };
   const remember = () => {
     state.closeDrafts.set(invoiceId, { closedBy: closedBy.value, finding: finding.value });
@@ -2302,7 +2304,7 @@ function buildReview(invoiceId, review, emailSummary) {
       duplicate
         ? `This invoice looks like a second bill for ${review.reference}. If it is, close it without paying. If it is not, PayOnce pays it once it is approved.`
         : unpaid
-          ? "PayOnce has sent nothing for this invoice. If it should not be paid, close it without paying. Otherwise PayOnce pays it once it is approved."
+          ? "Nothing has been paid for this invoice. If it should not be paid, close it without paying. Otherwise PayOnce pays it once it is approved."
           : `The bank reports the ${paidPayment} as paid, so PayOnce will not send another. Check with the supplier, then close the incident.`,
     ),
     h(

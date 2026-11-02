@@ -123,13 +123,19 @@ async function sweepOne(engine: Engine, agent: Dispatcher, transfer: Transfer): 
     return;
   }
   // One under the request id of a payment marked failed with no transfer, but not
-  // with that invoice's number, amount and currency, goes on the invoice's
-  // timeline once and sends it to a person, in its turn. A pending one's look
-  // lists it by request id.
+  // with that invoice's number, amount and currency, is kept beside that payment
+  // with its status, in the invoice's turn, and the invoice goes to a person. Its
+  // look comes when it is first kept and when its status changes, never more. A
+  // pending one's look lists it by request id.
   if (engine.ledger.knowsTransfer(transfer.request_id ?? "", transfer.id)) {
     const attempt: Attempt | undefined = engine.ledger.attemptOf(transfer.request_id ?? "", transfer.id);
     if (attempt?.transferId === null && attempt.state === "failed") {
-      await agent.run(attempt.invoiceId, (): boolean => noteMismatchedTransfer(engine, transfer));
+      const invoiceId: string = attempt.invoiceId;
+      const changed: boolean = await agent.run(invoiceId, (): boolean => noteMismatchedTransfer(engine, transfer));
+      const state: ObligationState | undefined = engine.ledger.obligation(invoiceId)?.state;
+      if (changed && (state === "open" || state === "escalated")) {
+        agent.wake(invoiceId);
+      }
     } else if (attempt?.transferId === null) {
       reportOnce(
         transfer,

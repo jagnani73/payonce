@@ -96,6 +96,7 @@ import {
   expiryOf,
   isExpired,
   liveAtBank,
+  mismatchedLive,
   RailOutageError,
   signersOf,
   type Approval,
@@ -442,31 +443,86 @@ export function unrecordedAttemptOf(ledger: Ledger, transfer: Transfer): Attempt
 export const MISMATCHED_TRANSFER_REASON: string =
   "Airwallex lists a transfer under the request id of a payment PayOnce marked as never sent, and it does not match this invoice";
 
-// Such a transfer is not recorded on the attempt, because it may not be this
-// invoice's payment. The invoice's timeline says so once per transfer, in
-// PayOnce's words, and the invoice waits for a person, reopened if it was
-// closed. Nothing wakes it: a look has nothing more to do with the transfer.
-// True when it wrote the warning, so a check before a payment looks again.
+// Such a transfer is not recorded as the attempt's payment, because it may not be
+// this invoice's. It is kept beside the attempt with the status the bank gives
+// it, and counts as live (liveAtBank) until the bank fails it, so nothing more is
+// sent or released for the invoice meanwhile. The first time, the timeline says
+// so in PayOnce's words and the invoice waits for a person, reopened unless it
+// is settled. Later reads only update its status. True when it tied the transfer
+// or its status changed, so the caller looks at the invoice again.
 export function noteMismatchedTransfer(engine: Engine, transfer: Transfer): boolean {
   const requestId: string = transfer.request_id ?? "";
   const attempt: Attempt | undefined =
     requestId === "" ? undefined : engine.ledger.attemptOf(requestId, transfer.id);
+  if (attempt?.requestId !== requestId || attempt.transferId !== null) {
+    return false;
+  }
+  if (attempt.mismatchedTransferId === transfer.id) {
+    return syncMismatched(engine, attempt, transfer);
+  }
   if (
-    attempt?.requestId !== requestId ||
     attempt.state !== "failed" ||
-    attempt.transferId !== null ||
-    unrecordedAttemptOf(engine.ledger, transfer) !== undefined
+    unrecordedAttemptOf(engine.ledger, transfer) !== undefined ||
+    !engine.ledger.addMismatched(requestId, transfer.id, transfer.short_reference_id, transfer.status ?? null)
   ) {
     return false;
   }
   const invoiceId: string = attempt.invoiceId;
-  const message: string = `${capitalise(attempt.kind)} payment PayOnce had marked failed has a transfer under its request id that does not match this invoice: Airwallex lists ${transfer.short_reference_id} under it with another reference, amount or currency. PayOnce did not record it on the ${attempt.kind}, so a person checks it`;
-  if (engine.ledger.events(invoiceId).some((event: LedgerEvent): boolean => event.message === message)) {
+  note(
+    engine.ledger,
+    invoiceId,
+    "warning",
+    `${capitalise(attempt.kind)} payment PayOnce had marked failed has a transfer under its request id that does not match this invoice: Airwallex lists ${transfer.short_reference_id} ${transfer.status} under it with another reference, amount or currency. PayOnce did not record it as the ${attempt.kind}, sends nothing for this invoice while the bank has it, and a person checks it`,
+  );
+  engine.ledger.escalateUnlessSettled(invoiceId, MISMATCHED_TRANSFER_REASON);
+  return true;
+}
+
+// Records the status the bank gives a transfer kept beside an attempt because it
+// does not match the invoice, with a bank line when it is paid or failed. True
+// when the status changed.
+function syncMismatched(engine: Engine, attempt: Attempt, transfer: Transfer): boolean {
+  if (!engine.ledger.setMismatchedStatus(transfer.id, transfer.status)) {
     return false;
   }
-  note(engine.ledger, invoiceId, "warning", message);
-  engine.ledger.escalate(invoiceId, MISMATCHED_TRANSFER_REASON);
+  const state: AttemptState | null = attemptStateOf(transfer);
+  if (state === "paid" || state === "failed") {
+    note(
+      engine.ledger,
+      attempt.invoiceId,
+      "bank",
+      `Transfer under the ${attempt.kind}'s request id that does not match this invoice: ${describe(transfer)}`,
+    );
+  }
   return true;
+}
+
+// Nothing is sent or released while a transfer under one of the invoice's request
+// ids that does not match it is live at the bank, and any open request is
+// withdrawn. A person checks it: once it is paid, a person can close the invoice,
+// and once it has failed, the invoice carries on, but PayOnce never closes it by
+// itself until a person has.
+function holdMismatched(engine: Engine, invoiceId: string, attempt: Attempt): NextLook {
+  engine.ledger.escalateUnlessSettled(invoiceId, MISMATCHED_TRANSFER_REASON);
+  if (engine.ledger.voidOpenApprovals(invoiceId)) {
+    note(
+      engine.ledger,
+      invoiceId,
+      "approval",
+      "Approval request withdrawn: a transfer that does not match this invoice is live under one of its request ids",
+    );
+  }
+  const reference: string = attempt.mismatchedReference ?? attempt.mismatchedTransferId ?? "";
+  note(
+    engine.ledger,
+    invoiceId,
+    "approval",
+    attempt.mismatchedStatus === "PAID"
+      ? `Waiting on a person. Transfer ${reference}, under the ${attempt.kind}'s request id, is paid but does not match this invoice. Check it with the supplier and close the incident. PayOnce sends nothing more`
+      : `Waiting on a person. Transfer ${reference}, under the ${attempt.kind}'s request id, does not match this invoice and is still with the bank, so PayOnce sends nothing`,
+    "waiting",
+  );
+  return null;
 }
 
 // A payment the bank has not failed that PayOnce found late, while another payment
@@ -497,7 +553,7 @@ export function paidTwice(ledger: Ledger, invoiceId: string): Attempt | undefine
 // duplicate lock once another payment has failed, which the next record of it
 // does, so a look records it again after reading the others.
 function keptFailed(attempt: Attempt): boolean {
-  return attempt.state === "failed" && liveAtBank(attempt);
+  return attempt.state === "failed" && attempt.transferId !== null && liveAtBank(attempt);
 }
 
 // Nothing more is sent while two payments may both pay the invoice, and any open
@@ -2437,13 +2493,23 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
   }
   // A person decided not to pay it, and a payout sent outside PayOnce reopened it.
   // That payout has failed, so it is closed again and nobody is asked to pay it.
+  // A transfer found under one of its request ids that does not match it leaves
+  // that to a person, on the close card.
   if (obligation.rejectedBy !== null) {
-    if (engine.ledger.reject(invoiceId, obligation.rejectedBy)) {
+    if (engine.ledger.rejectAgain(invoiceId)) {
       note(
         engine.ledger,
         invoiceId,
         "closed",
         `Closed without paying again. The payout sent outside PayOnce failed, and ${obligation.rejectedBy} had already closed this invoice without paying`,
+      );
+    } else {
+      note(
+        engine.ledger,
+        invoiceId,
+        "approval",
+        `Waiting on a person to close it again. ${obligation.rejectedBy} closed this invoice without paying, and PayOnce asks nobody to approve paying it`,
+        "waiting",
       );
     }
     return null;
@@ -2980,6 +3046,13 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
   }
   let obligation: Obligation = read;
 
+  // A transfer kept beside an attempt because it does not match the invoice is
+  // read like any payment with the bank.
+  for (const attempt of engine.ledger.attempts(invoiceId).filter(mismatchedLive)) {
+    if (attempt.mismatchedTransferId !== null && attempt.mismatchedStatus !== "PAID") {
+      syncMismatched(engine, attempt, await getTransfer(engine.client, attempt.mismatchedTransferId));
+    }
+  }
   let originalId: string | null = null;
   let original: Transfer | null = null;
   let liveReplacement: Transfer | null = null;
@@ -3023,6 +3096,10 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
       }
       if (anyLive(outside)) {
         return holdRetryForOutsidePayout(engine, invoiceId, attempt);
+      }
+      const mismatched: Attempt | undefined = engine.ledger.attempts(invoiceId).find(mismatchedLive);
+      if (mismatched !== undefined) {
+        return holdMismatched(engine, invoiceId, mismatched);
       }
       if (linked) {
         return Date.now();
@@ -3089,6 +3166,12 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
   }
   // A transfer found at a rate nobody approved may have escalated it above.
   obligation = engine.ledger.obligation(invoiceId) ?? obligation;
+  // Before anything is decided, held or released for a closed invoice reopened by
+  // it, or for one with nothing sent.
+  const mismatched: Attempt | undefined = engine.ledger.attempts(invoiceId).find(mismatchedLive);
+  if (mismatched !== undefined && obligation.state !== "settled") {
+    return holdMismatched(engine, invoiceId, mismatched);
+  }
 
   if (originalId === null) {
     const refused: Attempt | undefined = engine.ledger.attempts(invoiceId).at(-1);
@@ -3177,7 +3260,9 @@ export function payAgain(ledger: Ledger, invoiceId: string): PayAgainResult {
     const held: string =
       holder === undefined
         ? ""
-        : `: ${holder.kind} ${holder.reference ?? "with no reference yet"} is ${holder.state === "failed" ? "live at the bank" : ATTEMPT_STATE_WORDS[holder.state]}`;
+        : holder.state === "failed" && holder.transferId === null
+          ? `: transfer ${holder.mismatchedReference ?? ""} under the ${holder.kind}'s request id is live at the bank`
+          : `: ${holder.kind} ${holder.reference ?? "with no reference yet"} is ${holder.state === "failed" ? "live at the bank" : ATTEMPT_STATE_WORDS[holder.state]}`;
     const message: string = `Pay again refused by the duplicate lock${held}. An invoice can have one live payment`;
     note(ledger, invoiceId, "lock", message);
     return { refused: true, message };
@@ -3218,7 +3303,7 @@ function paidOriginal(ledger: Ledger, invoiceId: string): Attempt | undefined {
 // original Airwallex refused. Closing either leaves it unpaid. emails is the
 // email evidence an approval would show, null when the invoice has no emails.
 export interface CloseReview {
-  kind: AttemptKind | "outside" | "duplicate" | "unpaid";
+  kind: AttemptKind | "outside" | "mismatched" | "duplicate" | "unpaid";
   reference: string | null;
   reason: string;
   emails: string | null;
@@ -3255,8 +3340,23 @@ export function pendingClose(
       ? undefined
       : { kind: "outside", reference: paid.reference, reason, emails };
   }
-  // Not while a payout sent outside PayOnce may be paying it.
-  if (heldBeforePaying(ledger, obligation) && !anyLive(ledger.outsidePayouts(invoiceId))) {
+  // Paid by a transfer under one of its request ids that does not match it: a
+  // person checks it and closes the invoice.
+  if (ledger.paidMismatched(invoiceId)) {
+    const paid: Attempt | undefined = ledger
+      .attempts(invoiceId)
+      .find((attempt: Attempt): boolean => attempt.mismatchedStatus === "PAID");
+    return { kind: "mismatched", reference: paid?.mismatchedReference ?? null, reason, emails };
+  }
+  // Not while anything for it may be paying it.
+  const live: boolean =
+    anyLive(ledger.outsidePayouts(invoiceId)) || ledger.attempts(invoiceId).some(liveAtBank);
+  // A person closed it without paying, a payment found since reopened it, and
+  // every payment has failed since: a person closes it again.
+  if (obligation.rejectedBy !== null && !live) {
+    return { kind: "unpaid", reference: null, reason, emails };
+  }
+  if (heldBeforePaying(ledger, obligation) && !live) {
     return obligation.duplicateOf.length > 0
       ? { kind: "duplicate", reference: listOf(obligation.duplicateOf), reason, emails }
       : { kind: "unpaid", reference: null, reason, emails };
@@ -3275,10 +3375,17 @@ export function closeIncident(
 ): void {
   const review: CloseReview | undefined = pendingClose(ledger, invoiceId);
   if (review?.kind === "duplicate" || review?.kind === "unpaid") {
-    const duplicateOf: string[] = ledger.obligation(invoiceId)?.duplicateOf ?? [];
-    if (!ledger.reject(invoiceId, closedBy)) {
+    const obligation: Obligation | undefined = ledger.obligation(invoiceId);
+    const duplicateOf: string[] = obligation?.duplicateOf ?? [];
+    // One closed without paying before keeps who closed it first.
+    const closed: boolean =
+      obligation?.rejectedBy !== null && obligation?.rejectedBy !== undefined
+        ? ledger.rejectAgain(invoiceId, true)
+        : ledger.reject(invoiceId, closedBy);
+    if (!closed) {
       throw new Error(`${invoiceId} is not waiting on a person to close it`);
     }
+    ledger.clearMismatched(invoiceId);
     note(
       ledger,
       invoiceId,
@@ -3300,6 +3407,7 @@ export function closeIncident(
   if (review === undefined || !ledger.settle(invoiceId, true)) {
     throw new Error(`${invoiceId} is not waiting on a person to close it`);
   }
+  ledger.clearMismatched(invoiceId);
   note(ledger, invoiceId, "closed", `Incident closed by ${closedBy}: ${finding}`);
 }
 

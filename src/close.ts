@@ -25,7 +25,7 @@ function main(): void {
   if (review.kind === "duplicate") {
     console.log(`${invoiceId} is held before paying, as a likely second bill for ${review.reference}`);
   } else if (review.kind === "unpaid") {
-    console.log(`${invoiceId} is waiting on a person and has sent nothing`);
+    console.log(`${invoiceId} is waiting on a person and nothing for it is paid`);
   } else {
     console.log(`${invoiceId} is paid and waiting on a person`);
     console.log(`  ${review.kind.padEnd(9)} ${review.reference ?? "no reference"} paid`);

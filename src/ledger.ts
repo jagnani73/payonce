@@ -35,15 +35,24 @@ const SENT_ATTEMPT: string = `SELECT 1 FROM attempts WHERE invoice_id = ?
 // in flight, paid or in a status PayOnce does not know.
 const LIVE_OUTSIDE_PAYOUT: string = `SELECT 1 FROM outside_payouts WHERE invoice_id = ?
   AND state <> 'failed'`;
+const FAILED_IN_SQL: string = FAILED_STATUS_LIST.map((status: string): string => `'${status}'`).join(", ");
 // A payment for the invoice bound as the parameter that the bank has live, the
-// test liveAtBank makes in code: an attempt that is not failed, or a transfer the
+// test liveAtBank makes in code: an attempt that is not failed, a transfer the
 // ledger keeps failed while the bank shows it in flight, paid or in a status
-// PayOnce does not know. A transfer found late whose status was never read counts
-// as live.
+// PayOnce does not know, or a transfer under an attempt's request id that does not
+// match its invoice, while the bank has not failed it. A transfer found late
+// whose status was never read counts as live.
 const LIVE_ATTEMPT: string = `SELECT 1 FROM attempts WHERE invoice_id = ?
-  AND (state <> 'failed' OR (transfer_id IS NOT NULL AND CASE
-    WHEN bank_status IS NULL THEN found_late_at IS NOT NULL
-    ELSE bank_status NOT IN (${FAILED_STATUS_LIST.map((status: string): string => `'${status}'`).join(", ")}) END))`;
+  AND (state <> 'failed'
+    OR (transfer_id IS NOT NULL AND CASE
+      WHEN bank_status IS NULL THEN found_late_at IS NOT NULL
+      ELSE bank_status NOT IN (${FAILED_IN_SQL}) END)
+    OR (mismatched_transfer_id IS NOT NULL
+      AND (mismatched_status IS NULL OR mismatched_status NOT IN (${FAILED_IN_SQL}))))`;
+// A transfer under the request id of one of the invoice's attempts that does not
+// match the invoice, which no person has closed the invoice over since.
+const UNCLEARED_MISMATCH: string = `SELECT 1 FROM attempts WHERE invoice_id = ?
+  AND mismatched_transfer_id IS NOT NULL AND mismatched_cleared_at IS NULL`;
 const BUSY_TIMEOUT_MS: number = 5_000;
 
 // The partial unique index is the duplicate lock: an invoice can hold one attempt
@@ -458,6 +467,15 @@ export interface Attempt {
   // When Airwallex listed a transfer under its request id after PayOnce had
   // marked it failed with none. Null on every other attempt.
   foundLateAt: string | null;
+  // A transfer under its request id that is not its invoice's payment by number,
+  // amount and currency, on an attempt marked failed with none: its id, short
+  // reference and last status read. Null on every other attempt.
+  mismatchedTransferId: string | null;
+  mismatchedReference: string | null;
+  mismatchedStatus: string | null;
+  // When a person closed the invoice after it was found. Until then PayOnce never
+  // closes the invoice by itself.
+  mismatchedClearedAt: string | null;
 }
 
 // The quote an attempt is sent with, from the terms of the approval it was opened
@@ -944,6 +962,14 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     // When a transfer was found under its request id after PayOnce had marked it
     // failed with none, as an ISO time.
     found_late_at: "TEXT",
+    // A transfer Airwallex lists under the request id of an attempt marked failed
+    // with none that does not carry its invoice's number, amount and currency: its
+    // id, short reference and last status read, and when a person closed the
+    // invoice after it was found.
+    mismatched_transfer_id: "TEXT",
+    mismatched_reference: "TEXT",
+    mismatched_status: "TEXT",
+    mismatched_cleared_at: "TEXT",
   },
   rail_failures: {
     // When the transfer failed by Airwallex's updated_at, or when PayOnce first
@@ -1011,6 +1037,10 @@ interface AttemptRow {
   opened_at: string | null;
   tried_at: string | null;
   found_late_at: string | null;
+  mismatched_transfer_id: string | null;
+  mismatched_reference: string | null;
+  mismatched_status: string | null;
+  mismatched_cleared_at: string | null;
 }
 
 export class DuplicatePaymentError extends Error {
@@ -1072,7 +1102,15 @@ function toObligation(row: ObligationRow): Obligation {
 // transfer found late beside another live payment is kept failed (see record),
 // and only its bank_status says the bank has it. This is LIVE_ATTEMPT's test, for
 // an attempt in hand.
+// A transfer under the attempt's request id that does not match its invoice
+// counts too, while the bank has not failed it.
 export function liveAtBank(attempt: Attempt): boolean {
+  return ownLive(attempt) || mismatchedLive(attempt);
+}
+
+// The attempt's own payment: not failed, or a transfer the ledger keeps failed
+// that the bank has live.
+function ownLive(attempt: Attempt): boolean {
   if (attempt.state !== "failed") {
     return true;
   }
@@ -1082,10 +1120,25 @@ export function liveAtBank(attempt: Attempt): boolean {
   return attempt.bankStatus === null ? attempt.foundLateAt !== null : !failedStatus(attempt.bankStatus);
 }
 
-// A payment live at the bank that the bank has not paid yet: one being sent, one
-// in flight, or one in a status PayOnce does not know.
+// A transfer under the attempt's request id that does not match its invoice, which
+// the bank has not failed.
+export function mismatchedLive(attempt: Attempt): boolean {
+  return (
+    attempt.mismatchedTransferId !== null &&
+    (attempt.mismatchedStatus === null || !failedStatus(attempt.mismatchedStatus))
+  );
+}
+
+// A payment of the attempt's own live at the bank that the bank has not paid yet:
+// one being sent, one in flight, or one in a status PayOnce does not know.
 export function withBank(attempt: Attempt): boolean {
-  return liveAtBank(attempt) && attempt.state !== "paid" && attempt.bankStatus !== "PAID";
+  return ownLive(attempt) && attempt.state !== "paid" && attempt.bankStatus !== "PAID";
+}
+
+// Anything under the attempt's request id that the bank has live and not paid:
+// its own payment, or a transfer that does not match its invoice.
+function stillWithBank(attempt: Attempt): boolean {
+  return withBank(attempt) || (mismatchedLive(attempt) && attempt.mismatchedStatus !== "PAID");
 }
 
 // True when the invoice is paid from another currency's wallet, so each payment
@@ -1124,6 +1177,10 @@ function toAttempt(row: AttemptRow): Attempt {
     openedAt: row.opened_at ?? null,
     triedAt: row.tried_at ?? null,
     foundLateAt: row.found_late_at ?? null,
+    mismatchedTransferId: row.mismatched_transfer_id ?? null,
+    mismatchedReference: row.mismatched_reference ?? null,
+    mismatchedStatus: row.mismatched_status ?? null,
+    mismatchedClearedAt: row.mismatched_cleared_at ?? null,
   };
 }
 
@@ -2400,6 +2457,10 @@ export class Ledger {
       openedAt,
       triedAt: null,
       foundLateAt: null,
+      mismatchedTransferId: null,
+      mismatchedReference: null,
+      mismatchedStatus: null,
+      mismatchedClearedAt: null,
     };
   }
 
@@ -2878,9 +2939,10 @@ export class Ledger {
         .prepare(
           `UPDATE obligations SET state = 'open'
             WHERE invoice_id = ? AND state = 'escalated' AND rejected_by IS NULL
-              AND NOT EXISTS (${SENT_ATTEMPT}) AND NOT EXISTS (${LIVE_OUTSIDE_PAYOUT})`,
+              AND NOT EXISTS (${SENT_ATTEMPT}) AND NOT EXISTS (${LIVE_OUTSIDE_PAYOUT})
+              AND NOT EXISTS (${LIVE_ATTEMPT})`,
         )
-        .run(invoiceId, invoiceId, invoiceId);
+        .run(invoiceId, invoiceId, invoiceId, invoiceId);
       if (Number(used.changes) !== 1 || Number(released.changes) !== 1) {
         this.db.exec("ROLLBACK");
         return undefined;
@@ -2918,15 +2980,17 @@ export class Ledger {
 
   // Closes a held invoice without paying it, recording who did. False when it is
   // no longer held, for example because its payment was released in the meantime,
-  // or a payout for it sent outside PayOnce is in flight or paid.
+  // or a payout for it sent outside PayOnce, or a transfer under one of its
+  // request ids, is in flight or paid.
   reject(invoiceId: string, rejectedBy: string): boolean {
     const result: { changes: number | bigint } = this.db
       .prepare(
         `UPDATE obligations SET state = 'rejected', rejected_by = ?
           WHERE invoice_id = ? AND state = 'escalated'
-            AND NOT EXISTS (${SENT_ATTEMPT}) AND NOT EXISTS (${LIVE_OUTSIDE_PAYOUT})`,
+            AND NOT EXISTS (${SENT_ATTEMPT}) AND NOT EXISTS (${LIVE_OUTSIDE_PAYOUT})
+            AND NOT EXISTS (${LIVE_ATTEMPT})`,
       )
-      .run(rejectedBy, invoiceId, invoiceId, invoiceId);
+      .run(rejectedBy, invoiceId, invoiceId, invoiceId, invoiceId);
     if (Number(result.changes) !== 1) {
       return false;
     }
@@ -2936,21 +3000,74 @@ export class Ledger {
 
   // Closes again without paying an invoice a person had closed without paying,
   // which a payment found since reopened, once nothing for it is live at the bank,
-  // PayOnce's or sent outside it. False when something is, or it is no longer
-  // escalated.
-  rejectAgain(invoiceId: string): boolean {
+  // PayOnce's or sent outside it. By itself, PayOnce also leaves it alone while a
+  // transfer under one of its request ids that does not match it was found since
+  // a person last closed it: only a person (byPerson) clears that. False when
+  // nothing changed.
+  rejectAgain(invoiceId: string, byPerson: boolean = false): boolean {
     const result: { changes: number | bigint } = this.db
       .prepare(
         `UPDATE obligations SET state = 'rejected'
           WHERE invoice_id = ? AND state = 'escalated' AND rejected_by IS NOT NULL
-            AND NOT EXISTS (${LIVE_ATTEMPT}) AND NOT EXISTS (${LIVE_OUTSIDE_PAYOUT})`,
+            AND NOT EXISTS (${LIVE_ATTEMPT}) AND NOT EXISTS (${LIVE_OUTSIDE_PAYOUT})
+            AND (? = 1 OR NOT EXISTS (${UNCLEARED_MISMATCH}))`,
       )
-      .run(invoiceId, invoiceId, invoiceId);
+      .run(invoiceId, invoiceId, invoiceId, byPerson ? 1 : 0, invoiceId);
     if (Number(result.changes) !== 1) {
       return false;
     }
     this.voidOpenApprovals(invoiceId);
     return true;
+  }
+
+  // Ties a transfer Airwallex lists under the request id of an attempt marked
+  // failed with none, which does not match its invoice, to that attempt. False
+  // when the attempt already has one, has a transfer, or is not failed.
+  addMismatched(requestId: string, transferId: string, reference: string, status: string | null): boolean {
+    const result: { changes: number | bigint } = this.db
+      .prepare(
+        `UPDATE attempts
+            SET mismatched_transfer_id = ?, mismatched_reference = ?, mismatched_status = ?
+          WHERE request_id = ? AND state = 'failed' AND transfer_id IS NULL
+            AND mismatched_transfer_id IS NULL`,
+      )
+      .run(transferId, reference, status, requestId);
+    return Number(result.changes) === 1;
+  }
+
+  // The status a look or the sweep last read for such a transfer. True when it
+  // changed.
+  setMismatchedStatus(transferId: string, status: string): boolean {
+    const result: { changes: number | bigint } = this.db
+      .prepare(
+        `UPDATE attempts SET mismatched_status = ?
+          WHERE mismatched_transfer_id = ? AND mismatched_status IS NOT ?`,
+      )
+      .run(status, transferId, status);
+    return Number(result.changes) >= 1;
+  }
+
+  // A person closed the invoice, so the transfers found under its request ids
+  // that did not match it no longer keep it from closing by itself.
+  clearMismatched(invoiceId: string): void {
+    this.db
+      .prepare(
+        `UPDATE attempts SET mismatched_cleared_at = ?
+          WHERE invoice_id = ? AND mismatched_transfer_id IS NOT NULL
+            AND mismatched_cleared_at IS NULL`,
+      )
+      .run(new Date().toISOString(), invoiceId);
+  }
+
+  // Sends an invoice to a person unless it is settled, so a close another process
+  // made meanwhile stands.
+  escalateUnlessSettled(invoiceId: string, reason: string): void {
+    this.db
+      .prepare(
+        `UPDATE obligations SET state = 'escalated', escalation_reason = ?
+          WHERE invoice_id = ? AND state <> 'settled'`,
+      )
+      .run(reason, invoiceId);
   }
 
   addEmails(invoiceId: string, emails: SupplierEmail[]): void {
@@ -3449,15 +3566,30 @@ export class Ledger {
   }
 
   // True when one attempt is paid and no other payment for the invoice is with the
-  // bank: each has failed, or is a transfer the ledger keeps failed that the bank
-  // has paid as well, which the look holds for a person (paidTwice).
+  // bank: each has failed, or is a transfer the ledger keeps failed, or one under a
+  // request id that does not match the invoice, that the bank has paid as well,
+  // which the look holds for a person.
   paidOnce(invoiceId: string): boolean {
     const attempts: Attempt[] = this.attempts(invoiceId);
     const paid: number = attempts.filter(
       (attempt: Attempt): boolean => attempt.state === "paid",
     ).length;
-    const unresolved: number = attempts.filter(withBank).length;
+    const unresolved: number = attempts.filter(stillWithBank).length;
     return paid === 1 && unresolved === 0;
+  }
+
+  // True when every payment PayOnce sent has failed at the bank, nothing for the
+  // invoice is still with the bank, and a transfer under one of its request ids
+  // that does not match it is paid. Only a person closes it then.
+  paidMismatched(invoiceId: string): boolean {
+    const attempts: Attempt[] = this.attempts(invoiceId);
+    return (
+      attempts.every((attempt: Attempt): boolean => !ownLive(attempt) && !stillWithBank(attempt)) &&
+      attempts.some(
+        (attempt: Attempt): boolean => mismatchedLive(attempt) && attempt.mismatchedStatus === "PAID",
+      ) &&
+      !this.outsidePayouts(invoiceId).some((payout: OutsidePayout): boolean => payout.state !== "failed")
+    );
   }
 
   // True when every payment PayOnce sent has failed at the bank and the bank
@@ -3472,11 +3604,15 @@ export class Ledger {
   }
 
   // Settles only when the invoice has been paid once by PayOnce or, when a
-  // person closes it, by a payout sent outside PayOnce. A payment that went out
+  // person closes it, by a payout sent outside PayOnce or a transfer under one of
+  // its request ids that does not match it. A payment that went out
   // at a rate nobody approved leaves the invoice for a person to close, unless it
   // failed.
   settle(invoiceId: string, byPerson: boolean = false): boolean {
-    if (!this.paidOnce(invoiceId) && !(byPerson && this.paidOutside(invoiceId))) {
+    if (
+      !this.paidOnce(invoiceId) &&
+      !(byPerson && (this.paidOutside(invoiceId) || this.paidMismatched(invoiceId)))
+    ) {
       return false;
     }
     if (

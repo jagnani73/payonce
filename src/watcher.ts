@@ -4,6 +4,7 @@ import type { Dispatcher } from "./dispatcher.js";
 import type { Engine } from "./engine.js";
 import {
   isExpired,
+  mismatchedLive,
   withBank,
   type Approval,
   type Attempt,
@@ -145,15 +146,19 @@ export class Watcher {
       }
       // PayOnce's own payments and payouts for the invoice sent outside it. A
       // transfer the ledger keeps failed while the bank has it in flight is read
-      // too, so its look comes when the bank pays or fails it.
+      // too, and so is one under a request id that does not match the invoice, so
+      // the look comes when the bank pays or fails it.
+      const attempts: Attempt[] = this.engine.ledger.attempts(invoiceId);
       const inFlight: string[] = [
-        ...this.engine.ledger
-          .attempts(invoiceId)
+        ...attempts
           .filter(
             (attempt: Attempt): boolean =>
               attempt.state === "in_flight" || (attempt.state === "failed" && withBank(attempt)),
           )
           .map((attempt: Attempt): string | null => attempt.transferId),
+        ...attempts
+          .filter((attempt: Attempt): boolean => mismatchedLive(attempt) && attempt.mismatchedStatus !== "PAID")
+          .map((attempt: Attempt): string | null => attempt.mismatchedTransferId),
         ...this.engine.ledger
           .outsidePayouts(invoiceId)
           .filter((payout: OutsidePayout): boolean => payout.state === "in_flight")
