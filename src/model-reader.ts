@@ -10,11 +10,11 @@ import { KeywordReader } from "./keyword-reader.js";
 
 // Gemini's OpenAI-compatible endpoint. Any service that speaks the same chat
 // completions format can stand in for it.
-const DEFAULT_BASE_URL: string = "https://generativelanguage.googleapis.com/v1beta/openai";
+export const DEFAULT_BASE_URL: string = "https://generativelanguage.googleapis.com/v1beta/openai";
 // Tried in order. Free-tier capacity comes and goes, so a second model is what
 // keeps one busy model from sending an incident to a person.
-const DEFAULT_MODELS: string[] = ["gemini-3.5-flash", "gemini-3.1-flash-lite"];
-const REQUEST_TIMEOUT_MS: number = 8_000;
+export const DEFAULT_MODELS: string[] = ["gemini-3.5-flash", "gemini-3.1-flash-lite"];
+export const REQUEST_TIMEOUT_MS: number = 8_000;
 const MAX_ERROR_LENGTH: number = 200;
 
 const SYSTEM: string = `You read supplier emails for a company's accounts payable team. The team paid an invoice and the supplier has written in about it. A payment system uses your reading to decide whether to wait, send a replacement payment or hand the case to a person.
@@ -49,7 +49,7 @@ interface ChatResponse {
 }
 
 // The service answered with an error status.
-class ModelError extends Error {
+export class ModelError extends Error {
   readonly status: number;
 
   constructor(status: number, body: string) {
@@ -61,7 +61,7 @@ class ModelError extends Error {
 }
 
 // The service refused the key, so asking another model will not help.
-function keyRefused(error: unknown): boolean {
+export function keyRefused(error: unknown): boolean {
   return error instanceof ModelError && (error.status === 401 || error.status === 403);
 }
 
