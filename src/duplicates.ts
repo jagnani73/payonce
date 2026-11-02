@@ -64,14 +64,17 @@ function knownAs(obligation: Obligation, reference: string): boolean {
 // cannot pass for another supplier's by a character nobody sees. People's names
 // are compared by sameName in approvers.ts instead.
 export function sameSupplier(a: string, b: string): boolean {
-  const key = (name: string): string =>
-    name
-      .normalize("NFKC")
-      .replace(/[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, "")
-      .trim()
-      .replace(/\s+/g, " ")
-      .toLowerCase();
-  return key(a) === key(b);
+  return supplierNameKey(a) === supplierNameKey(b);
+}
+
+// What sameSupplier compares, for grouping many names at once.
+export function supplierNameKey(name: string): string {
+  return name
+    .normalize("NFKC")
+    .replace(/[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
 }
 
 export interface Bill {

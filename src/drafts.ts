@@ -443,6 +443,12 @@ export function isTemplate(value: unknown): value is DraftTemplate {
   return typeof value === "string" && Object.hasOwn(TEMPLATES, value);
 }
 
+// A template's label as the outbox card shows it, or null for a name PayOnce
+// does not have, such as one an edited ledger holds.
+export function templateLabel(template: string): string | null {
+  return isTemplate(template) ? TEMPLATES[template].label : null;
+}
+
 function contextOf(ledger: Ledger, obligation: Obligation, now: number): Context {
   const findings: string | undefined = ledger.findings(obligation.invoiceId);
   return {

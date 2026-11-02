@@ -52,7 +52,7 @@ const NAME_JOINERS: RegExp = /[\u{200c}\u{200d}\u{fe00}-\u{fe0f}]/gu;
 const UNSAFE_NAME: RegExp =
   /[\u0000-\u001f\u007f-\u009f\u2028\u2029\p{Cf}\p{Default_Ignorable_Code_Point}\u{e0000}-\u{e007f}]/gu;
 
-const BENEFICIARY_ID_PATTERN: RegExp = /^[A-Za-z0-9-]{1,64}$/;
+export const BENEFICIARY_ID_PATTERN: RegExp = /^[A-Za-z0-9-]{1,64}$/;
 const CURRENCY_PATTERN: RegExp = /^[A-Za-z]{3}$/;
 const AMOUNT_PATTERN: RegExp = /^(0|[1-9][0-9]{0,11})(?:\.([0-9]{1,2}))?$/;
 const METHODS: readonly TransferMethod[] = ["LOCAL", "SWIFT"];

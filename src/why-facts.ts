@@ -280,7 +280,7 @@ const UNPASSED_METHOD: string = "(a transfer method PayOnce does not pass on)";
 const SAFE_LINE: RegExp = /^[A-Za-z0-9 .,:;()'%=+\-/[\]"#_]*$/;
 
 // The bank's failure codes, in PayOnce's words.
-const FAILURE_WORDS: Readonly<Record<string, string>> = {
+export const FAILURE_WORDS: Readonly<Record<string, string>> = {
   "91401": "system error",
   "91402": "channel timeout",
   "90701": "account closed",
