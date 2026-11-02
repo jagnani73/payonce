@@ -3352,11 +3352,26 @@ function paidOriginal(ledger: Ledger, invoiceId: string): Attempt | undefined {
 // kind unpaid is any other invoice that has sent nothing, such as one whose
 // original Airwallex refused. Closing either leaves it unpaid. emails is the
 // email evidence an approval would show, null when the invoice has no emails.
+// covered lists the transfers under its request ids that do not match it and
+// that no person has cleared: closing on this review clears exactly those.
 export interface CloseReview {
   kind: AttemptKind | "outside" | "mismatched" | "duplicate" | "unpaid";
   reference: string | null;
   reason: string;
   emails: string | null;
+  covered: string[];
+}
+
+// The transfers under the invoice's request ids that do not match it, which no
+// person has cleared.
+function unclearedMismatches(ledger: Ledger, invoiceId: string): string[] {
+  return ledger
+    .attempts(invoiceId)
+    .flatMap((attempt: Attempt): string[] =>
+      attempt.mismatchedTransferId !== null && attempt.mismatchedClearedAt === null
+        ? [attempt.mismatchedTransferId]
+        : [],
+    );
 }
 
 export function pendingClose(
@@ -3373,6 +3388,7 @@ export function pendingClose(
     onFile.length === 0
       ? null
       : emailEvidence(storedFindings(ledger, invoiceId, onFile).findings.summary, onFile, obligation.supplierDomain);
+  const covered: string[] = unclearedMismatches(ledger, invoiceId);
   if (ledger.paidOnce(invoiceId)) {
     const paid: Attempt | undefined = ledger
       .attempts(invoiceId)
@@ -3380,7 +3396,7 @@ export function pendingClose(
     // A payment at a rate nobody approved is why it was not closed by itself.
     return paid === undefined
       ? undefined
-      : { kind: paid.kind, reference: paid.reference, reason: paid.rateMismatch ?? reason, emails };
+      : { kind: paid.kind, reference: paid.reference, reason: paid.rateMismatch ?? reason, emails, covered };
   }
   if (ledger.paidOutside(invoiceId)) {
     const paid: OutsidePayout | undefined = ledger
@@ -3388,7 +3404,7 @@ export function pendingClose(
       .find((payout: OutsidePayout): boolean => payout.state === "paid");
     return paid === undefined
       ? undefined
-      : { kind: "outside", reference: paid.reference, reason, emails };
+      : { kind: "outside", reference: paid.reference, reason, emails, covered };
   }
   // Paid by a transfer under one of its request ids that does not match it: a
   // person checks it and closes the invoice.
@@ -3396,7 +3412,7 @@ export function pendingClose(
     const paid: Attempt | undefined = ledger
       .attempts(invoiceId)
       .find((attempt: Attempt): boolean => attempt.mismatchedStatus === "PAID");
-    return { kind: "mismatched", reference: paid?.mismatchedReference ?? null, reason, emails };
+    return { kind: "mismatched", reference: paid?.mismatchedReference ?? null, reason, emails, covered };
   }
   // Not while anything for it may be paying it.
   const live: boolean =
@@ -3404,36 +3420,37 @@ export function pendingClose(
   // A person closed it without paying, a payment found since reopened it, and
   // every payment has failed since: a person closes it again.
   if (obligation.rejectedBy !== null && !live) {
-    return { kind: "unpaid", reference: null, reason, emails };
+    return { kind: "unpaid", reference: null, reason, emails, covered };
   }
   if (heldBeforePaying(ledger, obligation) && !live) {
     return obligation.duplicateOf.length > 0
-      ? { kind: "duplicate", reference: listOf(obligation.duplicateOf), reason, emails }
-      : { kind: "unpaid", reference: null, reason, emails };
+      ? { kind: "duplicate", reference: listOf(obligation.duplicateOf), reason, emails, covered }
+      : { kind: "unpaid", reference: null, reason, emails, covered };
   }
   return undefined;
 }
 
 // Records a person closing such an invoice. It moves no money, so it is not bound
 // to terms the way an approval is. A held duplicate is closed without paying, and
-// the invoices it duplicated say so on their timelines. The close clears the
-// transfers under the invoice's request ids that do not match it which were on
-// file when it was reviewed, in the transaction that closes it, so one found after
-// that still keeps PayOnce from closing the invoice by itself.
+// the invoices it duplicated say so on their timelines. shown is the covered list
+// of the review the person saw. The close is refused when a transfer under the
+// invoice's request ids that does not match it was found since, and otherwise
+// clears those on that list, in the transaction that closes it, so one found
+// after that still keeps PayOnce from closing the invoice by itself.
 export function closeIncident(
   ledger: Ledger,
   invoiceId: string,
   closedBy: string,
   finding: string,
+  shown: string[],
 ): void {
   const review: CloseReview | undefined = pendingClose(ledger, invoiceId);
-  const covered: string[] = ledger
-    .attempts(invoiceId)
-    .flatMap((attempt: Attempt): string[] =>
-      attempt.mismatchedTransferId !== null && attempt.mismatchedClearedAt === null
-        ? [attempt.mismatchedTransferId]
-        : [],
+  const covered: string[] = review?.covered ?? [];
+  if (covered.some((transferId: string): boolean => !shown.includes(transferId))) {
+    throw new Error(
+      `A transfer was found under one of ${invoiceId}'s request ids since the close card was shown. Look at the incident again before closing it`,
     );
+  }
   if (review?.kind === "duplicate" || review?.kind === "unpaid") {
     const obligation: Obligation | undefined = ledger.obligation(invoiceId);
     const duplicateOf: string[] = obligation?.duplicateOf ?? [];

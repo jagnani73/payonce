@@ -192,7 +192,7 @@ In the sandbox, the scenarios share one beneficiary per currency, so a change wo
 
 A paid original holds the duplicate lock, so PayOnce cannot send anything more for that invoice. If no supplier email reports the payment missing, the incident closes. If one does, or anything else on file sends it to a person, the incident stays open until a person closes it. The same goes for an invoice paid by a replacement or by a payout sent outside PayOnce that has gone to a person.
 
-The page shows the paid transfer and the reason, and takes a name and a note of what the person confirmed. `pnpm close` does the same in the terminal. Both the name and the note go on the timeline. Closing moves no money, so it is not bound to terms the way an approval is. "Check again" never closes an incident that is waiting on a person.
+The page shows the paid transfer and the reason, and takes a name and a note of what the person confirmed. `pnpm close` does the same in the terminal. Both the name and the note go on the timeline. Closing moves no money, so it is not bound to terms the way an approval is. It is refused, though, when a transfer that does not match the invoice turned up under one of its request ids after the card was shown, so the person looks again first. "Check again" never closes an incident that is waiting on a person.
 
 ## Audit trail
 

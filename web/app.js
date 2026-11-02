@@ -2288,7 +2288,8 @@ function buildReview(invoiceId, review, emailSummary) {
     event.preventDefault();
     submitClose(invoiceId);
   });
-  reviewRefs = { closedBy, finding, button, error, label };
+  // The close sends the transfers this card covered, so it is bound to what was shown.
+  reviewRefs = { closedBy, finding, button, error, label, covered: review.covered };
 
   setClass(els.review, "card approval approval--requested");
   els.review.replaceChildren(
@@ -2371,7 +2372,12 @@ function renderReview(detail) {
     } else {
       buildReview(
         invoiceId,
-        { kind: review.kind, reference: review.reference, reason: String(review.reason ?? "") },
+        {
+          kind: review.kind,
+          reference: review.reference,
+          reason: String(review.reason ?? ""),
+          covered: Array.isArray(review.covered) ? review.covered : [],
+        },
         emailSummary,
       );
     }
@@ -2385,6 +2391,7 @@ async function submitClose(invoiceId) {
   }
   const closedBy = reviewRefs.closedBy.value.trim();
   const finding = reviewRefs.finding.value.trim();
+  const covered = reviewRefs.covered;
   const missing =
     closedBy === ""
       ? { field: reviewRefs.closedBy, message: "Enter your name to close." }
@@ -2404,7 +2411,7 @@ async function submitClose(invoiceId) {
   try {
     await api(`${incidentPath(invoiceId)}/close`, {
       method: "POST",
-      body: { closedBy, finding },
+      body: { closedBy, finding, covered },
     });
     state.closeDrafts.delete(invoiceId);
     state.fastUntil = Date.now() + EXPECT_WORK_MS;

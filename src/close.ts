@@ -40,7 +40,7 @@ function main(): void {
     );
     return;
   }
-  closeIncident(ledger, invoiceId, closedBy, finding);
+  closeIncident(ledger, invoiceId, closedBy, finding, review.covered);
   console.log(duplicate ? "Closed without paying" : "Closed without a second payment");
 }
 

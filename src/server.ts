@@ -204,6 +204,9 @@ const MAX_NAME_LENGTH: number = 80;
 // Uploads that are not waiting, shown after the waiting ones.
 const INBOX_OTHERS_SHOWN: number = 50;
 const MAX_FINDING_LENGTH: number = 200;
+// The transfers a close card can cover, one per attempt at most.
+const MAX_COVERED: number = 50;
+const MAX_TRANSFER_ID_LENGTH: number = 64;
 const RUN_ID_PATTERN: RegExp = /^[1-9][0-9]{0,9}$/;
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -787,8 +790,18 @@ async function closeByPerson(
   if (finding === "" || finding.length > MAX_FINDING_LENGTH) {
     throw new HttpError(400, "Say what you confirmed");
   }
+  // The transfers the close card covered, so one found since it was shown is not
+  // cleared by a close nobody saw it on.
+  const covered: unknown = body["covered"] ?? [];
+  if (
+    !Array.isArray(covered) ||
+    covered.length > MAX_COVERED ||
+    !covered.every((id: unknown): boolean => typeof id === "string" && id.length <= MAX_TRANSFER_ID_LENGTH)
+  ) {
+    throw new HttpError(400, "Say which transfers the close card covered");
+  }
   await inTurn(invoiceId, (): void =>
-    closeIncident(engine.ledger, invoiceId, closedBy, finding),
+    closeIncident(engine.ledger, invoiceId, closedBy, finding, covered as string[]),
   );
   return { ok: true };
 }
