@@ -1141,6 +1141,13 @@ function stillWithBank(attempt: Attempt): boolean {
   return withBank(attempt) || (mismatchedLive(attempt) && attempt.mismatchedStatus !== "PAID");
 }
 
+// The attempt's own payment has failed at the bank, and nothing under its request
+// id is still with it. A transfer there that does not match the invoice may be
+// paid.
+function nothingWithBank(attempt: Attempt): boolean {
+  return !ownLive(attempt) && !stillWithBank(attempt);
+}
+
 // True when the invoice is paid from another currency's wallet, so each payment
 // converts on a quote a person approved.
 export function crossCurrency(obligation: Obligation): boolean {
@@ -3580,23 +3587,28 @@ export class Ledger {
 
   // True when every payment PayOnce sent has failed at the bank, nothing for the
   // invoice is still with the bank, and a transfer under one of its request ids
-  // that does not match it is paid. Only a person closes it then.
+  // that does not match it is paid. Only a person closes it then. A payout sent
+  // outside PayOnce that is paid as well does not stop it.
   paidMismatched(invoiceId: string): boolean {
     const attempts: Attempt[] = this.attempts(invoiceId);
     return (
-      attempts.every((attempt: Attempt): boolean => !ownLive(attempt) && !stillWithBank(attempt)) &&
+      attempts.every(nothingWithBank) &&
       attempts.some(
         (attempt: Attempt): boolean => mismatchedLive(attempt) && attempt.mismatchedStatus === "PAID",
       ) &&
-      !this.outsidePayouts(invoiceId).some((payout: OutsidePayout): boolean => payout.state !== "failed")
+      !this.outsidePayouts(invoiceId).some(
+        (payout: OutsidePayout): boolean => payout.state !== "failed" && payout.state !== "paid",
+      )
     );
   }
 
-  // True when every payment PayOnce sent has failed at the bank and the bank
-  // reports a payout sent outside PayOnce as paid.
+  // True when every payment PayOnce sent has failed at the bank, nothing for the
+  // invoice is still with the bank, and the bank reports a payout sent outside
+  // PayOnce as paid. A transfer under one of its request ids that does not match
+  // it and is paid as well does not stop it.
   paidOutside(invoiceId: string): boolean {
     return (
-      this.attempts(invoiceId).every((attempt: Attempt): boolean => !liveAtBank(attempt)) &&
+      this.attempts(invoiceId).every(nothingWithBank) &&
       this.outsidePayouts(invoiceId).some(
         (payout: OutsidePayout): boolean => payout.state === "paid",
       )
