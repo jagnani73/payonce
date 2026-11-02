@@ -19,12 +19,14 @@ import type { ApprovalTerms, RunTerms, RunTotal } from "./approval.js";
 import {
   chainReports,
   ledgerReport,
+  reconChainReport,
   runChainReports,
   runLedgerReport,
   type AuditSnapshot,
   type ChainBreak,
   type ChainReport,
   type LedgerReport,
+  type ReconChainReport,
   type RunAuditSnapshot,
   type RunChainReport,
   type RunLedgerReport,
@@ -431,6 +433,24 @@ function auditConditions(ledger: Ledger): FoundCondition[] {
       .map((report: RunChainReport): number => report.runId)
       .sort((a: number, b: number): number => a - b);
     found.push(condition("audit:runs", { ids, hash: runHash }, facts));
+  }
+  // Reconciliation's record is one chain, so there is no first timeline to name.
+  if (ledger.recon().hasTables()) {
+    const recon: ReconChainReport = reconChainReport(ledger.recon().auditSnapshot());
+    if (!recon.intact) {
+      const reconHash: AuditAlertFacts["runningHash"] =
+        recon.stored === null ? "missing" : recon.stored === recon.computed ? "matches" : "does not match";
+      const facts: AuditAlertFacts = {
+        kind: "audit",
+        scope: "recon",
+        broken: recon.breaks.length > 0 || recon.lostStart !== null ? 1 : 0,
+        first: null,
+        line: recon.breaks[0]?.line ?? null,
+        runningHash: reconHash,
+      };
+      const lines: number[] = recon.breaks.map((item: ChainBreak): number => item.line);
+      found.push(condition("audit:recon", { lines, lostStart: recon.lostStart, hash: reconHash }, facts));
+    }
   }
   return found;
 }

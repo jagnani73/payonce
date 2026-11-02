@@ -63,9 +63,12 @@ export interface RunAlertFacts {
 
 export interface AuditAlertFacts {
   kind: "audit";
-  scope: "invoices" | "runs";
+  // recon is reconciliation's record, one chain, so broken is 0 or 1 and first is
+  // null.
+  scope: "invoices" | "runs" | "recon";
   broken: number;
   // The first broken timeline (an invoice number or a run number) and its line.
+  // For recon, line is null when the lines from the start were removed.
   first: string | null;
   line: number | null;
   runningHash: "matches" | "missing" | "does not match";
@@ -390,7 +393,27 @@ function runMessage(facts: RunAlertFacts, base: string): AlertMessage {
   };
 }
 
+function reconAuditMessage(facts: AuditAlertFacts, base: string): AlertMessage {
+  const line: string =
+    facts.broken === 0
+      ? "no breaks"
+      : facts.line === null
+        ? "lines removed from its start"
+        : `broken from line ${Number.isSafeInteger(facts.line) ? facts.line : 1}`;
+  return {
+    title: "PayOnce's reconciliation record no longer verifies",
+    line: [ours("Check it with pnpm run audit before trusting what reconciliation found or what people explained")],
+    fields: [field("Reconciliation record", ours(line)), field("Running hash", ours(facts.runningHash))],
+    link: `${base}/#recon`,
+    linkText: "Open reconciliation in PayOnce",
+    urgent: true,
+  };
+}
+
 function auditMessage(facts: AuditAlertFacts, base: string): AlertMessage {
+  if (facts.scope === "recon") {
+    return reconAuditMessage(facts, base);
+  }
   const what: string = facts.scope === "invoices" ? "Invoice timelines" : "Pay run timelines";
   const name: string = identifier(facts.first, "one");
   const first: string =
