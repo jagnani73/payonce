@@ -19,7 +19,7 @@ import {
   type RunRow,
 } from "./ledger.js";
 import { formatMoney } from "./money.js";
-import { say } from "./printable.js";
+import { printable, say } from "./printable.js";
 import { readerFromEnv } from "./reader.js";
 import { describeFloors, reserveFromEnv } from "./reserve.js";
 import { parseRunFile, type FileProblem, type ParsedRunFile } from "./run-file.js";
@@ -106,7 +106,7 @@ function printRows(ledger: Ledger, rows: (CheckedRow | RunRow)[]): void {
   for (const row of rows) {
     say(rowText(row));
     if (row.payTo !== null && row.action === "pay") {
-      say(`           to ${row.payTo}${row.newPayee ? ", a payee PayOnce has never paid" : ""}`);
+      say(`           to ${printable(row.payTo)}${row.newPayee ? ", a payee PayOnce has never paid" : ""}`);
     }
     if (row.arrival !== null && row.currency !== null) {
       const advice: ArrivalAdvice = arrivalAdvice(row.arrival);
@@ -116,14 +116,15 @@ function printRows(ledger: Ledger, rows: (CheckedRow | RunRow)[]): void {
       }
       arriving = true;
     }
+    // A reason can hold an Airwallex name, so each prints as one line.
     for (const reason of row.reasons) {
-      say(`           ${reason}`);
+      say(`           ${printable(reason)}`);
     }
     if (row.heldFor.length > 0) {
       say(`           held for a person when sent: looks like a second bill for ${row.heldFor.join(", ")}`);
     }
     if ("note" in row && row.note !== null) {
-      say(`           ${row.note}`);
+      say(`           ${printable(row.note)}`);
     }
   }
   if (arriving) {
@@ -188,7 +189,7 @@ function printApproval(ledger: Ledger, pending: PendingRunApproval): void {
     say(`  so far   approved by ${signersOf(approval.signoffs)}`);
   }
   for (const bar of pending.barred) {
-    say(`  not      ${bar.name}, who ${bar.why}`);
+    say(`  not      ${printable(bar.name)}, who ${bar.why}`);
   }
   say(
     `  expires  ${new Date(approval.expiresAt).toLocaleString()}${pending.expired ? " (expired)" : ""}`,
@@ -211,8 +212,9 @@ function show(ledger: Ledger, run: Run): void {
     printApproval(ledger, pending);
   }
   const events: LedgerEvent[] = ledger.runEvents(run.id).slice(-EVENTS_SHOWN);
+  // One line each, as the ledger now stores them, for lines written before.
   for (const event of events) {
-    say(`  ${event.kind.padEnd(8)} ${event.message}`);
+    say(`  ${event.kind.padEnd(8)} ${printable(event.message)}`);
   }
 }
 

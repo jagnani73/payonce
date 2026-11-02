@@ -124,7 +124,7 @@ import {
   type EndedOutage,
 } from "./outages.js";
 import { recordMissingFees } from "./payments.js";
-import { printableError, say, sayError, sayWarning } from "./printable.js";
+import { oneLine, printableError, say, sayError, sayWarning } from "./printable.js";
 import { readerFromEnv, readerNamesFromEnv } from "./reader.js";
 import { describeFloors, reserveFromEnv } from "./reserve.js";
 import {
@@ -802,8 +802,7 @@ async function startIncident(request: IncomingMessage): Promise<unknown> {
   if (typeof emailsName !== "string" || !emailThreads().includes(emailsName)) {
     throw new HttpError(400, "Unknown email thread");
   }
-  const startedBy: string =
-    typeof body["startedBy"] === "string" ? body["startedBy"].trim() : "";
+  const startedBy: string = text(body, "startedBy");
   if (startedBy === "" || startedBy.length > MAX_NAME_LENGTH) {
     throw new HttpError(400, "Enter your name");
   }
@@ -871,8 +870,7 @@ async function approveIncident(
 ): Promise<unknown> {
   requireObligation(invoiceId);
   const body: Record<string, unknown> = await readJson(request);
-  const approver: string =
-    typeof body["approver"] === "string" ? body["approver"].trim() : "";
+  const approver: string = text(body, "approver");
   if (approver === "" || approver.length > MAX_NAME_LENGTH) {
     throw new HttpError(400, "Enter the approver's name");
   }
@@ -895,13 +893,11 @@ async function closeByPerson(
 ): Promise<unknown> {
   requireObligation(invoiceId);
   const body: Record<string, unknown> = await readJson(request);
-  const closedBy: string =
-    typeof body["closedBy"] === "string" ? body["closedBy"].trim() : "";
+  const closedBy: string = text(body, "closedBy");
   if (closedBy === "" || closedBy.length > MAX_NAME_LENGTH) {
     throw new HttpError(400, "Enter your name");
   }
-  const finding: string =
-    typeof body["finding"] === "string" ? body["finding"].trim() : "";
+  const finding: string = text(body, "finding");
   if (finding === "" || finding.length > MAX_FINDING_LENGTH) {
     throw new HttpError(400, "Say what you confirmed");
   }
@@ -936,8 +932,11 @@ async function bankDetailsForm(invoiceId: string): Promise<BankChangeForm> {
   return bankChangeForm(engine, requireObligation(invoiceId));
 }
 
+// A typed field as one line: a line break or other control character becomes a
+// space, so a name or a note cannot start a line of its own on a timeline, a card
+// or a terminal.
 function text(body: Record<string, unknown>, field: string): string {
-  return typeof body[field] === "string" ? body[field].trim() : "";
+  return typeof body[field] === "string" ? oneLine(body[field]).trim() : "";
 }
 
 // A person records calling the supplier back on the number on file, with the new

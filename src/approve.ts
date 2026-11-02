@@ -5,7 +5,7 @@ import { approvePayment, pendingApproval, type PendingApproval } from "./engine.
 import { Ledger, LEDGER_PATH, signersOf, type Approval, type Obligation, type Outage } from "./ledger.js";
 import { formatMoney } from "./money.js";
 import { railOf } from "./outages.js";
-import { say } from "./printable.js";
+import { printable, say } from "./printable.js";
 
 function describeDuplicate(duplicate: DuplicateEvidence): string {
   const paid: string = duplicate.paidBy === null ? "" : `, paid by ${duplicate.paidBy}`;
@@ -30,7 +30,8 @@ function show(pending: PendingApproval): void {
       `  fee      ${terms.fx.feeEstimateMinor === null ? `charged in ${terms.fx.sellCurrency} when it is sent` : `about ${formatMoney(terms.fx.feeEstimateMinor, terms.fx.sellCurrency)}`}`,
     );
   }
-  say(`  to       ${terms.payTo} (the account on file)`);
+  // The account name and the bank name come from Airwallex, so they print as one line.
+  say(`  to       ${printable(terms.payTo)} (the account on file)`);
   if (terms.arrival !== undefined) {
     const advice: ArrivalAdvice = arrivalAdvice(terms.arrival);
     say(`  arrival  ${advice.text}`);
@@ -62,7 +63,7 @@ function show(pending: PendingApproval): void {
     say(`  so far   approved by ${signersOf(approval.signoffs)}`);
   }
   for (const bar of pending.barred) {
-    say(`  not      ${bar.name}, who ${bar.why}`);
+    say(`  not      ${printable(bar.name)}, who ${bar.why}`);
   }
   say(
     `  expires  ${approval.expiresAt === null ? "already" : new Date(approval.expiresAt).toLocaleString()}${pending.expired ? " (expired)" : ""}`,

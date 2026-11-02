@@ -29,6 +29,14 @@ export function printableLines(text: string): string {
     .join("\n");
 }
 
+// A line PayOnce stores, such as a timeline line: every control character, a line
+// break included, becomes one space, so a typed name or note or an Airwallex name
+// cannot start a line of its own on the page or in a terminal. Format characters
+// stay as written, because the page and printable drop them when they show it.
+export function oneLine(text: string): string {
+  return text.replace(CONTROL, " ");
+}
+
 // JSON with every character a terminal could act on written as \uXXXX.
 // JSON.stringify escapes C0 controls already, so the text parses back to the same
 // value and stays safe to print.

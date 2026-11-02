@@ -121,7 +121,7 @@ import {
 import { formatMoney, readMinor, toMajor, toMinor } from "./money.js";
 import { holdLine, railFailureSeen, waitingLine } from "./outages.js";
 import { sendAttempt, syncTransfer, wasRejected } from "./payments.js";
-import { say, sayError } from "./printable.js";
+import { oneLine, say, sayError } from "./printable.js";
 import { debitCurrency, floorFor, type ReservePolicy } from "./reserve.js";
 
 // What the reader found. unverifiedSenders is kept for display; the policy works
@@ -262,11 +262,14 @@ export function note(
   message: string,
   topic: Topic | null = null,
 ): void {
-  if (!lineWanted(ledger.events(invoiceId), kind, message, topic)) {
+  // One line, as the ledger stores it, so a line break in a name or a note cannot
+  // print as a line of its own.
+  const line: string = oneLine(message);
+  if (!lineWanted(ledger.events(invoiceId), kind, line, topic)) {
     return;
   }
-  ledger.addEvent(invoiceId, kind, message, topic);
-  say(`  ${kind.padEnd(8)} ${message}`);
+  ledger.addEvent(invoiceId, kind, line, topic);
+  say(`  ${kind.padEnd(8)} ${line}`);
 }
 
 // Puts a failure on the incident's timeline. It must not throw, because it runs

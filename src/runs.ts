@@ -57,7 +57,7 @@ import {
 } from "./ledger.js";
 import { formatMoney } from "./money.js";
 import { runHoldLine, runWaitingLine } from "./outages.js";
-import { say, sayError } from "./printable.js";
+import { oneLine, say, sayError } from "./printable.js";
 import { currencyFloor, type CurrencyFloor, type FloorSource } from "./reserve.js";
 import { rowFromCells, type RunFile, type RunFileRow } from "./run-file.js";
 
@@ -282,7 +282,7 @@ function checkRow(
     } else {
       if (row.supplier !== null && nameKey(row.supplier) !== nameKey(details.account_name ?? "")) {
         reasons.push(
-          `The supplier in the file is ${row.supplier}, and the account name on beneficiary ${short} is ${details.account_name ?? "missing"}`,
+          `The supplier in the file is ${row.supplier}, and the account name on beneficiary ${short} is ${oneLine(details.account_name ?? "missing")}`,
         );
       }
       if (row.currency !== null && details.account_currency !== row.currency) {
@@ -322,7 +322,7 @@ function checkRow(
           bankChangeId = verified.id;
         } else {
           reasons.push(
-            `The bank details on file for ${details.account_name ?? row.supplier ?? "the supplier"} (${accountEnding(details)}) are not the ones PayOnce last paid it (${payee.lastPaid.payTo}${payee.lastPaid.reference === null ? "" : `, transfer ${payee.lastPaid.reference}`}). Check the new details with the supplier. If they are right, pay this invoice outside PayOnce. If not, restore the old details in Airwallex and upload the row again`,
+            `The bank details on file for ${oneLine(details.account_name ?? row.supplier ?? "the supplier")} (${accountEnding(details)}) are not the ones PayOnce last paid it (${payee.lastPaid.payTo}${payee.lastPaid.reference === null ? "" : `, transfer ${payee.lastPaid.reference}`}). Check the new details with the supplier. If they are right, pay this invoice outside PayOnce. If not, restore the old details in Airwallex and upload the row again`,
           );
         }
       }
@@ -711,11 +711,14 @@ export function runNote(
   message: string,
   topic: string | null = null,
 ): void {
-  if (!lineWanted(ledger.runEvents(runId), kind, message, topic)) {
+  // One line, as the ledger stores it, so a line break in a name, a note or a
+  // skip reason cannot print as a line of its own.
+  const line: string = oneLine(message);
+  if (!lineWanted(ledger.runEvents(runId), kind, line, topic)) {
     return;
   }
-  ledger.addRunEvent(runId, kind, message, topic);
-  say(`  run ${runId}    ${kind.padEnd(8)} ${message}`);
+  ledger.addRunEvent(runId, kind, line, topic);
+  say(`  run ${runId}    ${kind.padEnd(8)} ${line}`);
 }
 
 // Puts a failure on the run's timeline. It must not throw, because it runs from

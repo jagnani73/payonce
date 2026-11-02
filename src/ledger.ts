@@ -18,6 +18,7 @@ import type { ApprovalTerms, FxTerms } from "./approval.js";
 import type { ArrivalTerms } from "./arrival.js";
 import { failedStatus, FAILED_STATUS_LIST, type Debit } from "./assess.js";
 import type { EmailAttachment, SupplierEmail } from "./emails.js";
+import { oneLine } from "./printable.js";
 
 export const LEDGER_PATH: string = "payonce.db";
 
@@ -2387,7 +2388,8 @@ export class Ledger {
       invoiceId: invoice,
       at: new Date().toISOString(),
       kind,
-      message: storable(message),
+      // A timeline line is one line, whatever name, note or Airwallex text it holds.
+      message: storable(oneLine(message)),
       topic: topic === null ? null : storable(topic),
     };
     const hash: string = eventHash(prevHash, line);
@@ -4395,12 +4397,12 @@ export class Ledger {
       )
       .get(runId) as unknown as HashRow | undefined;
     const prevHash: string = last?.hash ?? GENESIS;
-    // Hashed as it will read back from the file.
+    // Hashed as it will read back from the file, and one line, as an invoice's.
     const line: RunEventFields = {
       runId,
       at: new Date().toISOString(),
       kind,
-      message: storable(message),
+      message: storable(oneLine(message)),
       topic: topic === null ? null : storable(topic),
     };
     const hash: string = runEventHash(prevHash, line);
