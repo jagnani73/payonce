@@ -5,6 +5,7 @@ import {
   DEFAULT_MODELS,
   keyRefused,
   ModelError,
+  redactKey,
   REQUEST_TIMEOUT_MS,
 } from "./model-reader.js";
 import { readerSettingsFromEnv, type ReaderSettings } from "./reader.js";
@@ -135,9 +136,9 @@ export class Explainer {
     this.send = send;
   }
 
-  // The key cut out of any text that could carry it.
+  // The key cut out of any text that could carry it, in any form it may take.
   private redact(text: string): string {
-    return text.replaceAll(this.apiKey, "[key]");
+    return redactKey(text, this.apiKey);
   }
 
   private async complete(model: string, prompt: string): Promise<string> {
