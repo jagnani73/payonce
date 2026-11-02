@@ -16,6 +16,7 @@ import {
   APPROVED_USE_WITHIN_MS,
   checkSigner,
   eligibleApprovers,
+  personName,
   sameName,
   signoffProblem,
   type ApprovalPolicy,
@@ -936,7 +937,8 @@ function fileRowsOf(ledger: Ledger, run: Run): RunFileRow[] {
 // Checks a file, stores it as a run waiting for approval and asks for approval.
 // Only one run waits at a time. Throws WaitingRunError, SameFileError, or
 // NothingToPayError with every row's reasons.
-export async function uploadRun(engine: Engine, file: RunFile, uploadedBy: string): Promise<number> {
+export async function uploadRun(engine: Engine, file: RunFile, uploader: string): Promise<number> {
+  const uploadedBy: string = personName(uploader);
   const waiting: Run | undefined = engine.ledger.waitingRun();
   if (waiting !== undefined) {
     throw new WaitingRunError(waiting.id);
@@ -1085,7 +1087,8 @@ export function approveRun(
 
 // Cancels a run still waiting. It moves no money, so anyone who gives a name and a
 // note may cancel it, and its invoice numbers are free again.
-export function cancelRun(ledger: Ledger, runId: number, cancelledBy: string, note: string): void {
+export function cancelRun(ledger: Ledger, runId: number, canceller: string, note: string): void {
+  const cancelledBy: string = personName(canceller);
   if (!ledger.cancelRun(runId, cancelledBy, note)) {
     throw new Error(`Run ${runId} is not waiting for approval, so it cannot be cancelled`);
   }

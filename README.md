@@ -139,7 +139,7 @@ Approvers are listed in `.env` as names with limits, for example `APPROVERS=Yash
 - If nobody on the list can approve a payment, for example because it needs two approvers and only one has a high enough limit, PayOnce opens no request and the timeline says so.
 - The agent does not replace a payment above `TWO_APPROVERS_ABOVE` by itself either. It escalates, and the replacement needs two approvers.
 
-The page has no login, so a name is whatever the person types or picks. The rules stop someone approving their own incident under their own name, and the timeline records who said what. They do not prove who was at the keyboard. That needs a login tied to each name.
+The page has no login, so a name is whatever the person types or picks. A name takes only the letters A to Z, digits, spaces, dots, hyphens and apostrophes, up to 80 characters, on the page and in the terminal alike, and so do the names in `APPROVERS`. That stops a name with an invisible character, or a look-alike letter from another alphabet, from passing for someone else's. The rules stop someone approving their own incident under their own name, and the timeline records who said what. They do not prove who was at the keyboard. That needs a login tied to each name.
 
 ## Payments across currencies
 

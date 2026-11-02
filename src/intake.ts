@@ -1,4 +1,5 @@
 import { Worker } from "node:worker_threads";
+import { personName } from "./approvers.js";
 import { numberOf, numbersOf, type InvoiceNumber } from "./duplicates.js";
 import { noteTexts, PARTIAL_NOTES, type EmailNote, type ParsedEmail, type ParsedUpload, type UploadSource } from "./eml.js";
 import { unverifiedSenders, type SupplierEmail } from "./emails.js";
@@ -148,12 +149,12 @@ function parseInWorker(raw: Buffer, source: UploadSource): Promise<ParsedEmail> 
 export function storeUpload(
   ledger: Ledger,
   email: ParsedEmail,
-  uploadedBy: string,
+  uploader: string,
   source: UploadSource,
   fileName: string | null,
 ): Upload {
   return ledger.addUpload({
-    uploadedBy,
+    uploadedBy: personName(uploader),
     source,
     fileName,
     rawSha256: email.rawSha256,
@@ -386,7 +387,8 @@ export class UploadNotWaitingError extends Error {
 // with PayOnce's words first and the email's subject last. Call it in the
 // invoice's turn. True when the invoice is open or with a person, so the agent
 // should look at it now. Throws UploadNotWaitingError when it was not waiting.
-export function deliverUpload(ledger: Ledger, uploadId: number, invoiceId: string, deliveredBy: string): boolean {
+export function deliverUpload(ledger: Ledger, uploadId: number, invoiceId: string, deliverer: string): boolean {
+  const deliveredBy: string = personName(deliverer);
   const before: Upload | undefined = ledger.upload(uploadId);
   const named: Match | null = before === undefined ? null : candidatesFor(ledger, before);
   const result: DeliverResult = ledger.deliverUpload(uploadId, invoiceId, deliveredBy);

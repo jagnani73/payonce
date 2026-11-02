@@ -4,6 +4,7 @@ import {
   type BeneficiaryRecord,
 } from "./airwallex/beneficiaries.js";
 import { getTransfer, type Transfer, type TransferBankDetails } from "./airwallex/transfers.js";
+import { personName } from "./approvers.js";
 import { bankDetailsKey } from "./assess.js";
 import { note, type Engine } from "./engine.js";
 import { liveAtBank, type Attempt, type Obligation, type OutsidePayout, type PayRunRow } from "./ledger.js";
@@ -231,7 +232,7 @@ export async function recordBankChange(
   if (blocked !== null || obligation.supplierPhone === null) {
     throw new Error(blocked ?? "No phone number is on file for this supplier");
   }
-  const calledBy: string = requireText(input.calledBy, "your name", MAX_NAME_LENGTH);
+  const calledBy: string = personName(input.calledBy);
   const spokeTo: string = requireText(input.spokeTo, "who you spoke to", MAX_NAME_LENGTH);
   const confirmed: string = requireText(input.confirmed, "what they confirmed", MAX_CONFIRMED_LENGTH);
   if (!isNumberOnFile(input.numberCalled, obligation.supplierPhone)) {

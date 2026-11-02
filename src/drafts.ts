@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ApprovalTerms } from "./approval.js";
+import { personName } from "./approvers.js";
 import { today, type ArrivalTerms } from "./arrival.js";
 import { deadlineMinutes } from "./deadlines.js";
 import {
@@ -634,9 +635,10 @@ export function createDraft(
   ledger: Ledger,
   obligation: Obligation,
   name: DraftTemplate,
-  createdBy: string,
+  creator: string,
   now: number = Date.now(),
 ): DraftView {
+  const createdBy: string = personName(creator);
   const template: Template = TEMPLATES[name];
   const context: Context = contextOf(ledger, obligation, now);
   const facts: Facts | string = template.facts(context);
@@ -688,10 +690,12 @@ export function markDraft(
   obligation: Obligation,
   draftId: number,
   move: DraftMove,
-  by: string | null,
+  person: string | null,
   note: string | null = null,
   now: number = Date.now(),
 ): void {
+  // Only a copy may go unnamed.
+  const by: string | null = person === null && move === "copied" ? null : personName(person ?? "");
   const draft: Draft | undefined = ledger.draft(draftId);
   if (draft === undefined || draft.invoiceId !== obligation.invoiceId) {
     throw new DraftMoveError(`Draft ${draftId} is not a draft for ${obligation.invoiceId}`);

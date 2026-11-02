@@ -9,6 +9,7 @@ import {
   type BeneficiarySpec,
 } from "./airwallex/beneficiaries.js";
 import type { Transfer } from "./airwallex/transfers.js";
+import { personName } from "./approvers.js";
 import type { Dispatcher } from "./dispatcher.js";
 import { loadEmails, type SupplierEmail } from "./emails.js";
 import {
@@ -139,9 +140,10 @@ export async function openScenario(
   engine: Engine,
   invoiceId: string,
   scenarioId: string,
-  startedBy: string,
+  starter: string,
   dueDate: string | null = null,
 ): Promise<Obligation> {
+  const startedBy: string = personName(starter);
   const def: ScenarioDef | undefined = SCENARIOS.find(
     (scenario: ScenarioDef): boolean => scenario.id === scenarioId,
   );

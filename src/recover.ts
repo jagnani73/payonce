@@ -1,6 +1,6 @@
 import { userInfo } from "node:os";
 import { AirwallexClient } from "./airwallex/client.js";
-import { policyFromEnv } from "./approvers.js";
+import { personName, policyFromEnv } from "./approvers.js";
 import { Dispatcher } from "./dispatcher.js";
 import { noteError, type Engine } from "./engine.js";
 import { describeQuotes } from "./fx.js";
@@ -50,7 +50,17 @@ async function main(): Promise<void> {
   const emailsName: string = process.argv[4] ?? DEFAULT_EMAILS;
   const scenarioId: string = process.argv[5] ?? DEFAULT_SCENARIO;
   // Who started the incident. The login name stands in when none is given.
-  const startedBy: string = process.argv.slice(6).join(" ").trim() || userInfo().username;
+  const given: string = process.argv.slice(6).join(" ").trim();
+  let startedBy: string;
+  try {
+    startedBy = personName(given || userInfo().username);
+  } catch (error: unknown) {
+    console.log(
+      `${error instanceof Error ? error.message : String(error)}. ${given === "" ? "The login name is not one, so give" : "Give"} the name of who starts the incident after the scenario`,
+    );
+    process.exitCode = 1;
+    return;
+  }
 
   // A pay run's invoice sends its first payment from the server, in the run's
   // order, and never from a scenario script. This watcher leaves such rows alone.

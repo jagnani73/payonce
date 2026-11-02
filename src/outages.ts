@@ -1,6 +1,6 @@
 import type { Transfer, TransferBankDetails } from "./airwallex/transfers.js";
 import { keyHash } from "./approval.js";
-import { sameName, type ApprovalPolicy, type Approver } from "./approvers.js";
+import { NameError, personName, sameName, type ApprovalPolicy, type Approver } from "./approvers.js";
 import { originalStateOf } from "./assess.js";
 import { deadlineMinutes } from "./deadlines.js";
 import { cleanLine } from "./eml.js";
@@ -36,7 +36,6 @@ export const RAIL_FAILURE_CODES: Readonly<Record<string, string>> = {
 
 const DEFAULT_FAILURES: number = 3;
 const DEFAULT_WINDOW_MINUTES: number = 30;
-const MAX_NAME_LENGTH: number = 80;
 const MAX_NOTE_LENGTH: number = 200;
 const MINUTE_MS: number = 60_000;
 const ENDED_SHOWN: number = 20;
@@ -338,11 +337,13 @@ export function endOutage(
   note: string,
   holdingOf: HoldingOf | null = null,
 ): EndedOutage {
-  const who: string = cleanLine(name, MAX_NAME_LENGTH + 1);
-  const why: string = cleanLine(note, MAX_NOTE_LENGTH + 1);
-  if (who === "" || who.length > MAX_NAME_LENGTH) {
-    throw new EndRefusedError("input", "Enter your name, in up to 80 characters");
+  let who: string;
+  try {
+    who = personName(name);
+  } catch (error: unknown) {
+    throw new EndRefusedError("input", error instanceof NameError ? error.message : String(error));
   }
+  const why: string = cleanLine(note, MAX_NOTE_LENGTH + 1);
   if (why === "" || why.length > MAX_NOTE_LENGTH) {
     throw new EndRefusedError("input", "Say why the outage is over, in up to 200 characters");
   }

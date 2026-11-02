@@ -20,7 +20,6 @@ const USAGE: string = `Usage:
   pnpm outbox <INVOICE> dismiss <DRAFT> <NAME> [NOTE]
 Templates: ${DRAFT_TEMPLATES.join(", ")}`;
 
-const MAX_NAME_LENGTH: number = 80;
 const MAX_NOTE_LENGTH: number = 200;
 
 function fail(message: string): void {
@@ -101,11 +100,8 @@ function main(): void {
     fail(`${invoiceId} is not in the ledger`);
     return;
   }
+  // createDraft and markDraft check the name and say what a name may hold.
   const person: string = (name ?? "").trim();
-  if (person.length > MAX_NAME_LENGTH) {
-    fail("That name is too long");
-    return;
-  }
   try {
     if (action === undefined) {
       list(outboxOf(ledger, obligation), invoiceId);

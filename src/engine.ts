@@ -40,6 +40,7 @@ import {
   APPROVED_USE_WITHIN_MS,
   checkSigner,
   eligibleApprovers,
+  personName,
   signoffProblem,
   signoffsNeeded,
   type ApprovalPolicy,
@@ -3633,10 +3634,11 @@ export function pendingClose(
 export function closeIncident(
   ledger: Ledger,
   invoiceId: string,
-  closedBy: string,
+  closer: string,
   finding: string,
   shown: string[] | null = null,
 ): void {
+  const closedBy: string = personName(closer);
   const review: CloseReview | undefined = pendingClose(ledger, invoiceId);
   const covered: CoveredTransfer[] = review?.covered ?? [];
   if (shown === null && covered.length > 0) {

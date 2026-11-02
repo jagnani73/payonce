@@ -3,7 +3,7 @@ import { basename } from "node:path";
 import { AirwallexClient } from "./airwallex/client.js";
 import type { RunTotal } from "./approval.js";
 import { arrivalAdvice, feeSeenText, HOLIDAYS_NOTE, type ArrivalAdvice } from "./arrival.js";
-import { describePolicy, policyFromEnv, type ApprovalPolicy } from "./approvers.js";
+import { describePolicy, personName, policyFromEnv, type ApprovalPolicy } from "./approvers.js";
 import type { Engine } from "./engine.js";
 import {
   Ledger,
@@ -226,9 +226,16 @@ function problemsText(problems: FileProblem[]): string {
     .join("\n");
 }
 
-async function upload(ledger: Ledger, path: string | undefined, uploadedBy: string): Promise<void> {
-  if (path === undefined || uploadedBy === "") {
+async function upload(ledger: Ledger, path: string | undefined, uploader: string): Promise<void> {
+  if (path === undefined || uploader === "") {
     fail("Usage: pnpm payrun upload <FILE> <NAME>. The name is who uploads the run, and that person cannot approve it");
+    return;
+  }
+  let uploadedBy: string;
+  try {
+    uploadedBy = personName(uploader);
+  } catch (error: unknown) {
+    fail(error instanceof Error ? error.message : String(error));
     return;
   }
   let text: string;

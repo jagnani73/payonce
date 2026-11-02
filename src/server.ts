@@ -26,7 +26,14 @@ import {
   type ArrivalAdvice,
   type ArrivalTerms,
 } from "./arrival.js";
-import { describePolicy, policyFromEnv, type Approver, type Barred } from "./approvers.js";
+import {
+  describePolicy,
+  NameError,
+  personName,
+  policyFromEnv,
+  type Approver,
+  type Barred,
+} from "./approvers.js";
 import {
   auditCsv,
   auditExport,
@@ -230,7 +237,6 @@ const BASE64: RegExp = /^[A-Za-z0-9+/]*={0,2}$/;
 const WEB_DIR: URL = new URL("../web/", import.meta.url);
 const EMAILS_DIR: URL = new URL("../fixtures/emails/", import.meta.url);
 
-const MAX_NAME_LENGTH: number = 80;
 // Uploads that are not waiting, shown after the waiting ones.
 const INBOX_OTHERS_SHOWN: number = 50;
 const MAX_FINDING_LENGTH: number = 200;
@@ -803,10 +809,7 @@ async function startIncident(request: IncomingMessage): Promise<unknown> {
   if (typeof emailsName !== "string" || !emailThreads().includes(emailsName)) {
     throw new HttpError(400, "Unknown email thread");
   }
-  const startedBy: string = text(body, "startedBy");
-  if (startedBy === "" || startedBy.length > MAX_NAME_LENGTH) {
-    throw new HttpError(400, "Enter your name");
-  }
+  const startedBy: string = name(body, "startedBy", "Enter your name");
   const scenarioId: unknown = body["scenario"] ?? DEFAULT_SCENARIO;
   if (
     typeof scenarioId !== "string" ||
@@ -871,10 +874,7 @@ async function approveIncident(
 ): Promise<unknown> {
   requireObligation(invoiceId);
   const body: Record<string, unknown> = await readJson(request);
-  const approver: string = text(body, "approver");
-  if (approver === "" || approver.length > MAX_NAME_LENGTH) {
-    throw new HttpError(400, "Enter the approver's name");
-  }
+  const approver: string = name(body, "approver", "Enter the approver's name");
   const approvalId: unknown = body["approvalId"];
   if (typeof approvalId !== "number" || !Number.isInteger(approvalId)) {
     throw new HttpError(400, "Say which approval request is being approved");
@@ -894,10 +894,7 @@ async function closeByPerson(
 ): Promise<unknown> {
   requireObligation(invoiceId);
   const body: Record<string, unknown> = await readJson(request);
-  const closedBy: string = text(body, "closedBy");
-  if (closedBy === "" || closedBy.length > MAX_NAME_LENGTH) {
-    throw new HttpError(400, "Enter your name");
-  }
+  const closedBy: string = name(body, "closedBy", "Enter your name");
   const finding: string = text(body, "finding");
   if (finding === "" || finding.length > MAX_FINDING_LENGTH) {
     throw new HttpError(400, "Say what you confirmed");
@@ -940,6 +937,11 @@ function text(body: Record<string, unknown>, field: string): string {
   return typeof body[field] === "string" ? oneLine(body[field]).trim() : "";
 }
 
+// A typed field exactly as sent, for a name that personName checks itself.
+function typed(body: Record<string, unknown>, field: string): string {
+  return typeof body[field] === "string" ? body[field] : "";
+}
+
 // A person records calling the supplier back on the number on file, with the new
 // bank details the supplier confirmed. PayOnce updates the supplier's record in
 // Airwallex, and the agent then looks at the invoice again.
@@ -961,7 +963,7 @@ async function bankChangeByPerson(
     details[name] = value;
   }
   const input: CallbackInput = {
-    calledBy: text(body, "calledBy"),
+    calledBy: name(body, "calledBy", "Enter your name"),
     numberCalled: text(body, "numberCalled"),
     calledAt: text(body, "calledAt"),
     spokeTo: text(body, "spokeTo"),
@@ -1088,7 +1090,7 @@ async function endOutageByPerson(request: IncomingMessage, raw: string): Promise
       engine.ledger,
       engine.approvals,
       Number(raw),
-      text(body, "endedBy"),
+      typed(body, "endedBy"),
       text(body, "note"),
       outageHolding(engine.ledger),
     );
@@ -1252,11 +1254,8 @@ async function markByPerson(
   const body: Record<string, unknown> = await readJson(request);
   let by: string | null;
   if (move === "copied") {
-    const given: string = text(body, "copiedBy");
-    if (given.length > MAX_NAME_LENGTH) {
-      throw new HttpError(400, "That name is too long");
-    }
-    by = given === "" ? null : given;
+    // A copy may go unnamed.
+    by = text(body, "copiedBy") === "" ? null : name(body, "copiedBy", "Enter your name");
   } else {
     by = name(body, move === "sent" ? "sentBy" : "dismissedBy", "Enter your name");
   }
@@ -1408,12 +1407,18 @@ function runDetail(raw: string): unknown {
   };
 }
 
+// A name a person typed, as PayOnce records it (personName), or 400 with what a
+// name may hold. It reads the field as sent, not through text, so a line break or
+// any other control character in a name is refused instead of becoming a space.
 function name(body: Record<string, unknown>, field: string, missing: string): string {
-  const value: string = text(body, field);
-  if (value === "" || value.length > MAX_NAME_LENGTH) {
-    throw new HttpError(400, missing);
+  try {
+    return personName(typed(body, field), missing);
+  } catch (error: unknown) {
+    if (error instanceof NameError) {
+      throw new HttpError(400, error.message);
+    }
+    throw error;
   }
-  return value;
 }
 
 // An Airwallex read that failed while checking a file is the bank's problem, not

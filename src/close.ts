@@ -5,6 +5,7 @@ import {
   type CloseReview,
   type CoveredTransfer,
 } from "./engine.js";
+import { personName } from "./approvers.js";
 import { Ledger, LEDGER_PATH } from "./ledger.js";
 import { say } from "./printable.js";
 
@@ -75,6 +76,14 @@ function main(): void {
     );
     return;
   }
+  let by: string;
+  try {
+    by = personName(closedBy);
+  } catch (error: unknown) {
+    console.log(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+    return;
+  }
   // Every transfer the close covers, and nothing else, so a list that changed
   // since the person looked is refused.
   const unknown: string[] = named.filter(
@@ -95,7 +104,7 @@ function main(): void {
   closeIncident(
     ledger,
     invoiceId,
-    closedBy,
+    by,
     finding,
     review.covered.map((transfer: CoveredTransfer): string => transfer.transferId),
   );

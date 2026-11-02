@@ -39,9 +39,49 @@ export interface Barred {
   why: string;
 }
 
+// What a name typed into PayOnce may hold once trimmed, with runs of spaces
+// collapsed: ASCII letters, digits, spaces, dots, hyphens and apostrophes, 1 to
+// 80 of them. Anything else, such as a zero-width space or a Cyrillic letter that
+// looks Latin, could pass on screen for someone else's name.
+const NAME_PATTERN: RegExp = /^[A-Za-z0-9 .'-]{1,80}$/;
+export const MAX_NAME_LENGTH: number = 80;
+export const NAME_RULE: string =
+  "A name takes only the letters A to Z, digits, spaces, dots, hyphens and apostrophes, up to 80 characters";
+
+// A name PayOnce refuses, with words for the person who typed it.
+export class NameError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NameError";
+  }
+}
+
+// A name as a person typed it, trimmed and with runs of spaces collapsed, as
+// PayOnce records it. Throws NameError when it is empty (missing says what to
+// enter) or holds anything NAME_RULE does not allow.
+export function personName(typed: string, missing: string = "Enter your name"): string {
+  const name: string = typed.trim().replace(/ {2,}/g, " ");
+  if (name === "") {
+    throw new NameError(missing);
+  }
+  if (!NAME_PATTERN.test(name)) {
+    throw new NameError(NAME_RULE);
+  }
+  return name;
+}
+
 // Names are typed by people, so case and spacing do not make a different person.
+// Both are compared in their normal form. Characters that draw nothing, such as
+// zero-width spaces, soft hyphens and bidi controls, are dropped first, so a name
+// stored before names were checked compares as it reads.
 export function sameName(a: string, b: string): boolean {
-  const key = (name: string): string => name.trim().replace(/\s+/g, " ").toLowerCase();
+  const key = (name: string): string =>
+    name
+      .normalize("NFKC")
+      .replace(/[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .toLowerCase();
   return key(a) === key(b);
 }
 
@@ -56,6 +96,11 @@ function parseApprovers(raw: string): Approver[] {
     const limit: number = colon < 0 ? Number.NaN : Number(entry.slice(colon + 1).trim());
     if (name === "" || !Number.isFinite(limit) || limit <= 0) {
       throw new Error(`"${entry.trim()}" is not a name and a limit, such as Alex:50000`);
+    }
+    // An approver types their name to approve, so a listed name follows the same
+    // rule, or nobody could ever approve as it.
+    if (!NAME_PATTERN.test(name)) {
+      throw new Error(`"${name}" is not a name PayOnce takes. ${NAME_RULE}`);
     }
     if (approvers.some((approver: Approver): boolean => sameName(approver.name, name))) {
       throw new Error(`${name} is listed twice`);
@@ -165,19 +210,20 @@ export function checkSigner(
   if (policy.problem !== null) {
     throw new Error(`Approval refused: ${policy.problem}`);
   }
+  const typed: string = personName(name, "Enter the approver's name");
   const approver: Approver | undefined = policy.approvers.find(
-    (candidate: Approver): boolean => sameName(candidate.name, name),
+    (candidate: Approver): boolean => sameName(candidate.name, typed),
   );
   if (approver === undefined) {
     throw new Error(
-      `${name.trim()} is not an approver. The approvers are ${policy.approvers.map((candidate: Approver): string => candidate.name).join(", ")}`,
+      `${typed} is not an approver. The approvers are ${policy.approvers.map((candidate: Approver): string => candidate.name).join(", ")}`,
     );
   }
-  const bar: Barred | undefined = barred.find((entry: Barred): boolean => sameName(entry.name, name));
+  const bar: Barred | undefined = barred.find((entry: Barred): boolean => sameName(entry.name, typed));
   if (bar !== undefined) {
     throw new Error(`${approver.name} ${bar.why}, so someone else approves this payment`);
   }
-  if (signedBy.some((signer: string): boolean => sameName(signer, name))) {
+  if (signedBy.some((signer: string): boolean => sameName(signer, typed))) {
     throw new Error(`${approver.name} has approved this already. The next approval must come from someone else`);
   }
   if (amount.minor > approver.limitMinor) {
