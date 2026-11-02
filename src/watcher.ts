@@ -148,7 +148,9 @@ export class Watcher {
       // PayOnce's own payments and payouts for the invoice sent outside it. A
       // transfer the ledger keeps failed while the bank has it in flight is read
       // too, and so is one under a request id that does not match the invoice, so
-      // the look comes when the bank pays or fails it.
+      // the look comes when the bank pays or fails it. A payout sent outside
+      // PayOnce is read in any state that is not final, so one a look stored as
+      // unknown, such as one it read as OVERDUE, is read again.
       const attempts: Attempt[] = this.engine.ledger.attempts(invoiceId);
       const inFlight: string[] = [
         ...attempts
@@ -162,7 +164,7 @@ export class Watcher {
           .map((attempt: Attempt): string | null => attempt.mismatchedTransferId),
         ...this.engine.ledger
           .outsidePayouts(invoiceId)
-          .filter((payout: OutsidePayout): boolean => payout.state === "in_flight")
+          .filter((payout: OutsidePayout): boolean => payout.state !== "paid" && payout.state !== "failed")
           .map((payout: OutsidePayout): string => payout.transferId),
       ].filter((id: string | null): id is string => id !== null);
       for (const transferId of inFlight) {

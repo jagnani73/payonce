@@ -376,9 +376,10 @@ function isWatching(invoiceId: string): boolean {
       .some(
         (attempt: Attempt): boolean => withBank(attempt),
       ) ||
+    // In any state that is not final, as the watcher reads them.
     engine.ledger
       .outsidePayouts(invoiceId)
-      .some((payout: OutsidePayout): boolean => payout.state === "in_flight")
+      .some((payout: OutsidePayout): boolean => payout.state !== "paid" && payout.state !== "failed")
   );
 }
 
