@@ -361,6 +361,25 @@ Every break found, changed, cleared or explained goes on a hash chain of its own
 
 `pnpm ui` runs a check a minute after it starts and then every `RECON_EVERY_MINUTES` (10 by default, 0 for never). Check now on the page starts one, at most once a minute. A check that fails a read records the error and changes no break. With alerts on, the open breaks share one alert, which posts again only when a break opens or its facts change. A reconciliation record that no longer verifies gets an alert of its own, as an invoice or pay run audit trail does.
 
+## Metrics
+
+The board says what needs a person now. Metrics says how the last week or month went: how many payments went out and how many the bank paid or failed, on which rail and why, how many incidents PayOnce closed by itself and how many needed someone, how long they took, what failures cost in fees, and which controls fired. Open Metrics in the top bar, or run `pnpm metrics`. Pick the last 7 days, the last 30 days or since the ledger started. The periods are rolling hours up to now, not calendar days, so two people reading the same file at the same minute get the same numbers.
+
+| Table | Counts | By |
+| --- | --- | --- |
+| Payments sent | First payments, first payments a person approved, replacements PayOnce sent by itself and approved ones, with how many the bank paid, failed or still has. Also how many first payments were paid the first time, any invoice paid more than once since the ledger started, and how long the bank took to pay | When the transfer was created |
+| Failures | Failures per rail and failure code, at the bank, refused by Airwallex or never created, with whether the code counts toward an outage and whether a resend can fix it | When the transfer was created, or when PayOnce tried to create it |
+| Incidents | Started, by origin. Closed, by how: paid the first time, replaced by PayOnce, paid after a person, or closed without paying. How long they took from the first timeline line, from the first failure and with a person. Why the ones that needed a person needed one, as the reason on file when they closed | Their first line, and their close |
+| Approvals | Requests given, those needing two approvers, and whether each was spent, voided or is still waiting, with the time to approve, plus requests waiting now | The signoff that completed the request |
+| Fees lost | Fees kept on failed transfers, the cash panel's figure | When the transfer was created |
+| Duplicates held | Invoices held as a likely second bill, and whether a person stopped them, paid them or they still wait | Their first line |
+| Rail outages | Each outage running in the period, how long it lasted and what it held | Overlapping the period |
+| Reconciliation breaks | Breaks by kind and whether they were explained, cleared or are still open, with the time to resolve | When the break opened |
+
+Each table counts by the time it names, so the tables do not add up to each other. Amounts stay in their own currency and are never added across currencies. A row whose time is not in the ledger is left out of the 7 and 30 day periods and counted as not on file. An invoice counts as needing a person when PayOnce sent it to one, even if the bank then settled it before anyone acted. Its reason is coded by matching PayOnce's own reason wording, so the page shows a fixed label such as "Bank deadline passed" and never the reason's text.
+
+Metrics only read the ledger. They call nothing in Airwallex, change nothing, and nothing PayOnce decides reads them. They show no names, notes, invoice numbers, references, email text or Airwallex messages. Three times feed the durations: when an invoice first went to a person, and when PayOnce first recorded a payment failed or paid. SQLite triggers write them as the state changes. A ledger from before them shows those durations as not on file.
+
 ## Alerts
 
 PayOnce can post to a Slack or Discord channel when something needs a person. It alerts on an invoice that is escalated, held or waiting on an approval, a bank deadline that has passed, a payout sent outside PayOnce, a payment PayOnce had marked as never sent that turned up and may have paid the supplier twice, a pay run waiting for approval, supplier emails waiting in the inbox for a person, an audit trail that no longer verifies, a currency whose headroom has gone below 0, reconciliation breaks that need a person, and a rail outage, once when it is declared and once when a person ends it. An outage alert names the rail, the failure codes, the payees counted and the bank's references, and never who ended it or their note.
@@ -464,8 +483,11 @@ pnpm reconcile show [CURRENCY]
 pnpm reconcile explain <ID[,ID...]> [NAME NOTE --facts=FP[,FP...]]
 pnpm mcp
 pnpm ask <INVOICE> [facts]
+pnpm metrics [7d|30d|all] [json]
 pnpm reset
 ```
+
+`pnpm metrics` prints the [metrics](#metrics) for the last 7 days, or the period given, with times in UTC. `json` prints what `GET /api/metrics` answers. It opens the ledger read-only and needs no `.env`, so it refuses a ledger an older PayOnce wrote: open that ledger once with `pnpm ui` or `pnpm board` first.
 
 `pnpm ask` asks the model why PayOnce did what it did on one invoice (see [Ask this incident why](#ask-this-incident-why)). With `facts` it prints the facts and the system message exactly as they would be sent, then the legend of labels, which stays on this machine, and asks nothing. It opens the ledger read-only and never calls Airwallex, so it refuses a ledger an older PayOnce wrote: open that ledger once with `pnpm ui` or `pnpm board` first. It strips control and format characters from names and invoice numbers after it swaps the labels back, as `pnpm board` does.
 
@@ -513,7 +535,7 @@ In the fifth, `inv-05002` has the same supplier, amount and number as INV-5002, 
 
 ## Read PayOnce from Claude
 
-`src/mcp.ts` is a read-only Model Context Protocol server over stdio. Add it to Claude Code or Claude Desktop and Claude can answer questions such as "what is waiting on a person?" or "why did INV-5001 go to a person?" from the ledger. It has ten tools:
+`src/mcp.ts` is a read-only Model Context Protocol server over stdio. Add it to Claude Code or Claude Desktop and Claude can answer questions such as "what is waiting on a person?" or "why did INV-5001 go to a person?" from the ledger. It has eleven tools:
 
 | Tool | What it returns |
 | --- | --- |
@@ -525,6 +547,7 @@ In the fifth, `inv-05002` has the same supplier, amount and number as INV-5002, 
 | `audit` | The hash chain check `pnpm run audit` makes, for the whole ledger, one invoice or one run |
 | `outages` | The active rail outages and those ended lately |
 | `suppliers`, `supplier` | Every supplier record, and one record as the supplier view shows it, without its waiting emails and drafts. `supplier` takes a record id or an invoice number |
+| `metrics` | The metrics for `7d`, `30d` or `all`: only numbers, codes, currencies, times and PayOnce's own labels |
 
 No tool approves, closes, pays, sends, drafts or uploads anything, or ends an outage. Named people still do that on the page and in the terminal. The server opens the ledger read-only for each call and closes it afterwards, so `pnpm reset` still works while Claude keeps the server running. It never creates a ledger, and never upgrades one an older PayOnce wrote: it says so and asks you to run `pnpm board` or restart `pnpm ui` once. If a write was cut off and left its journal beside the ledger, it says that too, until `pnpm ui` or `pnpm board` rolls the write back. It never calls Airwallex and needs no credentials. Of `.env` it parses only the lines that set `RESERVE_FLOORS`, the two bank deadlines, the outage rule and `PORT`, and ignores the rest.
 
@@ -614,6 +637,7 @@ Quit Claude Desktop fully and start it again. It writes the server's stderr to `
 | `src/recon-match.ts` | Reconciliation's matcher, the break kinds and their wording |
 | `src/recon-store.ts` | Reconciliation's tables, its runs, its breaks and their hash chain |
 | `src/reconcile.ts` | One reconciliation check, the server's timer, the report and a person's explanation |
+| `src/metrics.ts` | The metrics: the eight tables for a period, read from the ledger, and the reason codes |
 | `src/alerts.ts` | Alerts: the webhook setting, what needs a person, and posting with retries |
 | `src/alert-payloads.ts` | What an alert says, and its Slack and Discord message shapes |
 | `src/server.ts` | Local web server and JSON API |
@@ -622,7 +646,7 @@ Quit Claude Desktop fully and start it again. It writes the server's stderr to `
 | `src/mcp-text.ts` | Marks the text PayOnce did not write in an MCP answer, and masks phone numbers |
 | `src/money.ts` | Major and minor units, and amounts as people read them, for two-decimal currencies |
 | `src/printable.ts` | Cleans every line PayOnce prints to a terminal, so a name or an error cannot move the cursor or write the clipboard |
-| `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/audit.ts`, `src/cash.ts`, `src/board.ts`, `src/payrun.ts`, `src/outbox.ts`, `src/outage.ts`, `src/ask.ts`, `src/recon-cli.ts`, `src/reset.ts`, `src/index.ts` | The commands |
+| `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/audit.ts`, `src/cash.ts`, `src/board.ts`, `src/payrun.ts`, `src/outbox.ts`, `src/outage.ts`, `src/ask.ts`, `src/recon-cli.ts`, `src/metrics-cli.ts`, `src/reset.ts`, `src/index.ts` | The commands |
 | `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, exchange rate quotes, balances and their cache for the cash panel, balance history, the webhook subscription and the simulation calls |
 | `web/` | The page: plain HTML, CSS and JavaScript with no build step |
 | `fixtures/emails/` | Sample supplier emails |
@@ -662,6 +686,7 @@ A ledger from before PayOnce kept which account each payment went to keeps that 
 - Releasing only the rows of a pay run that do not pay on a rail with an outage. The whole run waits.
 - Reading financial transactions for reconciliation. Balance history has the running balance that shows a wallet adds up, and needs no other API scope.
 - Reconciliation on the incident page, the board or the cash panel, in the MCP server, or as an export. It has a page of its own and `pnpm reconcile`.
+- Charts, exports or stored snapshots of the metrics, money at risk over a past period, figures per person, and lists of the invoices behind a figure. Metrics are tables of what the ledger holds now, and the board and the incident list link every invoice.
 - Checking the refund of a failed converting transfer. The simulator cannot fail one, so reconciliation accepts that refund in either wallet, and that path is not verified in the sandbox.
 - Counting an outage's failures from a webhook or from the status check. A look at the invoice and the sweep count them, so a failure can take up to one sweep, 30 seconds, to count.
 - Grouping failures by bank. Several payees at one bank that fail together still declare an outage on the whole rail.
