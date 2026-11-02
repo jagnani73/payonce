@@ -102,6 +102,14 @@ function main(): void {
     );
   }
   say(describePolicy(policy));
+  // An expired request can no longer be approved, so no command is offered for it.
+  if (pending.expired) {
+    say("This request has expired. PayOnce opens a new request on its next look, and pnpm approve shows it then");
+    if (approver !== undefined) {
+      process.exitCode = 1;
+    }
+    return;
+  }
   if (approver === undefined) {
     say(`To approve these terms: pnpm approve ${invoiceId} ${pending.approval.id} <NAME>`);
     return;
