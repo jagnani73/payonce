@@ -223,13 +223,15 @@ function refundAmount(refund: RefundBreak): string | null {
 }
 
 // Why no refund trace fits, from the newest refund missing break on the invoice's
-// own transfers: a person explained it, or the refund landed and it cleared.
+// own transfers: a person explained it, or it cleared. A break clears when the
+// check stops finding it, which a partial refund or a movement no longer listed
+// does too, so a cleared one never says the refund landed.
 function noRefundMissing(refunds: RefundBreak[]): string {
   const newest: RefundBreak | undefined = refunds[0];
   return newest?.state === "explained"
     ? "a person explained the missing refund in reconciliation"
     : newest?.state === "cleared"
-      ? "the refund has landed, so reconciliation no longer finds it missing"
+      ? "reconciliation no longer finds the refund missing"
       : "reconciliation finds no missing refund for this invoice's payments";
 }
 
