@@ -809,18 +809,20 @@ async function closeByPerson(
   if (finding === "" || finding.length > MAX_FINDING_LENGTH) {
     throw new HttpError(400, "Say what you confirmed");
   }
-  // The transfers the close card covered, so one found since it was shown is not
-  // cleared by a close nobody saw it on.
-  const covered: unknown = body["covered"] ?? [];
+  // The transfer ids the close card covered, so one found since it was shown is
+  // not cleared by a close nobody saw it on. A close that names none is refused
+  // while any is on file.
+  const covered: unknown = body["covered"] ?? null;
   if (
-    !Array.isArray(covered) ||
-    covered.length > MAX_COVERED ||
-    !covered.every((id: unknown): boolean => typeof id === "string" && id.length <= MAX_TRANSFER_ID_LENGTH)
+    covered !== null &&
+    (!Array.isArray(covered) ||
+      covered.length > MAX_COVERED ||
+      !covered.every((id: unknown): boolean => typeof id === "string" && id.length <= MAX_TRANSFER_ID_LENGTH))
   ) {
     throw new HttpError(400, "Say which transfers the close card covered");
   }
   await inTurn(invoiceId, (): void =>
-    closeIncident(engine.ledger, invoiceId, closedBy, finding, covered as string[]),
+    closeIncident(engine.ledger, invoiceId, closedBy, finding, covered as string[] | null),
   );
   return { ok: true };
 }

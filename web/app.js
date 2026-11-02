@@ -2282,14 +2282,23 @@ function buildReview(invoiceId, review, emailSummary) {
       unpaid
         ? "Closing records your name and this note on the timeline. PayOnce then pays nothing for this invoice."
         : "Closing records your name and this note on the timeline. It does not move money.",
+      review.covered.length > 0 &&
+        " It also records that you checked the transfers this close covers, and only those.",
     ),
   );
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     submitClose(invoiceId);
   });
-  // The close sends the transfers this card covered, so it is bound to what was shown.
-  reviewRefs = { closedBy, finding, button, error, label, covered: review.covered };
+  // The close sends the transfer ids this card lists, so it is bound to what was shown.
+  reviewRefs = {
+    closedBy,
+    finding,
+    button,
+    error,
+    label,
+    covered: review.covered.map((transfer) => transfer.transferId),
+  };
 
   setClass(els.review, "card approval approval--requested");
   els.review.replaceChildren(
@@ -2335,10 +2344,33 @@ function buildReview(invoiceId, review, emailSummary) {
         h("dt", null, "Email evidence"),
         h("dd", null, sentence(emailSummary)),
       ],
+      review.covered.length > 0 && [
+        h("dt", null, "This close covers"),
+        h("dd", null, review.covered.map(coveredNode)),
+      ],
     ),
     form,
   );
   els.review.hidden = false;
+}
+
+// A transfer listed under one of the invoice's request ids that does not match
+// it, which closing the incident records as checked.
+function coveredNode(transfer) {
+  const status =
+    typeof transfer.status === "string" && transfer.status !== ""
+      ? humanize(transfer.status)
+      : "Status not read";
+  return h(
+    "span",
+    { class: "terms__covered" },
+    h("span", { class: "mono" }, transfer.reference),
+    h(
+      "span",
+      { class: "terms__sub" },
+      `${status}. Listed under the ${transfer.kind}'s request id and does not match this invoice`,
+    ),
+  );
 }
 
 function syncReviewControls() {
@@ -2376,7 +2408,12 @@ function renderReview(detail) {
           kind: review.kind,
           reference: review.reference,
           reason: String(review.reason ?? ""),
-          covered: Array.isArray(review.covered) ? review.covered : [],
+          covered: Array.isArray(review.covered)
+            ? review.covered.filter(
+                (transfer) =>
+                  typeof transfer?.transferId === "string" && typeof transfer.reference === "string",
+              )
+            : [],
         },
         emailSummary,
       );

@@ -3370,25 +3370,48 @@ function paidOriginal(ledger: Ledger, invoiceId: string): Attempt | undefined {
 // original Airwallex refused. Closing either leaves it unpaid. emails is the
 // email evidence an approval would show, null when the invoice has no emails.
 // covered lists the transfers under its request ids that do not match it and
-// that no person has cleared: closing on this review clears exactly those.
+// that no person has cleared: the card shows them, and closing on this review
+// clears exactly those.
 export interface CloseReview {
   kind: AttemptKind | "outside" | "mismatched" | "duplicate" | "unpaid";
   reference: string | null;
   reason: string;
   emails: string | null;
-  covered: string[];
+  covered: CoveredTransfer[];
+}
+
+// A transfer under the request id of one of the invoice's attempts (kind) that
+// does not match the invoice, with the bank's short reference and the status a
+// look last read for it.
+export interface CoveredTransfer {
+  transferId: string;
+  reference: string;
+  status: string | null;
+  kind: AttemptKind;
 }
 
 // The transfers under the invoice's request ids that do not match it, which no
-// person has cleared.
-function unclearedMismatches(ledger: Ledger, invoiceId: string): string[] {
+// person has cleared: what a person's close covers.
+function coveredByClose(ledger: Ledger, invoiceId: string): CoveredTransfer[] {
   return ledger
     .attempts(invoiceId)
-    .flatMap((attempt: Attempt): string[] =>
+    .flatMap((attempt: Attempt): CoveredTransfer[] =>
       attempt.mismatchedTransferId !== null && attempt.mismatchedClearedAt === null
-        ? [attempt.mismatchedTransferId]
+        ? [
+            {
+              transferId: attempt.mismatchedTransferId,
+              reference: attempt.mismatchedReference ?? attempt.mismatchedTransferId,
+              status: attempt.mismatchedStatus,
+              kind: attempt.kind,
+            },
+          ]
         : [],
     );
+}
+
+// How a close names the transfers it covers, as the card and pnpm close show them.
+export function coveredText(transfer: CoveredTransfer): string {
+  return `${transfer.reference} (${transfer.transferId}), ${transfer.status ?? "status not read"}, under the ${transfer.kind}'s request id`;
 }
 
 export function pendingClose(
@@ -3405,7 +3428,7 @@ export function pendingClose(
     onFile.length === 0
       ? null
       : emailEvidence(storedFindings(ledger, invoiceId, onFile).findings.summary, onFile, obligation.supplierDomain);
-  const covered: string[] = unclearedMismatches(ledger, invoiceId);
+  const covered: CoveredTransfer[] = coveredByClose(ledger, invoiceId);
   if (ledger.paidOnce(invoiceId)) {
     const paid: Attempt | undefined = ledger
       .attempts(invoiceId)
@@ -3449,33 +3472,41 @@ export function pendingClose(
 
 // Records a person closing such an invoice. It moves no money, so it is not bound
 // to terms the way an approval is. A held duplicate is closed without paying, and
-// the invoices it duplicated say so on their timelines. shown is the covered list
-// of the review the person saw. The close is refused when a transfer under the
-// invoice's request ids that does not match it was found since, and otherwise
-// clears those on that list, in the transaction that closes it, so one found
-// after that still keeps PayOnce from closing the invoice by itself.
+// the invoices it duplicated say so on their timelines. shown is the transfer ids
+// of the covered list the person saw, null when the caller names none. The close
+// is refused when it covers a transfer under the invoice's request ids that does
+// not match it and that is not on that list: one found since, or any at all when
+// the caller named none. Otherwise it clears those, in the transaction that
+// closes it, so one found after that still keeps PayOnce from closing the invoice
+// by itself.
 export function closeIncident(
   ledger: Ledger,
   invoiceId: string,
   closedBy: string,
   finding: string,
-  shown: string[],
+  shown: string[] | null = null,
 ): void {
   const review: CloseReview | undefined = pendingClose(ledger, invoiceId);
-  const covered: string[] = review?.covered ?? [];
-  if (covered.some((transferId: string): boolean => !shown.includes(transferId))) {
+  const covered: CoveredTransfer[] = review?.covered ?? [];
+  if (shown === null && covered.length > 0) {
+    throw new Error(
+      `Closing ${invoiceId} covers transfers listed under its request ids that do not match it, so the close must name them: ${covered.map(coveredText).join("; ")}`,
+    );
+  }
+  if (covered.some((transfer: CoveredTransfer): boolean => !(shown ?? []).includes(transfer.transferId))) {
     throw new Error(
       `A transfer was found under one of ${invoiceId}'s request ids since the close card was shown. Look at the incident again before closing it`,
     );
   }
+  const clears: string[] = covered.map((transfer: CoveredTransfer): string => transfer.transferId);
   if (review?.kind === "duplicate" || review?.kind === "unpaid") {
     const obligation: Obligation | undefined = ledger.obligation(invoiceId);
     const duplicateOf: string[] = obligation?.duplicateOf ?? [];
     // One closed without paying before keeps who closed it first.
     const closed: boolean =
       obligation?.rejectedBy !== null && obligation?.rejectedBy !== undefined
-        ? ledger.rejectAgain(invoiceId, true, covered)
-        : ledger.reject(invoiceId, closedBy, covered);
+        ? ledger.rejectAgain(invoiceId, true, clears)
+        : ledger.reject(invoiceId, closedBy, clears);
     if (!closed) {
       throw new Error(`${invoiceId} is not waiting on a person to close it`);
     }
@@ -3497,7 +3528,7 @@ export function closeIncident(
     }
     return;
   }
-  if (review === undefined || !ledger.settle(invoiceId, true, "escalated", covered)) {
+  if (review === undefined || !ledger.settle(invoiceId, true, "escalated", clears)) {
     throw new Error(`${invoiceId} is not waiting on a person to close it`);
   }
   note(ledger, invoiceId, "closed", `Incident closed by ${closedBy}: ${finding}`);

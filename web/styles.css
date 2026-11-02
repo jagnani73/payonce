@@ -1465,11 +1465,13 @@ input:read-only {
   line-height: 1.4;
 }
 
-.terms__duplicate {
+.terms__duplicate,
+.terms__covered {
   display: block;
 }
 
-.terms__duplicate + .terms__duplicate {
+.terms__duplicate + .terms__duplicate,
+.terms__covered + .terms__covered {
   margin-top: 6px;
 }
 
