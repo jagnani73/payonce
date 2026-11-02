@@ -605,10 +605,10 @@ async function api(path, { method = "GET", body } = {}) {
     data = null;
   }
   if (!response.ok) {
-    const message =
-      data !== null && typeof data.error === "string" && data.error !== ""
-        ? data.error
-        : `The server returned ${response.status}.`;
+    // A refusal can quote a stored name, such as who delivered an email, so it is
+    // cleaned the way names are.
+    const said = data === null ? "" : whyText(data.error);
+    const message = said !== "" ? said : `The server returned ${response.status}.`;
     // A refused upload says more than its message: the file's problems, or the run it names.
     const error = new Error(message);
     error.status = response.status;
@@ -1344,10 +1344,9 @@ function renderHeader(detail) {
   const busy = detail.busy === true;
   // An incident that stopped part-way is picked up again from here.
   const canResume = !busy && obligation.state !== "settled" && obligation.state !== "rejected";
-  const startedBy =
-    typeof obligation.startedBy === "string" && obligation.startedBy.trim() !== ""
-      ? obligation.startedBy.trim()
-      : null;
+  // A name stored before the name rule can hold format characters, so every stored
+  // name goes through whyText, as Airwallex's names do.
+  const startedBy = whyText(obligation.startedBy) || null;
   // Set when the invoice is paid from another currency's wallet.
   const paidFrom =
     typeof obligation.sourceCurrency === "string" && obligation.sourceCurrency !== obligation.currency
@@ -1742,7 +1741,7 @@ function buildEmail(email, unverified) {
         h(
           "dd",
           null,
-          `by ${email.uploadedBy ?? ""}, `,
+          `by ${whyText(email.uploadedBy)}, `,
           h("a", { href: `#inbox/${email.uploadId}` }, `email ${email.uploadId}`),
         ),
       ],
@@ -1910,11 +1909,11 @@ function callbackText(bankChange) {
           ),
         ];
   return [
-    `${bankChange.calledBy} called `,
+    `${whyText(bankChange.calledBy)} called `,
     h("span", { class: "mono" }, bankChange.numberCalled),
     " (on file)",
     ...when,
-    ` and spoke to ${bankChange.spokeTo}, who confirmed: ${bankChange.confirmed}`,
+    ` and spoke to ${whyText(bankChange.spokeTo)}, who confirmed: ${bankChange.confirmed}`,
   ];
 }
 
@@ -1979,8 +1978,7 @@ function isHeldPayment(approval) {
 }
 
 function approvalLead(approval) {
-  const approver =
-    typeof approval.approver === "string" && approval.approver !== "" ? approval.approver : null;
+  const approver = whyText(approval.approver) || null;
   const held = isHeldPayment(approval);
   const payment = held ? "payment" : "replacement";
   switch (approval.state) {
@@ -2236,7 +2234,7 @@ function buildApproveForm(invoiceId, approval, terms, error) {
         null,
         signoffs.map((signoff) => {
           const at = timeNode(signoff.at);
-          return h("span", { class: "approval__signoff" }, signoff.approver, at !== null && [" at ", at]);
+          return h("span", { class: "approval__signoff" }, whyText(signoff.approver), at !== null && [" at ", at]);
         }),
       ),
     );
@@ -3358,12 +3356,12 @@ function draftWarnings(draft) {
 
 function draftWho(draft) {
   if (draft.state === "sent") {
-    return `Drafted by ${draft.createdBy}. Marked sent by ${draft.sentBy ?? ""}.`;
+    return `Drafted by ${whyText(draft.createdBy)}. Marked sent by ${whyText(draft.sentBy)}.`;
   }
   if (draft.state === "dismissed") {
-    return `Drafted by ${draft.createdBy}. Dismissed by ${draft.dismissedBy ?? ""}${draft.dismissNote ? `: ${draft.dismissNote}` : ""}.`;
+    return `Drafted by ${whyText(draft.createdBy)}. Dismissed by ${whyText(draft.dismissedBy)}${draft.dismissNote ? `: ${draft.dismissNote}` : ""}.`;
   }
-  return `Drafted by ${draft.createdBy}${draft.copiedBy ? `, copied by ${draft.copiedBy}` : ""}.`;
+  return `Drafted by ${whyText(draft.createdBy)}${draft.copiedBy ? `, copied by ${whyText(draft.copiedBy)}` : ""}.`;
 }
 
 function buildDraft(invoiceId, draft) {
@@ -3850,9 +3848,9 @@ function renderRunHeader(run) {
         h("p", { class: "eyebrow" }, "Pay run"),
         h("h1", null, `Run ${info.id}`),
         h("p", { class: "detail__supplier" }, info.fileName),
-        h("p", { class: "detail__started" }, `Uploaded by ${info.uploadedBy}`, uploadedAt !== null && [" at ", uploadedAt]),
+        h("p", { class: "detail__started" }, `Uploaded by ${whyText(info.uploadedBy)}`, uploadedAt !== null && [" at ", uploadedAt]),
         info.state === "cancelled" &&
-          h("p", { class: "detail__started" }, `Cancelled by ${info.cancelledBy}: ${info.cancelNote}`),
+          h("p", { class: "detail__started" }, `Cancelled by ${whyText(info.cancelledBy)}: ${info.cancelNote}`),
       ),
       h(
         "div",
@@ -4051,7 +4049,7 @@ function runApprovalLead(approval, terms) {
       : held === 1
         ? " One of them looks like a second bill, so PayOnce holds it for a person when it comes to send it."
         : ` ${held} of them look like second bills, so PayOnce holds them for a person when it comes to send them.`;
-  const approver = typeof approval.approver === "string" && approval.approver !== "" ? approval.approver : null;
+  const approver = whyText(approval.approver) || null;
   switch (approval.state) {
     case "requested": {
       const needed = neededOf(approval);
@@ -4135,7 +4133,7 @@ function buildRunApproveForm(runId, approval, error) {
         null,
         signoffs.map((signoff) => {
           const at = timeNode(signoff.at);
-          return h("span", { class: "approval__signoff" }, signoff.approver, at !== null && [" at ", at]);
+          return h("span", { class: "approval__signoff" }, whyText(signoff.approver), at !== null && [" at ", at]);
         }),
       ),
     );
@@ -4736,13 +4734,13 @@ function renderInboxHeader(detail) {
         h(
           "p",
           { class: "detail__started" },
-          `Delivered by ${upload.deliveredBy ?? ""} to `,
+          `Delivered by ${whyText(upload.deliveredBy)} to `,
           h("a", { href: `#${encodeURIComponent(upload.invoiceId ?? "")}` }, upload.invoiceId ?? ""),
           " ",
           timeNode(upload.deliveredAt),
         ),
       upload.state === "dismissed" &&
-        h("p", { class: "detail__started" }, `Dismissed by ${upload.dismissedBy ?? ""}: ${upload.dismissNote ?? ""}`),
+        h("p", { class: "detail__started" }, `Dismissed by ${whyText(upload.dismissedBy)}: ${upload.dismissNote ?? ""}`),
     ),
     h("div", { class: "detail__facts" }, h("span", { class: badgeClass(entry) }, entry?.label ?? humanize(upload.state))),
   );
@@ -4777,7 +4775,7 @@ function renderInboxEmail(detail) {
         upload.dateAsWritten !== "" && [h("dt", null, "Date in the email"), h("dd", null, upload.dateAsWritten)],
         upload.messageId !== null && [h("dt", null, "Message-ID"), h("dd", { class: "email__muted" }, upload.messageId)],
         h("dt", null, "Uploaded"),
-        h("dd", null, `by ${upload.uploadedBy} `, timeNode(upload.uploadedAt)),
+        h("dd", null, `by ${whyText(upload.uploadedBy)} `, timeNode(upload.uploadedAt)),
         h("dt", null, "Upload"),
         h("dd", { class: "email__muted" }, `${source}, ${bytesText(upload.rawBytes)}, SHA-256 ${shortId(upload.rawSha256)}`),
       ),
@@ -6508,7 +6506,8 @@ function buildOutage(view, enders) {
       h("h3", { class: "outage__title" }, `Outage ${view.id} on ${view.rail}`),
       badge(OUTAGE_STATES[view.state], view.state, false),
     ),
-    h("p", { class: "outage__text" }, withPeriod(view.text)),
+    // The sentence of an ended outage names who ended it.
+    h("p", { class: "outage__text" }, withPeriod(whyText(view.text))),
     h(
       "dl",
       { class: "facts approval__status" },
@@ -6535,7 +6534,7 @@ function buildOutage(view, enders) {
         h(
           "dd",
           null,
-          `By ${view.endedBy ?? ""}`,
+          `By ${whyText(view.endedBy)}`,
           ended !== null && [" at ", ended],
           `: ${view.endNote ?? ""}`,
         ),
@@ -7041,7 +7040,7 @@ function renderReconExplained(report) {
           h(
             "span",
             { class: "recon-break__meta" },
-            `Explained by ${item.explainedBy ?? "a name PayOnce does not know"} `,
+            `Explained by ${whyText(item.explainedBy) || "a name PayOnce does not know"} `,
             zonedTime(item.explainedAt),
             ": ",
             item.note ?? "",
