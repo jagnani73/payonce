@@ -116,7 +116,7 @@ import {
   type RunRow,
   type Signoff,
 } from "./ledger.js";
-import { formatMoney, toMajor, toMinor } from "./money.js";
+import { formatMoney, readMinor, toMajor, toMinor } from "./money.js";
 import { holdLine, railFailureSeen, waitingLine } from "./outages.js";
 import { sendAttempt, syncTransfer, wasRejected } from "./payments.js";
 import { debitCurrency, floorFor, type ReservePolicy } from "./reserve.js";
@@ -416,12 +416,23 @@ export const LATE_TRANSFER_REASON: string =
 
 // The attempt a transfer Airwallex lists belongs to, when the ledger has no
 // transfer on it: one still pending whose create went unanswered, or one marked
-// failed because Airwallex listed nothing under its request id at the time.
+// failed because Airwallex listed nothing under its request id at the time. The
+// transfer must also carry the invoice's number as its reference, and its amount
+// and currency, as PayOnce sends them.
 export function unrecordedAttemptOf(ledger: Ledger, transfer: Transfer): Attempt | undefined {
   const requestId: string = transfer.request_id ?? "";
   const attempt: Attempt | undefined =
     requestId === "" ? undefined : ledger.attemptOf(requestId, transfer.id);
-  return attempt?.requestId === requestId && attempt.transferId === null ? attempt : undefined;
+  if (attempt?.requestId !== requestId || attempt.transferId !== null) {
+    return undefined;
+  }
+  const obligation: Obligation | undefined = ledger.obligation(attempt.invoiceId);
+  return obligation !== undefined &&
+    transfer.reference === obligation.invoiceId &&
+    transfer.transfer_currency === obligation.currency &&
+    readMinor(transfer.transfer_amount) === obligation.amountMinor
+    ? attempt
+    : undefined;
 }
 
 // A payment the bank has not failed that PayOnce found late, while another payment

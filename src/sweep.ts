@@ -122,6 +122,12 @@ async function sweepOne(engine: Engine, agent: Dispatcher, transfer: Transfer): 
     return;
   }
   if (engine.ledger.knowsTransfer(transfer.request_id ?? "", transfer.id)) {
+    if (engine.ledger.attemptOf(transfer.request_id ?? "", transfer.id)?.transferId === null) {
+      reportOnce(
+        transfer,
+        "listed under the request id of a PayOnce payment with no transfer, but not with that invoice's number, amount and currency, so PayOnce did not record it",
+      );
+    }
     return;
   }
   const match: PayoutMatch | undefined = invoiceForPayout(engine.ledger, transfer);
