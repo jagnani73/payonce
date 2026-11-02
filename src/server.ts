@@ -620,26 +620,30 @@ function watchedInvoices(): Set<string> {
 }
 
 // The page polls this, so it reads the ledger a few times in all, never once per
-// invoice.
+// invoice. The headline says how the incident stands: the board's reason for an
+// open invoice, and otherwise the latest decision, close or standing line, never
+// an error, an email or a message draft.
 function listIncidents(): unknown {
-  // The board's group of each open invoice, so the list can say it too.
   const groups: Map<string, BoardGroupOf> = boardGroups(engine.ledger);
   const headlines: Map<string, string> = engine.ledger.headlines();
   const runs: Map<string, number> = engine.ledger.runIdsByInvoice();
   const watched: Set<string> = watchedInvoices();
   return {
-    incidents: engine.ledger.obligations().map((obligation: Obligation) => ({
-      invoiceId: obligation.invoiceId,
-      supplier: obligation.supplier,
-      currency: obligation.currency,
-      amountMinor: obligation.amountMinor,
-      state: obligation.state,
-      headline: headlines.get(obligation.invoiceId) ?? "",
-      busy: isBusy(obligation.invoiceId),
-      watching: watched.has(obligation.invoiceId),
-      runId: runs.get(obligation.invoiceId) ?? null,
-      board: groups.get(obligation.invoiceId) ?? null,
-    })),
+    incidents: engine.ledger.obligations().map((obligation: Obligation) => {
+      const group: BoardGroupOf | undefined = groups.get(obligation.invoiceId);
+      return {
+        invoiceId: obligation.invoiceId,
+        supplier: obligation.supplier,
+        currency: obligation.currency,
+        amountMinor: obligation.amountMinor,
+        state: obligation.state,
+        headline: group?.why ?? headlines.get(obligation.invoiceId) ?? "",
+        busy: isBusy(obligation.invoiceId),
+        watching: watched.has(obligation.invoiceId),
+        runId: runs.get(obligation.invoiceId) ?? null,
+        board: group === undefined ? null : { group: group.group, label: group.label },
+      };
+    }),
   };
 }
 

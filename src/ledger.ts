@@ -58,9 +58,11 @@ const BUSY_TIMEOUT_MS: number = 5_000;
 // How often runningHashCheck hashes every line again, so a line rewritten in place
 // is caught within a minute, as the alert loop's audit check catches it.
 const FULL_HEAD_CHECK_MS: number = 60_000;
-// A line the incident list may show: a line about a message draft does not stand
-// for how the incident is.
-const HEADLINE_LINE: string = "kind <> 'outbox'";
+// A line the incident list may show for a closed invoice: a decision, a close, or a
+// standing line, but never an error, an email or a message draft.
+const HEADLINE_LINE: string = `(kind IN ('decision', 'closed')
+    OR (topic IS NOT NULL AND topic NOT LIKE 'outbox:%'))
+  AND kind NOT IN ('error', 'email', 'outbox')`;
 
 // The partial unique index is the duplicate lock: an invoice can hold one attempt
 // that is not failed, so a second live payment is refused by the database itself.
@@ -2482,9 +2484,9 @@ export class Ledger {
     ).map(toChainedEvent);
   }
 
-  // Each invoice's latest line the incident list may show. Each lookup walks back
-  // from the invoice's last line on events_by_invoice, so the list does not read
-  // every timeline.
+  // Each invoice's latest decision, close or standing line, for the incident list.
+  // Each lookup walks back from the invoice's last line on events_by_invoice, so
+  // the list does not read every timeline.
   headlines(): Map<string, string> {
     const rows: { invoice_id: string; message: string | null }[] = this.db
       .prepare(
