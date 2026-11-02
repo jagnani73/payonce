@@ -3009,43 +3009,52 @@ export class Ledger {
   // Closes a held invoice without paying it, recording who did. False when it is
   // no longer held, for example because its payment was released in the meantime,
   // or a payout for it sent outside PayOnce, or a transfer under one of its
-  // request ids, is in flight or paid.
-  reject(invoiceId: string, rejectedBy: string): boolean {
-    const result: { changes: number | bigint } = this.db
-      .prepare(
-        `UPDATE obligations SET state = 'rejected', rejected_by = ?
-          WHERE invoice_id = ? AND state = 'escalated'
-            AND NOT EXISTS (${SENT_ATTEMPT}) AND NOT EXISTS (${LIVE_OUTSIDE_PAYOUT})
-            AND NOT EXISTS (${LIVE_ATTEMPT})`,
-      )
-      .run(rejectedBy, invoiceId, invoiceId, invoiceId, invoiceId);
-    if (Number(result.changes) !== 1) {
-      return false;
-    }
-    this.voidOpenApprovals(invoiceId);
-    return true;
+  // request ids, is in flight or paid. covered lists the transfers under its
+  // request ids that do not match it which the person's close covered, and they
+  // are cleared in the same transaction.
+  reject(invoiceId: string, rejectedBy: string, covered: string[] = []): boolean {
+    return this.transaction((): boolean => {
+      const result: { changes: number | bigint } = this.db
+        .prepare(
+          `UPDATE obligations SET state = 'rejected', rejected_by = ?
+            WHERE invoice_id = ? AND state = 'escalated'
+              AND NOT EXISTS (${SENT_ATTEMPT}) AND NOT EXISTS (${LIVE_OUTSIDE_PAYOUT})
+              AND NOT EXISTS (${LIVE_ATTEMPT})`,
+        )
+        .run(rejectedBy, invoiceId, invoiceId, invoiceId, invoiceId);
+      if (Number(result.changes) !== 1) {
+        return false;
+      }
+      this.voidOpenApprovals(invoiceId);
+      this.clearMismatched(invoiceId, covered);
+      return true;
+    });
   }
 
   // Closes again without paying an invoice a person had closed without paying,
   // which a payment found since reopened, once nothing for it is live at the bank,
   // PayOnce's or sent outside it. By itself, PayOnce also leaves it alone while a
   // transfer under one of its request ids that does not match it was found since
-  // a person last closed it: only a person (byPerson) clears that. False when
+  // a person last closed it: only a person (byPerson) clears that, and only the
+  // ones their close covered (covered), in the same transaction. False when
   // nothing changed.
-  rejectAgain(invoiceId: string, byPerson: boolean = false): boolean {
-    const result: { changes: number | bigint } = this.db
-      .prepare(
-        `UPDATE obligations SET state = 'rejected'
-          WHERE invoice_id = ? AND state = 'escalated' AND rejected_by IS NOT NULL
-            AND NOT EXISTS (${LIVE_ATTEMPT}) AND NOT EXISTS (${LIVE_OUTSIDE_PAYOUT})
-            AND (? = 1 OR NOT EXISTS (${UNCLEARED_MISMATCH}))`,
-      )
-      .run(invoiceId, invoiceId, invoiceId, byPerson ? 1 : 0, invoiceId);
-    if (Number(result.changes) !== 1) {
-      return false;
-    }
-    this.voidOpenApprovals(invoiceId);
-    return true;
+  rejectAgain(invoiceId: string, byPerson: boolean = false, covered: string[] = []): boolean {
+    return this.transaction((): boolean => {
+      const result: { changes: number | bigint } = this.db
+        .prepare(
+          `UPDATE obligations SET state = 'rejected'
+            WHERE invoice_id = ? AND state = 'escalated' AND rejected_by IS NOT NULL
+              AND NOT EXISTS (${LIVE_ATTEMPT}) AND NOT EXISTS (${LIVE_OUTSIDE_PAYOUT})
+              AND (? = 1 OR NOT EXISTS (${UNCLEARED_MISMATCH}))`,
+        )
+        .run(invoiceId, invoiceId, invoiceId, byPerson ? 1 : 0, invoiceId);
+      if (Number(result.changes) !== 1) {
+        return false;
+      }
+      this.voidOpenApprovals(invoiceId);
+      this.clearMismatched(invoiceId, covered);
+      return true;
+    });
   }
 
   // Ties a transfer Airwallex lists under the request id of an attempt marked
@@ -3075,16 +3084,19 @@ export class Ledger {
     return Number(result.changes) >= 1;
   }
 
-  // A person closed the invoice, so the transfers found under its request ids
-  // that did not match it no longer keep it from closing by itself.
-  clearMismatched(invoiceId: string): void {
-    this.db
-      .prepare(
-        `UPDATE attempts SET mismatched_cleared_at = ?
-          WHERE invoice_id = ? AND mismatched_transfer_id IS NOT NULL
-            AND mismatched_cleared_at IS NULL`,
-      )
-      .run(new Date().toISOString(), invoiceId);
+  // A person closed the invoice over these transfers found under its request ids
+  // that did not match it, so they no longer keep it from closing by itself. One
+  // found after the close was reviewed is left as it is. The caller holds the
+  // write transaction that closes the invoice.
+  private clearMismatched(invoiceId: string, transferIds: string[]): void {
+    const at: string = new Date().toISOString();
+    const clear: StatementSync = this.db.prepare(
+      `UPDATE attempts SET mismatched_cleared_at = ?
+        WHERE invoice_id = ? AND mismatched_transfer_id = ? AND mismatched_cleared_at IS NULL`,
+    );
+    for (const transferId of transferIds) {
+      clear.run(at, invoiceId, transferId);
+    }
   }
 
   // Sends an invoice to a person unless it is settled, so a close another process
@@ -3645,7 +3657,14 @@ export class Ledger {
   // write transaction, and the close only changes an invoice still in the state
   // the caller read (from), so a payment another process recorded, or a change it
   // made to the invoice, after the caller looked leaves it as it is. False then.
-  settle(invoiceId: string, from: ObligationState, byPerson: boolean = false): boolean {
+  // covered lists the transfers under its request ids that do not match it which
+  // a person's close covered, and they are cleared in the same transaction.
+  settle(
+    invoiceId: string,
+    from: ObligationState,
+    byPerson: boolean = false,
+    covered: string[] = [],
+  ): boolean {
     return this.transaction((): boolean => {
       if (
         !this.paidOnce(invoiceId) &&
@@ -3671,6 +3690,7 @@ export class Ledger {
       }
       // Nothing is left to approve on a settled invoice.
       this.voidOpenApprovals(invoiceId);
+      this.clearMismatched(invoiceId, covered);
       return true;
     });
   }

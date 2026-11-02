@@ -3397,7 +3397,10 @@ export function pendingClose(
 
 // Records a person closing such an invoice. It moves no money, so it is not bound
 // to terms the way an approval is. A held duplicate is closed without paying, and
-// the invoices it duplicated say so on their timelines.
+// the invoices it duplicated say so on their timelines. The close clears the
+// transfers under the invoice's request ids that do not match it which were on
+// file when it was reviewed, in the transaction that closes it, so one found after
+// that still keeps PayOnce from closing the invoice by itself.
 export function closeIncident(
   ledger: Ledger,
   invoiceId: string,
@@ -3405,18 +3408,24 @@ export function closeIncident(
   finding: string,
 ): void {
   const review: CloseReview | undefined = pendingClose(ledger, invoiceId);
+  const covered: string[] = ledger
+    .attempts(invoiceId)
+    .flatMap((attempt: Attempt): string[] =>
+      attempt.mismatchedTransferId !== null && attempt.mismatchedClearedAt === null
+        ? [attempt.mismatchedTransferId]
+        : [],
+    );
   if (review?.kind === "duplicate" || review?.kind === "unpaid") {
     const obligation: Obligation | undefined = ledger.obligation(invoiceId);
     const duplicateOf: string[] = obligation?.duplicateOf ?? [];
     // One closed without paying before keeps who closed it first.
     const closed: boolean =
       obligation?.rejectedBy !== null && obligation?.rejectedBy !== undefined
-        ? ledger.rejectAgain(invoiceId, true)
-        : ledger.reject(invoiceId, closedBy);
+        ? ledger.rejectAgain(invoiceId, true, covered)
+        : ledger.reject(invoiceId, closedBy, covered);
     if (!closed) {
       throw new Error(`${invoiceId} is not waiting on a person to close it`);
     }
-    ledger.clearMismatched(invoiceId);
     note(
       ledger,
       invoiceId,
@@ -3435,10 +3444,9 @@ export function closeIncident(
     }
     return;
   }
-  if (review === undefined || !ledger.settle(invoiceId, "escalated", true)) {
+  if (review === undefined || !ledger.settle(invoiceId, "escalated", true, covered)) {
     throw new Error(`${invoiceId} is not waiting on a person to close it`);
   }
-  ledger.clearMismatched(invoiceId);
   note(ledger, invoiceId, "closed", `Incident closed by ${closedBy}: ${finding}`);
 }
 
