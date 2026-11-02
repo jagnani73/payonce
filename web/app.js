@@ -1177,8 +1177,8 @@ function updateIncidentNode(node, incident) {
     button.querySelector(".incident__amount"),
     formatMoney(incident.amountMinor, incident.currency),
   );
-  setText(button.querySelector(".incident__supplier"), incident.supplier);
-  setText(button.querySelector(".incident__headline"), incident.headline);
+  setText(button.querySelector(".incident__supplier"), whyText(incident.supplier));
+  setText(button.querySelector(".incident__headline"), whyText(incident.headline));
   button.querySelector(".incident__busy").hidden = incident.busy !== true;
   if (incident.invoiceId === state.selectedId) {
     button.setAttribute("aria-current", "true");
@@ -1480,7 +1480,7 @@ function createEventNode(event, key, signature) {
       "div",
       { class: "event__body" },
       h("p", { class: "event__kind" }, label),
-      h("p", { class: "event__message" }, event.message),
+      h("p", { class: "event__message" }, whyText(event.message)),
     ),
   );
 }
@@ -2091,7 +2091,7 @@ function buildApproval(invoiceId, approval, outage) {
       ],
       term(
         "Pay to",
-        terms.payTo,
+        whyText(terms.payTo),
         bankChange !== null &&
           h(
             "span",
@@ -2991,7 +2991,7 @@ function buildBankForm(invoiceId, fields, refs) {
         { maxlength: "70", spellcheck: "false" },
         () => draft.details[field.name] ?? "",
         (value) => (draft.details[field.name] = value),
-        field.current === "" ? null : `On file now: ${field.current}`,
+        field.current === "" ? null : `On file now: ${whyText(field.current)}`,
       ),
     ),
     bankActions(submit, cancelButton),
@@ -3892,7 +3892,11 @@ function buildRunRow(row, columns) {
       h("span", { class: "run-row__amount" }, amount),
       chip,
     ),
-    h("p", { class: "run-row__payee" }, supplierLink(pays ? row.beneficiaryId : null, row.payTo ?? row.supplier ?? cellOf(columns, row, "supplier"))),
+    h(
+      "p",
+      { class: "run-row__payee" },
+      supplierLink(pays ? row.beneficiaryId : null, whyText(row.payTo ?? row.supplier ?? cellOf(columns, row, "supplier"))),
+    ),
     arrival !== null &&
       h(
         "p",
@@ -3906,7 +3910,7 @@ function buildRunRow(row, columns) {
         sentence(today.text),
       ),
     tags.length > 0 && h("p", { class: "run-row__tags" }, tags),
-    notes.length > 0 && h("ul", { class: "run-row__reasons" }, notes.map((note) => h("li", null, withPeriod(note)))),
+    notes.length > 0 && h("ul", { class: "run-row__reasons" }, notes.map((note) => h("li", null, withPeriod(whyText(note))))),
   );
 }
 
@@ -4751,7 +4755,7 @@ function candidateRow(candidate, checked) {
         " ",
         badge(OBLIGATION_STATES[candidate.state], candidate.state),
       ),
-      h("span", { class: "candidate__line" }, `${candidate.supplier}, ${formatMoney(candidate.amountMinor, candidate.currency)}`),
+      h("span", { class: "candidate__line" }, `${whyText(candidate.supplier)}, ${formatMoney(candidate.amountMinor, candidate.currency)}`),
       h("span", { class: "candidate__line" }, candidate.amongDigits ? `${how}, next to other digits, as in a phone number` : how),
       h("span", { class: candidate.senderOnFile ? "candidate__line" : "candidate__line is-caution" }, sender),
     ),
