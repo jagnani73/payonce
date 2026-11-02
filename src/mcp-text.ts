@@ -145,10 +145,21 @@ export function lastFour(phone: string): string {
 
 // The phone numbers on file, as a pattern each that matches the same digits with
 // any spacing, so a timeline line that names one is masked however it is written.
+// A number is also matched by its last ten digits, without its country code, as
+// a callback to the number on file may be dialled (bank-change.ts). Those come
+// after every number in full, and not right after another digit, so a number
+// written in full, or with a national prefix, is masked whole.
 export function phonePatterns(phones: (string | null)[]): RegExp[] {
-  return [...new Set<string>(phones.map((phone: string | null): string => (phone ?? "").replace(/[^0-9]/g, "")))]
-    .filter((digits: string): boolean => digits.length >= MIN_PLUS_DIGITS)
-    .map((digits: string): RegExp => new RegExp(`\\+?${digits.split("").join("[\\s().-]*")}`, "g"));
+  const onFile: string[] = [
+    ...new Set<string>(phones.map((phone: string | null): string => (phone ?? "").replace(/[^0-9]/g, ""))),
+  ].filter((digits: string): boolean => digits.length >= MIN_PLUS_DIGITS);
+  const spaced = (digits: string): string => digits.split("").join("[\\s().-]*");
+  return [
+    ...onFile.map((digits: string): RegExp => new RegExp(`\\+?${spaced(digits)}`, "g")),
+    ...onFile
+      .filter((digits: string): boolean => digits.length > MIN_DIGITS)
+      .map((digits: string): RegExp => new RegExp(`(?<!\\d)\\(?${spaced(digits.slice(-MIN_DIGITS))}`, "g")),
+  ];
 }
 
 function maskKnown(text: string, known: RegExp[]): string {
