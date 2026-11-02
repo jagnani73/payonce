@@ -4562,10 +4562,10 @@ function renderEmailForm() {
     els.emailError.replaceChildren();
     return;
   }
+  // replaceChildren writes false as text, so a link not shown is left out.
   els.emailError.replaceChildren(
     withPeriod(error.message),
-    error.id !== null && " ",
-    error.id !== null && h("a", { href: `#inbox/${error.id}` }, `Open email ${error.id}`),
+    ...(error.id !== null ? [" ", h("a", { href: `#inbox/${error.id}` }, `Open email ${error.id}`)] : []),
   );
   els.emailError.hidden = false;
 }
