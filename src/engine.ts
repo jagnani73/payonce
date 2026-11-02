@@ -2440,6 +2440,11 @@ function noteHold(engine: Engine, invoiceId: string, held: Extract<FirstPayment,
   }
 }
 
+// Why a pay run row waits for a person when the record no longer holds the
+// account the run was approved for. A fixed string, as the supplier view tests it.
+export const RUN_ACCOUNT_CHANGED_REASON: string =
+  "its bank details changed after the pay run was approved";
+
 // Why a pay run row is not sent to the record as it is now, or null when the
 // record still holds the account the run was approved for.
 async function accountProblem(
@@ -2455,9 +2460,7 @@ async function accountProblem(
   if (details === undefined) {
     return "the beneficiary is no longer in Airwallex";
   }
-  return accountKeyOf(details) === accountKey
-    ? null
-    : "its bank details changed after the pay run was approved";
+  return accountKeyOf(details) === accountKey ? null : RUN_ACCOUNT_CHANGED_REASON;
 }
 
 // Why a first payment to the record as it is now waits for a person because of

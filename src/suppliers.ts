@@ -5,7 +5,7 @@ import { CHANGED_BANK_DETAILS_REASON, LAST_PAID_CHANGED_REASON } from "./decide.
 import { templateLabel } from "./drafts.js";
 import { numberOf, numbersOf, sameInvoiceNumber, supplierNameKey } from "./duplicates.js";
 import { summarise, unverifiedSenders, type SupplierEmail } from "./emails.js";
-import { ACCOUNT_CHANGED_REASON, LATE_TRANSFER_REASON } from "./engine.js";
+import { ACCOUNT_CHANGED_REASON, LATE_TRANSFER_REASON, RUN_ACCOUNT_CHANGED_REASON } from "./engine.js";
 import {
   boardEntriesFor,
   GROUP_LABELS,
@@ -81,6 +81,7 @@ const ACCOUNT_REASONS: readonly string[] = [
   CHANGED_BANK_DETAILS_REASON,
   LAST_PAID_CHANGED_REASON,
   ACCOUNT_CHANGED_REASON,
+  RUN_ACCOUNT_CHANGED_REASON,
 ];
 
 export type CautionCode =
@@ -1163,8 +1164,11 @@ function cautionsOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts, owne
   // As the engine reads it: the record holds details other than the account
   // PayOnce last paid and checked, and the latest applied callback did not verify
   // them (verifiedBankChange). The ledger never reads the record, so "holds" is
-  // the account PayOnce last stored for it. Whatever the callbacks, any open
-  // invoice the engine sent to a person because the details changed.
+  // the account PayOnce last stored for it. Those rules hold first payments and
+  // pay run rows only: a replacement whose original went to the same details is
+  // not held by them, so the sentence promises nothing about replacements.
+  // Whatever the callbacks, any open invoice the engine sent to a person because
+  // the details changed.
   const held: SupplierObligation[] = openOnes.filter(heldForAccount);
   const storedChanged: boolean =
     stored !== null && lastPaid !== undefined && stored.key !== lastPaid.accountKey && appliedKey !== stored.key;
@@ -1173,7 +1177,7 @@ function cautionsOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts, owne
       code: "account-changed",
       text: [
         storedChanged
-          ? "PayOnce last found this record holding bank details other than the account it last paid and checked, and no callback has verified them. It pays nothing to them until someone calls the number on file and records the call."
+          ? "PayOnce last found this record holding bank details other than the account it last paid and checked, and no callback has verified them. Before someone calls the number on file and records the call, PayOnce sends no first payment to them and skips any pay run row to them."
           : null,
         held.length > 0
           ? "These invoices wait for a person because the record's bank details changed after a payment to it was made, decided or approved. PayOnce never pays changed details by itself."

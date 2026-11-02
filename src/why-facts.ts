@@ -51,6 +51,7 @@ import {
   pendingApproval,
   pendingClose,
   REPLACEMENT_DEADLINE_REASON,
+  RUN_ACCOUNT_CHANGED_REASON,
   type CloseReview,
   type PendingApproval,
 } from "./engine.js";
@@ -526,9 +527,9 @@ const REASON_PARTS: readonly ReasonPart[] = [
     LAST_PAID_CHANGED_REASON,
     UNCONFIRMED_ACCOUNT_REASON,
     ACCOUNT_CHANGED_REASON,
-    // accountProblem's reasons in engine.ts, which it does not export.
+    RUN_ACCOUNT_CHANGED_REASON,
+    // accountProblem's other reason in engine.ts, which it does not export.
     "the beneficiary is no longer in Airwallex",
-    "its bank details changed after the pay run was approved",
   ]
     .sort((a: string, b: string): number => b.length - a.length)
     .map(fixedPart),
