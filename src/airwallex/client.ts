@@ -1,6 +1,10 @@
+import { cleanLine } from "../eml.js";
+
 const DEFAULT_BASE_URL: string = "https://api.sandbox.airwallex.com";
 const TOKEN_REFRESH_MARGIN_MS: number = 60_000;
 const REQUEST_TIMEOUT_MS: number = 30_000;
+const MAX_ERROR_TEXT: number = 300;
+const ERROR_CODE: RegExp = /^[A-Za-z0-9_.-]{1,64}$/;
 
 export type HttpMethod = "GET" | "POST";
 
@@ -15,19 +19,24 @@ interface ErrorBody {
   source?: string;
 }
 
-// Airwallex answered with an error status.
+// Airwallex answered with an error status. The message reaches the timeline, the
+// page and the terminal, so Airwallex's words are cut to one cleaned line, and a
+// code is kept only when it looks like one. A gateway's HTML page then becomes a
+// short line instead of a long one in the hash chain.
 export class AirwallexError extends Error {
   readonly status: number;
   readonly code: string | undefined;
   readonly source: string | undefined;
 
   constructor(request: string, status: number, body: ErrorBody, fallback: string) {
-    const code: string = body.code === undefined ? "" : ` ${body.code}`;
-    super(`${request} failed with ${status}${code}: ${body.message ?? fallback}`);
+    const code: string | undefined =
+      typeof body.code === "string" && ERROR_CODE.test(body.code) ? body.code : undefined;
+    const said: string = cleanLine(typeof body.message === "string" ? body.message : fallback, MAX_ERROR_TEXT);
+    super(`${request} failed with ${status}${code === undefined ? "" : ` ${code}`}: ${said}`);
     this.name = "AirwallexError";
     this.status = status;
-    this.code = body.code;
-    this.source = body.source;
+    this.code = code;
+    this.source = typeof body.source === "string" ? cleanLine(body.source, MAX_ERROR_TEXT) : undefined;
   }
 }
 
