@@ -14,6 +14,7 @@ import {
   type PaidBy,
   type PaymentCheck,
   type PaymentView,
+  type RecordStored,
   type Resolved,
   type RunRowView,
   type SupplierDetail,
@@ -176,14 +177,14 @@ function accountLine(account: AccountView): string[] {
   }
   const paid: string[] = [];
   if (account.payonce.total > 0) {
-    paid.push(`${account.payonce.paid} paid, ${account.payonce.failed} failed, ${account.payonce.live} with the bank`);
+    paid.push(`PayOnce: ${account.payonce.paid} paid, ${account.payonce.failed} failed, ${account.payonce.live} with the bank`);
   }
   if (account.outside.total > 0) {
-    paid.push(`outside PayOnce ${account.outside.paid} paid, ${account.outside.failed} failed, ${account.outside.live} with the bank`);
+    paid.push(`outside PayOnce: ${account.outside.paid} paid, ${account.outside.failed} failed, ${account.outside.live} with the bank`);
   }
   const lines: string[] = [
-    `  ${account.label}  ${account.ending === null ? "ending not on file" : `ending ${printable(account.ending)}`}  ${[...facts, ...paid].join(", ") || "no payment to it"}`,
-    `${INDENT}Seen as ${account.seenAs.map((source: string): string => SOURCE_WORDS[source] ?? source).join(", ")}, ${day(account.firstSeen)} to ${day(account.lastSeen)}`,
+    `  ${account.label}  ${account.ending === null ? "ending not on file" : `ending ${printable(account.ending)}`}  ${[facts.join(", "), ...paid].filter((part: string): boolean => part !== "").join("; ") || "no payment to it"}`,
+    `${INDENT}Seen as ${account.seenAs.map((source: string): string => SOURCE_WORDS[source] ?? source).join(", ")}; first ${day(account.firstSeen)}, last ${day(account.lastSeen)}`,
   ];
   if (account.verifiedBy !== null) {
     lines.push(
@@ -218,7 +219,7 @@ function paymentLine(payment: PaymentView): string {
       ? []
       : [`transfer ${printable(payment.mismatchedReference)} under its request id does not match the invoice${payment.mismatchedStatus === null ? "" : ` (${printable(payment.mismatchedStatus)})`}`]),
   ];
-  return `${INDENT}${payment.kind} ${payment.reference === null ? "(no reference)" : printable(payment.reference)}  ${printable(payment.state)}${payment.bankStatus === null ? "" : ` ${printable(payment.bankStatus)}`}${failure}, ${amount(payment.amountMinor, payment.currency)}, ${payment.account === null ? "account not on file" : `to ${payment.account}`} (${CHECK_WORDS[payment.check]}), ${payment.kind === "outside" ? "found" : "sent"} ${utc(payment.sentAt)}${extra.length === 0 ? "" : `, ${extra.join(", ")}`}`;
+  return `${INDENT}${payment.kind} ${payment.reference === null ? "(no reference)" : printable(payment.reference)}  ${printable(payment.state)}${payment.bankStatus === null ? "" : `, bank status ${printable(payment.bankStatus)}`}${failure}, ${amount(payment.amountMinor, payment.currency)}, ${payment.account === null ? "account not on file" : `to ${payment.account}`} (${CHECK_WORDS[payment.check]}), ${payment.kind === "outside" ? "found" : "sent"} ${utc(payment.sentAt)}${extra.length === 0 ? "" : `, ${extra.join(", ")}`}`;
 }
 
 function invoiceLines(invoice: InvoiceView): string[] {
@@ -274,9 +275,9 @@ function runLine(row: RunRowView): string {
     ...(row.newPayee ? ["new payee"] : []),
     ...(row.callbackVerified ? ["account verified by a callback"] : []),
     ...(row.account === null ? [] : [`account ${row.account}`]),
-    ...(row.action === "skip" ? [count(row.skipReasons, "reason", "reasons")] : []),
   ];
-  return `  Pay run ${row.runId} (${row.runState}), row ${row.line}: ${row.invoiceId === null ? "no invoice number" : printable(row.invoiceId)}, ${row.action}, ${row.state}, ${amount(row.amountMinor, row.currency)}${facts.length === 0 ? "" : `, ${facts.join(", ")}`}`;
+  const action: string = row.action === "pay" ? "pays" : `skipped for ${count(row.skipReasons, "reason", "reasons")}`;
+  return `  Pay run ${row.runId} (${row.runState}), row ${row.line}: ${row.invoiceId === null ? "no invoice number" : printable(row.invoiceId)}, ${action}, row ${row.state}, ${amount(row.amountMinor, row.currency)}${facts.length === 0 ? "" : `, ${facts.join(", ")}`}`;
 }
 
 function section(title: string, lines: string[]): void {
@@ -316,14 +317,15 @@ function printDetail(detail: SupplierDetail): void {
     say(`Related: record ${related.key}, ${printable(related.name) || "(no name)"} (${why.join("; ")})`);
   }
   if (detail.recordStored !== null) {
+    const stored: RecordStored = detail.recordStored;
     const where: string =
-      detail.recordStored.invoiceId !== null
-        ? ` (${printable(detail.recordStored.invoiceId)})`
-        : detail.recordStored.runId !== null
-          ? ` (pay run ${detail.recordStored.runId})`
+      stored.invoiceId !== null
+        ? ` (${printable(stored.invoiceId)})`
+        : stored.runId !== null
+          ? ` (${stored.runLine === null ? "" : `row ${stored.runLine} of `}pay run ${stored.runId})`
           : "";
     say(
-      `PayOnce last stored what this record held on ${utc(detail.recordStored.at)}${where}, account ${detail.recordStored.account}. It reads the record again before every payment.`,
+      `PayOnce last stored what this record held on ${utc(stored.at)}${where}, account ${stored.account}. It reads the record again before every payment.`,
     );
   } else {
     say("PayOnce has not stored what this record holds. It reads the record again before every payment.");
