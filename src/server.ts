@@ -1648,6 +1648,8 @@ async function route(
       explainer: {
         on: explainer !== null,
         models: explainer?.name ?? "",
+        host: explainer?.host ?? "",
+        googleFreeTier: explainer?.googleFreeTier ?? false,
         perMinute: ASKS_PER_MINUTE,
         perDay: ASKS_PER_DAY,
       },

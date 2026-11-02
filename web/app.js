@@ -592,6 +592,8 @@ async function loadOptions() {
       explainer: {
         on: options.explainer?.on === true,
         models: typeof options.explainer?.models === "string" ? options.explainer.models : "",
+        host: typeof options.explainer?.host === "string" ? options.explainer.host : "",
+        googleFreeTier: options.explainer?.googleFreeTier === true,
       },
     };
     state.optionsError = null;
@@ -2227,9 +2229,6 @@ async function submitApproval(invoiceId) {
   }
 }
 
-// The card for an incident a person has to close: the bank reports the original
-// as paid, so there is no payment to approve. For an invoice held as a likely
-// second bill, closing it pays nothing.
 // ---------- ask why ----------
 
 // A model's explanation of the incident, asked for by a person. It is shown as
@@ -2259,7 +2258,13 @@ function buildWhy(invoiceId, explainer, entry, limited, stale) {
   button.disabled = !on || entry.asking || limited;
   button.addEventListener("click", () => askWhy(invoiceId));
   const at = answer === null ? null : parseDate(answer.at);
-  const when = at === null ? "" : ` at ${minuteFormat.format(at)}`;
+  const clock = at === null ? null : minuteFormat.format(at);
+  const when = clock === null ? "" : ` at ${clock}`;
+  // Google may use what its free tier is sent; any other service is named by host.
+  const sentTo =
+    explainer?.googleFreeTier === true
+      ? `${explainer.models} on Google's free tier`
+      : `${explainer?.models ?? "the model"} at ${explainer?.host || "the address in READER_BASE_URL"}`;
   const children = [
     h("div", { class: "approval__head" }, h("h2", { id: "why-title" }, "Why this happened"), button),
     state.options !== null &&
@@ -2271,7 +2276,7 @@ function buildWhy(invoiceId, explainer, entry, limited, stale) {
       h(
         "p",
         { class: "hint" },
-        `Sends this invoice's PayOnce records to ${explainer.models} on Google's free tier. It leaves out emails, names and account details.`,
+        `Sends this invoice's PayOnce records to ${sentTo}. It leaves out emails, names and account details.`,
       ),
     entry.asking &&
       h(
@@ -2293,8 +2298,10 @@ function buildWhy(invoiceId, explainer, entry, limited, stale) {
             answer.legend.map((item) => h("li", null, `${item.alias} is ${item.value}`)),
           ),
         ],
+      // A cached answer that has gone stale shows only the stale notice.
       answer.cached &&
-        h("p", { class: "hint" }, `Nothing has changed since${when === "" ? " then" : when}, so this is the same answer.`),
+        !stale &&
+        h("p", { class: "hint" }, `Nothing has changed since ${clock ?? "then"}, so this is the same answer.`),
       stale && caution("The incident has changed since this answer. Ask again for a current one."),
       h(
         "p",
@@ -2336,22 +2343,32 @@ async function askWhy(invoiceId) {
     state.why.set(invoiceId, { asking: false, answer, error: null });
   } catch (error) {
     const wait = error.status === 429 ? Number(error.data?.retryAfterSeconds) : NaN;
-    if (Number.isFinite(wait) && wait > 0) {
+    const limitedNow = Number.isFinite(wait) && wait > 0;
+    if (limitedNow) {
       state.whyRetryAt = Date.now() + wait * 1000;
       clearTimeout(whyTimer);
-      // The button comes back by itself once the limit allows the next ask.
+      // The button comes back by itself once the limit allows the next ask, and
+      // the error that said when goes with it.
       whyTimer = setTimeout(() => {
+        for (const [id, entry] of state.why) {
+          if (entry.limited === true) {
+            state.why.set(id, { ...entry, error: null, limited: false });
+          }
+        }
         const detail = currentDetail();
         if (detail !== null) {
           renderWhy(detail);
         }
       }, wait * 1000 + 50);
     }
-    state.why.set(invoiceId, { ...whyEntry(invoiceId), asking: false, error: error.message });
+    state.why.set(invoiceId, { ...whyEntry(invoiceId), asking: false, error: error.message, limited: limitedNow });
   }
   redrawWhy(invoiceId);
 }
 
+// The card for an incident a person has to close: the bank reports the original
+// as paid, so there is no payment to approve. For an invoice held as a likely
+// second bill, closing it pays nothing.
 function buildReview(invoiceId, review, emailSummary) {
   const hasReference = typeof review.reference === "string" && review.reference !== "";
   const duplicate = review.kind === "duplicate";

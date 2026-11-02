@@ -115,10 +115,23 @@ function toAnswer(content: string): { explanation: string; notInFacts: string } 
   return { explanation, notInFacts };
 }
 
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "the address in READER_BASE_URL";
+  }
+}
+
 export class Explainer {
   readonly models: string[];
   // Shown on the page and the CLI, such as "gemini-3.5-flash, then gemini-3.1-flash-lite".
   readonly name: string;
+  // The host the facts go to, and whether it is Google's endpoint, whose free
+  // tier Google may use to improve its products. The page's hint names one or the
+  // other.
+  readonly host: string;
+  readonly googleFreeTier: boolean;
   private readonly url: string;
   private readonly apiKey: string;
   private readonly send: typeof fetch;
@@ -132,6 +145,8 @@ export class Explainer {
     this.models = models.length > 0 ? models : DEFAULT_MODELS;
     this.name = this.models.join(", then ");
     this.url = `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
+    this.host = hostOf(baseUrl);
+    this.googleFreeTier = this.host === hostOf(DEFAULT_BASE_URL);
     this.apiKey = apiKey;
     this.send = send;
   }
