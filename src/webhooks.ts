@@ -14,6 +14,7 @@ const MAX_BODY_BYTES: number = 256 * 1024;
 // A signed event older or newer than this is refused, so a captured one cannot be
 // played back later.
 const MAX_CLOCK_SKEW_MS: number = 5 * 60_000;
+const REFUSAL_LOG_EVERY_MS: number = 60_000;
 
 // The fields PayOnce reads. data is the transfer, as Get transfer returns it.
 export interface WebhookEvent {
@@ -73,9 +74,49 @@ function toEvent(body: Buffer): WebhookEvent | undefined {
   return { id, name, data: (isObject(object) ? object : data) as WebhookEvent["data"] };
 }
 
+// Anyone who learns the tunnel's address can send requests, so refusals are
+// printed at most once a minute, with a count, and a stream of them cannot scroll
+// the timeline lines off the terminal. Refusals held back are printed when the
+// minute is up.
+class RefusalLog {
+  private held: number = 0;
+  private latest: string = "";
+  private printedAt: number = Number.NEGATIVE_INFINITY;
+  private timer: NodeJS.Timeout | undefined;
+
+  add(status: number, text: string): void {
+    this.held += 1;
+    this.latest = `${status} ${text}`;
+    const wait: number = this.printedAt + REFUSAL_LOG_EVERY_MS - Date.now();
+    if (wait <= 0) {
+      this.print();
+      return;
+    }
+    this.timer ??= setTimeout((): void => {
+      this.timer = undefined;
+      this.print();
+    }, wait).unref();
+  }
+
+  private print(): void {
+    if (this.held === 0) {
+      return;
+    }
+    sayWarning(
+      this.held === 1
+        ? `  webhook  answered ${this.latest}`
+        : `  webhook  answered ${this.held} requests with an error in the last minute, the latest ${this.latest}`,
+    );
+    this.held = 0;
+    this.printedAt = Date.now();
+  }
+}
+
+const refusals: RefusalLog = new RefusalLog();
+
 function answer(response: ServerResponse, status: number, text: string): void {
   if (status !== 200) {
-    sayWarning(`  webhook  answered ${status} ${text}`);
+    refusals.add(status, text);
   }
   response.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
   response.end(text);
