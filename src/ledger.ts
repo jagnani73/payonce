@@ -1063,6 +1063,22 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
   },
 };
 
+// What the account_key backfill reads of an attempt.
+interface UnkeyedAttempt {
+  request_id: string;
+  invoice_id: string;
+  kind: string;
+  opened_at: string | null;
+  reference: string | null;
+}
+
+// A used approval the backfill may take an attempt's account from, with when its
+// last signoff came.
+interface UsedApproval {
+  account_key: string | null;
+  approved_at: string | null;
+}
+
 interface AttemptRow {
   request_id: string;
   invoice_id: string;
@@ -1822,6 +1838,7 @@ export class Ledger {
   private addColumns(): void {
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      let accountKeyAdded: boolean = false;
       for (const [table, columns] of Object.entries(ADDED_COLUMNS)) {
         const existing: string[] = (
           this.db.prepare(`PRAGMA table_info(${table})`).all() as unknown as ColumnRow[]
@@ -1836,24 +1853,8 @@ export class Ledger {
                 "UPDATE obligations SET invoice_floor_minor = reserve_floor_minor WHERE reserve_floor_minor <> 0",
               );
             }
-            // An attempt from before the column keeps the account it was checked
-            // against when sent: the one its approval named, or a pay run row's.
-            // Any other went out unchecked, so it never counts as the account
-            // PayOnce last paid.
             if (table === "attempts" && name === "account_key") {
-              this.db.exec(
-                `UPDATE attempts SET account_key =
-                   (SELECT json_extract(approvals.terms, '$.accountKey') FROM approvals
-                     WHERE approvals.id = attempts.approval_id)
-                 WHERE approval_id IS NOT NULL`,
-              );
-              this.db.exec(
-                `UPDATE attempts SET account_key =
-                   (SELECT run_rows.account_key FROM obligations
-                      JOIN run_rows ON run_rows.id = obligations.run_row_id
-                     WHERE obligations.invoice_id = attempts.invoice_id)
-                 WHERE account_key IS NULL AND kind = 'original'`,
-              );
+              accountKeyAdded = true;
             }
             // A pending attempt with no transfer from before tries were kept may
             // have been tried at any time, so it counts as tried now.
@@ -1867,11 +1868,105 @@ export class Ledger {
           }
         }
       }
+      // Once every column is there, in the same write lock as the column add.
+      if (accountKeyAdded) {
+        this.backfillAccountKeys();
+      }
       this.db.exec("COMMIT");
     } catch (error: unknown) {
       this.db.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  // An attempt from before account_key keeps the account something checked when
+  // it was sent: the accountKey in the terms of the approval it was opened on
+  // (approval_id), else of the used approval of its invoice for the same kind of
+  // payment that a person approved before the attempt was opened and after the
+  // invoice's attempt before it, else, for a released pay run row's original, the
+  // account the run approved. Never the invoice's latest approval as such. Any
+  // other went out unchecked, so it never counts as the account PayOnce last
+  // paid, and its supplier counts as paid before with the account not confirmed
+  // (lastPaidUnchecked). Only inside addColumns' transaction.
+  private backfillAccountKeys(): void {
+    this.db.exec(
+      `UPDATE attempts SET account_key =
+         (SELECT json_extract(approvals.terms, '$.accountKey') FROM approvals
+           WHERE approvals.id = attempts.approval_id)
+       WHERE approval_id IS NOT NULL`,
+    );
+    const all: UnkeyedAttempt[] = this.db
+      .prepare("SELECT request_id, invoice_id, kind, opened_at, reference FROM attempts ORDER BY rowid")
+      .all() as unknown as UnkeyedAttempt[];
+    const unkeyed: UnkeyedAttempt[] = this.db
+      .prepare(
+        `SELECT request_id, invoice_id, kind, opened_at, reference FROM attempts
+          WHERE account_key IS NULL AND approval_id IS NULL ORDER BY rowid`,
+      )
+      .all() as unknown as UnkeyedAttempt[];
+    const usedApprovals = this.db.prepare(
+      `SELECT json_extract(approvals.terms, '$.accountKey') AS account_key,
+              (SELECT max(signoffs.at) FROM signoffs WHERE signoffs.approval_id = approvals.id) AS approved_at
+         FROM approvals
+        WHERE approvals.invoice_id = ? AND approvals.state = 'used'
+          AND json_extract(approvals.terms, '$.action') = ?`,
+    );
+    const setKey = this.db.prepare("UPDATE attempts SET account_key = ? WHERE request_id = ?");
+    for (const attempt of unkeyed) {
+      const at: number = this.openedAround(attempt);
+      if (Number.isNaN(at)) {
+        continue;
+      }
+      const index: number = all.findIndex((other: UnkeyedAttempt): boolean => other.request_id === attempt.request_id);
+      const before: UnkeyedAttempt | undefined = all
+        .slice(0, index)
+        .filter((other: UnkeyedAttempt): boolean => other.invoice_id === attempt.invoice_id)
+        .at(-1);
+      const after: number = before === undefined ? Number.NaN : this.openedAround(before);
+      const used: UsedApproval | undefined = (
+        usedApprovals.all(
+          attempt.invoice_id,
+          attempt.kind === "replacement" ? "replace" : "pay",
+        ) as unknown as UsedApproval[]
+      )
+        .map((approval: UsedApproval): UsedApproval & { at: number } => ({
+          ...approval,
+          at: Date.parse(approval.approved_at ?? ""),
+        }))
+        .filter(
+          (approval: UsedApproval & { at: number }): boolean =>
+            approval.at <= at && (Number.isNaN(after) || approval.at > after),
+        )
+        .sort((a: { at: number }, b: { at: number }): number => a.at - b.at)
+        .at(-1);
+      if (typeof used?.account_key === "string") {
+        setKey.run(used.account_key, attempt.request_id);
+      }
+    }
+    this.db.exec(
+      `UPDATE attempts SET account_key =
+         (SELECT run_rows.account_key FROM obligations
+            JOIN run_rows ON run_rows.id = obligations.run_row_id
+           WHERE obligations.invoice_id = attempts.invoice_id)
+       WHERE account_key IS NULL AND approval_id IS NULL AND kind = 'original'`,
+    );
+  }
+
+  // When an attempt from before account_key was opened: opened_at, or else when
+  // the timeline first says it was sent, which comes just after. NaN when neither
+  // is on file.
+  private openedAround(attempt: UnkeyedAttempt): number {
+    if (attempt.opened_at !== null) {
+      return Date.parse(attempt.opened_at);
+    }
+    if (attempt.reference === null) {
+      return Number.NaN;
+    }
+    const sent: string = `${attempt.kind === "replacement" ? "Replacement" : "Original"} ${attempt.reference} sent:`;
+    const row: { at: string | null } | undefined = this.db
+      .prepare("SELECT min(at) AS at FROM events WHERE invoice_id = ? AND substr(message, 1, ?) = ?")
+      .get(attempt.invoice_id, sent.length, sent) as unknown as { at: string | null } | undefined;
+    return Date.parse(row?.at ?? "");
   }
 
   // True once the timeline is a hash chain: any record of the chain in meta, or
