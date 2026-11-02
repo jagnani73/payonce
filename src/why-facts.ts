@@ -1623,7 +1623,8 @@ export function whyFacts(
     const builder: FactsBuilder = new FactsBuilder(ledger, obligation, known);
     const aliases: Aliases = builder.aliases;
     const events: LedgerEvent[] = ledger.events(invoiceId);
-    const row: RunRow | undefined = obligation.runRowId === null ? undefined : ledger.runRowOf(invoiceId);
+    // == null: a ledger no newer code has opened has no run_row_id column at all.
+    const row: RunRow | undefined = obligation.runRowId == null ? undefined : ledger.runRowOf(invoiceId);
 
     // The invoices it looks like a second bill for come first, so they are
     // numbered first.

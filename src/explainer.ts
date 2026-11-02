@@ -345,7 +345,7 @@ export class ExplainLimiter {
     const dayStart: number = Math.floor(now / DAY_MS) * DAY_MS;
     if (this.starts.filter((at: number): boolean => at >= dayStart).length >= ASKS_PER_DAY) {
       return this.limited(
-        `PayOnce asks the model at most ${ASKS_PER_DAY} times a day (UTC) from this page. Try again after midnight UTC, or use pnpm why`,
+        `PayOnce asks the model at most ${ASKS_PER_DAY} times a day (UTC) from this page. Try again after midnight UTC, or use pnpm ask`,
         dayStart + DAY_MS - now,
         false,
       );

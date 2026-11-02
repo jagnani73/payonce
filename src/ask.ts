@@ -13,10 +13,21 @@ import { whyFacts, type LegendEntry, type WhyBuild } from "./why-facts.js";
 // for the key and the settings the facts quote, because Node's
 // --env-file-if-exists says the file is missing once for tsx and again for the
 // script.
-const USAGE: string = `Usage: pnpm why <INVOICE> [facts]
+const USAGE: string = `Usage: pnpm ask <INVOICE> [facts]
 Without facts, asks the model reader's models why PayOnce did what it did on the invoice.
 With facts, prints the facts and the legend exactly as they would be sent, and asks nothing.`;
 const WIDTH: number = 80;
+// As pnpm board prints names: control characters, which could move the cursor
+// or colour the terminal, and line breaks become spaces, and format characters
+// (bidi controls, zero-width characters and the rest of Unicode's Cf), which
+// could reverse or hide part of a line, and the rest of the tag block are
+// dropped. Applied after the legend swaps names and invoice numbers back in.
+const CONTROL: RegExp = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
+const HIDDEN: RegExp = /[\p{Cf}\u{e0000}-\u{e007f}]/gu;
+
+function printable(text: string): string {
+  return text.replace(HIDDEN, "").replace(CONTROL, " ").trim();
+}
 
 function loadEnv(): void {
   try {
@@ -53,7 +64,7 @@ function wrapped(text: string): string {
 function legendText(legend: LegendEntry[]): string {
   return legend.length === 0
     ? "Legend: none"
-    : `Legend (kept on this machine, never sent):\n${legend.map((entry: LegendEntry): string => `  ${entry.alias} = ${entry.value}`).join("\n")}`;
+    : `Legend (kept on this machine, never sent):\n${legend.map((entry: LegendEntry): string => `  ${entry.alias} = ${printable(entry.value)}`).join("\n")}`;
 }
 
 async function main(): Promise<void> {
@@ -66,16 +77,25 @@ async function main(): Promise<void> {
     fail(`There is no ${LEDGER_PATH} here. Start an incident first.`);
   }
   const ledger: Ledger = new Ledger(LEDGER_PATH, true);
+  // Opened read-only, so an older file is never upgraded here, and its facts
+  // cannot be read: a column the facts read may be missing.
+  const gaps: string[] = ledger.schemaGaps();
+  if (gaps.length > 0) {
+    fail(
+      `This ledger was written by an older PayOnce and lacks ${gaps.length} ${gaps.length === 1 ? "table or column" : "tables or columns"} (${gaps.slice(0, 3).join(", ")}). pnpm ask never upgrades a ledger. Restart pnpm ui, or run pnpm board once, which upgrades it, then ask again.`,
+    );
+  }
+  const shownId: string = printable(invoiceId);
   const build: WhyBuild | undefined = whyFacts(ledger, invoiceId, {
     approvals: policyFromEnv(),
     reserve: reserveFromEnv(),
     readers: readerNamesFromEnv(),
   });
   if (build === undefined) {
-    fail(`${invoiceId} is not in the ledger`);
+    fail(`${shownId} is not in the ledger`);
   }
   if (build.unrecognised > 0) {
-    console.warn(`  why      ${build.unrecognised} unrecognised reason${build.unrecognised === 1 ? "" : "s"} on ${invoiceId}`);
+    console.warn(`  why      ${build.unrecognised} unrecognised reason${build.unrecognised === 1 ? "" : "s"} on ${shownId}`);
   }
 
   if (mode === "facts") {
@@ -92,7 +112,7 @@ async function main(): Promise<void> {
   const explainer: Explainer | null = explainerFromEnv();
   if (explainer === null) {
     fail(
-      `The model reader is off, so PayOnce cannot ask a model. Set READER_API_KEY in .env, or run pnpm why ${invoiceId} facts to see what would be sent`,
+      `The model reader is off, so PayOnce cannot ask a model. Set READER_API_KEY in .env, or run pnpm ask ${shownId} facts to see what would be sent`,
     );
   }
   let answer: ModelAnswer;
@@ -110,11 +130,11 @@ async function main(): Promise<void> {
     (sum: number, count: number): number => sum + count,
     0,
   );
-  console.log(`${invoiceId}: why PayOnce did what it did`);
-  console.log(wrapped(shown.explanation));
+  console.log(`${shownId}: why PayOnce did what it did`);
+  console.log(wrapped(printable(shown.explanation)));
   if (shown.notInFacts !== "") {
     console.log("");
-    console.log(wrapped(`Not in the records: ${shown.notInFacts}`));
+    console.log(wrapped(`Not in the records: ${printable(shown.notInFacts)}`));
   }
   if (shown.aliasesLeft) {
     console.log("");
@@ -123,7 +143,7 @@ async function main(): Promise<void> {
   console.log("");
   console.log(
     wrapped(
-      `Written by ${shown.model} from PayOnce's records for this invoice (${build.asOf.lines} timeline lines, ${left} not passed on)${shown.cut ? ", shortened to fit" : ""}. A model can be wrong: the timeline is the record.`,
+      `Written by ${printable(shown.model)} from PayOnce's records for this invoice (${build.asOf.lines} timeline lines, ${left} not passed on)${shown.cut ? ", shortened to fit" : ""}. A model can be wrong: the timeline is the record.`,
     ),
   );
 }
