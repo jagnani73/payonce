@@ -444,6 +444,10 @@ export function unrecordedAttemptOf(ledger: Ledger, transfer: Transfer): Attempt
 export const MISMATCHED_TRANSFER_REASON: string =
   "Airwallex lists a transfer under the request id of a payment PayOnce marked as never sent, and it does not match this invoice";
 
+// The same reason once the bank has failed every such transfer for the invoice.
+export const MISMATCHED_FAILED_REASON: string =
+  "Airwallex listed a transfer under the request id of a payment PayOnce marked as never sent that did not match this invoice, and the bank has failed it";
+
 // Such a transfer is not recorded as the attempt's payment, because it may not be
 // this invoice's. It is kept beside the attempt with the status the bank gives
 // it, and counts as live (liveAtBank) until the bank fails it, so nothing more is
@@ -3084,11 +3088,20 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
   let obligation: Obligation = read;
 
   // A transfer kept beside an attempt because it does not match the invoice is
-  // read like any payment with the bank.
+  // read like any payment with the bank. Once the bank has failed every one, the
+  // reason the invoice waits for a person says so, unless another process has
+  // changed the reason or closed the invoice meanwhile.
   for (const attempt of engine.ledger.attempts(invoiceId).filter(mismatchedLive)) {
     if (attempt.mismatchedTransferId !== null && attempt.mismatchedStatus !== "PAID") {
       syncMismatched(engine, attempt, await getTransfer(engine.client, attempt.mismatchedTransferId));
     }
+  }
+  if (
+    obligation.escalationReason === MISMATCHED_TRANSFER_REASON &&
+    !engine.ledger.attempts(invoiceId).some(mismatchedLive) &&
+    engine.ledger.rewordEscalation(invoiceId, MISMATCHED_TRANSFER_REASON, MISMATCHED_FAILED_REASON)
+  ) {
+    obligation = engine.ledger.obligation(invoiceId) ?? obligation;
   }
   let originalId: string | null = null;
   let original: Transfer | null = null;
