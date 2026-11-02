@@ -216,8 +216,8 @@ export interface CommitRules {
   // Why a break no longer found clears, or null when it stays for a person.
   cleared: (kind: BreakKind, subject: string, result: MatchResult) => ClearReason | null;
   describe: (kind: BreakKind, facts: string) => string;
-  // False for a match with no new read: it opens nothing, and what it finds new
-  // waits as found once for the next live run.
+  // False for a match with no new read: it opens nothing and creates or changes
+  // no found-once row, so what it finds new waits for the next live run to find.
   live: boolean;
 }
 
@@ -808,7 +808,9 @@ export class ReconStore {
   // Compares what a run found with the breaks on file and writes only what
   // differs, with one chained line for each change. A kind that does not open at
   // once opens only when two live runs in a row find the same facts, and a run
-  // with no new read opens nothing. One open break per key: new facts update it.
+  // with no new read opens nothing and neither creates nor changes a found-once
+  // row, so it never stands in for one of those runs. One open break per key: new
+  // facts update it.
   // A kind that waits for a person never clears by itself: only an explanation
   // ends it, and the sweep tying a payout ends its untied break. An explanation
   // holds for the facts it was given on, and only while they are found without a
@@ -847,10 +849,13 @@ export class ReconStore {
       const row: BreakRow | undefined = live.get(item.key);
       if (row !== undefined) {
         if (row.state === "pending") {
+          if (!rules.live) {
+            continue;
+          }
           if (row.fingerprint !== item.fingerprint) {
             update.run(item.facts, item.fingerprint, item.currency, item.invoiceId, item.transferId, row.id);
             this.db.prepare("UPDATE recon_breaks SET found_at = ? WHERE id = ?").run(at, row.id);
-          } else if (rules.live) {
+          } else {
             this.db.prepare("UPDATE recon_breaks SET state = 'open', opened_at = ? WHERE id = ?").run(at, row.id);
             this.appendLine(row.id, "found", `Break ${row.id} found: ${text(item)}`, at);
             changes.opened += 1;
@@ -884,7 +889,11 @@ export class ReconStore {
         changes.opened += 1;
         continue;
       }
-      if (rules.live && rules.atOnce(item.kind)) {
+      if (!rules.live) {
+        // Found only in what is stored: the next live run has to find it first.
+        continue;
+      }
+      if (rules.atOnce(item.kind)) {
         const id: number = this.insertBreak(item, "open", at);
         this.appendLine(id, "found", `Break ${id} found: ${text(item)}`, at);
         changes.opened += 1;

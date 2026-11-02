@@ -504,7 +504,8 @@ export async function reconcileOnce(
 
 // Matches what the ledger already holds again, with no Airwallex call, as of the
 // last live run. The closing balance is not checked, since no balance is read,
-// and nothing opens: what it finds new waits for the next live run.
+// and nothing opens or is found once: what it finds new waits for the next live
+// run to find it.
 export function reconcileOffline(ledger: Ledger, ranFrom: RanFrom, now: number = Date.now()): RunOutcome {
   const run: ReconRun = beginRun(ledger, ranFrom, "offline", now);
   return commitRun(ledger, run, null, now);
