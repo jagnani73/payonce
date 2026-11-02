@@ -339,6 +339,14 @@ A draft is built only from what PayOnce formats itself: the invoice number, amou
 
 The text is fixed when it is drafted. Its SHA-256 goes on the incident's timeline in the same write, and copying, sending and dismissing are recorded there too. If the payment changes afterwards, for example the bank pays it, the card says what changed and suggests drafting it again. If the stored text no longer matches its hash, the card says that too.
 
+## Ask this incident why
+
+Each incident has a "Why this happened" card at the top of its side column, and `pnpm why <INVOICE>` does the same in the terminal. It asks the model reader's models for a short account in plain English of what PayOnce did on the invoice, why it did it, and what it is waiting on now. Nobody types a question, so nothing from the page reaches the prompt. The answer is only for reading: PayOnce never stores it in the ledger, the timeline, approval terms, alerts or drafts, and nothing it decides reads it.
+
+The model gets PayOnce's own records and nothing else. That means states, amounts, bank references and statuses, failure codes in PayOnce's words, the reasons its rules gave, the approval request and where it stands, the settings PayOnce reads now, active outages and the timeline. It never gets an email, a subject, a sender, a display name, an attachment name, anything from an upload, account details, a phone number, a payout reference, a note someone typed or an error message. People and other invoices go in as labels such as [person 1] and [invoice 2], and PayOnce puts the real names back only in the answer it shows. A timeline line goes in only when PayOnce recognises it as one of its own templates. Any other line goes in as a stand-in such as "(an error line PayOnce does not pass on)", and a reason PayOnce does not recognise goes in as "(a reason PayOnce does not pass on)". `pnpm why <INVOICE> facts` prints exactly what would be sent and asks nothing.
+
+The request uses the reader's key, base URL, model list and 8 second timeout, and PayOnce cuts the key out of any error. The page allows 2 asks a minute and 30 a day per server, one at a time, which leaves most of the free-tier quota to the email reader. If nothing on the invoice has changed, asking again gives the same answer from memory and sends no request. If every model answers 429, the page waits a minute before it asks again. The terminal has no limit. Without `READER_API_KEY` the card says the model reader is off.
+
 ## Run it
 
 ```bash
@@ -385,8 +393,11 @@ pnpm outbox <INVOICE> dismiss <DRAFT> <NAME> [NOTE]
 pnpm outage
 pnpm outage end <ID> <NAME> <NOTE>
 pnpm mcp
+pnpm why <INVOICE> [facts]
 pnpm reset
 ```
+
+`pnpm why` asks the model why PayOnce did what it did on one invoice (see [Ask this incident why](#ask-this-incident-why)). With `facts` it prints the facts and the system message exactly as they would be sent, then the legend of labels, which stays on this machine, and asks nothing. It opens the ledger read-only and never calls Airwallex.
 
 `pnpm outage` lists the active outages and the last few ended, with the payouts each counted and what it held. `pnpm outage end` ends one, as the button on the page does. It writes only the ledger, and the server's watcher picks up what the outage held on its next check.
 
@@ -521,6 +532,8 @@ Quit Claude Desktop fully and start it again. It writes the server's stderr to `
 | `src/model-reader.ts` | The model reader: one chat completion that returns the findings |
 | `src/reader.ts` | Picks the model reader, or the keyword placeholder when no key is set |
 | `src/keyword-reader.ts` | Keyword placeholder that reads the emails when no key is set |
+| `src/why-facts.ts` | The facts a model gets to explain an incident: PayOnce's own fields, the reasons and timeline lines it recognises, and labels for people and other invoices |
+| `src/explainer.ts` | Asks the model reader's models to explain an incident, checks and cleans the answer, and keeps the page's limits |
 | `src/drafts.ts` | Messages to send: the templates, which ones fit an incident, and drafts that keep their hash |
 | `src/alerts.ts` | Alerts: the webhook setting, what needs a person, and posting with retries |
 | `src/alert-payloads.ts` | What an alert says, and its Slack and Discord message shapes |
@@ -528,7 +541,7 @@ Quit Claude Desktop fully and start it again. It writes the server's stderr to `
 | `src/mcp.ts` | The read-only MCP server over stdio, and the only file that imports the MCP SDK |
 | `src/mcp-views.ts` | What the MCP tools answer, from the ledger alone |
 | `src/mcp-text.ts` | Marks the text PayOnce did not write in an MCP answer, and masks phone numbers |
-| `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/audit.ts`, `src/cash.ts`, `src/board.ts`, `src/payrun.ts`, `src/outbox.ts`, `src/outage.ts`, `src/reset.ts`, `src/index.ts` | The commands |
+| `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/audit.ts`, `src/cash.ts`, `src/board.ts`, `src/payrun.ts`, `src/outbox.ts`, `src/outage.ts`, `src/why.ts`, `src/reset.ts`, `src/index.ts` | The commands |
 | `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, exchange rate quotes, balances and their cache for the cash panel, the webhook subscription and the simulation calls |
 | `web/` | The page: plain HTML, CSS and JavaScript with no build step |
 | `fixtures/emails/` | Sample supplier emails |
@@ -538,7 +551,8 @@ The code holds amounts in minor units and converts at the Airwallex boundary. Th
 
 ## Not built yet
 
-- A model's explanation of each decision. The reasons on the timeline come from the policy.
+- Asking a model a question of your own about an incident. The "Why this happened" card asks one fixed question.
+- Pay run timelines in an explanation. A pay run row's facts give only its run and line.
 - Closing an incident without a payment, except a held duplicate. A person can close any other only when the bank reports a payment for the invoice as paid.
 - Chasing the bank by itself. When a payment passes its deadline, PayOnce tells a person and offers a trace request for them to send to Airwallex.
 - Sending email. Messages are drafted for a person, who sends them from their own mail, and PayOnce keeps no recipient addresses.
