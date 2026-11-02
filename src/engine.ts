@@ -603,12 +603,14 @@ export async function recordLateTransfer(engine: Engine, transfer: Transfer): Pr
   const invoiceId: string = attempt.invoiceId;
   const recorded: Transfer = await syncTransfer(engine.client, engine.ledger, transfer.id);
   const live: boolean = attemptStateOf(recorded) !== "failed";
-  // A payment from another currency's wallet is checked against its approved
-  // quote, as when a look finds a transfer by request id. A failed one on a closed
-  // invoice moved nothing, so it does not reopen it.
+  // It is checked against its approved quote, for a payment from another
+  // currency's wallet, and against the account it was decided or approved for, as
+  // when a look finds a transfer by request id. A failed one on a closed invoice
+  // moved nothing, so it does not reopen it.
   const before: Obligation | undefined = engine.ledger.obligation(invoiceId);
   if (before !== undefined && (live || before.state === "open" || before.state === "escalated")) {
     checkRate(engine, before, attempt, recorded);
+    checkAccount(engine, before, attempt, recorded);
   }
   const twice: boolean = paidTwice(engine.ledger, invoiceId) !== undefined;
   // Live at the bank, but the ledger keeps it failed: another payment holds the lock.
@@ -1225,14 +1227,20 @@ function checkRate(
 // can change between the account check and the create call. One that went to
 // other details than the attempt was decided or approved for is marked
 // misdirected, so it never counts as the account PayOnce last paid this supplier,
-// and goes to a person. Checked wherever an attempt first gains a transfer: when
-// it is sent, when a retry creates it, and when it is found by its request_id.
+// and goes to a person. So does one that shows no bank details, which nobody
+// could check, as checkRate treats a transfer with no conversion. Checked
+// wherever an attempt first gains a transfer: when it is sent, when a retry
+// creates it, when it is found by its request_id, and when a transfer is found
+// late under the request id of an attempt marked failed.
 function checkAccount(engine: Engine, obligation: Obligation, attempt: Attempt, transfer: Transfer): void {
   const sentTo: TransferBankDetails | undefined = transfer.beneficiary?.bank_details;
-  if (attempt.accountKey === null || sentTo === undefined || accountKeyOf(sentTo) === attempt.accountKey) {
+  if (attempt.accountKey === null || (sentTo !== undefined && accountKeyOf(sentTo) === attempt.accountKey)) {
     return;
   }
-  const reason: string = `${attempt.kind} ${transfer.short_reference_id} went to bank details that are not the ones it was decided or approved for`;
+  const reason: string =
+    sentTo === undefined
+      ? `${attempt.kind} ${transfer.short_reference_id} shows no bank details, so PayOnce cannot check they are the ones it was decided or approved for`
+      : `${attempt.kind} ${transfer.short_reference_id} went to bank details that are not the ones it was decided or approved for`;
   engine.ledger.markMisdirected(attempt.requestId);
   engine.ledger.escalate(obligation.invoiceId, reason);
   note(engine.ledger, obligation.invoiceId, "warning", capitalise(reason));

@@ -976,7 +976,8 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     fee_minor: "INTEGER",
     fee_currency: "TEXT",
     // 1 when the transfer went to other bank details than the ones it was
-    // approved or decided for, so it never counts as the account PayOnce last paid.
+    // approved or decided for, or showed none, so it never counts as the account
+    // PayOnce last paid.
     misdirected: "INTEGER NOT NULL DEFAULT 0",
     // When recordMissingFees last tried to read the fee, as an ISO time.
     fee_tried_at: "TEXT",
