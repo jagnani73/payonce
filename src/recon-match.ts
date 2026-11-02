@@ -527,7 +527,7 @@ function iso(ms: number): string {
 
 // The earliest time a failed transfer can have failed, by what PayOnce knows: its
 // updated_at, and when a run first read it failed. Both come after the failure.
-function failedBy(transfer: ReconTransfer): number | null {
+export function failedBy(transfer: ReconTransfer): number | null {
   const times: number[] = [transfer.updatedMs, transfer.failedSeenMs].filter(
     (time: number | null): time is number => time !== null,
   );

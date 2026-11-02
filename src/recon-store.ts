@@ -166,6 +166,12 @@ export interface ReconBreak {
   note: string | null;
 }
 
+// A refund missing break with its transfer as the last check read it, null when
+// no check has stored that transfer.
+export interface RefundBreak extends ReconBreak {
+  transfer: ReconTransfer | null;
+}
+
 // One window of balance history, read to its last page, in Airwallex's order.
 export interface WindowRead {
   fromMs: number;
@@ -1058,6 +1064,28 @@ export class ReconStore {
       )
       .filter((row: BreakRow | undefined): row is BreakRow => row !== undefined)
       .map(toBreak);
+  }
+
+  // The newest refund missing break on each of these transfers, in any state,
+  // newest first, for the outbox's refund trace. Nothing on a file reconciliation
+  // never opened.
+  refundBreaks(transferIds: string[]): RefundBreak[] {
+    if (transferIds.length === 0 || !this.hasTables()) {
+      return [];
+    }
+    const rows: BreakRow[] = this.db
+      .prepare(
+        `SELECT * FROM recon_breaks b
+          WHERE b.kind = 'refund-missing' AND b.transfer_id IN (${transferIds.map((): string => "?").join(", ")})
+            AND b.id = (SELECT MAX(id) FROM recon_breaks WHERE kind = 'refund-missing' AND transfer_id = b.transfer_id)
+          ORDER BY b.id DESC`,
+      )
+      .all(...transferIds) as unknown as BreakRow[];
+    const transfer: StatementSync = this.db.prepare("SELECT * FROM recon_transfers WHERE transfer_id = ?");
+    return rows.map((row: BreakRow): RefundBreak => {
+      const read: TransferRow | undefined = transfer.get(row.transfer_id) as unknown as TransferRow | undefined;
+      return { ...toBreak(row), transfer: read === undefined ? null : toTransfer(read) };
+    });
   }
 
   runs(limit: number): ReconRun[] {

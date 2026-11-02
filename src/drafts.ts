@@ -23,6 +23,8 @@ import {
 } from "./ledger.js";
 import { formatMoney } from "./money.js";
 import { say } from "./printable.js";
+import { failedBy, type ReconTransfer } from "./recon-match.js";
+import type { RefundBreak } from "./recon-store.js";
 
 // Messages for a person to send to the supplier or the bank. PayOnce never sends
 // them. Each is rendered once, from facts PayOnce formats itself: amounts, bank
@@ -35,7 +37,8 @@ export type DraftTemplate =
   | "replacement-sent"
   | "checking"
   | "callback-notice"
-  | "bank-trace";
+  | "bank-trace"
+  | "refund-trace";
 
 export type DraftAudience = "supplier" | "bank";
 
@@ -54,6 +57,9 @@ interface Context {
   findings: EmailFindings | null;
   emails: number;
   now: number;
+  // Reconciliation's newest refund missing break on each of the invoice's own
+  // transfers, newest first.
+  refunds: RefundBreak[];
 }
 
 interface Template {
@@ -69,6 +75,11 @@ interface Template {
 const REFERENCE: RegExp = /^[A-Z0-9-]{1,30}$/;
 const BANK_STATUS: RegExp = /^[A-Z_]{1,30}$/;
 const DAY: RegExp = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
+const CURRENCY: RegExp = /^[A-Z]{3}$/;
+
+function matching(value: string | null | undefined, pattern: RegExp): string | null {
+  return typeof value === "string" && pattern.test(value) ? value : null;
+}
 
 function referenceOf(attempt: Attempt | undefined): string | null {
   return attempt?.reference !== null && attempt?.reference !== undefined && REFERENCE.test(attempt.reference)
@@ -189,6 +200,36 @@ function arrivalParagraph(facts: Facts, newPayment: boolean): string {
   return facts["expectedBy"] === null
     ? `We expect it to reach your account within the usual time for this route. If it does not arrive, please let us know and quote ${which}.`
     : `We expect it to reach your account by ${facts["expectedBy"] ?? ""}, or a little later if there is a public holiday before then. If it has not arrived by then, please let us know and quote ${which}.`;
+}
+
+// The refund a refund missing break waits for, as PayOnce formats it, or null
+// when its stored facts do not hold an amount and currency PayOnce can write.
+function refundAmount(refund: RefundBreak): string | null {
+  let facts: unknown;
+  try {
+    facts = JSON.parse(refund.facts);
+  } catch {
+    return null;
+  }
+  const { expectedMinor, currency } = (facts ?? {}) as { expectedMinor?: unknown; currency?: unknown };
+  return typeof expectedMinor === "number" &&
+    Number.isSafeInteger(expectedMinor) &&
+    expectedMinor > 0 &&
+    typeof currency === "string" &&
+    CURRENCY.test(currency)
+    ? formatMoney(expectedMinor, currency)
+    : null;
+}
+
+// Why no refund trace fits, from the newest refund missing break on the invoice's
+// own transfers: a person explained it, or the refund landed and it cleared.
+function noRefundMissing(refunds: RefundBreak[]): string {
+  const newest: RefundBreak | undefined = refunds[0];
+  return newest?.state === "explained"
+    ? "a person explained the missing refund in reconciliation"
+    : newest?.state === "cleared"
+      ? "the refund has landed, so reconciliation no longer finds it missing"
+      : "reconciliation finds no missing refund for this invoice's payments";
 }
 
 const TEMPLATES: Record<DraftTemplate, Template> = {
@@ -419,6 +460,64 @@ const TEMPLATES: Record<DraftTemplate, Template> = {
       };
     },
   },
+  "refund-trace": {
+    label: "Refund trace request to Airwallex",
+    audience: "bank",
+    facts(context: Context): Facts | string {
+      // The latest of the invoice's own payments whose refund reconciliation
+      // finds missing.
+      const open: RefundBreak[] = context.refunds.filter((refund: RefundBreak): boolean => refund.state === "open");
+      const failed: Attempt | undefined = [...context.attempts]
+        .reverse()
+        .find(
+          (attempt: Attempt): boolean =>
+            attempt.transferId !== null &&
+            open.some((refund: RefundBreak): boolean => refund.transferId === attempt.transferId),
+        );
+      const refund: RefundBreak | undefined = open.find(
+        (item: RefundBreak): boolean => item.transferId === failed?.transferId,
+      );
+      if (failed === undefined || refund === undefined) {
+        return noRefundMissing(context.refunds);
+      }
+      const transfer: ReconTransfer | null = refund.transfer;
+      const reference: string | null = referenceOf(failed) ?? matching(transfer?.reference, REFERENCE);
+      if (reference === null) {
+        return "the payment whose refund is missing has no bank reference PayOnce can quote";
+      }
+      const failedAt: number | null = transfer === null ? null : failedBy(transfer);
+      return {
+        reference,
+        debited: refundAmount(refund),
+        status: matching(transfer?.status, BANK_STATUS),
+        failedDay: failedAt === null ? null : dayText(today(new Date(failedAt))),
+        method: context.obligation.transferMethod,
+      };
+    },
+    suggest(_context: Context, facts: Facts): string | null {
+      return `Reconciliation has not found the refund of ${facts["reference"] ?? "the failed payment"} in the wallet`;
+    },
+    render(facts: Facts): Text {
+      return {
+        subject: `Refund of failed transfer ${facts["reference"] ?? ""}`,
+        body: lines(
+          "Hello,",
+          "",
+          "This transfer failed, and its refund has not reached our wallet. Could you tell us where the refund is?",
+          "",
+          `Transfer reference: ${facts["reference"] ?? ""}`,
+          facts["debited"] !== null && `Amount taken from our wallet: ${facts["debited"] ?? ""}`,
+          `Method: ${facts["method"] ?? ""}`,
+          facts["failedDay"] !== null && `Failed on: ${facts["failedDay"] ?? ""}`,
+          facts["status"] !== null && `Status when we last checked: ${facts["status"] ?? ""}`,
+          "",
+          "Please also tell us when the money will be back in our wallet. If any of it will not come back, such as a fee, please say how much and why.",
+          "",
+          "Thank you,",
+        ),
+      };
+    },
+  },
 };
 
 export const DRAFT_TEMPLATES: DraftTemplate[] = Object.keys(TEMPLATES) as DraftTemplate[];
@@ -437,6 +536,7 @@ const FACT_LABELS: Record<string, string> = {
   debited: "amount debited",
   method: "method",
   createdAt: "time created",
+  failedDay: "day it failed",
 };
 
 export function isTemplate(value: unknown): value is DraftTemplate {
@@ -451,13 +551,21 @@ export function templateLabel(template: string): string | null {
 
 function contextOf(ledger: Ledger, obligation: Obligation, now: number): Context {
   const findings: string | undefined = ledger.findings(obligation.invoiceId);
+  const attempts: Attempt[] = ledger.attempts(obligation.invoiceId);
   return {
     ledger,
     obligation,
-    attempts: ledger.attempts(obligation.invoiceId),
+    attempts,
     findings: findings === undefined ? null : (JSON.parse(findings) as EmailFindings),
     emails: ledger.emails(obligation.invoiceId).length,
     now,
+    // Matched by the invoice's own transfer ids only, never a kept transfer or a
+    // payout sent outside PayOnce.
+    refunds: ledger
+      .recon()
+      .refundBreaks(
+        attempts.flatMap((attempt: Attempt): string[] => (attempt.transferId === null ? [] : [attempt.transferId])),
+      ),
   };
 }
 

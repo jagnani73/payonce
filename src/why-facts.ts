@@ -343,6 +343,7 @@ const DRAFT_LABELS: readonly string[] = [
   "We are looking into it",
   "We will call to confirm bank details",
   "Trace request to Airwallex",
+  "Refund trace request to Airwallex",
 ];
 const WEBHOOK_NEWS: string = "has been paid|has failed|was cancelled|is overdue";
 const BARRED_WHY: ReadonlySet<string> = new Set<string>([
