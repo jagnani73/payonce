@@ -2379,6 +2379,24 @@ export class Ledger {
       );
   }
 
+  // Runs fn in one deferred read transaction, so every read in it sees the ledger
+  // as it was at one moment, whatever another process writes meanwhile. It works
+  // on a read-only ledger. fn must only read, and must not open a transaction.
+  readSnapshot<T>(fn: () => T): T {
+    if (this.db.isTransaction) {
+      throw new Error("A ledger transaction is already open");
+    }
+    this.db.exec("BEGIN");
+    try {
+      const result: T = fn();
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error: unknown) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   // What an audit checks, read in one transaction so a line another process adds
   // meanwhile cannot make the running hash look wrong. invoiceId null reads every
   // invoice's lines.
@@ -3477,6 +3495,15 @@ export class Ledger {
     return row === undefined ? undefined : toApproval(row, this.signoffs(row.id));
   }
 
+  // Every approval request for the invoice, oldest first.
+  approvalsFor(invoiceId: string): Approval[] {
+    return (
+      this.db
+        .prepare("SELECT * FROM approvals WHERE invoice_id = ? ORDER BY id")
+        .all(invoiceId) as unknown as ApprovalRow[]
+    ).map((row: ApprovalRow): Approval => toApproval(row, this.signoffs(row.id)));
+  }
+
   approval(id: number): Approval | undefined {
     const row: ApprovalRow | undefined = this.db
       .prepare("SELECT * FROM approvals WHERE id = ?")
@@ -3676,6 +3703,16 @@ export class Ledger {
             WHERE beneficiary_id = ? AND state = 'applied' AND applied_key = ?`,
         )
         .all(beneficiaryId, detailsKey) as unknown as { called_by: string }[]
+    ).map((row: { called_by: string }): string => row.called_by);
+  }
+
+  // Who recorded each callback on this invoice, in any state, oldest first. Only
+  // the names: the number called and what was said stay out.
+  callbackRecorders(invoiceId: string): string[] {
+    return (
+      this.db
+        .prepare("SELECT called_by FROM bank_changes WHERE invoice_id = ? ORDER BY id")
+        .all(invoiceId) as unknown as { called_by: string }[]
     ).map((row: { called_by: string }): string => row.called_by);
   }
 
