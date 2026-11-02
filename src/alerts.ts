@@ -40,6 +40,7 @@ import {
   UNREADABLE_CASH_REASON,
 } from "./decide.js";
 import {
+  heldBeforePaying,
   LATE_TRANSFER_REASON,
   pendingApproval,
   pendingClose,
@@ -214,11 +215,14 @@ export function baseReason(reason: string): string {
   return reason;
 }
 
+// heldBefore is true for an invoice held before paying, or one a person closed
+// without paying that a payment found since reopened.
 function needOf(
   obligation: Obligation,
   base: string,
   pending: PendingApproval | undefined,
   review: CloseReview | undefined,
+  heldBefore: boolean,
 ): InvoiceNeed {
   if (pending !== undefined) {
     return pending.terms.action === "pay" ? "approve-held" : "approve";
@@ -226,8 +230,13 @@ function needOf(
   if (base.startsWith(LATE_TRANSFER_REASON)) {
     return "twice";
   }
-  if (review !== undefined) {
-    return review.kind === "duplicate" || review.kind === "unpaid" ? "held" : "close";
+  if (review !== undefined && review.kind !== "duplicate" && review.kind !== "unpaid") {
+    return "close";
+  }
+  // Any invoice with nothing live at the bank can be closed without paying, but
+  // one that sent a payment keeps the need its reason gives.
+  if (review !== undefined && heldBefore) {
+    return "held";
   }
   // The ask not to pay stays in the reason, and so in the fingerprint, but does
   // not change what the person is asked to do.
@@ -267,7 +276,13 @@ function invoiceCondition(ledger: Ledger, obligation: Obligation): FoundConditio
   const pending: PendingApproval | undefined = pendingApproval(ledger, invoiceId);
   const review: CloseReview | undefined = pending === undefined ? pendingClose(ledger, invoiceId) : undefined;
   const base: string = baseReason(obligation.escalationReason);
-  const need: InvoiceNeed = needOf(obligation, base, pending, review);
+  const need: InvoiceNeed = needOf(
+    obligation,
+    base,
+    pending,
+    review,
+    obligation.rejectedBy !== null || heldBeforePaying(ledger, obligation),
+  );
   // A payment found late is news even while an approved one is with the bank.
   if (need !== "bank" && need !== "twice" && pending === undefined && approvedAndUnderway(ledger, invoiceId)) {
     return null;

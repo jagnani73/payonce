@@ -3243,22 +3243,22 @@ export class Ledger {
     return row?.last_quote ?? undefined;
   }
 
-  // Closes a held invoice without paying it, recording who did. False when it is
-  // no longer held, for example because its payment was released in the meantime,
-  // or a payout for it sent outside PayOnce, or a transfer under one of its
-  // request ids, is in flight or paid. covered lists the transfers under its
-  // request ids that do not match it which the person's close covered, and they
-  // are cleared in the same transaction.
+  // Closes an escalated invoice without paying it, recording who did. False when
+  // it is no longer escalated, for example because its payment was released in
+  // the meantime, or when a payment for it is live at the bank: PayOnce's, a
+  // transfer under one of its request ids, or a payout sent outside PayOnce, in
+  // flight or paid. covered lists the transfers under its request ids that do not
+  // match it which the person's close covered, and they are cleared in the same
+  // transaction, as any open request is voided.
   reject(invoiceId: string, rejectedBy: string, covered: string[] = []): boolean {
     return this.transaction((): boolean => {
       const result: { changes: number | bigint } = this.db
         .prepare(
           `UPDATE obligations SET state = 'rejected', rejected_by = ?
             WHERE invoice_id = ? AND state = 'escalated'
-              AND NOT EXISTS (${SENT_ATTEMPT}) AND NOT EXISTS (${LIVE_OUTSIDE_PAYOUT})
-              AND NOT EXISTS (${LIVE_ATTEMPT})`,
+              AND NOT EXISTS (${LIVE_OUTSIDE_PAYOUT}) AND NOT EXISTS (${LIVE_ATTEMPT})`,
         )
-        .run(rejectedBy, invoiceId, invoiceId, invoiceId, invoiceId);
+        .run(rejectedBy, invoiceId, invoiceId, invoiceId);
       if (Number(result.changes) !== 1) {
         return false;
       }

@@ -1944,7 +1944,7 @@ function escalate(
       obligation.invoiceId,
       "approval",
       obligation.supplierPhone === null
-        ? "Waiting on a person. The bank details on file are not the ones the original went to, and no phone number is on file to verify them by calling the supplier back"
+        ? "Waiting on a person. The bank details on file are not the ones the original went to, and no phone number is on file to verify them by calling the supplier back. Close the invoice without paying, or restore the details the original went to in Airwallex and check again"
         : `Waiting on a person to call the supplier on ${obligation.supplierPhone}, the number on file, and record the callback. PayOnce pays an account the original did not go to only after that`,
       "waiting",
     );
@@ -3376,7 +3376,7 @@ export function payAgain(ledger: Ledger, invoiceId: string): PayAgainResult {
     obligation?.state === "settled"
       ? "Pay again not sent. The incident is closed, so PayOnce pays nothing more for this invoice"
       : obligation?.state === "rejected"
-        ? "Pay again not sent. A person closed this invoice without paying, because it was a second bill for another invoice"
+        ? "Pay again not sent. A person closed this invoice without paying"
         : anyLive(ledger.outsidePayouts(invoiceId))
           ? "Pay again not sent. A payout sent outside PayOnce may already pay this invoice"
           : obligation !== undefined && heldBeforePaying(ledger, obligation)
@@ -3403,8 +3403,9 @@ function paidOriginal(ledger: Ledger, invoiceId: string): Attempt | undefined {
 // paid once: by PayOnce's original or replacement, or by a payout sent outside
 // PayOnce after every payment PayOnce sent failed. kind duplicate is an invoice
 // held before paying as a second bill for others, and its reference lists them.
-// kind unpaid is any other invoice that has sent nothing, such as one whose
-// original Airwallex refused. Closing either leaves it unpaid. emails is the
+// kind unpaid is any other escalated invoice with nothing for it live at the
+// bank, such as one whose original Airwallex refused, or whose payments all
+// failed. Closing either leaves it unpaid. emails is the
 // email evidence an approval would show, null when the invoice has no emails.
 // covered lists the transfers under its request ids that do not match it and
 // that no person has cleared: the card shows them, and closing on this review
@@ -3492,24 +3493,24 @@ export function pendingClose(
     return { kind: "mismatched", reference: paid?.mismatchedReference ?? null, reason, emails, covered };
   }
   // Not while anything for it may be paying it.
-  const live: boolean =
-    anyLive(ledger.outsidePayouts(invoiceId)) || ledger.attempts(invoiceId).some(liveAtBank);
-  // A person closed it without paying, a payment found since reopened it, and
-  // every payment has failed since: a person closes it again.
-  if (obligation.rejectedBy !== null && !live) {
-    return { kind: "unpaid", reference: null, reason, emails, covered };
+  if (anyLive(ledger.outsidePayouts(invoiceId)) || ledger.attempts(invoiceId).some(liveAtBank)) {
+    return undefined;
   }
-  if (heldBeforePaying(ledger, obligation) && !live) {
-    return obligation.duplicateOf.length > 0
-      ? { kind: "duplicate", reference: listOf(obligation.duplicateOf), reason, emails, covered }
-      : { kind: "unpaid", reference: null, reason, emails, covered };
-  }
-  return undefined;
+  // Nothing for it is with the bank or paid, so a person may close it without
+  // paying, whatever it waits on: held before paying, a failed payment with a
+  // request open, new bank details nobody can verify by calling back, or one a
+  // person closed before that a payment found since reopened.
+  return obligation.rejectedBy === null &&
+    heldBeforePaying(ledger, obligation) &&
+    obligation.duplicateOf.length > 0
+    ? { kind: "duplicate", reference: listOf(obligation.duplicateOf), reason, emails, covered }
+    : { kind: "unpaid", reference: null, reason, emails, covered };
 }
 
 // Records a person closing such an invoice. It moves no money, so it is not bound
-// to terms the way an approval is. A held duplicate is closed without paying, and
-// the invoices it duplicated say so on their timelines. shown is the transfer ids
+// to terms the way an approval is. A held duplicate, and any other invoice with
+// nothing live at the bank, is closed without paying, and the invoices a held
+// one duplicated say so on their timelines. shown is the transfer ids
 // of the covered list the person saw, null when the caller names none. The close
 // is refused when it covers a transfer under the invoice's request ids that does
 // not match it and that is not on that list: one found since, or any at all when
@@ -3538,7 +3539,12 @@ export function closeIncident(
   const clears: string[] = covered.map((transfer: CoveredTransfer): string => transfer.transferId);
   if (review?.kind === "duplicate" || review?.kind === "unpaid") {
     const obligation: Obligation | undefined = ledger.obligation(invoiceId);
-    const duplicateOf: string[] = obligation?.duplicateOf ?? [];
+    // Named only for a held invoice or one closed before, so a close of an
+    // invoice paid on an approval after a hold does not call it a second bill.
+    const duplicateOf: string[] =
+      obligation !== undefined && (obligation.rejectedBy !== null || heldBeforePaying(ledger, obligation))
+        ? obligation.duplicateOf
+        : [];
     // One closed without paying before keeps who closed it first.
     const closed: boolean =
       obligation?.rejectedBy !== null && obligation?.rejectedBy !== undefined

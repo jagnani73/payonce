@@ -196,6 +196,8 @@ The page shows the paid transfer and the reason, and takes a name and a note of 
 
 When PayOnce would close an incident by itself but one of these transfers is on file, or a payout sent outside PayOnce for the invoice is still live, it hands the incident to a person instead and stops looking at it. The timeline says what to check, the close card offers the close, and an alert goes out when alerts are on.
 
+A person can also close an invoice without paying it while it waits on a person and nothing for it is with the bank or paid. That covers an invoice held before paying, one whose payments all failed while a replacement waits for approval, and one whose new bank details cannot be checked because no phone number is on file to call. The close card then reads "Close without paying" and takes a name and a note, as `pnpm close` does. PayOnce sends nothing, withdraws any open approval request and does not ask anyone to approve paying the invoice again. While a payment for it is still with the bank, the close waits until the bank pays or fails that payment.
+
 ## Audit trail
 
 Each incident's timeline is a hash chain, and so is each pay run's. Every line stores the hash of the line before it on the same invoice, and a SHA-256 hash of its own content plus that previous hash. Editing, removing or inserting a line breaks the chain at that point. The ledger also keeps a running hash over every line in the order they were written. It catches two things one invoice's chain misses: lines removed from the end of a timeline, and every line of an invoice removed. Pay run timelines have a running hash of their own. `pnpm run audit` and the downloads check every line each time. The audit line under a timeline on the page checks that timeline's chain in full each time, so a line edited, removed or inserted in it shows at once. For the running hash it hashes only the lines added since its last check: the ledger's last line removed shows at once, while a whole invoice removed, or a timeline's last line removed when it is not the ledger's last, shows within about a minute, when it hashes every line again.
@@ -380,7 +382,7 @@ For a model to read the emails, create a Gemini API key in Google AI Studio and 
 pnpm ui
 ```
 
-Open `http://127.0.0.1:4310`. The page opens on the [incident board](#incident-board). `docs/demo.md` walks through four incidents in under five minutes. Choose a payment, a bank outcome and a supplier email thread, then start an incident. The page follows it step by step. The agent waits for a webhook or a status check after each bank outcome, so an incident takes up to a minute in the sandbox. When an incident is waiting on a person, the approval card shows the terms and takes a name. If the bank has paid the invoice, a close card takes a name and a note instead. "Check again" continues an incident that stopped part-way.
+Open `http://127.0.0.1:4310`. The page opens on the [incident board](#incident-board). `docs/demo.md` walks through four incidents in under five minutes. Choose a payment, a bank outcome and a supplier email thread, then start an incident. The page follows it step by step. The agent waits for a webhook or a status check after each bank outcome, so an incident takes up to a minute in the sandbox. When an incident is waiting on a person, the approval card shows the terms and takes a name. If the bank has paid the invoice, a close card takes a name and a note instead. When nothing for the invoice is with the bank, the same card closes it without paying. "Check again" continues an incident that stopped part-way.
 
 The server has no login. It listens on this machine only and accepts changes only from its own page. It also refuses reads that another website's page sends from your browser, while the page itself, a typed address, `curl` and the terminal commands work as before.
 
@@ -569,7 +571,7 @@ The code holds amounts in minor units and converts at the Airwallex boundary. Th
 
 - Asking a model a question of your own about an incident. The "Why this happened" card asks one fixed question.
 - Pay run timelines in an explanation. A pay run row's facts give only its run and line.
-- Closing an incident without a payment, except an invoice held before paying, which a person can close without paying. A person can close any other only when the bank reports a payment for the invoice as paid.
+- Closing an invoice while a payment for it is still with the bank. A person can close it once the bank pays or fails that payment.
 - Chasing the bank by itself. When a payment passes its deadline, PayOnce tells a person and offers a trace request for them to send to Airwallex.
 - Sending email. Messages are drafted for a person, who sends them from their own mail, and PayOnce keeps no recipient addresses.
 - A floor check on a single incident's first payment. Pay run rows have one.

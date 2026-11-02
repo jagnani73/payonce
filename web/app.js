@@ -2411,7 +2411,7 @@ async function askWhy(invoiceId) {
 function buildReview(invoiceId, review, emailSummary) {
   const hasReference = typeof review.reference === "string" && review.reference !== "";
   const duplicate = review.kind === "duplicate";
-  // A held invoice, a likely second bill or any other that has sent nothing, closes unpaid.
+  // A held invoice, a likely second bill or any other with nothing live at the bank closes unpaid.
   const unpaid = duplicate || review.kind === "unpaid";
   const label = unpaid ? "Close without paying" : "Close incident";
   const paidPayment =
@@ -2502,7 +2502,7 @@ function buildReview(invoiceId, review, emailSummary) {
       duplicate
         ? `This invoice looks like a second bill for ${review.reference}. If it is, close it without paying. If it is not, PayOnce pays it once it is approved.`
         : unpaid
-          ? "Nothing has been paid for this invoice. If it should not be paid, close it without paying. Otherwise PayOnce pays it once it is approved."
+          ? "Nothing for this invoice is with the bank or paid. If it should not be paid, close it without paying."
           : `The bank reports the ${paidPayment} as paid, so PayOnce will not send another. Check with the supplier, then close the incident.`,
     ),
     h(
