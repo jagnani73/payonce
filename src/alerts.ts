@@ -65,6 +65,7 @@ import {
   type RunApproval,
 } from "./ledger.js";
 import { formatMoney } from "./money.js";
+import { say, sayWarning } from "./printable.js";
 import { runStatus } from "./runs.js";
 
 // How often the server looks for conditions that need a person, how long a new
@@ -644,7 +645,7 @@ export class Alerts {
         await this.flush();
       }
     } catch (error: unknown) {
-      console.warn(`  alert    ${redact(messageOf(error), this.target.url)}`);
+      sayWarning(`  alert    ${redact(messageOf(error), this.target.url)}`);
     } finally {
       this.running = false;
     }
@@ -693,7 +694,7 @@ export class Alerts {
       report === null ? ["cash:"] : [],
     );
     if (recorded.first) {
-      console.log(
+      say(
         recorded.standing === 0
           ? "  alert    Alerts on: nothing is waiting on a person, so no summary is queued"
           : `  alert    Alerts on: ${recorded.standing} ${recorded.standing === 1 ? "condition" : "conditions"} already standing recorded without an alert each, and one summary queued`,
@@ -735,7 +736,7 @@ export class Alerts {
     const error: string = answer.error.replace(/[.\s]+$/, "");
     if (status !== null && status >= 200 && status < 300) {
       this.finish(alert, { state: "sent", tried: true, nextTryAt: null, error: null });
-      console.log(`  alert    sent: ${title}`);
+      say(`  alert    sent: ${title}`);
       return;
     }
     const retry: boolean = status === null || status === 429 || status >= 500;
@@ -745,18 +746,18 @@ export class Alerts {
           ? Math.min(Math.max(answer.retryAfterMs ?? backoff(tries), 1_000), MAX_RETRY_AFTER_MS)
           : backoff(tries);
       this.finish(alert, { state: "queued", tried: true, nextTryAt: Date.now() + delay, error: answer.error });
-      console.warn(`  alert    ${title}: ${error}. Trying again in ${Math.round(delay / 1_000)} seconds`);
+      sayWarning(`  alert    ${title}: ${error}. Trying again in ${Math.round(delay / 1_000)} seconds`);
       return;
     }
     this.finish(alert, { state: "failed", tried: true, nextTryAt: null, error: answer.error });
     if (status !== null && GONE.includes(status)) {
       this.stopped = `the webhook answered ${status}, so the address is wrong or the webhook was removed`;
-      console.warn(
+      sayWarning(
         `  alert    Alerts stopped: ${this.stopped}. Fix ALERT_WEBHOOK_URL and restart; alerts still queued are sent then if they still apply`,
       );
       return;
     }
-    console.warn(
+    sayWarning(
       `  alert    ${title} was not sent: ${error}${retry ? `, after ${tries} tries` : ""}. PayOnce does not try it again`,
     );
   }

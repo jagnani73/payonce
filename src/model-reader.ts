@@ -7,6 +7,7 @@ import {
   type SupplierEmail,
 } from "./emails.js";
 import { KeywordReader } from "./keyword-reader.js";
+import { sayWarning } from "./printable.js";
 
 // Gemini's OpenAI-compatible endpoint. Any service that speaks the same chat
 // completions format can stand in for it.
@@ -276,7 +277,7 @@ export class ModelReader implements EmailReader {
       } catch (error: unknown) {
         failure = error;
         // Kept off the timeline unless every model fails, but worth seeing.
-        console.warn(
+        sayWarning(
           `  reader   ${model} gave no answer after ${Date.now() - started} ms: ${error instanceof Error ? error.message : String(error)}`,
         );
         if (keyRefused(error)) {

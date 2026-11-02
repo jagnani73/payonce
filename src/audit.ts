@@ -23,6 +23,7 @@ import {
   type RunLedgerReport,
 } from "./audit-trail.js";
 import { Ledger, LEDGER_PATH, type Obligation, type Run } from "./ledger.js";
+import { printableJson, printableLines, say } from "./printable.js";
 
 const FORMATS: string[] = ["json", "csv"];
 const USAGE: string = "Usage: pnpm run audit [INVOICE] [json|csv], or pnpm run audit run <RUN> [json|csv]";
@@ -34,18 +35,18 @@ function short(hash: string | null): string {
 }
 
 function printLedger(report: LedgerReport): void {
-  console.log(`Ledger: ${describeLedger(report)}`);
-  console.log(`  head     ${short(report.stored)}`);
+  say(`Ledger: ${describeLedger(report)}`);
+  say(`  head     ${short(report.stored)}`);
   if (!report.intact) {
-    console.log(`  lines    give ${short(report.computed)}`);
+    say(`  lines    give ${short(report.computed)}`);
   }
 }
 
 function printRunLedger(report: RunLedgerReport): void {
-  console.log(`Pay runs: ${describeRunLedger(report)}`);
-  console.log(`  head     ${short(report.stored)}`);
+  say(`Pay runs: ${describeRunLedger(report)}`);
+  say(`  head     ${short(report.stored)}`);
   if (!report.intact) {
-    console.log(`  lines    give ${short(report.computed)}`);
+    say(`  lines    give ${short(report.computed)}`);
   }
 }
 
@@ -57,18 +58,18 @@ function printChain(
   snapshot: { events: { id: number }[]; backfilledThrough: number; chainStartedAt: string | null },
 ): boolean {
   const intact: boolean = report.breaks.length === 0;
-  console.log(
+  say(
     `${name}: ${report.lines} ${report.lines === 1 ? "line" : "lines"}, ${intact ? "the chain is intact" : "the chain breaks"}`,
   );
-  console.log(`  head     ${short(report.head)}`);
+  say(`  head     ${short(report.head)}`);
   for (const found of report.breaks) {
-    console.log(`  line ${String(found.line).padEnd(4)} ${found.at}  ${found.problem}`);
+    say(`  line ${String(found.line).padEnd(4)} ${found.at}  ${found.problem}`);
   }
   const backfilled: number = snapshot.events.filter(
     (event: { id: number }): boolean => event.id <= snapshot.backfilledThrough,
   ).length;
   if (backfilled > 0) {
-    console.log(
+    say(
       `  earlier  lines 1 to ${backfilled} were written before the chain started on ${snapshot.chainStartedAt ?? "an unknown date"} and hashed then, so it vouches for them only from that date`,
     );
   }
@@ -101,7 +102,7 @@ function auditLedger(snapshot: AuditSnapshot): boolean {
   );
   for (const report of reports) {
     const broken: string | null = describeBreaks(report.breaks);
-    console.log(
+    say(
       `${report.invoiceId.padEnd(width)}  ${String(report.lines).padStart(3)} ${report.lines === 1 ? "line " : "lines"}  ${broken === null ? "intact" : `breaks: ${broken}`}`,
     );
   }
@@ -118,7 +119,7 @@ function auditRuns(snapshot: RunAuditSnapshot): boolean {
   const reports: RunChainReport[] = runChainReports(snapshot.events);
   for (const report of reports) {
     const broken: string | null = describeBreaks(report.breaks);
-    console.log(
+    say(
       `run ${String(report.runId).padEnd(6)}  ${String(report.lines).padStart(3)} ${report.lines === 1 ? "line " : "lines"}  ${broken === null ? "intact" : `breaks: ${broken}`}`,
     );
   }
@@ -130,22 +131,35 @@ function auditRuns(snapshot: RunAuditSnapshot): boolean {
   );
 }
 
+// JSON writes what a terminal could act on as \uXXXX and still parses to the same
+// messages, so it is always written that way. A CSV goes to a file or a pipe as it
+// is, because whoever checks the hashes needs every message exactly, and is made
+// safe to read only when it goes straight to a terminal.
+function writeExport(format: string, audit: AuditExport | RunAuditExport): void {
+  if (format === "csv") {
+    const csv: string = auditCsv(audit);
+    process.stdout.write(process.stdout.isTTY ? printableLines(csv) : csv);
+    return;
+  }
+  process.stdout.write(`${printableJson(JSON.stringify(audit, null, 2))}\n`);
+}
+
 // Checks one pay run's timeline, or prints its audit trail as JSON or CSV.
 function mainRun(ledger: Ledger, raw: string | undefined, format: string | undefined): void {
   if (!ledger.hasRunTable()) {
-    console.log("This ledger has no pay runs");
+    say("This ledger has no pay runs");
     process.exitCode = 1;
     return;
   }
   const run: Run | undefined =
     raw !== undefined && /^[1-9][0-9]{0,9}$/.test(raw) ? ledger.run(Number(raw)) : undefined;
   if (run === undefined) {
-    console.log(raw === undefined ? USAGE : `Run ${raw.slice(0, 20)} is not in the ledger`);
+    say(raw === undefined ? USAGE : `Run ${raw.slice(0, 20)} is not in the ledger`);
     process.exitCode = 1;
     return;
   }
   if (!ledger.runChainStarted()) {
-    console.log(NOT_CHAINED);
+    say(NOT_CHAINED);
     process.exitCode = 1;
     return;
   }
@@ -158,7 +172,7 @@ function mainRun(ledger: Ledger, raw: string | undefined, format: string | undef
     { runId: run.id, fileName: run.fileName, fileHash: run.fileHash, uploadedBy: run.uploadedBy, state: run.state },
     snapshot,
   );
-  process.stdout.write(format === "csv" ? auditCsv(audit) : `${JSON.stringify(audit, null, 2)}\n`);
+  writeExport(format, audit);
   if (!audit.intact) {
     process.exitCode = 1;
   }
@@ -174,20 +188,20 @@ function main(): void {
   const invoiceId: string | undefined = first;
   const format: string | undefined = process.argv[runForm ? 4 : 3];
   if (format !== undefined && !FORMATS.includes(format)) {
-    console.log(USAGE);
+    say(USAGE);
     process.exitCode = 1;
     return;
   }
 
   if (!existsSync(LEDGER_PATH)) {
-    console.log("There is no ledger yet, so there is nothing to check");
+    say("There is no ledger yet, so there is nothing to check");
     process.exitCode = 1;
     return;
   }
   // Read-only, so checking the ledger never upgrades it or hashes its lines.
   const ledger: Ledger = new Ledger(LEDGER_PATH, true);
   if (!ledger.chainStarted()) {
-    console.log(
+    say(
       "This ledger's timelines are not a hash chain yet. The next pnpm ui or other command that opens it starts the chain",
     );
     process.exitCode = 1;
@@ -202,7 +216,7 @@ function main(): void {
     if (ledger.runChainStarted()) {
       intact = auditRuns(ledger.runAuditSnapshot(null)) && intact;
     } else if (ledger.hasRunLines()) {
-      console.log(NOT_CHAINED);
+      say(NOT_CHAINED);
       intact = false;
     }
     process.exitCode = intact ? 0 : 1;
@@ -211,7 +225,7 @@ function main(): void {
   const obligation: Obligation | undefined = ledger.obligation(invoiceId);
   const snapshot: AuditSnapshot = ledger.auditSnapshot(invoiceId);
   if (obligation === undefined && snapshot.events.length === 0) {
-    console.log(`${invoiceId} is not in the ledger`);
+    say(`${invoiceId} is not in the ledger`);
     process.exitCode = 1;
     return;
   }
@@ -220,16 +234,14 @@ function main(): void {
     return;
   }
   if (obligation === undefined) {
-    console.log(
+    say(
       `${invoiceId} has timeline lines but no invoice. Run pnpm run audit ${invoiceId} to check them`,
     );
     process.exitCode = 1;
     return;
   }
   const audit: AuditExport = auditExport(obligation, snapshot);
-  process.stdout.write(
-    format === "csv" ? auditCsv(audit) : `${JSON.stringify(audit, null, 2)}\n`,
-  );
+  writeExport(format, audit);
   if (!audit.intact) {
     process.exitCode = 1;
   }

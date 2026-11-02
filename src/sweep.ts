@@ -21,6 +21,7 @@ import {
 } from "./ledger.js";
 import { toMinor } from "./money.js";
 import { railFailureSeen } from "./outages.js";
+import { sayWarning } from "./printable.js";
 
 const METHODS: ReadonlySet<string> = new Set<string>(["LOCAL", "SWIFT"]);
 
@@ -40,7 +41,7 @@ function reportOnce(transfer: Transfer, problem: string): void {
     return;
   }
   reported.add(transfer.id);
-  console.warn(`  sweep    ${transfer.short_reference_id ?? transfer.id}: ${problem}`);
+  sayWarning(`  sweep    ${transfer.short_reference_id ?? transfer.id}: ${problem}`);
 }
 
 // Takes a payout someone else sent on as a new invoice, so the agent runs the

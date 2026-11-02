@@ -11,6 +11,7 @@ import {
   type AttemptState,
   type OutsidePayout,
 } from "./ledger.js";
+import { sayWarning } from "./printable.js";
 import { runKey } from "./runs.js";
 import { sweep } from "./sweep.js";
 
@@ -64,7 +65,7 @@ export class Watcher {
     this.timer = setTimeout((): void => {
       this.check()
         .catch((error: unknown): void => {
-          console.warn(
+          sayWarning(
             `  watcher  check failed: ${error instanceof Error ? error.message : String(error)}`,
           );
         })
@@ -174,7 +175,7 @@ export class Watcher {
           }
         } catch (error: unknown) {
           readFailed = true;
-          console.warn(
+          sayWarning(
             `  watcher  ${transferId}: ${error instanceof Error ? error.message : String(error)}`,
           );
         }

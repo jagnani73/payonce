@@ -5,6 +5,7 @@ import { approvePayment, pendingApproval, type PendingApproval } from "./engine.
 import { Ledger, LEDGER_PATH, signersOf, type Approval, type Obligation, type Outage } from "./ledger.js";
 import { formatMoney } from "./money.js";
 import { railOf } from "./outages.js";
+import { say } from "./printable.js";
 
 function describeDuplicate(duplicate: DuplicateEvidence): string {
   const paid: string = duplicate.paidBy === null ? "" : `, paid by ${duplicate.paidBy}`;
@@ -14,56 +15,56 @@ function describeDuplicate(duplicate: DuplicateEvidence): string {
 function show(pending: PendingApproval): void {
   const terms: ApprovalTerms = pending.terms;
   const approval: Approval = pending.approval;
-  console.log(
+  say(
     `${terms.action === "replace" ? "Replacement payment for" : "Payment of held invoice"} ${terms.invoiceId}, request ${approval.id}`,
   );
-  console.log(`  pay      ${formatMoney(terms.amountMinor, terms.currency)}`);
+  say(`  pay      ${formatMoney(terms.amountMinor, terms.currency)}`);
   if (terms.fx !== undefined) {
-    console.log(
+    say(
       `  from     ${formatMoney(terms.fx.sellAmountMinor, terms.fx.sellCurrency)} at ${describeRate(terms.fx)} (${markupOf(terms.fx)} from mid-market ${String(terms.fx.midRate)})`,
     );
-    console.log(
+    say(
       `  quote    ${terms.fx.quoteId}, holds until ${new Date(terms.fx.validTo).toLocaleString()}`,
     );
-    console.log(
+    say(
       `  fee      ${terms.fx.feeEstimateMinor === null ? `charged in ${terms.fx.sellCurrency} when it is sent` : `about ${formatMoney(terms.fx.feeEstimateMinor, terms.fx.sellCurrency)}`}`,
     );
   }
-  console.log(`  to       ${terms.payTo} (the account on file)`);
+  say(`  to       ${terms.payTo} (the account on file)`);
   if (terms.arrival !== undefined) {
     const advice: ArrivalAdvice = arrivalAdvice(terms.arrival);
-    console.log(`  arrival  ${advice.text}`);
+    say(`  arrival  ${advice.text}`);
     if (advice.sentToday !== null) {
-      console.log(`           ${advice.sentToday.text}`);
+      say(`           ${advice.sentToday.text}`);
     }
-    console.log(`           ${advice.note}`);
+    say(`           ${advice.note}`);
   }
   if (terms.action === "replace") {
     const failure: string =
       terms.evidence.failureCode === null ? "" : ` (${terms.evidence.failureCode})`;
-    console.log(
+    say(
       `  because  original ${terms.evidence.originalReference} ${terms.evidence.originalState}${failure}: ${terms.evidence.reason}`,
     );
-    console.log(`  emails   ${terms.evidence.emails}`);
+    say(`  emails   ${terms.evidence.emails}`);
   } else {
-    console.log(`  held     ${terms.evidence.reason}`);
+    say(`  held     ${terms.evidence.reason}`);
     for (const duplicate of terms.evidence.duplicates) {
-      console.log(`  like     ${describeDuplicate(duplicate)}`);
+      say(`  like     ${describeDuplicate(duplicate)}`);
     }
     if (terms.evidence.emails !== undefined) {
-      console.log(`  emails   ${terms.evidence.emails}`);
+      say(`  emails   ${terms.evidence.emails}`);
     }
   }
-  console.log(
+  say(
     `  needs    ${approval.needed === 1 ? "one approver" : `${approval.needed} approvers, because ${approval.neededWhy}`}`,
   );
   if (approval.signoffs.length > 0) {
-    console.log(`  so far   approved by ${signersOf(approval.signoffs)}`);
+    say(`  so far   approved by ${signersOf(approval.signoffs)}`);
   }
   for (const bar of pending.barred) {
-    console.log(`  not      ${bar.name}, who ${bar.why}`);
+    say(`  not      ${bar.name}, who ${bar.why}`);
   }
-  console.log(
+  say(
     `  expires  ${approval.expiresAt === null ? "already" : new Date(approval.expiresAt).toLocaleString()}${pending.expired ? " (expired)" : ""}`,
   );
 }
@@ -77,7 +78,7 @@ function main(): void {
   const requestId: number = Number(process.argv[3]);
   const approver: string | undefined = process.argv.slice(4).join(" ").trim() || undefined;
   if (invoiceId === undefined || (process.argv[3] !== undefined && !Number.isInteger(requestId))) {
-    console.log("Usage: pnpm approve <INVOICE> [REQUEST NAME]");
+    say("Usage: pnpm approve <INVOICE> [REQUEST NAME]");
     process.exitCode = 1;
     return;
   }
@@ -86,7 +87,7 @@ function main(): void {
   const ledger: Ledger = new Ledger(LEDGER_PATH);
   const pending: PendingApproval | undefined = pendingApproval(ledger, invoiceId);
   if (pending === undefined) {
-    console.log(`No approval is waiting for ${invoiceId}`);
+    say(`No approval is waiting for ${invoiceId}`);
     process.exitCode = 1;
     return;
   }
@@ -96,13 +97,13 @@ function main(): void {
   const outage: Outage | undefined =
     obligation === undefined ? undefined : ledger.activeOutage(obligation.currency, obligation.transferMethod);
   if (outage !== undefined) {
-    console.log(
+    say(
       `  outage   Outage ${outage.id} on ${railOf(outage)} is active. An approval given now is kept until a person ends it and still expires when it would`,
     );
   }
-  console.log(describePolicy(policy));
+  say(describePolicy(policy));
   if (approver === undefined) {
-    console.log(`To approve these terms: pnpm approve ${invoiceId} ${pending.approval.id} <NAME>`);
+    say(`To approve these terms: pnpm approve ${invoiceId} ${pending.approval.id} <NAME>`);
     return;
   }
   try {
@@ -113,13 +114,13 @@ function main(): void {
       approver,
       requestId,
     );
-    console.log(
+    say(
       after.state === "approved"
         ? "Approved. The approval covers these terms only"
         : `Recorded. It needs ${after.needed - after.signoffs.length} more approver before PayOnce sends it`,
     );
   } catch (error: unknown) {
-    console.log(error instanceof Error ? error.message : String(error));
+    say(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
   }
 }

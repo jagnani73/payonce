@@ -20,6 +20,7 @@ import {
   type Obligation,
 } from "./ledger.js";
 import { formatMoney } from "./money.js";
+import { say } from "./printable.js";
 
 // Messages for a person to send to the supplier or the bank. PayOnce never sends
 // them. Each is rendered once, from facts PayOnce formats itself: amounts, bank
@@ -656,7 +657,7 @@ export function createDraft(
     (draftId: number): string =>
       `Draft ${draftId} for the ${template.audience} created by ${createdBy}: "${template.label}". Text SHA-256 ${hash}. PayOnce does not send it`,
   );
-  console.log(`  outbox   Draft ${id} created by ${createdBy}: ${template.label}`);
+  say(`  outbox   Draft ${id} created by ${createdBy}: ${template.label}`);
   const draft: Draft | undefined = ledger.draft(id);
   if (draft === undefined) {
     throw new Error(`Draft ${id} could not be read back`);
@@ -712,5 +713,5 @@ export function markDraft(
   if (!ledger.markDraft(obligation.invoiceId, draftId, move, MOVES_FROM[move], by, note, line)) {
     throw new DraftMoveError(`Draft ${draftId} is already ${ledger.draft(draftId)?.state ?? draft.state}, so it cannot be marked ${move}`);
   }
-  console.log(`  outbox   ${line}`);
+  say(`  outbox   ${line}`);
 }

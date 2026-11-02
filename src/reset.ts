@@ -1,11 +1,12 @@
 import { existsSync, renameSync } from "node:fs";
 import { LEDGER_PATH } from "./ledger.js";
+import { say } from "./printable.js";
 
 // Starts a clean ledger by moving the current one aside. Nothing is deleted, and
 // transfers already sent in the sandbox stay there.
 function main(): void {
   if (!existsSync(LEDGER_PATH)) {
-    console.log("There is no ledger yet, so there is nothing to reset");
+    say("There is no ledger yet, so there is nothing to reset");
     return;
   }
   const stamp: string = new Date().toISOString().replace(/[:.]/g, "-");
@@ -13,12 +14,12 @@ function main(): void {
   try {
     renameSync(LEDGER_PATH, archived);
   } catch (error: unknown) {
-    console.log(`Could not move ${LEDGER_PATH}. Stop pnpm ui and try again`);
-    console.log(`  ${error instanceof Error ? error.message : String(error)}`);
+    say(`Could not move ${LEDGER_PATH}. Stop pnpm ui and try again`);
+    say(`  ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
     return;
   }
-  console.log(`Moved the ledger to ${archived}. The next run starts a new one`);
+  say(`Moved the ledger to ${archived}. The next run starts a new one`);
 }
 
 main();

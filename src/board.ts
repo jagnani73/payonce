@@ -15,6 +15,7 @@ import {
 import { Ledger, LEDGER_PATH } from "./ledger.js";
 import { formatMoney } from "./money.js";
 import { sendsText, type OutageCode } from "./outages.js";
+import { printable, say } from "./printable.js";
 
 // The incident board in the terminal, ranked as the page ranks it. It reads only
 // the ledger, with no Airwallex call, and loads .env only if there is one, for the
@@ -32,15 +33,9 @@ const ID_WIDTH: number = 16;
 const SUPPLIER_WIDTH: number = 28;
 const AMOUNT_WIDTH: number = 24;
 const INDENT: string = "    ";
-// Control characters, which could move the cursor or colour the terminal, and line
-// breaks become spaces. Format characters (bidi controls, zero-width characters
-// and the rest of Unicode's Cf), which could reverse or hide part of a line, and
-// the rest of the tag block are dropped.
-const CONTROL: RegExp = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
-const HIDDEN: RegExp = /[\p{Cf}\u{e0000}-\u{e007f}]/gu;
 
 function fail(message: string): void {
-  console.log(message);
+  say(message);
   process.exitCode = 1;
 }
 
@@ -91,12 +86,6 @@ function waited(since: string | null, now: string): string {
   }
   const hours: number = Math.floor(minutes / 60);
   return hours < 48 ? `${hours} h` : `${Math.floor(hours / 24)} days`;
-}
-
-// A supplier or payee name, or an invoice number from a pay run file, as it is
-// safe to print.
-function printable(text: string): string {
-  return text.replace(HIDDEN, "").replace(CONTROL, " ").trim();
 }
 
 function cut(text: string, width: number): string {
@@ -185,52 +174,52 @@ function print(report: BoardReport): void {
     report.filters.currency,
     report.filters.origin === null ? null : `origin ${report.filters.origin}`,
   ].filter((part: string | null): part is string => part !== null);
-  console.log(`Incident board at ${utc(report.generatedAt)}, from the ledger only`);
+  say(`Incident board at ${utc(report.generatedAt)}, from the ledger only`);
   if (applied.length > 0) {
-    console.log(`Showing ${report.entries.length} of ${report.all}: ${applied.join(", ")}`);
+    say(`Showing ${report.entries.length} of ${report.all}: ${applied.join(", ")}`);
   }
   if (report.outages.length > 0) {
-    console.log("");
-    console.log(`Active rail outages (${report.outages.length}), whatever the filters`);
+    say("");
+    say(`Active rail outages (${report.outages.length}), whatever the filters`);
     for (const outage of report.outages) {
       for (const line of outageLines(outage)) {
-        console.log(line);
+        say(line);
       }
     }
   }
-  console.log("");
-  console.log("Money that could still leave a wallet");
+  say("");
+  say("Money that could still leave a wallet");
   if (report.totals.length === 0) {
-    console.log("  None");
+    say("  None");
   }
   for (const total of report.totals) {
-    console.log(totalLine(total));
+    say(totalLine(total));
   }
   for (const group of report.groups) {
     const entries: BoardEntry[] = report.entries.filter((entry: BoardEntry): boolean => entry.group === group.group);
     if (report.filters.group !== null && report.filters.group !== group.group) {
       continue;
     }
-    console.log("");
-    console.log(`${group.label} (${group.count})`);
+    say("");
+    say(`${group.label} (${group.count})`);
     if (entries.length === 0) {
-      console.log("  None");
+      say("  None");
     }
     for (const entry of entries) {
       for (const line of entryLines(entry, report.generatedAt)) {
-        console.log(line);
+        say(line);
       }
     }
   }
   if (report.invoices === 0) {
-    console.log("");
-    console.log("No incidents yet. Start one with pnpm recover, or with the new incident form in pnpm ui");
+    say("");
+    say("No incidents yet. Start one with pnpm recover, or with the new incident form in pnpm ui");
   } else if (report.all === 0) {
-    console.log("");
-    console.log("Every invoice in the ledger is closed, and no pay run waits for approval");
+    say("");
+    say("Every invoice in the ledger is closed, and no pay run waits for approval");
   }
-  console.log("");
-  console.log("PayOnce has no exchange rates, so amounts in different currencies are ranked as plain numbers.");
+  say("");
+  say("PayOnce has no exchange rates, so amounts in different currencies are ranked as plain numbers.");
 }
 
 function main(): void {

@@ -1,4 +1,5 @@
 import { readMinor, toMinor } from "../money.js";
+import { sayWarning } from "../printable.js";
 import type { AirwallexClient } from "./client.js";
 
 interface BalanceRow {
@@ -131,7 +132,7 @@ export class BalanceCache {
     try {
       await this.afterRead?.();
     } catch (error: unknown) {
-      console.warn(`  balances ${error instanceof Error ? error.message : String(error)}`);
+      sayWarning(`  balances ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 }

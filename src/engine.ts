@@ -121,6 +121,7 @@ import {
 import { formatMoney, readMinor, toMajor, toMinor } from "./money.js";
 import { holdLine, railFailureSeen, waitingLine } from "./outages.js";
 import { sendAttempt, syncTransfer, wasRejected } from "./payments.js";
+import { say, sayError } from "./printable.js";
 import { debitCurrency, floorFor, type ReservePolicy } from "./reserve.js";
 
 // What the reader found. unverifiedSenders is kept for display; the policy works
@@ -265,17 +266,17 @@ export function note(
     return;
   }
   ledger.addEvent(invoiceId, kind, message, topic);
-  console.log(`  ${kind.padEnd(8)} ${message}`);
+  say(`  ${kind.padEnd(8)} ${message}`);
 }
 
 // Puts a failure on the incident's timeline. It must not throw, because it runs
 // from error handlers.
 export function noteError(ledger: Ledger, invoiceId: string, error: unknown): void {
-  console.error(error);
+  sayError(error);
   try {
     note(ledger, invoiceId, "error", messageOf(error));
   } catch (inner: unknown) {
-    console.error(`Could not record the error for ${invoiceId}: ${messageOf(inner)}`);
+    sayError(`Could not record the error for ${invoiceId}: ${messageOf(inner)}`);
   }
 }
 
@@ -3256,7 +3257,7 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
     } else if (attempt.kind === "replacement" && originalStateOf(transfer) === "in_flight") {
       liveReplacement = transfer;
     }
-    console.log(`  ${attempt.kind} ${describe(transfer)}`);
+    say(`  ${attempt.kind} ${describe(transfer)}`);
   }
   // A transfer kept failed beside a payment that has failed since, in this look
   // or another, takes its own state now that the duplicate lock is free.

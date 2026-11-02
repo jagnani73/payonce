@@ -8,6 +8,7 @@ import {
   type Outbox,
 } from "./drafts.js";
 import { INVOICE_ID_PATTERN, Ledger, LEDGER_PATH, type Obligation } from "./ledger.js";
+import { say } from "./printable.js";
 
 // Messages to the supplier or the bank for a person to send. PayOnce never sends
 // them. Reads and writes only the ledger, with no Airwallex call.
@@ -23,37 +24,37 @@ const MAX_NAME_LENGTH: number = 80;
 const MAX_NOTE_LENGTH: number = 200;
 
 function fail(message: string): void {
-  console.log(message);
+  say(message);
   process.exitCode = 1;
 }
 
 function printDraft(draft: DraftView): void {
-  console.log(`Draft ${draft.id} for the ${draft.audience}: ${draft.label} (${draft.state})`);
-  console.log(`  drafted by ${draft.createdBy} at ${draft.createdAt}`);
+  say(`Draft ${draft.id} for the ${draft.audience}: ${draft.label} (${draft.state})`);
+  say(`  drafted by ${draft.createdBy} at ${draft.createdAt}`);
   if (draft.sentBy !== null) {
-    console.log(`  marked sent by ${draft.sentBy} at ${draft.sentAt ?? ""}`);
+    say(`  marked sent by ${draft.sentBy} at ${draft.sentAt ?? ""}`);
   }
   if (draft.dismissedBy !== null) {
-    console.log(`  dismissed by ${draft.dismissedBy}${draft.dismissNote === null ? "" : `: ${draft.dismissNote}`}`);
+    say(`  dismissed by ${draft.dismissedBy}${draft.dismissNote === null ? "" : `: ${draft.dismissNote}`}`);
   }
-  console.log(`  text SHA-256 ${draft.textHash}`);
+  say(`  text SHA-256 ${draft.textHash}`);
   if (!draft.intact) {
-    console.log("  WARNING: this text no longer matches the hash recorded on the timeline when it was drafted");
+    say("  WARNING: this text no longer matches the hash recorded on the timeline when it was drafted");
   }
   if (draft.noLongerFits !== null) {
-    console.log(`  Since it was drafted, it no longer fits: ${draft.noLongerFits}`);
+    say(`  Since it was drafted, it no longer fits: ${draft.noLongerFits}`);
   } else if (draft.changed !== null && draft.changed.length > 0) {
-    console.log(`  Since it was drafted, ${draft.changed.join(", ")}`);
+    say(`  Since it was drafted, ${draft.changed.join(", ")}`);
   }
-  console.log("");
-  console.log(`Subject: ${draft.subject}`);
-  console.log("");
-  console.log(draft.body);
+  say("");
+  say(`Subject: ${draft.subject}`);
+  say("");
+  say(draft.body);
 }
 
 function list(outbox: Outbox, invoiceId: string): void {
   if (outbox.drafts.length === 0) {
-    console.log(`${invoiceId} has no message drafts`);
+    say(`${invoiceId} has no message drafts`);
   }
   for (const draft of outbox.drafts) {
     const note: string =
@@ -62,26 +63,26 @@ function list(outbox: Outbox, invoiceId: string): void {
         : draft.changed !== null && draft.changed.length > 0
           ? `, changed since: ${draft.changed.join(", ")}`
           : "";
-    console.log(`  draft ${String(draft.id).padEnd(4)} ${draft.state.padEnd(9)} ${draft.label} (${draft.audience})${draft.intact ? "" : ", text does not match its hash"}${note}`);
+    say(`  draft ${String(draft.id).padEnd(4)} ${draft.state.padEnd(9)} ${draft.label} (${draft.audience})${draft.intact ? "" : ", text does not match its hash"}${note}`);
   }
   if (outbox.offers.length > 0) {
-    console.log("Messages that fit now:");
+    say("Messages that fit now:");
   }
   for (const offer of outbox.offers) {
-    console.log(`  ${offer.suggested ? "suggested" : "         "} ${offer.template.padEnd(17)} ${offer.label} (${offer.audience})${offer.why === null ? "" : `: ${offer.why}`}`);
+    say(`  ${offer.suggested ? "suggested" : "         "} ${offer.template.padEnd(17)} ${offer.label} (${offer.audience})${offer.why === null ? "" : `: ${offer.why}`}`);
   }
   for (const item of outbox.notOffered) {
-    console.log(`  not offered: ${item.label}. ${item.why}`);
+    say(`  not offered: ${item.label}. ${item.why}`);
   }
   if (outbox.withheld.length > 0) {
-    console.log(
+    say(
       `No message to the supplier is suggested, because they asked to hold, cancel or not pay this invoice. To draft one anyway: pnpm outbox ${invoiceId} draft <TEMPLATE> <NAME>`,
     );
   }
   for (const offer of outbox.withheld) {
-    console.log(`  held back ${offer.template.padEnd(17)} ${offer.label} (${offer.audience})`);
+    say(`  held back ${offer.template.padEnd(17)} ${offer.label} (${offer.audience})`);
   }
-  console.log("PayOnce never sends these. Copy one into your own email, send it to the contact on file, then record it with pnpm outbox <INVOICE> sent <DRAFT> <NAME>.");
+  say("PayOnce never sends these. Copy one into your own email, send it to the contact on file, then record it with pnpm outbox <INVOICE> sent <DRAFT> <NAME>.");
 }
 
 function draftId(raw: string | undefined): number | null {

@@ -5,6 +5,7 @@ import {
   type Server,
   type ServerResponse,
 } from "node:http";
+import { sayError, sayWarning } from "./printable.js";
 
 export const WEBHOOK_PATH: string = "/airwallex/webhooks";
 
@@ -74,7 +75,7 @@ function toEvent(body: Buffer): WebhookEvent | undefined {
 
 function answer(response: ServerResponse, status: number, text: string): void {
   if (status !== 200) {
-    console.warn(`  webhook  answered ${status} ${text}`);
+    sayWarning(`  webhook  answered ${status} ${text}`);
   }
   response.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
   response.end(text);
@@ -93,7 +94,7 @@ export class WebhookReceiver {
     this.server = createServer(
       (request: IncomingMessage, response: ServerResponse): void => {
         this.handle(request, response).catch((error: unknown): void => {
-          console.error(error);
+          sayError(error);
           if (!response.headersSent) {
             answer(response, 500, "Could not take the event");
           }

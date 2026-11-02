@@ -13,6 +13,7 @@ import {
   type OutagesReport,
   type OutageView,
 } from "./outages.js";
+import { say } from "./printable.js";
 
 const ENDED_SHOWN: number = 5;
 
@@ -29,20 +30,20 @@ function loadEnv(): void {
 }
 
 function show(view: OutageView): void {
-  console.log(`Outage ${view.id} on ${view.rail}, ${view.state}`);
-  console.log(`  ${view.text}`);
-  console.log(`  declared ${view.declaredAt}`);
+  say(`Outage ${view.id} on ${view.rail}, ${view.state}`);
+  say(`  ${view.text}`);
+  say(`  declared ${view.declaredAt}`);
   for (const payout of view.counted) {
-    console.log(`  counted  ${describeCounted(payout)}`);
+    say(`  counted  ${describeCounted(payout)}`);
   }
   for (const item of view.held) {
-    console.log(`  held     ${describeHeld(item)}`);
+    say(`  held     ${describeHeld(item)}`);
   }
   if (view.state === "active") {
-    console.log(`  ending   sends ${sendsText(view.sends)}`);
+    say(`  ending   sends ${sendsText(view.sends)}`);
   }
   if (view.state === "ended") {
-    console.log(`  ended    by ${view.endedBy ?? ""} at ${view.endedAt ?? ""}: ${view.endNote ?? ""}`);
+    say(`  ended    by ${view.endedBy ?? ""} at ${view.endedAt ?? ""}: ${view.endNote ?? ""}`);
   }
 }
 
@@ -66,14 +67,14 @@ function main(): void {
   const ledger: Ledger = new Ledger(LEDGER_PATH);
   if (command === undefined) {
     const report: OutagesReport = outagesReport(ledger, policy, outageHolding(ledger));
-    console.log(describeOutageRule(outageRuleFromEnv()));
+    say(describeOutageRule(outageRuleFromEnv()));
     if (report.active.length === 0) {
-      console.log("No outage is active");
+      say("No outage is active");
     }
     for (const view of [...report.active, ...report.recent.slice(0, ENDED_SHOWN)]) {
       show(view);
     }
-    console.log(
+    say(
       report.enders === null
         ? "Any named person may end an outage, because no approver list is set"
         : `An outage is ended by a name in APPROVERS: ${report.enders.join(", ")}`,
@@ -84,17 +85,17 @@ function main(): void {
   const name: string = process.argv[4] ?? "";
   const note: string = process.argv.slice(5).join(" ");
   if (command !== "end" || !Number.isInteger(id) || name === "" || note.trim() === "") {
-    console.log("Usage: pnpm outage [end <ID> <NAME> <NOTE...>]");
+    say("Usage: pnpm outage [end <ID> <NAME> <NOTE...>]");
     process.exitCode = 1;
     return;
   }
   try {
     const ended: EndedOutage = endOutage(ledger, policy, id, name, note, outageHolding(ledger));
-    console.log(
+    say(
       `Ended. The server's watcher picks up the ${ended.holds.length} ${ended.holds.length === 1 ? "invoice or run" : "invoices and runs"} it held on its next check, or the next pnpm ui or pnpm recover does`,
     );
   } catch (error: unknown) {
-    console.log(error instanceof Error ? error.message : String(error));
+    say(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
   }
 }

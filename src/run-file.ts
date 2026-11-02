@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { dueDateProblem } from "./arrival.js";
 import { validDomain } from "./eml.js";
 import { INVOICE_ID_PATTERN, type TransferMethod } from "./ledger.js";
+import { printable } from "./printable.js";
 import { PAID_OUTCOME, SANDBOX_OUTCOMES } from "./sandbox-bank.js";
 
 // A column a pay run file can have. Nothing else is read from a file: no bank
@@ -30,10 +31,19 @@ export const RUN_COLUMNS: RunColumn[] = [
 const SOURCE_COLUMNS: string[] = ["source_currency", "paid_from", "pay_from", "sell_currency"];
 
 export const MAX_RUN_ROWS: number = 50;
-// Small enough that the largest file fits the server's 64 KB request body.
+// The server's body limit for a run upload leaves room for the largest file after
+// UTF-8 and JSON escaping.
 export const MAX_RUN_FILE_CHARS: number = 40_000;
 const MAX_CELL_LENGTH: number = 100;
 const MAX_FILE_NAME_LENGTH: number = 100;
+// Control characters, which could move a terminal's cursor or write its clipboard
+// when a skip reason is printed, and characters nothing draws: format characters
+// (bidi controls, zero-width characters), default-ignorables and the tag block. A
+// line break inside a cell has its own problem.
+const UNSAFE_CELL: RegExp =
+  /[\u0000-\u0009\u000b\u000c\u000e-\u001f\u007f-\u009f\u2028\u2029\p{Cf}\p{Default_Ignorable_Code_Point}\u{e0000}-\u{e007f}]/u;
+const UNSAFE_NAME: RegExp =
+  /[\u0000-\u001f\u007f-\u009f\u2028\u2029\p{Cf}\p{Default_Ignorable_Code_Point}\u{e0000}-\u{e007f}]/gu;
 
 const BENEFICIARY_ID_PATTERN: RegExp = /^[A-Za-z0-9-]{1,64}$/;
 const CURRENCY_PATTERN: RegExp = /^[A-Za-z]{3}$/;
@@ -205,14 +215,26 @@ export function rowFromCells(line: number, columns: string[], cells: string[]): 
   }
   const value = (name: string): string => {
     const index: number = columns.indexOf(name);
-    return index < 0 ? "" : (cells[index] ?? "");
+    return index < 0 || unsafe.has(name) ? "" : (cells[index] ?? "");
   };
+  // An unsafe cell reads as empty and has its problem already, so it gets no second one.
+  const missing = (name: string, problem: string): void => {
+    if (!unsafe.has(name)) {
+      problems.push(problem);
+    }
+  };
+  // The column is named and the cell is never repeated, so nothing in it reaches a
+  // reason, the timeline or a terminal.
+  const unsafe: Set<string> = new Set<string>();
   columns.forEach((name: string, index: number): void => {
     const cell: string = cells[index] ?? "";
     if (/[\r\n]/.test(cell)) {
       problems.push(`The ${name} cell has a line break in it`);
     } else if (cell.length > MAX_CELL_LENGTH) {
       problems.push(`The ${name} cell is longer than ${MAX_CELL_LENGTH} characters`);
+    } else if (UNSAFE_CELL.test(cell)) {
+      problems.push(`The ${name} cell has a control character or a character nothing draws in it`);
+      unsafe.add(name);
     }
     if (cell.includes("�")) {
       problems.push(`The ${name} cell has characters that are not UTF-8`);
@@ -222,7 +244,7 @@ export function rowFromCells(line: number, columns: string[], cells: string[]): 
   const invoice: string = value("invoice");
   let invoiceId: string | null = null;
   if (invoice === "") {
-    problems.push("The invoice number is empty");
+    missing("invoice", "The invoice number is empty");
   } else if (!INVOICE_ID_PATTERN.test(invoice)) {
     problems.push(`The invoice number ${invoice.slice(0, 40)} is not 1 to 40 letters, digits and dashes`);
   } else {
@@ -231,13 +253,13 @@ export function rowFromCells(line: number, columns: string[], cells: string[]): 
 
   const supplier: string = value("supplier");
   if (supplier === "") {
-    problems.push("The supplier is empty");
+    missing("supplier", "The supplier is empty");
   }
 
   const beneficiary: string = value("beneficiary_id");
   let beneficiaryId: string | null = null;
   if (beneficiary === "") {
-    problems.push("The beneficiary id is empty");
+    missing("beneficiary_id", "The beneficiary id is empty");
   } else if (!BENEFICIARY_ID_PATTERN.test(beneficiary)) {
     problems.push("The beneficiary id is not 1 to 64 letters, digits and dashes");
   } else {
@@ -248,7 +270,7 @@ export function rowFromCells(line: number, columns: string[], cells: string[]): 
   const badAmount: string | null = amountProblem(amount);
   let amountMinor: number | null = null;
   if (badAmount !== null) {
-    problems.push(badAmount);
+    missing("amount", badAmount);
   } else if (amountMinorOf(amount) <= 0) {
     problems.push("The amount must be above zero");
   } else {
@@ -258,7 +280,7 @@ export function rowFromCells(line: number, columns: string[], cells: string[]): 
   const code: string = value("currency");
   let currency: string | null = null;
   if (!CURRENCY_PATTERN.test(code)) {
-    problems.push(code === "" ? "The currency is empty" : `The currency ${code} is not a three-letter code`);
+    missing("currency", code === "" ? "The currency is empty" : `The currency ${code} is not a three-letter code`);
   } else if (!twoDecimals(code.toUpperCase())) {
     problems.push(`${code.toUpperCase()} does not have two decimals. PayOnce handles two-decimal currencies only`);
   } else {
@@ -315,7 +337,7 @@ export function rowFromCells(line: number, columns: string[], cells: string[]): 
 // characters, 100 characters at most.
 export function cleanFileName(name: string): string {
   const base: string = name.split(/[\\/]/).at(-1) ?? "";
-  return base.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, MAX_FILE_NAME_LENGTH);
+  return base.replace(UNSAFE_NAME, "").trim().slice(0, MAX_FILE_NAME_LENGTH);
 }
 
 // Reads a pay run file. A problem with the file as a whole refuses it, and nothing
@@ -361,7 +383,7 @@ export function parseRunFile(fileName: string, text: string): ParsedRunFile {
     } else if (!known.includes(column)) {
       problems.push({
         line: header.line,
-        message: `The header has an unknown column "${column.slice(0, 40)}". The columns are ${known.join(", ")}`,
+        message: `The header has an unknown column "${printable(column.slice(0, 40))}". The columns are ${known.join(", ")}`,
       });
     } else if (columns.indexOf(column) !== index) {
       problems.push({ line: header.line, message: `The column ${column} appears twice in the header` });

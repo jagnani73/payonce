@@ -6,6 +6,7 @@ import { noteError, type Engine } from "./engine.js";
 import { describeQuotes } from "./fx.js";
 import { Ledger, LEDGER_PATH, type Obligation, type RunRow } from "./ledger.js";
 import { describeOutageRule, outageRuleFromEnv } from "./outages.js";
+import { say } from "./printable.js";
 import { readerFromEnv } from "./reader.js";
 import { describeFloors, reserveFromEnv } from "./reserve.js";
 import { SandboxBank } from "./sandbox-bank.js";
@@ -40,9 +41,9 @@ async function main(): Promise<void> {
     reserve: reserveFromEnv(),
     bank,
   };
-  console.log(describeFloors(engine.reserve));
-  console.log(describeQuotes());
-  console.log(describeOutageRule(outageRuleFromEnv()));
+  say(describeFloors(engine.reserve));
+  say(describeQuotes());
+  say(describeOutageRule(outageRuleFromEnv()));
   const agent: Dispatcher = new Dispatcher(engine);
   const watcher: Watcher = new Watcher(engine, agent, CHECK_EVERY_MS);
   const invoiceId: string = process.argv[3] ?? newInvoiceId(ledger);
@@ -55,7 +56,7 @@ async function main(): Promise<void> {
   // order, and never from a scenario script. This watcher leaves such rows alone.
   const fromRun: RunRow | undefined = ledger.runRowOf(invoiceId);
   if (fromRun !== undefined && ledger.attempts(invoiceId).length === 0) {
-    console.log(`${invoiceId} belongs to pay run ${fromRun.runId}, and the server sends it`);
+    say(`${invoiceId} belongs to pay run ${fromRun.runId}, and the server sends it`);
     process.exitCode = 1;
     return;
   }
@@ -67,13 +68,13 @@ async function main(): Promise<void> {
       existing !== undefined &&
       (ledger.attempts(invoiceId).length > 0 || existing.state === "rejected")
     ) {
-      console.log(`${invoiceId} is already in the ledger`);
+      say(`${invoiceId} is already in the ledger`);
       agent.wake(invoiceId);
       await untilAtRest(ledger, agent, bank, invoiceId);
     } else {
       // An obligation with no payment yet is a run that stopped before paying, or
       // one PayOnce held before paying.
-      console.log(`${existing === undefined ? "New incident" : "Starting"} ${invoiceId}`);
+      say(`${existing === undefined ? "New incident" : "Starting"} ${invoiceId}`);
       await runScenario(
         engine,
         agent,
@@ -88,7 +89,7 @@ async function main(): Promise<void> {
   } finally {
     watcher.stop();
   }
-  console.log(`  state: ${ledger.obligation(invoiceId)?.state ?? "unknown"}`);
+  say(`  state: ${ledger.obligation(invoiceId)?.state ?? "unknown"}`);
 }
 
 await main();

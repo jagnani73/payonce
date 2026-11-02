@@ -19,6 +19,7 @@ import {
   type RunRow,
 } from "./ledger.js";
 import { formatMoney } from "./money.js";
+import { say } from "./printable.js";
 import { readerFromEnv } from "./reader.js";
 import { describeFloors, reserveFromEnv } from "./reserve.js";
 import { parseRunFile, type FileProblem, type ParsedRunFile } from "./run-file.js";
@@ -58,7 +59,7 @@ const STATUS_WORDS: Record<RunStatus, string> = {
 const EVENTS_SHOWN: number = 8;
 
 function fail(message: string): void {
-  console.log(message);
+  say(message);
   process.exitCode = 1;
 }
 
@@ -103,30 +104,30 @@ function rowText(row: CheckedRow | RunRow): string {
 function printRows(ledger: Ledger, rows: (CheckedRow | RunRow)[]): void {
   let arriving: boolean = false;
   for (const row of rows) {
-    console.log(rowText(row));
+    say(rowText(row));
     if (row.payTo !== null && row.action === "pay") {
-      console.log(`           to ${row.payTo}${row.newPayee ? ", a payee PayOnce has never paid" : ""}`);
+      say(`           to ${row.payTo}${row.newPayee ? ", a payee PayOnce has never paid" : ""}`);
     }
     if (row.arrival !== null && row.currency !== null) {
       const advice: ArrivalAdvice = arrivalAdvice(row.arrival);
-      console.log(`           ${advice.text}; ${feeSeenText(ledger, row.currency, row.arrival.method)}`);
+      say(`           ${advice.text}; ${feeSeenText(ledger, row.currency, row.arrival.method)}`);
       if (advice.sentToday !== null) {
-        console.log(`           ${advice.sentToday.text}`);
+        say(`           ${advice.sentToday.text}`);
       }
       arriving = true;
     }
     for (const reason of row.reasons) {
-      console.log(`           ${reason}`);
+      say(`           ${reason}`);
     }
     if (row.heldFor.length > 0) {
-      console.log(`           held for a person when sent: looks like a second bill for ${row.heldFor.join(", ")}`);
+      say(`           held for a person when sent: looks like a second bill for ${row.heldFor.join(", ")}`);
     }
     if ("note" in row && row.note !== null) {
-      console.log(`           ${row.note}`);
+      say(`           ${row.note}`);
     }
   }
   if (arriving) {
-    console.log(`  ${HOLIDAYS_NOTE}`);
+    say(`  ${HOLIDAYS_NOTE}`);
   }
 }
 
@@ -137,11 +138,11 @@ function printCash(cash: RunCash[]): void {
     const available: string =
       entry.availableMinor === null ? "unknown" : formatMoney(entry.availableMinor, entry.currency);
     const after: string = entry.afterMinor === null ? "unknown" : formatMoney(entry.afterMinor, entry.currency);
-    console.log(
+    say(
       `  cash     ${entry.currency}: ${formatMoney(entry.payMinor, entry.currency)} to pay, available ${available}, committed elsewhere ${formatMoney(entry.committedMinor, entry.currency)}, ${floor}, after the run ${after}${entry.feeUnknown > 0 ? ", fee not known" : ""}`,
     );
     if (entry.problem !== null) {
-      console.log(`           ${entry.problem}`);
+      say(`           ${entry.problem}`);
     }
   }
 }
@@ -150,12 +151,12 @@ function printApproval(ledger: Ledger, pending: PendingRunApproval): void {
   const approval: RunApproval = pending.approval;
   const totals: RunTotal[] = pending.terms.totals;
   const payments: number = pending.terms.rows.length;
-  console.log(
+  say(
     `Request ${approval.id}: pay ${totalsText(totals)} in ${payments} ${payments === 1 ? "payment" : "payments"}`,
   );
   // As on the page's card, so an approver sees a currency with no floor.
   for (const total of totals) {
-    console.log(
+    say(
       `  ${total.currency.padEnd(8)} ${formatMoney(total.amountMinor, total.currency)} in ${total.payments} ${total.payments === 1 ? "payment" : "payments"}, ${total.reserveFloorMinor === null ? `no reserve floor is set for ${total.currency}` : `reserve floor ${formatMoney(total.reserveFloorMinor, total.currency)}`}`,
     );
   }
@@ -164,32 +165,32 @@ function printApproval(ledger: Ledger, pending: PendingRunApproval): void {
   for (const row of pending.terms.rows) {
     if (row.arrival !== undefined) {
       const advice: ArrivalAdvice = arrivalAdvice(row.arrival);
-      console.log(`  arrival  row ${row.line} ${row.invoiceId}: ${advice.text}`);
+      say(`  arrival  row ${row.line} ${row.invoiceId}: ${advice.text}`);
       if (advice.sentToday !== null) {
-        console.log(`           ${advice.sentToday.text}`);
+        say(`           ${advice.sentToday.text}`);
       }
       arriving = true;
     }
   }
   if (arriving) {
-    console.log(`           ${HOLIDAYS_NOTE}`);
+    say(`           ${HOLIDAYS_NOTE}`);
   }
-  console.log(
+  say(
     `  needs    ${approval.needed === 1 ? "one approver" : `${approval.needed} approvers, because ${approval.neededWhy}`}`,
   );
-  console.log(`  limits   checked against ${formatMoney(pending.largest.amountMinor, pending.largest.currency)}, the largest total`);
+  say(`  limits   checked against ${formatMoney(pending.largest.amountMinor, pending.largest.currency)}, the largest total`);
   // The sender check trusts these domains, so the approvers see each one.
   for (const check of domainChecks(ledger, pending.terms)) {
     const changed: boolean = check.caution;
-    console.log(`  ${changed ? "caution " : "domain  "} ${domainText(check)}`);
+    say(`  ${changed ? "caution " : "domain  "} ${domainText(check)}`);
   }
   if (approval.signoffs.length > 0) {
-    console.log(`  so far   approved by ${signersOf(approval.signoffs)}`);
+    say(`  so far   approved by ${signersOf(approval.signoffs)}`);
   }
   for (const bar of pending.barred) {
-    console.log(`  not      ${bar.name}, who ${bar.why}`);
+    say(`  not      ${bar.name}, who ${bar.why}`);
   }
-  console.log(
+  say(
     `  expires  ${new Date(approval.expiresAt).toLocaleString()}${pending.expired ? " (expired)" : ""}`,
   );
 }
@@ -197,10 +198,10 @@ function printApproval(ledger: Ledger, pending: PendingRunApproval): void {
 function show(ledger: Ledger, run: Run): void {
   const rows: RunRow[] = ledger.runRows(run.id);
   const counts: RunCounts = runCounts(rows);
-  console.log(
+  say(
     `Pay run ${run.id}, ${run.fileName}, uploaded by ${run.uploadedBy} at ${new Date(run.uploadedAt).toLocaleString()}: ${STATUS_WORDS[runStatus(ledger, run)]}`,
   );
-  console.log(
+  say(
     `  ${counts.pay} to pay (${totalsText(counts.totals)})${counts.held === 0 ? "" : `, ${counts.held} held for a person when sent`}, ${counts.skip} skipped`,
   );
   printRows(ledger, rows);
@@ -211,7 +212,7 @@ function show(ledger: Ledger, run: Run): void {
   }
   const events: LedgerEvent[] = ledger.runEvents(run.id).slice(-EVENTS_SHOWN);
   for (const event of events) {
-    console.log(`  ${event.kind.padEnd(8)} ${event.message}`);
+    say(`  ${event.kind.padEnd(8)} ${event.message}`);
   }
 }
 
@@ -241,8 +242,8 @@ async function upload(ledger: Ledger, path: string | undefined, uploadedBy: stri
     return;
   }
   const engine: Engine = engineFrom(ledger);
-  console.log(describePolicy(engine.approvals));
-  console.log(describeFloors(engine.reserve));
+  say(describePolicy(engine.approvals));
+  say(describeFloors(engine.reserve));
   try {
     const runId: number = await uploadRun(engine, parsed.file, uploadedBy);
     const run: Run | undefined = ledger.run(runId);
@@ -250,7 +251,7 @@ async function upload(ledger: Ledger, path: string | undefined, uploadedBy: stri
       show(ledger, run);
       const pending: PendingRunApproval | undefined = pendingRunApproval(ledger, runId);
       if (pending !== undefined) {
-        console.log(`To approve: pnpm payrun approve ${runId} ${pending.approval.id} <NAME>`);
+        say(`To approve: pnpm payrun approve ${runId} ${pending.approval.id} <NAME>`);
       }
     }
   } catch (error: unknown) {
@@ -276,9 +277,9 @@ function approve(ledger: Ledger, run: Run, requestRaw: string | undefined, appro
     return;
   }
   printApproval(ledger, pending);
-  console.log(describePolicy(policy));
+  say(describePolicy(policy));
   if (requestRaw === undefined || approver === "") {
-    console.log(`To approve these terms: pnpm payrun approve ${run.id} ${pending.approval.id} <NAME>`);
+    say(`To approve these terms: pnpm payrun approve ${run.id} ${pending.approval.id} <NAME>`);
     return;
   }
   const requestId: number = Number(requestRaw);
@@ -289,7 +290,7 @@ function approve(ledger: Ledger, run: Run, requestRaw: string | undefined, appro
   try {
     const after: RunApproval = approveRun(ledger, policy, run.id, approver, requestId);
     const left: number = after.needed - after.signoffs.length;
-    console.log(
+    say(
       after.state === "approved"
         ? "Approved. pnpm ui releases the run on its next check"
         : `Recorded. It needs ${left} more approver${left === 1 ? "" : "s"} before PayOnce releases it`,
@@ -333,7 +334,7 @@ async function main(): Promise<void> {
     }
     try {
       cancelRun(ledger, run.id, second, note);
-      console.log(`Run ${run.id} is cancelled. Its invoice numbers are free again`);
+      say(`Run ${run.id} is cancelled. Its invoice numbers are free again`);
     } catch (error: unknown) {
       fail(error instanceof Error ? error.message : String(error));
     }

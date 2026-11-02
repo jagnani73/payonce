@@ -6,6 +6,7 @@ import {
   type CoveredTransfer,
 } from "./engine.js";
 import { Ledger, LEDGER_PATH } from "./ledger.js";
+import { say } from "./printable.js";
 
 const COVERS_FLAG: string = "--covers=";
 
@@ -32,7 +33,7 @@ function main(): void {
     .join(" ")
     .trim();
   if (invoiceId === undefined || invoiceId.startsWith(COVERS_FLAG)) {
-    console.log("Usage: pnpm close <INVOICE> [NAME] [NOTE] [--covers=REF,...]");
+    say("Usage: pnpm close <INVOICE> [NAME] [NOTE] [--covers=REF,...]");
     process.exitCode = 1;
     return;
   }
@@ -40,28 +41,28 @@ function main(): void {
   const ledger: Ledger = new Ledger(LEDGER_PATH);
   const review: CloseReview | undefined = pendingClose(ledger, invoiceId);
   if (review === undefined) {
-    console.log(`${invoiceId} is not waiting on a person to close it`);
+    say(`${invoiceId} is not waiting on a person to close it`);
     process.exitCode = 1;
     return;
   }
 
   const duplicate: boolean = review.kind === "duplicate" || review.kind === "unpaid";
   if (review.kind === "duplicate") {
-    console.log(`${invoiceId} is held before paying, as a likely second bill for ${review.reference}`);
+    say(`${invoiceId} is held before paying, as a likely second bill for ${review.reference}`);
   } else if (review.kind === "unpaid") {
-    console.log(`${invoiceId} is waiting on a person and nothing for it is paid`);
+    say(`${invoiceId} is waiting on a person and nothing for it is paid`);
   } else {
-    console.log(`${invoiceId} is paid and waiting on a person`);
-    console.log(`  ${review.kind.padEnd(9)} ${review.reference ?? "no reference"} paid`);
+    say(`${invoiceId} is paid and waiting on a person`);
+    say(`  ${review.kind.padEnd(9)} ${review.reference ?? "no reference"} paid`);
   }
-  console.log(`  because   ${review.reason}`);
+  say(`  because   ${review.reason}`);
   if (review.emails !== null) {
-    console.log(`  emails    ${review.emails}`);
+    say(`  emails    ${review.emails}`);
   }
   if (review.covered.length > 0) {
-    console.log("  covers    transfers listed under its request ids that do not match it:");
+    say("  covers    transfers listed under its request ids that do not match it:");
     for (const transfer of review.covered) {
-      console.log(`            ${coveredText(transfer)}`);
+      say(`            ${coveredText(transfer)}`);
     }
   }
   const covers: string =
@@ -69,7 +70,7 @@ function main(): void {
       ? ""
       : ` ${COVERS_FLAG}${review.covered.map((transfer: CoveredTransfer): string => transfer.reference).join(",")}`;
   if (closedBy === undefined || closedBy.startsWith(COVERS_FLAG) || finding === "") {
-    console.log(
+    say(
       `To close it${duplicate ? " without paying" : ""}: pnpm close ${invoiceId} <NAME> <NOTE>${covers}`,
     );
     return;
@@ -83,7 +84,7 @@ function main(): void {
     (transfer: CoveredTransfer): boolean => !named.some((name: string): boolean => names(name, transfer)),
   );
   if (missing || unknown.length > 0) {
-    console.log(
+    say(
       review.covered.length === 0
         ? `Not closed: nothing listed under ${invoiceId}'s request ids needs naming, so leave out --covers (${unknown.join(", ")} not on file)`
         : `Not closed: name every transfer listed above, and only those${unknown.length > 0 ? ` (${unknown.join(", ")} not on the list)` : ""}: pnpm close ${invoiceId} <NAME> <NOTE>${covers}`,
@@ -98,7 +99,7 @@ function main(): void {
     finding,
     review.covered.map((transfer: CoveredTransfer): string => transfer.transferId),
   );
-  console.log(duplicate ? "Closed without paying" : "Closed without a second payment");
+  say(duplicate ? "Closed without paying" : "Closed without a second payment");
 }
 
 main();

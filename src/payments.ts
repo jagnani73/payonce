@@ -8,6 +8,7 @@ import {
 import { attemptStateOf, debitOf, feeOf, type Debit, type Fee } from "./assess.js";
 import { crossCurrency, type Attempt, type Ledger, type Obligation } from "./ledger.js";
 import { toMajor } from "./money.js";
+import { sayWarning } from "./printable.js";
 
 // Failed transfers whose fee is read from Airwallex in one go, when the ledger
 // has none for them.
@@ -150,7 +151,7 @@ export async function recordMissingFees(
         recorded += 1;
       }
     } catch (error: unknown) {
-      console.warn(
+      sayWarning(
         `  fees     ${transferId}: ${error instanceof Error ? error.message : String(error)}`,
       );
     }

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Lease, Ledger } from "./ledger.js";
+import { sayWarning } from "./printable.js";
 
 // A lease runs out by itself, so a process that dies holding one blocks its
 // currency for a minute at most. The holder renews it well before then.
@@ -52,7 +53,7 @@ export async function withCurrencyLock<T>(
     try {
       ledger.leaveCurrencyQueue(currency, lease.holder);
     } catch (inner: unknown) {
-      console.warn(`  lock     ${inner instanceof Error ? inner.message : String(inner)}`);
+      sayWarning(`  lock     ${inner instanceof Error ? inner.message : String(inner)}`);
     }
     throw error;
   }
@@ -61,10 +62,10 @@ export async function withCurrencyLock<T>(
   const renew: ReturnType<typeof setInterval> = setInterval((): void => {
     try {
       if (!ledger.renewCurrencyLock(currency, lease.holder, Date.now() + LEASE_MS)) {
-        console.warn(`  lock     the ${currency} lease ran out before the payment finished`);
+        sayWarning(`  lock     the ${currency} lease ran out before the payment finished`);
       }
     } catch (error: unknown) {
-      console.warn(`  lock     ${error instanceof Error ? error.message : String(error)}`);
+      sayWarning(`  lock     ${error instanceof Error ? error.message : String(error)}`);
     }
   }, RENEW_EVERY_MS);
   try {

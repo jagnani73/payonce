@@ -57,6 +57,7 @@ import {
 } from "./ledger.js";
 import { formatMoney } from "./money.js";
 import { runHoldLine, runWaitingLine } from "./outages.js";
+import { say, sayError } from "./printable.js";
 import { currencyFloor, type CurrencyFloor, type FloorSource } from "./reserve.js";
 import { rowFromCells, type RunFile, type RunFileRow } from "./run-file.js";
 
@@ -714,17 +715,17 @@ export function runNote(
     return;
   }
   ledger.addRunEvent(runId, kind, message, topic);
-  console.log(`  run ${runId}    ${kind.padEnd(8)} ${message}`);
+  say(`  run ${runId}    ${kind.padEnd(8)} ${message}`);
 }
 
 // Puts a failure on the run's timeline. It must not throw, because it runs from
 // error handlers.
 export function runNoteError(ledger: Ledger, runId: number, error: unknown, what: string = ""): void {
-  console.error(error);
+  sayError(error);
   try {
     runNote(ledger, runId, "error", `${what}${error instanceof Error ? error.message : String(error)}`);
   } catch (inner: unknown) {
-    console.error(
+    sayError(
       `Could not record the error for run ${runId}: ${inner instanceof Error ? inner.message : String(inner)}`,
     );
   }

@@ -21,6 +21,7 @@ import {
   type OutageSubjectHeld,
   type RailFailure,
 } from "./ledger.js";
+import { say, sayWarning } from "./printable.js";
 
 // The failure codes that say the rail failed, not the payee's account. Each has
 // PayOnce's own label. Account codes (account closed, invalid account,
@@ -187,13 +188,13 @@ export function railFailureSeen(
       declaredLine,
     );
     if (outage !== undefined) {
-      console.log(
+      say(
         `  outage   Outage ${outage.id} declared on ${railOf(outage)}: payouts to ${outage.payees} payees failed with ${codesText(outage.codes)}`,
       );
     }
     return outage;
   } catch (error: unknown) {
-    console.warn(
+    sayWarning(
       `  outage   ${transfer.short_reference_id ?? transfer.id}: ${error instanceof Error ? error.message : String(error)}`,
     );
     return undefined;
@@ -388,7 +389,7 @@ export function endOutage(
   if (holds === undefined) {
     throw alreadyEnded(after);
   }
-  console.log(`  outage   Outage ${id} on ${railOf(after)} ended by ${ender}: ${why}`);
+  say(`  outage   Outage ${id} on ${railOf(after)} ended by ${ender}: ${why}`);
   return { outage: after, holds };
 }
 

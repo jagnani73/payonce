@@ -8,6 +8,7 @@ import {
 } from "./emails.js";
 import type { Decision, Incident, OriginalTransferState } from "./incident.js";
 import { KeywordReader } from "./keyword-reader.js";
+import { say } from "./printable.js";
 
 const INVOICE_ID: string = "INV-1042";
 const SUPPLIER_DOMAIN: string = "example-supplier.test";
@@ -121,10 +122,10 @@ for (const sample of samples) {
     twoApproversAboveMinor: 500_000,
   };
   const decision: Decision = decide(incident);
-  console.log(sample.label);
-  console.log(`  emails: ${findings.summary}`);
+  say(sample.label);
+  say(`  emails: ${findings.summary}`);
   if (unverified.length > 0) {
-    console.log(`  sender not on file: ${unverified.join(", ")}`);
+    say(`  sender not on file: ${unverified.join(", ")}`);
   }
-  console.log(`  decision: ${decision.action} (${decision.reason})`);
+  say(`  decision: ${decision.action} (${decision.reason})`);
 }

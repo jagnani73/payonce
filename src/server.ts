@@ -126,6 +126,7 @@ import {
   type EndedOutage,
 } from "./outages.js";
 import { recordMissingFees } from "./payments.js";
+import { printableError, say, sayError, sayWarning } from "./printable.js";
 import { readerFromEnv, readerNamesFromEnv } from "./reader.js";
 import { describeFloors, reserveFromEnv } from "./reserve.js";
 import {
@@ -486,7 +487,7 @@ function onWebhook(event: WebhookEvent): void {
     event.data.id ?? "",
   );
   const reference: string = attempt?.reference ?? event.data.short_reference_id ?? "";
-  console.log(`  webhook  ${event.name} ${reference}`);
+  say(`  webhook  ${event.name} ${reference}`);
   const news: string | undefined = DECISIVE_EVENTS[event.name];
   if (news === undefined) {
     return;
@@ -546,7 +547,7 @@ async function subscribeWithRetry(url: string): Promise<string> {
 // often enough that nothing waits long.
 async function connectWebhooks(): Promise<void> {
   if (process.env["WEBHOOKS"] === "off") {
-    console.log("Webhooks are off. Payments in flight are checked every 3 seconds");
+    say("Webhooks are off. Payments in flight are checked every 3 seconds");
     return;
   }
   try {
@@ -560,7 +561,7 @@ async function connectWebhooks(): Promise<void> {
         (code: number | null): void => {
           tunnel = null;
           watcher.every(CHECK_EVERY_MS);
-          console.warn(
+          sayWarning(
             `The webhook tunnel closed (exit ${code}). Payments in flight are checked every 3 seconds`,
           );
         },
@@ -570,9 +571,9 @@ async function connectWebhooks(): Promise<void> {
     const url: string = `${address.replace(/\/+$/, "")}${WEBHOOK_PATH}`;
     receiver.setSecret(await subscribeWithRetry(url));
     watcher.every(CHECK_WITH_WEBHOOKS_MS);
-    console.log(`Airwallex webhooks arrive at ${url}`);
+    say(`Airwallex webhooks arrive at ${url}`);
   } catch (error: unknown) {
-    console.warn(
+    sayWarning(
       `Webhooks are not connected, so payments in flight are checked every 3 seconds: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
@@ -1124,7 +1125,7 @@ async function askWhy(request: IncomingMessage, invoiceId: string): Promise<Show
     throw new HttpError(404, `${invoiceId} is not in the ledger`);
   }
   if (build.unrecognised > 0) {
-    console.warn(`  why      ${build.unrecognised} unrecognised reason${build.unrecognised === 1 ? "" : "s"} on ${invoiceId}`);
+    sayWarning(`  why      ${build.unrecognised} unrecognised reason${build.unrecognised === 1 ? "" : "s"} on ${invoiceId}`);
   }
   const key: string = factsKey(invoiceId, build.facts, explainer.models);
   const remembered: { answer: ModelAnswer; at: number } | undefined = explainLimiter.remembered(key, Date.now());
@@ -1150,7 +1151,7 @@ async function askWhy(request: IncomingMessage, invoiceId: string): Promise<Show
   } finally {
     explainLimiter.end(key, Date.now(), answer, limited);
   }
-  console.log(
+  say(
     `  why      ${invoiceId} answered by ${answer.model} in ${(answer.ms / 1000).toFixed(1)} s (${answer.explanation.length} characters)`,
   );
   return shownAnswer(answer, build, Date.now(), false);
@@ -1831,7 +1832,7 @@ const server: Server = createServer(
       const status: number = error instanceof HttpError ? error.status : 500;
       const message: string = error instanceof Error ? error.message : String(error);
       if (status === 500) {
-        console.error(error);
+        sayError(error);
       }
       if (response.headersSent) {
         response.end();
@@ -1857,7 +1858,7 @@ const server: Server = createServer(
 
 // One failed step must not take the server, and every other incident, down with it.
 process.on("unhandledRejection", (reason: unknown): void => {
-  console.error("Unhandled rejection:", reason);
+  sayError(`Unhandled rejection: ${printableError(reason)}`);
 });
 
 process.on("exit", (): void => {
@@ -1870,13 +1871,13 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 }
 
 server.listen(PORT, HOST, (): void => {
-  console.log(`PayOnce is at http://${HOST}:${PORT} (sandbox only, no real money)`);
-  console.log(`Supplier emails are read by: ${engine.reader.name}`);
-  console.log(describePolicy(engine.approvals));
-  console.log(describeFloors(engine.reserve));
-  console.log(describeQuotes());
-  console.log(describeOutageRule(outageRuleFromEnv()));
-  console.log(describeAlerts(alertSetting));
+  say(`PayOnce is at http://${HOST}:${PORT} (sandbox only, no real money)`);
+  say(`Supplier emails are read by: ${engine.reader.name}`);
+  say(describePolicy(engine.approvals));
+  say(describeFloors(engine.reserve));
+  say(describeQuotes());
+  say(describeOutageRule(outageRuleFromEnv()));
+  say(describeAlerts(alertSetting));
   // The first page load then has balances to show.
   balances.refreshIfOld();
   pickUpInterrupted();
