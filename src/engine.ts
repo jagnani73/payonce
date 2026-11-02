@@ -435,6 +435,40 @@ export function unrecordedAttemptOf(ledger: Ledger, transfer: Transfer): Attempt
     : undefined;
 }
 
+// Why an invoice waits for a person when Airwallex lists a transfer under the
+// request id of a payment PayOnce marked failed with none, and that transfer does
+// not carry the invoice's number, amount and currency. A fixed string, because
+// alerts post escalation reasons.
+export const MISMATCHED_TRANSFER_REASON: string =
+  "Airwallex lists a transfer under the request id of a payment PayOnce marked as never sent, and it does not match this invoice";
+
+// Such a transfer is not recorded on the attempt, because it may not be this
+// invoice's payment. The invoice's timeline says so once per transfer, in
+// PayOnce's words, and the invoice waits for a person, reopened if it was
+// closed. Nothing wakes it: a look has nothing more to do with the transfer.
+// True when it wrote the warning, so a check before a payment looks again.
+export function noteMismatchedTransfer(engine: Engine, transfer: Transfer): boolean {
+  const requestId: string = transfer.request_id ?? "";
+  const attempt: Attempt | undefined =
+    requestId === "" ? undefined : engine.ledger.attemptOf(requestId, transfer.id);
+  if (
+    attempt?.requestId !== requestId ||
+    attempt.state !== "failed" ||
+    attempt.transferId !== null ||
+    unrecordedAttemptOf(engine.ledger, transfer) !== undefined
+  ) {
+    return false;
+  }
+  const invoiceId: string = attempt.invoiceId;
+  const message: string = `${capitalise(attempt.kind)} payment PayOnce had marked failed has a transfer under its request id that does not match this invoice: Airwallex lists ${transfer.short_reference_id} under it with another reference, amount or currency. PayOnce did not record it on the ${attempt.kind}, so a person checks it`;
+  if (engine.ledger.events(invoiceId).some((event: LedgerEvent): boolean => event.message === message)) {
+    return false;
+  }
+  note(engine.ledger, invoiceId, "warning", message);
+  engine.ledger.escalate(invoiceId, MISMATCHED_TRANSFER_REASON);
+  return true;
+}
+
 // A payment the bank has not failed that PayOnce found late, while another payment
 // for the invoice, PayOnce's or one sent outside it, is live at the bank too: the
 // supplier may have been paid twice. Late is a transfer recorded on an attempt
@@ -507,6 +541,13 @@ export async function recordLateTransfer(engine: Engine, transfer: Transfer): Pr
   const invoiceId: string = attempt.invoiceId;
   const recorded: Transfer = await syncTransfer(engine.client, engine.ledger, transfer.id);
   const live: boolean = attemptStateOf(recorded) !== "failed";
+  // A payment from another currency's wallet is checked against its approved
+  // quote, as when a look finds a transfer by request id. A failed one on a closed
+  // invoice moved nothing, so it does not reopen it.
+  const before: Obligation | undefined = engine.ledger.obligation(invoiceId);
+  if (before !== undefined && (live || before.state === "open" || before.state === "escalated")) {
+    checkRate(engine, before, attempt, recorded);
+  }
   const twice: boolean = paidTwice(engine.ledger, invoiceId) !== undefined;
   // Live at the bank, but the ledger keeps it failed: another payment holds the lock.
   const kept: boolean =
@@ -557,6 +598,9 @@ async function linkUnseenPayouts(engine: Engine, invoiceId: string): Promise<boo
       continue;
     }
     if (engine.ledger.knowsTransfer(transfer.request_id ?? "", transfer.id)) {
+      if (engine.ledger.attemptOf(transfer.request_id ?? "", transfer.id)?.invoiceId === invoiceId) {
+        linked = noteMismatchedTransfer(engine, transfer) || linked;
+      }
       continue;
     }
     const named: Obligation | undefined = engine.ledger.obligationForReference(

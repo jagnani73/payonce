@@ -6,6 +6,7 @@ import { invoiceForPayout, type PayoutMatch } from "./duplicates.js";
 import {
   linkOutsidePayout,
   note,
+  noteMismatchedTransfer,
   payoutSummary,
   recordLateTransfer,
   unrecordedAttemptOf,
@@ -121,8 +122,15 @@ async function sweepOne(engine: Engine, agent: Dispatcher, transfer: Transfer): 
     }
     return;
   }
+  // One under the request id of a payment marked failed with no transfer, but not
+  // with that invoice's number, amount and currency, goes on the invoice's
+  // timeline once and sends it to a person, in its turn. A pending one's look
+  // lists it by request id.
   if (engine.ledger.knowsTransfer(transfer.request_id ?? "", transfer.id)) {
-    if (engine.ledger.attemptOf(transfer.request_id ?? "", transfer.id)?.transferId === null) {
+    const attempt: Attempt | undefined = engine.ledger.attemptOf(transfer.request_id ?? "", transfer.id);
+    if (attempt?.transferId === null && attempt.state === "failed") {
+      await agent.run(attempt.invoiceId, (): boolean => noteMismatchedTransfer(engine, transfer));
+    } else if (attempt?.transferId === null) {
       reportOnce(
         transfer,
         "listed under the request id of a PayOnce payment with no transfer, but not with that invoice's number, amount and currency, so PayOnce did not record it",
