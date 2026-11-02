@@ -278,7 +278,9 @@ export interface ReconAlertState {
   open: number;
   kinds: KindTotal[];
   currencies: string[];
-  // The open break with the highest number.
+  // The open break with the newest line saying it is new or has new facts, so a
+  // break found once and opened later is named on the alert its line raised. The
+  // open break with the highest number when no open break has such a line.
   newestOpen: ReconBreak | undefined;
   // The newest line saying a break is new or has new facts, in any state.
   newest: number;
@@ -1098,7 +1100,8 @@ export class ReconStore {
 
   // The open breaks counted in full, and the newest line saying any break is new
   // or has new facts, whatever state that break is in now. A break clearing or
-  // explained adds no such line, so it never moves the alert.
+  // explained adds no such line, so it never moves the alert. The break named
+  // newest is found by the same lines, among the open ones.
   alertState(): ReconAlertState {
     const kinds: KindTotal[] = this.kindTotals(["open"]);
     const currencies: string[] = (
@@ -1106,11 +1109,21 @@ export class ReconStore {
         .prepare("SELECT DISTINCT currency FROM recon_breaks WHERE state = 'open' ORDER BY currency")
         .all() as unknown as { currency: string }[]
     ).map((row: { currency: string }): string => row.currency);
-    const newestOpen: BreakRow | undefined = this.db
-      .prepare("SELECT * FROM recon_breaks WHERE state = 'open' ORDER BY id DESC LIMIT 1")
-      .get() as unknown as BreakRow | undefined;
+    const news: string = NEWS_KINDS.map((): string => "?").join(", ");
+    // CROSS JOIN keeps the lines as the outer loop, newest first, so the first
+    // open break met ends the scan.
+    const newestOpen: BreakRow | undefined =
+      (this.db
+        .prepare(
+          `SELECT b.* FROM recon_events e CROSS JOIN recon_breaks b ON b.id = e.break_id
+            WHERE e.kind IN (${news}) AND b.state = 'open' ORDER BY e.id DESC LIMIT 1`,
+        )
+        .get(...NEWS_KINDS) as unknown as BreakRow | undefined) ??
+      (this.db
+        .prepare("SELECT * FROM recon_breaks WHERE state = 'open' ORDER BY id DESC LIMIT 1")
+        .get() as unknown as BreakRow | undefined);
     const row: { newest: number | null } = this.db
-      .prepare(`SELECT MAX(id) AS newest FROM recon_events WHERE kind IN (${NEWS_KINDS.map((): string => "?").join(", ")})`)
+      .prepare(`SELECT MAX(id) AS newest FROM recon_events WHERE kind IN (${news})`)
       .get(...NEWS_KINDS) as unknown as { newest: number | null };
     return {
       open: kinds.reduce((total: number, entry: KindTotal): number => total + entry.count, 0),
