@@ -3692,11 +3692,13 @@ export class Ledger {
   // its request ids that does not match it. A payment that went out
   // at a rate nobody approved leaves the invoice for a person to close, unless it
   // failed. So does a transfer found late that may have paid it a second time
-  // (lateBesideLive, the test paidTwice makes). The checks and the close run in one
-  // write transaction, and the close only changes an invoice still open or
-  // escalated, and still in the state the caller read when it gives one (from),
-  // so a payment another process recorded, or a change it made to the invoice,
-  // after the caller looked leaves it as it is. False then. covered lists the
+  // (lateBesideLive, the test paidTwice makes), and by itself PayOnce never closes
+  // one while a payout sent outside PayOnce is live or a mismatched transfer no
+  // person has cleared is on file. The checks and the close run in one write
+  // transaction, and the close only changes an invoice still open or escalated,
+  // and still in the state the caller read when it gives one (from), so a payment
+  // another process recorded or tied, or a change it made to the invoice, after
+  // the caller looked leaves it as it is. False then. covered lists the
   // transfers under its request ids that do not match it which a person's close
   // covered, and they are cleared in the same transaction.
   settle(
@@ -3725,9 +3727,10 @@ export class Ledger {
       const result: { changes: number | bigint } = this.db
         .prepare(
           `UPDATE obligations SET state = 'settled'
-            WHERE invoice_id = ? AND state = COALESCE(?, state) AND state IN ('open', 'escalated')`,
+            WHERE invoice_id = ? AND state = COALESCE(?, state) AND state IN ('open', 'escalated')
+              AND (? = 1 OR (NOT EXISTS (${LIVE_OUTSIDE_PAYOUT}) AND NOT EXISTS (${UNCLEARED_MISMATCH})))`,
         )
-        .run(invoiceId, from);
+        .run(invoiceId, from, byPerson ? 1 : 0, invoiceId, invoiceId);
       if (Number(result.changes) !== 1) {
         return false;
       }
