@@ -1303,9 +1303,13 @@ type NextLook = number | null;
 
 // What a look does when the ledger refused its close. A payment that went out at a
 // rate nobody approved waits for a person, and so does an invoice the ledger no
-// longer shows as paid once. Otherwise another process recorded a payment that
-// may pay it a second time, or changed the invoice, since this look read it, and
-// the next look, at once, decides as the ledger now stands.
+// longer shows as paid once. By itself PayOnce never closes an invoice beside a
+// live payout sent outside PayOnce, or a transfer under one of its request ids
+// that does not match it which no person has cleared (see settle), so that one
+// goes to a person too, open or not, and the close card offers it. One already
+// with a person keeps its reason. Otherwise another process recorded a payment
+// that may pay it a second time, or changed the invoice, since this look read it,
+// and the next look, at once, decides as the ledger now stands.
 function closeRefused(engine: Engine, invoiceId: string): NextLook {
   if (
     engine.ledger
@@ -1330,7 +1334,36 @@ function closeRefused(engine: Engine, invoiceId: string): NextLook {
     );
     return null;
   }
+  const outside: boolean = anyLive(engine.ledger.outsidePayouts(invoiceId));
+  if (outside || coveredByClose(engine.ledger, invoiceId).length > 0) {
+    const reason: string = outside
+      ? OUTSIDE_PAYOUT_REASON
+      : engine.ledger.attempts(invoiceId).some(mismatchedLive)
+        ? MISMATCHED_TRANSFER_REASON
+        : MISMATCHED_FAILED_REASON;
+    if (engine.ledger.escalateIfOpen(invoiceId, reason)) {
+      note(engine.ledger, invoiceId, "approval", closeWaitingLine(engine.ledger, invoiceId), "waiting");
+    }
+    return null;
+  }
   return Date.now();
+}
+
+// What an invoice paid once waits for while only a person can close it. It names
+// a live payout sent outside PayOnce, or else the transfers a person's close
+// covers, so the person checks them first.
+function closeWaitingLine(ledger: Ledger, invoiceId: string): string {
+  if (anyLive(ledger.outsidePayouts(invoiceId))) {
+    return "Waiting on a person. A payout sent outside PayOnce may also pay this invoice, which PayOnce has paid once. Check it with the supplier and close the incident. PayOnce will not send a second payment";
+  }
+  const references: string[] = coveredByClose(ledger, invoiceId).map(
+    (transfer: CoveredTransfer): string => transfer.reference,
+  );
+  if (references.length === 0) {
+    return "Waiting on a person to check with the supplier and close the incident. PayOnce will not send a second payment";
+  }
+  const one: boolean = references.length === 1;
+  return `Waiting on a person to check ${one ? "transfer" : "transfers"} ${listOf(references)}, listed under this invoice's request ${one ? "id" : "ids"}, which ${one ? "does" : "do"} not match it, and close the incident. PayOnce will not send a second payment`;
 }
 
 const RETRY_FAILED_LOOK_MS: number = 60_000;
@@ -1851,7 +1884,7 @@ function escalate(
       engine.ledger,
       obligation.invoiceId,
       "approval",
-      "Waiting on a person to check with the supplier and close the incident. PayOnce will not send a second payment",
+      closeWaitingLine(engine.ledger, obligation.invoiceId),
       "waiting",
     );
     return null;

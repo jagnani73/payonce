@@ -3138,6 +3138,21 @@ export class Ledger {
     }
   }
 
+  // Sends an open invoice to a person with reason. One already with a person keeps
+  // the reason it went there for, and a closed one is left as it is, so a close
+  // another process made meanwhile stands. True when the invoice is with a person.
+  escalateIfOpen(invoiceId: string, reason: string): boolean {
+    const result: { changes: number | bigint } = this.db
+      .prepare(
+        `UPDATE obligations
+            SET escalation_reason = CASE state WHEN 'escalated' THEN escalation_reason ELSE ? END,
+                state = 'escalated'
+          WHERE invoice_id = ? AND state IN ('open', 'escalated')`,
+      )
+      .run(reason, invoiceId);
+    return Number(result.changes) === 1;
+  }
+
   // Sends an invoice to a person unless it is settled, so a close another process
   // made meanwhile stands.
   escalateUnlessSettled(invoiceId: string, reason: string): void {

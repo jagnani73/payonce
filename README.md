@@ -194,6 +194,8 @@ A paid original holds the duplicate lock, so PayOnce cannot send anything more f
 
 The page shows the paid transfer and the reason, and takes a name and a note of what the person confirmed. `pnpm close` does the same in the terminal. Both the name and the note go on the timeline. Closing moves no money, so it is not bound to terms the way an approval is. Sometimes a transfer that does not match the invoice turns up under one of its request ids. The close card lists each such transfer under "This close covers", and the close covers exactly the ones the card showed. `pnpm close` prints them too, and closes only when `--covers=` names every one, by short reference or transfer id. If another one turns up after the card was shown, the close is refused and the person looks again first. "Check again" never closes an incident that is waiting on a person.
 
+When PayOnce would close an incident by itself but one of these transfers is on file, or a payout sent outside PayOnce for the invoice is still live, it hands the incident to a person instead and stops looking at it. The timeline says what to check, the close card offers the close, and an alert goes out when alerts are on.
+
 ## Audit trail
 
 Each incident's timeline is a hash chain, and so is each pay run's. Every line stores the hash of the line before it on the same invoice, and a SHA-256 hash of its own content plus that previous hash. Editing, removing or inserting a line breaks the chain at that point. The ledger also keeps a running hash over every line in the order they were written. It catches two things one invoice's chain misses: lines removed from the end of a timeline, and every line of an invoice removed. Pay run timelines have a running hash of their own.
