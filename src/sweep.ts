@@ -104,18 +104,20 @@ function adopt(engine: Engine, transfer: Transfer, state: FoundState): string | 
 }
 
 async function sweepOne(engine: Engine, agent: Dispatcher, transfer: Transfer): Promise<void> {
-  // One of PayOnce's own that the ledger has no transfer on, such as an attempt
-  // marked failed before Airwallex listed it, which no look reads again. A closed
-  // invoice is not looked at: recording a transfer that may still pay it reopens
-  // it.
+  // One of PayOnce's own that the ledger has no transfer on. A pending attempt's
+  // look records it, listing the attempt by request id, so its rate is checked
+  // and the bank told as for any payment sent. One marked failed before Airwallex
+  // listed it, which no look reads again, is recorded here. A closed invoice is
+  // not looked at: recording a transfer that may still pay it reopens it.
   const late: Attempt | undefined = unrecordedAttemptOf(engine.ledger, transfer);
   if (late !== undefined) {
-    const recorded: boolean = await agent.run(late.invoiceId, (): Promise<boolean> =>
-      recordLateTransfer(engine, transfer),
-    );
-    const state: ObligationState | undefined = engine.ledger.obligation(late.invoiceId)?.state;
-    if (recorded && (state === "open" || state === "escalated")) {
-      agent.wake(late.invoiceId);
+    const invoiceId: string = late.invoiceId;
+    const changed: boolean =
+      late.state === "pending" ||
+      (await agent.run(invoiceId, (): Promise<boolean> => recordLateTransfer(engine, transfer)));
+    const state: ObligationState | undefined = engine.ledger.obligation(invoiceId)?.state;
+    if (changed && (state === "open" || state === "escalated")) {
+      agent.wake(invoiceId);
     }
     return;
   }

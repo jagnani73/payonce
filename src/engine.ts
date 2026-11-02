@@ -418,13 +418,14 @@ export function unrecordedAttemptOf(ledger: Ledger, transfer: Transfer): Attempt
 }
 
 // Records a transfer Airwallex lists only now under the request id of an attempt
-// with none on it, in the state the bank gives it, and says so on the timeline.
-// An attempt marked failed is corrected. A closed invoice the transfer may still
-// pay is reopened for a person. True when it recorded one, and the caller then
-// looks at the invoice again.
+// PayOnce had marked failed with none on it, in the state the bank gives it, and
+// says so on the timeline. A pending attempt is left to its look, which lists it
+// by request id and checks its transfer as it does any payment it sends. A closed
+// invoice the transfer may still pay is reopened for a person. True when it
+// recorded one, and the caller then looks at the invoice again.
 export async function recordLateTransfer(engine: Engine, transfer: Transfer): Promise<boolean> {
   const attempt: Attempt | undefined = unrecordedAttemptOf(engine.ledger, transfer);
-  if (attempt === undefined) {
+  if (attempt?.state !== "failed") {
     return false;
   }
   const invoiceId: string = attempt.invoiceId;
@@ -435,7 +436,7 @@ export async function recordLateTransfer(engine: Engine, transfer: Transfer): Pr
     engine.ledger,
     invoiceId,
     twice ? "warning" : "bank",
-    `${capitalise(attempt.kind)} payment ${attempt.state === "failed" ? "PayOnce had marked failed is a transfer after all" : "found in Airwallex"}: Airwallex now lists ${describe(recorded)} under its request id${twice ? ". A payout sent outside PayOnce for this invoice is on file too, so the supplier may be paid twice" : ""}`,
+    `${capitalise(attempt.kind)} payment PayOnce had marked failed is a transfer after all: Airwallex now lists ${describe(recorded)} under its request id${twice ? ". A payout sent outside PayOnce for this invoice is on file too, so the supplier may be paid twice" : ""}`,
   );
   const state: ObligationState | undefined = engine.ledger.obligation(invoiceId)?.state;
   if (live && (state === "settled" || state === "rejected")) {
