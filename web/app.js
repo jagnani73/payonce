@@ -1729,11 +1729,10 @@ function buildEmail(email, unverified) {
             h("span", { class: "flag" }, icon("warning"), "Does not match the supplier on file"),
           ),
       ),
-      typeof email.fromName === "string" &&
-        email.fromName !== "" && [
-          h("dt", null, "Name in the email"),
-          h("dd", { class: "email__muted" }, `${email.fromName} (not checked)`),
-        ],
+      whyText(email.fromName) !== "" && [
+        h("dt", null, "Name in the email"),
+        h("dd", { class: "email__muted" }, `${whyText(email.fromName)} (not checked)`),
+      ],
       h("dt", null, "Subject"),
       h("dd", { class: "email__subject" }, email.subject),
       Number.isInteger(email.uploadId) && [
@@ -1913,7 +1912,7 @@ function callbackText(bankChange) {
     h("span", { class: "mono" }, bankChange.numberCalled),
     " (on file)",
     ...when,
-    ` and spoke to ${whyText(bankChange.spokeTo)}, who confirmed: ${bankChange.confirmed}`,
+    ` and spoke to ${whyText(bankChange.spokeTo)}, who confirmed: ${whyText(bankChange.confirmed)}`,
   ];
 }
 
@@ -3359,7 +3358,7 @@ function draftWho(draft) {
     return `Drafted by ${whyText(draft.createdBy)}. Marked sent by ${whyText(draft.sentBy)}.`;
   }
   if (draft.state === "dismissed") {
-    return `Drafted by ${whyText(draft.createdBy)}. Dismissed by ${whyText(draft.dismissedBy)}${draft.dismissNote ? `: ${draft.dismissNote}` : ""}.`;
+    return `Drafted by ${whyText(draft.createdBy)}. Dismissed by ${whyText(draft.dismissedBy)}${whyText(draft.dismissNote) ? `: ${whyText(draft.dismissNote)}` : ""}.`;
   }
   return `Drafted by ${whyText(draft.createdBy)}${draft.copiedBy ? `, copied by ${whyText(draft.copiedBy)}` : ""}.`;
 }
@@ -3850,7 +3849,7 @@ function renderRunHeader(run) {
         h("p", { class: "detail__supplier" }, info.fileName),
         h("p", { class: "detail__started" }, `Uploaded by ${whyText(info.uploadedBy)}`, uploadedAt !== null && [" at ", uploadedAt]),
         info.state === "cancelled" &&
-          h("p", { class: "detail__started" }, `Cancelled by ${whyText(info.cancelledBy)}: ${info.cancelNote}`),
+          h("p", { class: "detail__started" }, `Cancelled by ${whyText(info.cancelledBy)}: ${whyText(info.cancelNote)}`),
       ),
       h(
         "div",
@@ -4740,7 +4739,7 @@ function renderInboxHeader(detail) {
           timeNode(upload.deliveredAt),
         ),
       upload.state === "dismissed" &&
-        h("p", { class: "detail__started" }, `Dismissed by ${whyText(upload.dismissedBy)}: ${upload.dismissNote ?? ""}`),
+        h("p", { class: "detail__started" }, `Dismissed by ${whyText(upload.dismissedBy)}: ${whyText(upload.dismissNote)}`),
     ),
     h("div", { class: "detail__facts" }, h("span", { class: badgeClass(entry) }, entry?.label ?? humanize(upload.state))),
   );
@@ -4763,9 +4762,9 @@ function renderInboxEmail(detail) {
         { class: "email__head" },
         h("dt", null, "From"),
         h("dd", null, h("span", { class: "email__from" }, addressParts(upload.sender))),
-        upload.senderName !== "" && [h("dt", null, "Name in the email"), h("dd", { class: "email__muted" }, `${upload.senderName} (not checked)`)],
+        whyText(upload.senderName) !== "" && [h("dt", null, "Name in the email"), h("dd", { class: "email__muted" }, `${whyText(upload.senderName)} (not checked)`)],
         h("dt", null, "From as written"),
-        h("dd", { class: "email__muted" }, upload.fromAsWritten),
+        h("dd", { class: "email__muted" }, whyText(upload.fromAsWritten)),
         replyTo.length > 0 && [
           h("dt", null, "Reply-To"),
           h("dd", null, replyTo.map((address) => h("div", { class: "email__from" }, addressParts(address)))),
@@ -6536,7 +6535,7 @@ function buildOutage(view, enders) {
           null,
           `By ${whyText(view.endedBy)}`,
           ended !== null && [" at ", ended],
-          `: ${view.endNote ?? ""}`,
+          `: ${whyText(view.endNote)}`,
         ),
       ],
     ),
@@ -7043,7 +7042,7 @@ function renderReconExplained(report) {
             `Explained by ${whyText(item.explainedBy) || "a name PayOnce does not know"} `,
             zonedTime(item.explainedAt),
             ": ",
-            item.note ?? "",
+            whyText(item.note),
           ),
         ),
       ),
