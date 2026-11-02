@@ -17,6 +17,7 @@ import {
   CHANGED_BANK_DETAILS_REASON,
   EMAILS_UNREAD_REASON,
   IN_FLIGHT_REASON,
+  LAST_PAID_CHANGED_REASON,
   NEW_BANK_DETAILS_REASON,
   NO_FLOOR_CLAUSE,
   NO_FLOOR_REASON,
@@ -33,12 +34,14 @@ import {
   SENT_OUTSIDE_REASON,
   SETTLED_REASON,
   TWO_APPROVERS_REASON,
+  UNCONFIRMED_ACCOUNT_REASON,
   UNKNOWN_STATUS_REASON,
   UNREADABLE_CASH_REASON,
   UNVERIFIED_SENDER_REASON,
 } from "./decide.js";
 import { emailEvidence, type SupplierEmail } from "./emails.js";
 import {
+  ACCOUNT_CHANGED_REASON,
   CASH_HOLD_REASON,
   EMAILS_BEFORE_PAYMENT_REASON,
   heldBeforePaying,
@@ -520,6 +523,9 @@ const REASON_PARTS: readonly ReasonPart[] = [
     LATE_TRANSFER_REASON,
     MISMATCHED_TRANSFER_REASON,
     MISMATCHED_FAILED_REASON,
+    LAST_PAID_CHANGED_REASON,
+    UNCONFIRMED_ACCOUNT_REASON,
+    ACCOUNT_CHANGED_REASON,
     // accountProblem's reasons in engine.ts, which it does not export.
     "the beneficiary is no longer in Airwallex",
     "its bank details changed after the pay run was approved",
@@ -568,7 +574,11 @@ const REASON_PARTS: readonly ReasonPart[] = [
     (match: RegExpExecArray): string => match[0],
   ),
   slotPart(
-    `(?:${KIND}) ${REF} went to bank details that are not the ones it was approved for`,
+    `(?:${KIND}) ${REF} went to bank details that are not the ones it was (?:decided or )?approved for`,
+    (match: RegExpExecArray): string => match[0],
+  ),
+  slotPart(
+    `(?:${KIND}) ${REF} shows no bank details, so PayOnce cannot check they are the ones it was decided or approved for`,
     (match: RegExpExecArray): string => match[0],
   ),
   slotPart(
@@ -584,6 +594,7 @@ const WHY_PARTS: readonly ReasonPart[] = [
   fixedPart("PayOnce does not know who started this payment"),
   fixedPart("PayOnce has never paid this beneficiary"),
   fixedPart("it pays an account PayOnce has not paid this supplier before"),
+  fixedPart("PayOnce paid this supplier before it kept which account each payment went to"),
   slotPart(`the amount is above (${MONEY})`, (match: RegExpExecArray): string => match[0]),
   slotPart(
     `it pays (?:a different account from the one|another account than the one) (${INV}) was (sent|paid) to`,
@@ -819,6 +830,13 @@ const FIXED_LINES: ReadonlyMap<string, readonly Source[]> = new Map<string, read
       "Waiting on a person. A supplier email arrived while PayOnce read the others, so it asks nobody to approve paying this invoice until it has read that one too",
       "Waiting on a person. The beneficiary is no longer in Airwallex, so there is nothing to pay it to. Close the invoice without paying",
       "Waiting on a person. The bank details on file are not the ones the pay run approved, so PayOnce does not pay this invoice. Close it without paying, or restore the approved details in Airwallex and check again",
+      "Waiting on a person. The bank details on file are not the ones the original went to, and no phone number is on file to verify them by calling the supplier back. Close the invoice without paying, or restore the details the original went to in Airwallex and check again",
+      "Waiting on a person. The bank details on file are not the ones PayOnce last paid this supplier, and no phone number is on file to verify them by calling the supplier back. Close the invoice without paying, or restore the details PayOnce last paid in Airwallex and check again",
+      "Waiting on a person. The bank details on file are not the ones this payment was decided or approved for, so PayOnce does not send it again. Restore those details in Airwallex and check again to send it",
+      ...["original", "replacement"].map(
+        (kind: string): string =>
+          `Waiting on a person. The ${kind} was marked failed without being sent, so restoring those details no longer sends it: paying this invoice now takes a person's approval, or a person closes it without paying`,
+      ),
     ],
   ),
   ...fixedFrom(["warning/bank-details"], ["The supplier's bank details on file are not the ones the original payment went to"]),
@@ -867,6 +885,7 @@ const FIXED_LINES: ReadonlyMap<string, readonly Source[]> = new Map<string, read
       "Pay again not sent. The incident is closed, so PayOnce pays nothing more for this invoice",
       "Pay again not sent. A person closed this invoice without paying, because it was a second bill for another invoice",
       "Pay again not sent. A person closed this invoice without paying, as a second bill for another",
+      "Pay again not sent. A person closed this invoice without paying",
       "Pay again not sent. A payout sent outside PayOnce may already pay this invoice",
       "Pay again not sent. PayOnce is holding this invoice before paying it, so it pays only on an approval",
       "Pay again not sent. No payment for this invoice is live, so a replacement goes through the policy, and through a person's approval once the invoice is with a person",
@@ -883,8 +902,8 @@ const ARRIVAL_MARKERS: readonly string[] = [
   ". A replacement sent on ",
   ". PayOnce has no arrival estimate for a replacement by ",
 ];
-const CAUSE: string = String.raw`payout ${REF} sent outside PayOnce has paid this invoice|(?:${KIND}) (?:${REF_OR_ID})?, found late, is live at the bank and may pay this invoice|transfer (?:${REF_OR_ID})? under the failed (?:${KIND})'s request id is paid but does not match this invoice`;
-const THEN: string = `a person can close the invoice|(?:${KIND}) (?:${REF_OR_ID})? counts as this invoice's payment`;
+const CAUSE: string = String.raw`payout ${REF} sent outside PayOnce has paid this invoice|(?:${KIND}) (?:${REF_OR_ID})?, found late, is live at the bank and may pay this invoice|transfer (?:${REF_OR_ID})? under the failed (?:${KIND})'s request id is paid but does not match this invoice|the bank details on file are not the ones it was decided or approved for`;
+const THEN: string = `a person can close the invoice|(?:${KIND}) (?:${REF_OR_ID})? counts as this invoice's payment|a person decides how to pay the invoice, or closes it without paying`;
 const OUTAGE_LEAD: string = `Outage ${N} on ${CUR} (?:${METHOD}), declared at ${CLOCK}`;
 // holdLine's endings in outages.ts.
 const HOLD_ENDINGS: string = [
@@ -994,6 +1013,12 @@ const LINE_RULES: readonly LineRule[] = [
     (): string =>
       "Waiting on a person to call the supplier on the number on file and record the callback. PayOnce pays an account the original did not go to only after that",
   ),
+  rule(
+    [WAITING],
+    "Waiting on a person to call the supplier on [\\s\\S]+, the number on file, and record the callback\\. PayOnce pays an account it has not paid this supplier before only after that",
+    (): string =>
+      "Waiting on a person to call the supplier on the number on file and record the callback. PayOnce pays an account it has not paid this supplier before only after that",
+  ),
   keep([PAYMENT_WAITING], `Waiting for its turn in pay run ${N}\\. The server sends the run's first payments one at a time`),
   rule(
     [OUTAGE_WAITING],
@@ -1017,6 +1042,7 @@ const LINE_RULES: readonly LineRule[] = [
   ),
 
   // Bank details and second bills.
+  keep(["warning/last-paid"], `The bank details on file are not the ones PayOnce last paid this supplier, with ${REF_OR_ID}`),
   rule(["warning/bank-details"], `The account on file for this invoice is not the one (${INV}) was (sent|paid) to`, (match: RegExpExecArray, builder: FactsBuilder): string =>
     `The account on file for this invoice is not the one ${builder.aliases.invoice(match[1] ?? "") ?? "another invoice"} was ${match[2] ?? "sent"} to`,
   ),
@@ -1051,7 +1077,8 @@ const LINE_RULES: readonly LineRule[] = [
   rule([PAYMENT, WARNING], `(${KIND_CAP}) (${REF}) (?:usually arrives|has no arrival estimate)[\\s\\S]*`, (match: RegExpExecArray): string =>
     `${match[1] ?? ""} ${match[2] ?? ""}: PayOnce recorded when it usually arrives`,
   ),
-  keep([WARNING], `(?:${KIND_CAP}) ${REF} went to bank details that are not the ones it was approved for`),
+  keep([WARNING], `(?:${KIND_CAP}) ${REF} went to bank details that are not the ones it was (?:decided or )?approved for`),
+  keep([WARNING], `(?:${KIND_CAP}) ${REF} shows no bank details, so PayOnce cannot check they are the ones it was decided or approved for`),
   rule([WARNING], `(${KIND_CAP}) (${REF} went out[\\s\\S]*)`, (match: RegExpExecArray, builder: FactsBuilder): string =>
     capitalise(builder.reason(`${(match[1] ?? "").toLowerCase()} ${match[2] ?? ""}`)),
   ),
@@ -1156,7 +1183,9 @@ const LINE_RULES: readonly LineRule[] = [
     (match: RegExpExecArray, builder: FactsBuilder): string =>
       `Closed without paying again. ${match[1] ?? ""}, and ${builder.aliases.person(match[2] ?? "")} had already closed ${match[3] ?? "it"} without paying`,
   ),
-  rule([CLOSED], "Closed without paying by [\\s\\S]*", (_match: RegExpExecArray, builder: FactsBuilder): string => builder.closedWithoutPaying()),
+  rule([CLOSED], "Closed without paying by [\\s\\S]*", (match: RegExpExecArray, builder: FactsBuilder): string =>
+    builder.closedWithoutPaying(/^Closed without paying by [A-Za-z0-9 .'_-]{1,80}, as a second bill for /.test(match[0])),
+  ),
   rule([CLOSED], "Incident closed by ([\\s\\S]*)", (match: RegExpExecArray, builder: FactsBuilder): string =>
     `Incident closed by ${builder.aliases.peopleBefore(match[1] ?? "", ": ")}. Their note is not passed on`,
   ),
@@ -1214,7 +1243,7 @@ const LINE_RULES: readonly LineRule[] = [
   ),
   rule(
     [ERROR],
-    "The supplier's bank details changed after the (decision|replacement was approved|payment was approved|pay run was approved), so PayOnce sent nothing\\. Check again to look at the new details",
+    "The supplier's bank details changed after the (decision|replacement was approved|payment was decided|payment was approved|pay run was approved), so PayOnce sent nothing\\. Check again to look at the new details",
     (match: RegExpExecArray): string =>
       `The supplier's bank details changed after the ${match[1] ?? "decision"}, so PayOnce sent nothing. Check again to look at the new details`,
   ),
@@ -1317,10 +1346,12 @@ class FactsBuilder {
   }
 
   // The close-without-paying line, from the invoice's own fields, since the line
-  // holds the note a person typed.
-  closedWithoutPaying(): string {
+  // holds the note a person typed. secondBill is whether the line named the
+  // invoices it was a second bill for, which a close of an invoice that sent a
+  // payment does not.
+  closedWithoutPaying(secondBill: boolean): string {
     const by: string = this.aliases.person(this.obligation.rejectedBy);
-    const matches: string[] = this.aliases.invoiceAliases(this.obligation.duplicateOf);
+    const matches: string[] = secondBill ? this.aliases.invoiceAliases(this.obligation.duplicateOf) : [];
     return `Closed without paying by ${by}${matches.length === 0 ? "" : `, as a second bill for ${listOf(matches)}`}. Their note is not passed on`;
   }
 
