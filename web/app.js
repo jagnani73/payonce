@@ -475,6 +475,16 @@ function zonedTime(value) {
   return h("time", { datetime: date.toISOString(), title: dateTimeFormat.format(date) }, format.format(date));
 }
 
+function isToday(date) {
+  return date.toDateString() === new Date().toDateString();
+}
+
+// A time as the page shows it: the time alone today, and with its day on any
+// other day, so lines days apart never read as one day.
+function stampText(date) {
+  return isToday(date) ? timeFormat.format(date) : `${dayFormat.format(date)}, ${timeFormat.format(date)}`;
+}
+
 function timeNode(value) {
   const date = parseDate(value);
   return date === null
@@ -482,7 +492,7 @@ function timeNode(value) {
     : h(
         "time",
         { datetime: date.toISOString(), title: dateTimeFormat.format(date) },
-        timeFormat.format(date),
+        stampText(date),
       );
 }
 
@@ -1339,7 +1349,13 @@ function createEventNode(event, key, signature) {
         datetime: date === null ? null : date.toISOString(),
         title: date === null ? null : dateTimeFormat.format(date),
       },
-      date === null ? "" : timeFormat.format(date),
+      // The time column is narrow, so a line from another day puts its day under
+      // the time.
+      date === null
+        ? ""
+        : isToday(date)
+          ? timeFormat.format(date)
+          : [timeFormat.format(date), h("span", { class: "event__day" }, dayFormat.format(date))],
     ),
     h("span", { class: "event__marker", "aria-hidden": "true" }, icon(kind)),
     h(
@@ -5137,7 +5153,7 @@ function since(value, now) {
   if (seconds < 3600) {
     return `${Math.floor(seconds / 60)} min ago`;
   }
-  return `at ${timeFormat.format(at)}`;
+  return `at ${stampText(at)}`;
 }
 
 function cashFreshness(cash) {
@@ -5169,11 +5185,11 @@ function cashProblems(cash) {
   if (error !== null && typeof error === "object") {
     const failedAt = parseDate(error.at);
     const readAt = parseDate(cash.airwallex.readAt);
-    const when = failedAt === null ? "" : ` at ${timeFormat.format(failedAt)}`;
+    const when = failedAt === null ? "" : ` at ${stampText(failedAt)}`;
     problems.push(
       readAt === null
         ? `Airwallex could not be read${when}: ${withPeriod(error.message)} PayOnce's own figures are current.`
-        : `The last read${when} failed: ${withPeriod(error.message)} The panel shows the read from ${timeFormat.format(readAt)}.`,
+        : `The last read${when} failed: ${withPeriod(error.message)} The panel shows the read from ${stampText(readAt)}.`,
     );
   }
   if (typeof cash.floors?.problem === "string" && cash.floors.problem !== "") {

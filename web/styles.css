@@ -975,6 +975,10 @@ input:read-only {
   white-space: nowrap;
 }
 
+.event__day {
+  display: block;
+}
+
 .event__marker {
   position: relative;
   z-index: 1;
