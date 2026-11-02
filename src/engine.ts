@@ -1274,7 +1274,7 @@ async function send(
 // Closes the incident on the state the look read the invoice in. False, with
 // nothing changed, when the ledger refuses (see settle).
 function close(engine: Engine, invoiceId: string, from: ObligationState): boolean {
-  if (!engine.ledger.settle(invoiceId, from)) {
+  if (!engine.ledger.settle(invoiceId, false, from)) {
     return false;
   }
   const replaced: boolean = engine.ledger
@@ -3463,7 +3463,7 @@ export function closeIncident(
     }
     return;
   }
-  if (review === undefined || !ledger.settle(invoiceId, "escalated", true, covered)) {
+  if (review === undefined || !ledger.settle(invoiceId, true, "escalated", covered)) {
     throw new Error(`${invoiceId} is not waiting on a person to close it`);
   }
   note(ledger, invoiceId, "closed", `Incident closed by ${closedBy}: ${finding}`);

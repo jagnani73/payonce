@@ -3685,15 +3685,16 @@ export class Ledger {
   // at a rate nobody approved leaves the invoice for a person to close, unless it
   // failed. So does a transfer found late that may have paid it a second time
   // (lateBesideLive, the test paidTwice makes). The checks and the close run in one
-  // write transaction, and the close only changes an invoice still in the state
-  // the caller read (from), so a payment another process recorded, or a change it
-  // made to the invoice, after the caller looked leaves it as it is. False then.
-  // covered lists the transfers under its request ids that do not match it which
-  // a person's close covered, and they are cleared in the same transaction.
+  // write transaction, and the close only changes an invoice still open or
+  // escalated, and still in the state the caller read when it gives one (from),
+  // so a payment another process recorded, or a change it made to the invoice,
+  // after the caller looked leaves it as it is. False then. covered lists the
+  // transfers under its request ids that do not match it which a person's close
+  // covered, and they are cleared in the same transaction.
   settle(
     invoiceId: string,
-    from: ObligationState,
     byPerson: boolean = false,
+    from: ObligationState | null = null,
     covered: string[] = [],
   ): boolean {
     return this.transaction((): boolean => {
@@ -3714,7 +3715,10 @@ export class Ledger {
         return false;
       }
       const result: { changes: number | bigint } = this.db
-        .prepare("UPDATE obligations SET state = 'settled' WHERE invoice_id = ? AND state = ?")
+        .prepare(
+          `UPDATE obligations SET state = 'settled'
+            WHERE invoice_id = ? AND state = COALESCE(?, state) AND state IN ('open', 'escalated')`,
+        )
         .run(invoiceId, from);
       if (Number(result.changes) !== 1) {
         return false;
