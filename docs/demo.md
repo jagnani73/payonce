@@ -15,6 +15,14 @@ Open `http://127.0.0.1:4310`. Use a window at least 1500 pixels wide at 125% zoo
 
 Set `READER_API_KEY` in `.env` so a model reads the emails. After `pnpm ui` starts, the console names the models it will ask. The free tier allows about five requests a minute on the first model, and the second takes over if the first is rate limited. AI Studio shows the daily limits.
 
+Set `APPROVERS` in `.env`, for example `APPROVERS=Yash:50000,Alex:10000,Kim:10000,Sam:4200`, and restart `pnpm ui` after changing it. The name typed on the start form cannot approve that incident, so approve under another name. Each approval in the run below needs one approver. These need two:
+
+- `eur-from-usd`, while PayOnce has not yet paid the EUR supplier: a held invoice to a supplier PayOnce has never paid takes two approvers.
+- The sample pay run on a fresh ledger, where every row pays a supplier PayOnce has never paid.
+- `usd-local-bank-change`, because it pays an account the original did not go to. Whoever records the callback cannot approve it either.
+
+With the list above, each of these still has two approvers left after the starter is barred. Sam's 4,200 limit is below the 4,476 USD that `eur-from-usd` takes from the USD wallet, so Sam is refused there.
+
 The run sends six sandbox transfers. Airwallex emails the account owner for each one unless transfer notifications are off under Settings > User settings > Notifications.
 
 ## The run

@@ -174,7 +174,7 @@ export function policyFromEnv(env: NodeJS.ProcessEnv = process.env): ApprovalPol
       MINUTE_MS;
     policy.approvers = parseApprovers(env["APPROVERS"] ?? "");
     if (policy.approvers.length === 0) {
-      policy.problem = "no approvers are set. Add APPROVERS to .env, such as Alex:50000,Sam:5000";
+      policy.problem = "no approvers are set. Add APPROVERS to .env, such as Yash:50000,Alex:10000,Kim:10000,Sam:4200";
     }
   } catch (error: unknown) {
     policy.approvers = [];

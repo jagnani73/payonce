@@ -129,7 +129,7 @@ Before paying, PayOnce rebuilds the terms from current data and compares them wi
 
 ### Who can approve
 
-Approvers are listed in `.env` as names with limits, for example `APPROVERS=Yash:50000,Alex:10000,Sam:5000`. Without the list nobody can approve. A limit is compared with what the payment takes from the company's wallet, in that wallet's currency. For an invoice paid from its own currency, that is the invoice amount. For one paid from another wallet, it is the amount on the exchange rate quote (see [Payments across currencies](#payments-across-currencies)).
+Approvers are listed in `.env` as names with limits, for example `APPROVERS=Yash:50000,Alex:10000,Kim:10000,Sam:4200`. Without the list nobody can approve. With those four, every scenario and the sample pay run still has enough approvers once the person who started it is barred, and Sam, with a limit of 4,200, is still refused on `eur-from-usd`, which takes about 4,476 USD from the USD wallet. A limit is compared with what the payment takes from the company's wallet, in that wallet's currency. For an invoice paid from its own currency, that is the invoice amount. For one paid from another wallet, it is the amount on the exchange rate quote (see [Payments across currencies](#payments-across-currencies)).
 
 - Two different approvers are needed above `TWO_APPROVERS_ABOVE` (5,000 by default). Two are also needed whatever the amount when the payment would go to an account the original did not go to, and when PayOnce does not know who started the incident, as with a payout found in Airwallex. Paying a held invoice takes two as well when PayOnce has never paid the supplier, or last paid it another account.
 - The person who started an incident cannot approve a payment for it. The page asks for a name when an incident starts. `pnpm recover` takes one as its fifth argument and uses the computer's login name without it.
@@ -367,7 +367,7 @@ Everything else talks to the Airwallex sandbox. Create a `.env` file in the proj
 ```bash
 AWX_CLIENT_ID=your-client-id
 AWX_API_KEY=your-api-key
-APPROVERS=Yash:50000,Alex:10000,Sam:5000
+APPROVERS=Yash:50000,Alex:10000,Kim:10000,Sam:4200
 RESERVE_FLOORS=USD:1000000,EUR:1000000
 WEBHOOKS=off
 ```
