@@ -295,11 +295,13 @@ export function arrivalAdvice(arrival: ArrivalTerms, on: string = today()): Arri
     due: dueText(arrival),
     risk: arrivalRisk(arrival),
     atRisk: atRisk(arrival),
+    // A route with no figures says only that the due date has passed since.
     sentToday:
-      arrival.from >= on || now.latest === null
+      arrival.from >= on ||
+      (now.latest === null && (risk !== "passed" || arrivalRisk(arrival) === "passed"))
         ? null
         : {
-            text: `if sent today, ${on}, usually by ${now.latest}${risk === null ? "" : `; ${RISK_WORDS[risk]}`}`,
+            text: `if sent today, ${on}, ${now.latest === null ? "arrival not known" : `usually by ${now.latest}`}${risk === null ? "" : `; ${RISK_WORDS[risk]}`}`,
             atRisk: atRisk(now),
           },
     note: HOLIDAYS_NOTE,
