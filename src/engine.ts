@@ -2984,6 +2984,13 @@ async function replaceUnderLock(
   let incident: Incident = assessment.incident;
   let paid: string | null = assessment.paidDuplicate;
   const next: Attempt | Decision | Outage | null = engine.ledger.transaction((): Attempt | Decision | Outage | null => {
+    // Another process may have sent the invoice to a person, or a person may have
+    // closed it without paying, while this look waited for the lock or read
+    // Airwallex. Only an approval pays an invoice with a person, and nothing pays
+    // a closed one, so the next look, at once, reads it as it is now.
+    if (engine.ledger.obligation(invoiceId)?.state !== "open") {
+      return null;
+    }
     // An email delivered since assess read the thread is read before anything
     // is sent.
     if (engine.ledger.emailCount(invoiceId) !== assessment.emails.length) {
