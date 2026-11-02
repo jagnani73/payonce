@@ -349,6 +349,8 @@ The request uses the reader's key, base URL, model list and 8 second timeout, an
 
 ## Run it
 
+You need Node 24 (PayOnce uses its built-in `node:sqlite`) and pnpm 12.
+
 ```bash
 pnpm install
 pnpm dev
@@ -356,7 +358,19 @@ pnpm dev
 
 `pnpm dev` needs no credentials. It reads the sample supplier emails in `fixtures/emails/` and prints the findings and the decision for seven incidents.
 
-Everything else talks to the Airwallex sandbox. Copy `.env.example` to `.env` and fill in a sandbox Client ID and API key. Set `RESERVE_FLOORS=USD:1000000,EUR:1000000` as well. Without it no currency has a floor, and every failed payment goes to a person instead of being replaced.
+Everything else talks to the Airwallex sandbox. Create a `.env` file in the project folder with your sandbox Client ID and API key and a list of approvers:
+
+```bash
+AWX_CLIENT_ID=your-client-id
+AWX_API_KEY=your-api-key
+APPROVERS=Yash:50000,Alex:10000,Sam:5000
+RESERVE_FLOORS=USD:1000000,EUR:1000000
+WEBHOOKS=off
+```
+
+Without `APPROVERS` nobody can approve, so every approval is refused. Without `RESERVE_FLOORS` no currency has a floor, and every failed payment goes to a person instead of being replaced. Set `WEBHOOKS=off` for the sandbox. Airwallex records webhook events there but never delivers them (see [Webhooks](#webhooks)), and while webhooks are on, the status check that finds every change runs every 15 seconds instead of every 3. Leave the line out to open the tunnel, for an Airwallex account that delivers webhooks.
+
+`.env.example` lists every setting with its default. Read it as a reference rather than copying it as it is. `NAME!` is a required secret: write it as `NAME=value`. `NAME=value` shows the default. A line such as `ALERT_FORMAT=slack|discord  # default: slack` lists the values a setting takes and which one is the default, so write just one of them. A name with no value is off until you set it. Put only the lines you change in `.env`. PayOnce talks only to the sandbox: `AWX_BASE_URL` must be `https://api.sandbox.airwallex.com`, the default, or `https://api-demo.airwallex.com`, and any other address stops it at start-up.
 
 For a model to read the emails, create a Gemini API key in Google AI Studio and set it as `READER_API_KEY`. The free tier needs no billing account. Google may use free-tier content to improve its products. The "Supplier email" card says so next to the upload: keep confidential mail out, or leave the key unset and let the keyword placeholder read it. `READER_MODEL` takes a comma-separated list of models to try in order.
 
