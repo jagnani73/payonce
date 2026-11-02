@@ -1,4 +1,5 @@
 import { listTransfersSince, type Transfer } from "./airwallex/transfers.js";
+import { sentToOf } from "./approval.js";
 import { debitOf, feeOf, originalStateOf, type Debit, type Fee } from "./assess.js";
 import { isOverdue } from "./deadlines.js";
 import type { Dispatcher } from "./dispatcher.js";
@@ -94,6 +95,8 @@ function adopt(engine: Engine, transfer: Transfer, state: FoundState): string | 
       feeCurrency: fee?.currency ?? null,
       amountMinor: debit?.minor ?? null,
       currency: debit?.currency ?? null,
+      // Where it went, for the supplier view only.
+      ...sentToOf(transfer.beneficiary?.bank_details),
     },
   );
   note(

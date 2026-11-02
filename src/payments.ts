@@ -5,6 +5,7 @@ import {
   getTransfer,
   type Transfer,
 } from "./airwallex/transfers.js";
+import { sentToOf } from "./approval.js";
 import { attemptStateOf, debitOf, feeOf, type Debit, type Fee } from "./assess.js";
 import { crossCurrency, type Attempt, type Ledger, type Obligation } from "./ledger.js";
 import { toMajor } from "./money.js";
@@ -32,6 +33,13 @@ function record(ledger: Ledger, transfer: Transfer): void {
     transfer.created_at ?? null,
     transfer.status ?? null,
   );
+  // For the supplier view only, so a failure here never changes the payment step.
+  try {
+    const sent: { sentKey: string | null; sentEnding: string | null } = sentToOf(transfer.beneficiary?.bank_details);
+    ledger.recordSentTo(transfer.request_id, sent.sentKey, sent.sentEnding);
+  } catch (error: unknown) {
+    sayWarning(`  ledger   could not keep where ${transfer.short_reference_id ?? transfer.id} went: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 const TOO_MANY_REQUESTS: number = 429;

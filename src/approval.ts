@@ -304,6 +304,27 @@ export function accountKeyOf(details: TransferBankDetails | undefined): string {
   return keyHash(bankDetailsKey(details));
 }
 
+// The last four characters of an account, kept only as letters and digits, so
+// Airwallex text in the field can never pass for one.
+const ENDING: RegExp = /^[A-Za-z0-9]{1,4}$/;
+
+// Where a transfer went, for the supplier view only: the accountKey of its bank
+// details and the last four characters of the account number or IBAN. Both null
+// when the transfer carries no bank details, and the ending null when it is not
+// letters and digits. Nothing PayOnce decides reads them.
+export function sentToOf(details: TransferBankDetails | undefined): { sentKey: string | null; sentEnding: string | null } {
+  if (details === undefined || Object.keys(details).length === 0) {
+    return { sentKey: null, sentEnding: null };
+  }
+  return { sentKey: accountKeyOf(details), sentEnding: endingOf(details) };
+}
+
+export function endingOf(details: { account_number?: unknown; iban?: unknown }): string | null {
+  const raw: unknown = typeof details.account_number === "string" && details.account_number !== "" ? details.account_number : details.iban;
+  const ending: string = typeof raw === "string" ? raw.replace(/\s+/g, "").slice(-4) : "";
+  return ENDING.test(ending) ? ending : null;
+}
+
 export function bindingOf(terms: ApprovalTerms | RunTerms): string {
   return createHash("sha256").update(JSON.stringify(terms)).digest("hex");
 }

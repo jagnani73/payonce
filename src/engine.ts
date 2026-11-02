@@ -26,6 +26,7 @@ import {
   paidWith,
   paymentAmount,
   rateMismatch,
+  sentToOf,
   termsFor,
   withArrival,
   withFeeEstimate,
@@ -379,6 +380,8 @@ function payoutMoney(transfer: Transfer): PayoutMoney {
     currency: debit?.currency ?? null,
     feeMinor: fee?.minor ?? null,
     feeCurrency: fee?.currency ?? null,
+    // Where it went, for the supplier view only.
+    ...sentToOf(transfer.beneficiary?.bank_details),
   };
 }
 

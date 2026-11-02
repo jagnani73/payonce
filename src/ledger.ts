@@ -114,6 +114,7 @@ const SCHEMA: string = `
   );
   CREATE INDEX IF NOT EXISTS events_by_invoice ON events(invoice_id, id);
   CREATE INDEX IF NOT EXISTS attempts_by_invoice ON attempts(invoice_id);
+  CREATE INDEX IF NOT EXISTS obligations_by_beneficiary ON obligations(beneficiary_id);
   CREATE INDEX IF NOT EXISTS approvals_by_invoice ON approvals(invoice_id, id);
   CREATE INDEX IF NOT EXISTS emails_by_invoice ON emails(invoice_id, id);
   CREATE TABLE IF NOT EXISTS webhook_events (
@@ -521,6 +522,10 @@ export interface PayoutMoney {
   currency: string | null;
   feeMinor: number | null;
   feeCurrency: string | null;
+  // The accountKey of the bank details the transfer went to and their last four
+  // characters, for the supplier view only. Nothing PayOnce decides reads them.
+  sentKey?: string | null;
+  sentEnding?: string | null;
 }
 
 // A payout sent outside PayOnce whose reference names an invoice in the ledger.
@@ -542,6 +547,8 @@ export interface FoundPayout {
   feeCurrency: string | null;
   amountMinor: number | null;
   currency: string | null;
+  sentKey: string | null;
+  sentEnding: string | null;
 }
 
 // One approver's approval of a request, with the binding of the terms they saw.
@@ -1018,6 +1025,11 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     // payout's, and on attempts from before the column that no approval or pay run
     // row named an account for.
     account_key: "TEXT",
+    // The accountKey of the bank details the transfer went to, and their last
+    // four characters, as last read. For the supplier view only: nothing PayOnce
+    // decides reads them. Null until read since the columns were added.
+    sent_key: "TEXT",
+    sent_ending: "TEXT",
   },
   rail_failures: {
     // When the transfer failed by Airwallex's updated_at, or when PayOnce first
@@ -1060,6 +1072,9 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     fee_minor: "INTEGER",
     fee_currency: "TEXT",
     fee_tried_at: "TEXT",
+    // As on attempts, for the supplier view only.
+    sent_key: "TEXT",
+    sent_ending: "TEXT",
   },
 };
 
@@ -2951,8 +2966,8 @@ export class Ledger {
         .prepare(
           `INSERT INTO attempts
              (request_id, invoice_id, kind, transfer_id, reference, state, failure_code,
-              fee_minor, fee_currency, amount_minor, currency)
-           VALUES (?, ?, 'original', ?, ?, ?, ?, ?, ?, ?, ?)`,
+              fee_minor, fee_currency, amount_minor, currency, sent_key, sent_ending)
+           VALUES (?, ?, 'original', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           found.requestId,
@@ -2965,6 +2980,8 @@ export class Ledger {
           found.feeCurrency,
           found.amountMinor,
           found.currency,
+          found.sentKey,
+          found.sentEnding,
         );
       this.db.exec("COMMIT");
     } catch (error: unknown) {
@@ -2998,8 +3015,8 @@ export class Ledger {
       .prepare(
         `INSERT OR IGNORE INTO outside_payouts
            (transfer_id, invoice_id, found_at, reference, state, amount_minor, currency,
-            fee_minor, fee_currency)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            fee_minor, fee_currency, sent_key, sent_ending)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         payout.transferId,
@@ -3011,6 +3028,8 @@ export class Ledger {
         payout.currency,
         payout.feeMinor,
         payout.feeCurrency,
+        payout.sentKey ?? null,
+        payout.sentEnding ?? null,
       );
     return Number(result.changes) === 1;
   }
@@ -3033,7 +3052,8 @@ export class Ledger {
         `UPDATE outside_payouts
             SET state = ?, amount_minor = COALESCE(?, amount_minor),
                 currency = COALESCE(?, currency), fee_minor = COALESCE(?, fee_minor),
-                fee_currency = COALESCE(?, fee_currency)
+                fee_currency = COALESCE(?, fee_currency),
+                sent_key = COALESCE(?, sent_key), sent_ending = COALESCE(?, sent_ending)
           WHERE transfer_id = ?`,
       )
       .run(
@@ -3042,6 +3062,8 @@ export class Ledger {
         money.currency,
         money.feeMinor,
         money.feeCurrency,
+        money.sentKey ?? null,
+        money.sentEnding ?? null,
         transferId,
       );
   }
@@ -3178,6 +3200,18 @@ export class Ledger {
     if (Number(result.changes) !== 1) {
       throw new Error(`No payment attempt has request_id ${requestId}`);
     }
+  }
+
+  // Where an attempt's transfer went, as last read, for the supplier view only.
+  // Its own write after record, so the duplicate lock's write is untouched, and
+  // a value that could not be read keeps the one on file.
+  recordSentTo(requestId: string, sentKey: string | null, sentEnding: string | null): void {
+    this.db
+      .prepare(
+        `UPDATE attempts SET sent_key = COALESCE(?, sent_key), sent_ending = COALESCE(?, sent_ending)
+          WHERE request_id = ?`,
+      )
+      .run(sentKey, sentEnding, requestId);
   }
 
   // Marks an attempt PayOnce had failed with no transfer as one Airwallex now
