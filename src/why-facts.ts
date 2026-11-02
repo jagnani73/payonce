@@ -1445,10 +1445,14 @@ function approvalFacts(ledger: Ledger, obligation: Obligation, builder: FactsBui
   const pending: PendingApproval | undefined = pendingApproval(ledger, obligation.invoiceId);
   const fx: FxTerms | undefined = terms.fx;
   const aliases: Aliases = builder.aliases;
+  // Terms PayOnce did not write, such as a row made by hand in a test ledger, may
+  // have no evidence. They give none, instead of failing the facts.
+  const evidence: ApprovalTerms["evidence"] | undefined =
+    typeof terms.evidence === "object" && terms.evidence !== null ? terms.evidence : undefined;
   // Picked field by field: payTo, accountKey, the beneficiary, the quote id, the
   // binding and the callback's number, contact and words are never read.
-  const replacement: ReplacementTerms | null = terms.action === "replace" ? terms : null;
-  const held: HeldPaymentTerms | null = terms.action === "pay" ? terms : null;
+  const replacement: ReplacementTerms | null = terms.action === "replace" && evidence !== undefined ? terms : null;
+  const held: HeldPaymentTerms | null = terms.action === "pay" && evidence !== undefined ? terms : null;
   const callback: BankChangeEvidence | null = replacement?.evidence.bankChange ?? null;
   return {
     number: approval.id,
@@ -1471,8 +1475,8 @@ function approvalFacts(ledger: Ledger, obligation: Obligation, builder: FactsBui
       person: aliases.person(entry.name),
       why: BARRED_WHY.has(entry.why) ? entry.why : "barred by the approval policy",
     })),
-    reasonInTerms: builder.reason(terms.evidence.reason),
-    emailEvidenceInTerms: evidenceText(terms.evidence.emails),
+    reasonInTerms: builder.reason(evidence?.reason ?? ""),
+    emailEvidenceInTerms: evidenceText(evidence?.emails),
     originalInTerms:
       replacement === null
         ? null
