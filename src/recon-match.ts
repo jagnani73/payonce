@@ -90,7 +90,7 @@ export const KIND_ACTIONS: Record<BreakKind, string> = {
   "paid-then-returned":
     "Check with the supplier before paying again. PayOnce does not reopen the invoice by itself.",
   "untied-payout":
-    "This clears by itself when the sweep ties the payout to an invoice. Otherwise a person explains it: say what it paid.",
+    "This clears by itself when the sweep ties the payout to an invoice. Otherwise a person explains it, saying what it paid.",
   "unexplained-credit": "Say what it is, such as a top-up.",
   "unexplained-debit": "Say what it is, or raise it with Airwallex.",
   "unreadable-movement":

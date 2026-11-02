@@ -6918,7 +6918,7 @@ function buildKindGroup(kind, items) {
     h("label", { class: "field" }, h("span", { class: "field__label" }, "What these are"), note),
     h("div", { class: "recon-explain__actions" }, button, all),
     error,
-    h("p", { class: "hint" }, "Explaining moves no money and changes no invoice. It covers the breaks ticked here with the facts shown. If they change, they open again."),
+    h("p", { class: "hint" }, "Explaining moves no money and changes no invoice. It covers the breaks ticked here with the facts shown. If their facts change, they open again."),
   );
   form.addEventListener("submit", (event) => {
     event.preventDefault();
