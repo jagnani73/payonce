@@ -168,7 +168,9 @@ function blockedReason(engine: Engine, obligation: Obligation): string | null {
     return "A payment for this invoice is still with the bank or paid, so its bank details stay as they are";
   }
   if (comparedPayment(engine, obligation) === undefined) {
-    return "PayOnce has not paid this supplier before, so there are no bank details to compare new ones with. Approve paying the account on file, or close the invoice without paying";
+    return engine.ledger.lastPaidUnchecked(obligation.beneficiaryId) === undefined
+      ? "PayOnce has not paid this supplier before, so there are no bank details to compare new ones with. Approve paying the account on file, or close the invoice without paying"
+      : "PayOnce paid this supplier only before it kept which account each payment went to, so there are no checked bank details to compare new ones with. Approve paying the account on file, or close the invoice without paying";
   }
   if (
     engine.ledger

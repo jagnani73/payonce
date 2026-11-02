@@ -81,6 +81,7 @@ import {
   NO_FLOOR_REASON,
   OUTAGE_REASON,
   OUTSIDE_PAYOUT_REASON,
+  UNCONFIRMED_ACCOUNT_REASON,
 } from "./decide.js";
 import { likelyDuplicates, nearlyPays, sameNumberForSupplier } from "./duplicates.js";
 import {
@@ -2445,15 +2446,19 @@ async function accountProblem(
 }
 
 // Why a first payment to the record as it is now waits for a person because of
-// where PayOnce last paid this supplier, or null: LAST_PAID_CHANGED_REASON when
+// where PayOnce last paid this supplier, or null. LAST_PAID_CHANGED_REASON when
 // the record no longer holds the account of PayOnce's last checked payment to
-// it, whether or not a callback verified the one it holds. continueHeld then
+// it, whether or not a callback verified the one it holds: continueHeld then
 // waits for a callback, and once there is one needs two approvers and bars
-// whoever recorded it. A supplier PayOnce has never paid is not held for this.
-// Reads only the ledger.
+// whoever recorded it. UNCONFIRMED_ACCOUNT_REASON when PayOnce paid this
+// supplier only before it kept which account each payment went to. A supplier
+// PayOnce has never paid is not held for this. Reads only the ledger.
 function lastPaidHold(ledger: Ledger, obligation: Obligation, record: TransferBankDetails): string | null {
   const last: { accountKey: string } | undefined = ledger.lastPaidTransfer(obligation.beneficiaryId);
-  return last !== undefined && last.accountKey !== accountKeyOf(record) ? LAST_PAID_CHANGED_REASON : null;
+  if (last !== undefined) {
+    return last.accountKey === accountKeyOf(record) ? null : LAST_PAID_CHANGED_REASON;
+  }
+  return ledger.lastPaidUnchecked(obligation.beneficiaryId) === undefined ? null : UNCONFIRMED_ACCOUNT_REASON;
 }
 
 // Why a new invoice is held before paying because of other invoices: it looks
@@ -2493,10 +2498,11 @@ function heldForOthers(
 // record no longer holds it, or when paying it would take cash below the floor.
 // Any other first payment is decided on the record as it is read here, and is
 // held when PayOnce last paid this supplier another account, even one a callback
-// verified (lastPaidHold). A supplier PayOnce has never paid is not held for
-// this. The attempt keeps the account either way, so every retry is checked
-// against it. A pay run's row is never paid from another currency's wallet.
-// Call it in the invoice's turn.
+// verified, or paid it only before it kept which account each payment went to
+// (lastPaidHold). A supplier PayOnce has never paid is not held for this. The
+// attempt keeps the account either way, so every retry is checked against it.
+// A pay run's row is never paid from another currency's wallet. Call it in the
+// invoice's turn.
 //
 // It holds the currency lock of the wallet the money leaves throughout. The reads
 // from Airwallex come first, with the beneficiary record last, and every check
@@ -2567,7 +2573,8 @@ export async function startPayment(
         }
         // An account PayOnce has not paid this supplier, when it has paid them
         // another, waits for a person, as a replacement does: a callback first,
-        // then two approvers.
+        // then two approvers. So does any account of a supplier PayOnce paid only
+        // before it kept which account each payment went to.
         const lastPaid: string | null = record === undefined ? null : lastPaidHold(engine.ledger, now, record);
         if (lastPaid !== null) {
           engine.ledger.holdBeforePaying(invoiceId, [], lastPaid);
@@ -2910,13 +2917,16 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
   });
 }
 
-// Two approvers for a payment to a beneficiary PayOnce has never paid, or to an
-// account it has not paid this supplier before, by the account its last checked
-// payment kept. Null when PayOnce last paid this very account.
+// Two approvers for a payment to a beneficiary PayOnce has never paid, to one it
+// paid only before it kept which account each payment went to, or to an account
+// it has not paid this supplier before, by the account its last checked payment
+// kept. Null when PayOnce last paid this very account.
 function payeeRule(engine: Engine, obligation: Obligation, accountKey: string): SignoffRule | null {
   const last: { accountKey: string } | undefined = engine.ledger.lastPaidTransfer(obligation.beneficiaryId);
   if (last === undefined) {
-    return { needed: 2, why: "PayOnce has never paid this beneficiary" };
+    return engine.ledger.lastPaidUnchecked(obligation.beneficiaryId) === undefined
+      ? { needed: 2, why: "PayOnce has never paid this beneficiary" }
+      : { needed: 2, why: "PayOnce paid this supplier before it kept which account each payment went to" };
   }
   return last.accountKey === accountKey
     ? null

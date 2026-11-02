@@ -20,6 +20,11 @@ export const CHANGED_BANK_DETAILS_REASON: string =
 // holds: it needs a callback first, then two approvers.
 export const LAST_PAID_CHANGED_REASON: string =
   "the supplier's bank details on file changed since PayOnce last paid this supplier";
+// Why a first payment is held when PayOnce has paid this supplier only before it
+// kept which account each payment went to, so nothing on file says which
+// account it paid.
+export const UNCONFIRMED_ACCOUNT_REASON: string =
+  "PayOnce paid this supplier before it kept which account each payment went to, so a person confirms the account before it pays";
 export const ORIGINAL_DEADLINE_REASON: string =
   "the bank has not paid or failed the original transfer by its deadline";
 // Why the agent sent a replacement it would have sent by itself to a person. It

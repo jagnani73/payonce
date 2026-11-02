@@ -4047,10 +4047,10 @@ export class Ledger {
   // The latest payment PayOnce sent this beneficiary that the bank paid, to the
   // details it was decided or approved for, with that account's key. Only a
   // checked payment counts: one that kept the account it was meant for and did
-  // not go elsewhere (misdirected). Payouts sent outside PayOnce do not count, so
-  // a record changed and paid in the web app does not become the account on
-  // file, and nor does a payment from before the account was kept that nothing
-  // checked.
+  // not go elsewhere or show no bank details (misdirected). Payouts sent outside
+  // PayOnce do not count, so a record changed and paid in the web app does not
+  // become the account on file, and nor does a payment from before the account
+  // was kept that nothing checked (lastPaidUnchecked).
   lastPaidTransfer(
     beneficiaryId: string,
   ): { transferId: string; reference: string | null; accountKey: string } | undefined {
@@ -4069,6 +4069,23 @@ export class Ledger {
     return row === undefined
       ? undefined
       : { transferId: row.transfer_id, reference: row.reference, accountKey: row.account_key };
+  }
+
+  // The latest payment PayOnce sent this beneficiary that the bank paid and that
+  // kept no account: one from before attempts kept the account each payment went
+  // to, which nothing on file shows was checked. Undefined when there is none.
+  lastPaidUnchecked(beneficiaryId: string): { transferId: string; reference: string | null } | undefined {
+    const row: { transfer_id: string; reference: string | null } | undefined = this.db
+      .prepare(
+        `SELECT attempts.transfer_id, attempts.reference FROM attempts
+           JOIN obligations ON obligations.invoice_id = attempts.invoice_id
+          WHERE obligations.beneficiary_id = ? AND obligations.origin = 'payonce'
+            AND attempts.state = 'paid' AND attempts.transfer_id IS NOT NULL
+            AND attempts.misdirected = 0 AND attempts.account_key IS NULL
+          ORDER BY attempts.rowid DESC LIMIT 1`,
+      )
+      .get(beneficiaryId) as unknown as { transfer_id: string; reference: string | null } | undefined;
+    return row === undefined ? undefined : { transferId: row.transfer_id, reference: row.reference };
   }
 
   bankChange(id: number): BankChange | undefined {

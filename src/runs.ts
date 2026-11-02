@@ -136,7 +136,10 @@ function accountEnding(details: TransferBankDetails): string {
 }
 
 // Reads every beneficiary the rows name once, and for each that PayOnce has paid,
-// the transfer it last paid, for the bank details it went to. GETs only.
+// the transfer it last paid, for the bank details it went to. That is the latest
+// checked payment (lastPaidTransfer), or for a supplier PayOnce paid only before
+// it kept which account each payment went to, the latest of those, as before
+// accounts were kept. GETs only.
 async function readPayees(engine: Engine, rows: RunFileRow[]): Promise<Map<string, Payee>> {
   const payees: Map<string, Payee> = new Map();
   const ids: string[] = [
@@ -150,7 +153,9 @@ async function readPayees(engine: Engine, rows: RunFileRow[]): Promise<Map<strin
     const record: BeneficiaryRecord | undefined = await findBeneficiary(engine.client, id);
     const details: TransferBankDetails | undefined = record?.beneficiary?.bank_details;
     const last: { transferId: string; reference: string | null } | undefined =
-      details === undefined ? undefined : engine.ledger.lastPaidTransfer(id);
+      details === undefined
+        ? undefined
+        : (engine.ledger.lastPaidTransfer(id) ?? engine.ledger.lastPaidUnchecked(id));
     let lastPaid: Payee["lastPaid"] = undefined;
     if (last !== undefined) {
       const sentTo: TransferBankDetails | undefined = (await getTransfer(engine.client, last.transferId))
