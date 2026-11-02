@@ -1115,12 +1115,18 @@ async function assess(
     floor: null,
     paidDuplicate: paid,
   };
-  // The arrival is advice for people. The policy decided without it.
+  // The arrival is advice for people. The policy decided without it. The ask not
+  // to pay is named here as the request and the alert name it. The floor and a
+  // paid second bill have standing warnings of their own (noteFloor, noteSecondBill).
+  const said: string =
+    decision.action === "escalate"
+      ? namingNotToPay(decision.reason, incident.supplierAsksNotToPay)
+      : decision.reason;
   note(
     engine.ledger,
     obligation.invoiceId,
     "decision",
-    `${capitalise(decision.action)}: ${decision.reason}${held}${arrivalClause(assessment)}`,
+    `${capitalise(decision.action)}: ${said}${held}${arrivalClause(assessment)}`,
     "decision",
   );
   return assessment;
