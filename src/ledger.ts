@@ -15,6 +15,7 @@ import {
 } from "./audit-trail.js";
 import type { ApprovalTerms, FxTerms } from "./approval.js";
 import type { ArrivalTerms } from "./arrival.js";
+import { failedStatus, FAILED_STATUS_LIST } from "./assess.js";
 import type { EmailAttachment, SupplierEmail } from "./emails.js";
 
 export const LEDGER_PATH: string = "payonce.db";
@@ -34,6 +35,15 @@ const SENT_ATTEMPT: string = `SELECT 1 FROM attempts WHERE invoice_id = ?
 // in flight, paid or in a status PayOnce does not know.
 const LIVE_OUTSIDE_PAYOUT: string = `SELECT 1 FROM outside_payouts WHERE invoice_id = ?
   AND state <> 'failed'`;
+// A payment for the invoice bound as the parameter that the bank has live, the
+// test liveAtBank makes in code: an attempt that is not failed, or a transfer the
+// ledger keeps failed while the bank shows it in flight, paid or in a status
+// PayOnce does not know. A transfer found late whose status was never read counts
+// as live.
+const LIVE_ATTEMPT: string = `SELECT 1 FROM attempts WHERE invoice_id = ?
+  AND (state <> 'failed' OR (transfer_id IS NOT NULL AND CASE
+    WHEN bank_status IS NULL THEN found_late_at IS NOT NULL
+    ELSE bank_status NOT IN (${FAILED_STATUS_LIST.map((status: string): string => `'${status}'`).join(", ")}) END))`;
 const BUSY_TIMEOUT_MS: number = 5_000;
 
 // The partial unique index is the duplicate lock: an invoice can hold one attempt
@@ -1055,6 +1065,27 @@ function toObligation(row: ObligationRow): Obligation {
     runRowId: row.run_row_id,
     dueDate: row.due_date ?? null,
   };
+}
+
+// A transfer the bank has live counts as live everywhere, whatever state its
+// attempt is in. The duplicate lock holds one attempt that is not failed, so a
+// transfer found late beside another live payment is kept failed (see record),
+// and only its bank_status says the bank has it. This is LIVE_ATTEMPT's test, for
+// an attempt in hand.
+export function liveAtBank(attempt: Attempt): boolean {
+  if (attempt.state !== "failed") {
+    return true;
+  }
+  if (attempt.transferId === null) {
+    return false;
+  }
+  return attempt.bankStatus === null ? attempt.foundLateAt !== null : !failedStatus(attempt.bankStatus);
+}
+
+// A payment live at the bank that the bank has not paid yet: one being sent, one
+// in flight, or one in a status PayOnce does not know.
+export function withBank(attempt: Attempt): boolean {
+  return liveAtBank(attempt) && attempt.state !== "paid" && attempt.bankStatus !== "PAID";
 }
 
 // True when the invoice is paid from another currency's wallet, so each payment
@@ -2265,6 +2296,11 @@ export class Ledger {
     quote: AttemptQuote | null,
     openedAt: string = new Date().toISOString(),
   ): void {
+    // The unique index refuses a second attempt that is not failed. A transfer the
+    // ledger keeps failed while the bank has it live refuses one too.
+    if (this.db.prepare(LIVE_ATTEMPT).get(invoiceId) !== undefined) {
+      throw new DuplicatePaymentError(invoiceId);
+    }
     try {
       this.db
         .prepare(
@@ -2616,7 +2652,9 @@ export class Ledger {
   // failed whose transfer the bank shows live while another payment for the
   // invoice holds the duplicate lock keeps its failed state, so the lock still
   // holds one live payment, and the rest is recorded: bank_status says what the
-  // bank shows.
+  // bank shows. Once the lock is free, the next record takes the bank's state, so
+  // the lock holds it from then on. A status PayOnce does not know counts as
+  // live, so a failed attempt the bank shows in one is recorded in flight.
   record(
     requestId: string,
     transferId: string,
@@ -2630,11 +2668,14 @@ export class Ledger {
     bankCreatedAt: string | null = null,
     bankStatus: string | null = null,
   ): void {
-    const update = (written: AttemptState | null): { changes: number | bigint } =>
+    const unknownLive: number =
+      state === null && bankStatus !== null && !failedStatus(bankStatus) ? 1 : 0;
+    const update = (written: AttemptState | null, revive: number): { changes: number | bigint } =>
       this.db
         .prepare(
           `UPDATE attempts
-              SET transfer_id = ?, reference = ?, state = COALESCE(?, state),
+              SET transfer_id = ?, reference = ?,
+                  state = COALESCE(?, CASE WHEN state = 'failed' AND ? = 1 THEN 'in_flight' ELSE state END),
                   failure_code = ?, fee_minor = COALESCE(?, fee_minor),
                   fee_currency = COALESCE(?, fee_currency),
                   amount_minor = COALESCE(?, amount_minor), currency = COALESCE(?, currency),
@@ -2646,6 +2687,7 @@ export class Ledger {
           transferId,
           reference,
           written,
+          revive,
           failureCode,
           feeMinor,
           feeCurrency,
@@ -2657,12 +2699,12 @@ export class Ledger {
         );
     let result: { changes: number | bigint };
     try {
-      result = update(state);
+      result = update(state, unknownLive);
     } catch (error: unknown) {
       if (!isUniqueViolation(error)) {
         throw error;
       }
-      result = update(null);
+      result = update(null, 0);
     }
     if (Number(result.changes) !== 1) {
       throw new Error(`No payment attempt has request_id ${requestId}`);
@@ -3264,10 +3306,11 @@ export class Ledger {
   // moment and never as neither. Undefined, with nothing changed, when it is no
   // longer approved, for example because another process voided it in the
   // meantime, or when it has expired since the look checked it. Also when the
-  // invoice is no longer escalated, as when a person closed it, or a payout for
-  // it sent outside PayOnce is live. Also when unchanged, run under the write
-  // lock, returns false. The attempt keeps the approval, and the quote in its
-  // terms for a payment from another currency's wallet.
+  // invoice is no longer escalated, as when a person closed it, a payout for it
+  // sent outside PayOnce is live, or another payment for it is live at the bank.
+  // Also when unchanged, run under the write lock, returns false. The attempt
+  // keeps the approval, and the quote in its terms for a payment from another
+  // currency's wallet.
   useApproval(
     invoiceId: string,
     approvalId: number,
@@ -3285,9 +3328,9 @@ export class Ledger {
           `UPDATE approvals SET state = 'used'
             WHERE id = ? AND invoice_id = ? AND state = 'approved' AND expires_at > ?
               AND EXISTS (SELECT 1 FROM obligations WHERE invoice_id = ? AND state = 'escalated')
-              AND NOT EXISTS (${LIVE_OUTSIDE_PAYOUT})`,
+              AND NOT EXISTS (${LIVE_OUTSIDE_PAYOUT}) AND NOT EXISTS (${LIVE_ATTEMPT})`,
         )
-        .run(approvalId, invoiceId, new Date().toISOString(), invoiceId, invoiceId);
+        .run(approvalId, invoiceId, new Date().toISOString(), invoiceId, invoiceId, invoiceId);
       if (Number(result.changes) !== 1) {
         this.db.exec("ROLLBACK");
         return undefined;
@@ -3384,24 +3427,23 @@ export class Ledger {
     ).map((row: { applied_key: string }): string => row.applied_key);
   }
 
-  // True when one attempt is paid and every other attempt has failed.
+  // True when one attempt is paid and no other payment for the invoice is with the
+  // bank: each has failed, or is a transfer the ledger keeps failed that the bank
+  // has paid as well, which the look holds for a person (paidTwice).
   paidOnce(invoiceId: string): boolean {
     const attempts: Attempt[] = this.attempts(invoiceId);
     const paid: number = attempts.filter(
       (attempt: Attempt): boolean => attempt.state === "paid",
     ).length;
-    const unresolved: number = attempts.filter(
-      (attempt: Attempt): boolean =>
-        attempt.state !== "paid" && attempt.state !== "failed",
-    ).length;
+    const unresolved: number = attempts.filter(withBank).length;
     return paid === 1 && unresolved === 0;
   }
 
-  // True when every payment PayOnce sent has failed and the bank reports a payout
-  // sent outside PayOnce as paid.
+  // True when every payment PayOnce sent has failed at the bank and the bank
+  // reports a payout sent outside PayOnce as paid.
   paidOutside(invoiceId: string): boolean {
     return (
-      this.attempts(invoiceId).every((attempt: Attempt): boolean => attempt.state === "failed") &&
+      this.attempts(invoiceId).every((attempt: Attempt): boolean => !liveAtBank(attempt)) &&
       this.outsidePayouts(invoiceId).some(
         (payout: OutsidePayout): boolean => payout.state === "paid",
       )
@@ -3419,7 +3461,7 @@ export class Ledger {
     if (
       !byPerson &&
       this.attempts(invoiceId).some(
-        (attempt: Attempt): boolean => attempt.rateMismatch !== null && attempt.state !== "failed",
+        (attempt: Attempt): boolean => attempt.rateMismatch !== null && liveAtBank(attempt),
       )
     ) {
       return false;

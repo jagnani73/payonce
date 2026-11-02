@@ -3,6 +3,8 @@ import type { ApprovalTerms, FxTerms, LastQuote } from "./approval.js";
 import {
   crossCurrency,
   isExpired,
+  liveAtBank,
+  withBank,
   type Approval,
   type Attempt,
   type Ledger,
@@ -151,7 +153,7 @@ function couldStillPay(
 ): boolean {
   return (
     obligation.state === "escalated" &&
-    attempts.every((attempt: Attempt): boolean => attempt.state === "failed") &&
+    attempts.every((attempt: Attempt): boolean => !liveAtBank(attempt)) &&
     payouts.every((payout: OutsidePayout): boolean => payout.state === "failed")
   );
 }
@@ -206,9 +208,10 @@ export function cashLines(
     const attempts: Attempt[] = ledger.attempts(invoiceId);
     const payouts: OutsidePayout[] = ledger.outsidePayouts(invoiceId);
 
-    // A fee of 0 lost nothing. One not recorded yet is listed as not known.
+    // A fee of 0 lost nothing. One not recorded yet is listed as not known. A
+    // transfer the ledger keeps failed that the bank has live lost no fee.
     for (const attempt of attempts) {
-      if (attempt.state === "failed" && attempt.transferId !== null && attempt.feeMinor !== 0) {
+      if (!liveAtBank(attempt) && attempt.transferId !== null && attempt.feeMinor !== 0) {
         lines.push(feeLost(invoiceId, attempt.feeCurrency ?? wallet, attempt.feeMinor, attempt.reference));
       }
     }
@@ -235,10 +238,11 @@ export function cashLines(
           fromQuote: amount.fromQuote,
           runId: null,
         });
-      } else if (attempt.state === "pending" || attempt.state === "in_flight") {
+      } else if (withBank(attempt)) {
         // A found invoice's original is a payout someone sent outside PayOnce. The
         // money is booked where the transfer took it, which for a payout paid from
-        // another currency is not the invoice's.
+        // another currency is not the invoice's. A transfer the ledger keeps failed
+        // while the bank has it in flight is with the bank like any other.
         const amount: LineAmount = lineAmount(ledger, obligation, attempt, now);
         lines.push(
           ...sentLines(

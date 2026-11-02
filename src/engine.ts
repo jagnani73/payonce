@@ -60,7 +60,6 @@ import {
   attemptStateOf,
   bankDetailsKey,
   debitOf,
-  failedStatus,
   feeOf,
   originalStateOf,
   resendCanFix,
@@ -96,6 +95,7 @@ import {
   DuplicatePaymentError,
   expiryOf,
   isExpired,
+  liveAtBank,
   RailOutageError,
   signersOf,
   type Approval,
@@ -436,27 +436,34 @@ export function unrecordedAttemptOf(ledger: Ledger, transfer: Transfer): Attempt
 }
 
 // A payment the bank has not failed that PayOnce found late, while another payment
-// for the invoice, PayOnce's or one sent outside it, has not failed either: the
+// for the invoice, PayOnce's or one sent outside it, is live at the bank too: the
 // supplier may have been paid twice. Late is a transfer recorded on an attempt
 // PayOnce had marked failed with none, or one the ledger keeps failed while the
-// bank shows it live, because another payment holds the duplicate lock.
+// bank shows it live, because another payment holds the duplicate lock. Both are
+// judged by liveAtBank, so two late transfers the ledger keeps apart count too.
 export function paidTwice(ledger: Ledger, invoiceId: string): Attempt | undefined {
   const attempts: Attempt[] = ledger.attempts(invoiceId);
   const late: Attempt | undefined = attempts.find(
     (attempt: Attempt): boolean =>
       attempt.transferId !== null &&
-      (attempt.state === "failed"
-        ? attempt.bankStatus !== null && !failedStatus(attempt.bankStatus)
-        : attempt.foundLateAt !== null),
+      liveAtBank(attempt) &&
+      (attempt.state === "failed" || attempt.foundLateAt !== null),
   );
   if (late === undefined) {
     return undefined;
   }
   const other: boolean =
     attempts.some(
-      (attempt: Attempt): boolean => attempt.requestId !== late.requestId && attempt.state !== "failed",
+      (attempt: Attempt): boolean => attempt.requestId !== late.requestId && liveAtBank(attempt),
     ) || anyLive(ledger.outsidePayouts(invoiceId));
   return other ? late : undefined;
+}
+
+// A transfer the ledger keeps failed while the bank shows it live. It holds the
+// duplicate lock once another payment has failed, which the next record of it
+// does, so a look records it again after reading the others.
+function keptFailed(attempt: Attempt): boolean {
+  return attempt.state === "failed" && liveAtBank(attempt);
 }
 
 // Nothing more is sent while two payments may both pay the invoice, and any open
@@ -915,11 +922,13 @@ async function assess(
     sentOutsidePayOnce: obligation.origin === "outside",
     // The look that called this has just read them from Airwallex.
     outsidePayoutLive: anyLive(engine.ledger.outsidePayouts(obligation.invoiceId)),
+    // Failed at the bank: a replacement the ledger keeps failed beside a live one
+    // has not.
     replacementFailed: engine.ledger
       .attempts(obligation.invoiceId)
       .some(
         (attempt: Attempt): boolean =>
-          attempt.kind === "replacement" && attempt.state === "failed",
+          attempt.kind === "replacement" && !liveAtBank(attempt),
       ),
     supplierReportsNonReceipt: findings.claimsNonReceipt === true,
     supplierAsksForNewBankDetails: findings.asksForNewBankDetails === true,
@@ -2741,11 +2750,11 @@ export async function resumeIncident(
 // approves it on a new quote.
 //
 // Undefined, with nothing sent, when the ledger shows a payout for the invoice
-// sent outside PayOnce live, a payment found late that may pay it (paidTwice),
-// the invoice closed, or the attempt no longer pending with no transfer, just
-// before the create call. Another process may have tied the payout, recorded the
-// late transfer, closed the invoice, or failed or recorded the attempt, while this
-// one waited for the lock.
+// sent outside PayOnce live, another payment for it live at the bank, such as a
+// transfer found late (paidTwice), the invoice closed, or the attempt no longer
+// pending with no transfer, just before the create call. Another process may
+// have tied the payout, recorded the late transfer, closed the invoice, or failed
+// or recorded the attempt, while this one waited for the lock.
 async function retry(
   engine: Engine,
   obligation: Obligation,
@@ -2774,18 +2783,19 @@ async function retry(
   const lapsed: boolean = quoteLapsed(obligation, attempt);
   const invoiceId: string = obligation.invoiceId;
   const state: ObligationState | undefined = engine.ledger.obligation(invoiceId)?.state;
+  const attempts: Attempt[] = engine.ledger.attempts(invoiceId);
   if (
     (state !== "open" && state !== "escalated") ||
     anyLive(engine.ledger.outsidePayouts(invoiceId)) ||
-    paidTwice(engine.ledger, invoiceId) !== undefined ||
-    !engine.ledger
-      .attempts(invoiceId)
-      .some(
-        (current: Attempt): boolean =>
-          current.requestId === attempt.requestId &&
-          current.state === "pending" &&
-          current.transferId === null,
-      )
+    attempts.some(
+      (current: Attempt): boolean => current.requestId !== attempt.requestId && liveAtBank(current),
+    ) ||
+    !attempts.some(
+      (current: Attempt): boolean =>
+        current.requestId === attempt.requestId &&
+        current.state === "pending" &&
+        current.transferId === null,
+    )
   ) {
     return undefined;
   }
@@ -2931,13 +2941,32 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
     if (state === "failed") {
       railFailureSeen(engine.ledger, transfer, "look");
     }
-    if (attempt.kind === "original") {
+    // The original the policy goes by is the latest the bank has not failed, so a
+    // transfer found late that is live is never taken for a failed one and
+    // replaced. With none live, it is the latest.
+    if (
+      attempt.kind === "original" &&
+      (original === null ||
+        originalStateOf(transfer) !== "failed" ||
+        originalStateOf(original) === "failed")
+    ) {
       originalId = transfer.id;
       original = transfer;
-    } else if (originalStateOf(transfer) === "in_flight") {
+    } else if (attempt.kind === "replacement" && originalStateOf(transfer) === "in_flight") {
       liveReplacement = transfer;
     }
     console.log(`  ${attempt.kind} ${describe(transfer)}`);
+  }
+  // A transfer kept failed beside a payment that has failed since, in this look
+  // or another, takes its own state now that the duplicate lock is free.
+  for (const kept of engine.ledger.attempts(invoiceId).filter(keptFailed)) {
+    if (kept.transferId === null) {
+      continue;
+    }
+    const transfer: Transfer = await syncTransfer(engine.client, engine.ledger, kept.transferId);
+    if (engine.ledger.attemptOf(kept.requestId, transfer.id)?.state !== "failed") {
+      note(engine.ledger, invoiceId, "bank", `${capitalise(kept.kind)} ${describe(transfer)}`);
+    }
   }
   // A transfer found at a rate nobody approved may have escalated it above.
   obligation = engine.ledger.obligation(invoiceId) ?? obligation;
@@ -2965,6 +2994,12 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
   const twice: Attempt | undefined = paidTwice(engine.ledger, invoiceId);
   if (twice !== undefined) {
     return holdPaidTwice(engine, invoiceId, twice);
+  }
+  // Still kept failed, as when another process opened or recorded a payment
+  // meanwhile: nothing is decided around a payment the bank has live, and the
+  // next look, at once, records it again.
+  if (engine.ledger.attempts(invoiceId).some(keptFailed)) {
+    return Date.now();
   }
   if (engine.ledger.paidOnce(invoiceId)) {
     // A paid replacement was sent on a decision already made, so it closes the
@@ -3019,13 +3054,11 @@ export function payAgain(ledger: Ledger, invoiceId: string): PayAgainResult {
     if (!(error instanceof DuplicatePaymentError)) {
       throw error;
     }
-    const holder: Attempt | undefined = ledger
-      .attempts(invoiceId)
-      .find((attempt: Attempt): boolean => attempt.state !== "failed");
+    const holder: Attempt | undefined = ledger.attempts(invoiceId).find(liveAtBank);
     const held: string =
       holder === undefined
         ? ""
-        : `: ${holder.kind} ${holder.reference ?? "with no reference yet"} is ${ATTEMPT_STATE_WORDS[holder.state]}`;
+        : `: ${holder.kind} ${holder.reference ?? "with no reference yet"} is ${holder.state === "failed" ? "live at the bank" : ATTEMPT_STATE_WORDS[holder.state]}`;
     const message: string = `Pay again refused by the duplicate lock${held}. An invoice can have one live payment`;
     note(ledger, invoiceId, "lock", message);
     return { refused: true, message };

@@ -19,6 +19,7 @@ import { heldBeforePaying, pendingClose, REPLACEMENT_DEADLINE_REASON } from "./e
 import { candidatesFor, invoiceIndex, type InvoiceIndex, type Match } from "./intake.js";
 import {
   isExpired,
+  withBank,
   type Approval,
   type Attempt,
   type Ledger,
@@ -328,7 +329,7 @@ function withBankText(obligation: Obligation, attempt: Attempt): Situation {
 }
 
 function isLive(attempt: Attempt): boolean {
-  return attempt.transferId !== null && (attempt.state === "pending" || attempt.state === "in_flight");
+  return attempt.transferId !== null && withBank(attempt);
 }
 
 // When the bank should have paid or failed the payment, counted from the creation

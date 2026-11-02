@@ -19,10 +19,11 @@ const IN_FLIGHT_STATUSES: ReadonlySet<string> = new Set<string>([
   "SENT",
 ]);
 
-const FAILED_STATUSES: ReadonlySet<string> = new Set<string>([
-  "FAILED",
-  "CANCELLED",
-]);
+// The statuses in which the bank has failed a transfer. The ledger's LIVE_ATTEMPT
+// is built from this list, so SQL and code read a status the same way.
+export const FAILED_STATUS_LIST: readonly string[] = ["FAILED", "CANCELLED"];
+
+const FAILED_STATUSES: ReadonlySet<string> = new Set<string>(FAILED_STATUS_LIST);
 
 // 91401 system error, 91402 channel timeout. Both fail on the sending side, so the
 // beneficiary details were never rejected and the same payment can be sent again.

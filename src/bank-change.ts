@@ -6,7 +6,7 @@ import {
 import { getTransfer, type Transfer, type TransferBankDetails } from "./airwallex/transfers.js";
 import { bankDetailsKey } from "./assess.js";
 import { note, type Engine } from "./engine.js";
-import type { Attempt, Obligation, OutsidePayout, PayRunRow } from "./ledger.js";
+import { liveAtBank, type Attempt, type Obligation, type OutsidePayout, type PayRunRow } from "./ledger.js";
 import { wasRejected } from "./payments.js";
 
 // The bank details a person may change after a callback, with the label the page
@@ -147,7 +147,7 @@ function blockedReason(engine: Engine, obligation: Obligation): string | null {
       : "The incident is not waiting on a person";
   }
   const attempts: Attempt[] = engine.ledger.attempts(obligation.invoiceId);
-  if (attempts.length === 0 || attempts.some((attempt: Attempt): boolean => attempt.state !== "failed")) {
+  if (attempts.length === 0 || attempts.some(liveAtBank)) {
     return "A payment for this invoice is still with the bank or paid, so its bank details stay as they are";
   }
   if (

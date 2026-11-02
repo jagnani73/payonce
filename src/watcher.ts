@@ -4,6 +4,7 @@ import type { Dispatcher } from "./dispatcher.js";
 import type { Engine } from "./engine.js";
 import {
   isExpired,
+  withBank,
   type Approval,
   type Attempt,
   type AttemptState,
@@ -142,11 +143,16 @@ export class Watcher {
         this.agent.wake(invoiceId);
         continue;
       }
-      // PayOnce's own payments and payouts for the invoice sent outside it.
+      // PayOnce's own payments and payouts for the invoice sent outside it. A
+      // transfer the ledger keeps failed while the bank has it in flight is read
+      // too, so its look comes when the bank pays or fails it.
       const inFlight: string[] = [
         ...this.engine.ledger
           .attempts(invoiceId)
-          .filter((attempt: Attempt): boolean => attempt.state === "in_flight")
+          .filter(
+            (attempt: Attempt): boolean =>
+              attempt.state === "in_flight" || (attempt.state === "failed" && withBank(attempt)),
+          )
           .map((attempt: Attempt): string | null => attempt.transferId),
         ...this.engine.ledger
           .outsidePayouts(invoiceId)

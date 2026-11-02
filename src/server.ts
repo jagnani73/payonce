@@ -119,6 +119,7 @@ import {
   NothingToPayError,
   SameFileError,
   WaitingRunError,
+  withBank,
   type Alert,
   type Approval,
   type Attempt,
@@ -310,8 +311,7 @@ function isWatching(invoiceId: string): boolean {
     engine.ledger
       .attempts(invoiceId)
       .some(
-        (attempt: Attempt): boolean =>
-          attempt.state === "pending" || attempt.state === "in_flight",
+        (attempt: Attempt): boolean => withBank(attempt),
       ) ||
     engine.ledger
       .outsidePayouts(invoiceId)
@@ -442,8 +442,9 @@ function onWebhook(event: WebhookEvent): void {
     return;
   }
   // A failed transfer is cancelled a few seconds later, and a status check may
-  // have got there first. Either way the ledger already has the news.
-  if (attempt.state === "paid" || attempt.state === "failed") {
+  // have got there first. Either way the ledger already has the news. A transfer
+  // the ledger keeps failed while the bank has it in flight is news.
+  if (!withBank(attempt)) {
     return;
   }
   note(
