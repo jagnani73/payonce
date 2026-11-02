@@ -95,6 +95,7 @@ import {
   DuplicatePaymentError,
   expiryOf,
   isExpired,
+  lateBesideLive,
   liveAtBank,
   mismatchedLive,
   RailOutageError,
@@ -531,22 +532,9 @@ function holdMismatched(engine: Engine, invoiceId: string, attempt: Attempt): Ne
 // PayOnce had marked failed with none, or one the ledger keeps failed while the
 // bank shows it live, because another payment holds the duplicate lock. Both are
 // judged by liveAtBank, so two late transfers the ledger keeps apart count too.
+// settle makes the same test inside its transaction.
 export function paidTwice(ledger: Ledger, invoiceId: string): Attempt | undefined {
-  const attempts: Attempt[] = ledger.attempts(invoiceId);
-  const late: Attempt | undefined = attempts.find(
-    (attempt: Attempt): boolean =>
-      attempt.transferId !== null &&
-      liveAtBank(attempt) &&
-      (attempt.state === "failed" || attempt.foundLateAt !== null),
-  );
-  if (late === undefined) {
-    return undefined;
-  }
-  const other: boolean =
-    attempts.some(
-      (attempt: Attempt): boolean => attempt.requestId !== late.requestId && liveAtBank(attempt),
-    ) || anyLive(ledger.outsidePayouts(invoiceId));
-  return other ? late : undefined;
+  return lateBesideLive(ledger.attempts(invoiceId), ledger.outsidePayouts(invoiceId));
 }
 
 // A transfer the ledger keeps failed while the bank shows it live. It holds the
@@ -1273,8 +1261,10 @@ async function send(
   return created;
 }
 
-function close(engine: Engine, invoiceId: string): boolean {
-  if (!engine.ledger.settle(invoiceId)) {
+// Closes the incident on the state the look read the invoice in. False, with
+// nothing changed, when the ledger refuses (see settle).
+function close(engine: Engine, invoiceId: string, from: ObligationState): boolean {
+  if (!engine.ledger.settle(invoiceId, from)) {
     return false;
   }
   const replaced: boolean = engine.ledger
@@ -1294,6 +1284,38 @@ function close(engine: Engine, invoiceId: string): boolean {
 // The time of the next look the agent takes by itself, in epoch milliseconds.
 // Null when it waits for news or for a person.
 type NextLook = number | null;
+
+// What a look does when the ledger refused its close. A payment that went out at a
+// rate nobody approved waits for a person, and so does an invoice the ledger no
+// longer shows as paid once. Otherwise another process recorded a payment that
+// may pay it a second time, or changed the invoice, since this look read it, and
+// the next look, at once, decides as the ledger now stands.
+function closeRefused(engine: Engine, invoiceId: string): NextLook {
+  if (
+    engine.ledger
+      .attempts(invoiceId)
+      .some((attempt: Attempt): boolean => attempt.rateMismatch !== null && liveAtBank(attempt))
+  ) {
+    note(
+      engine.ledger,
+      invoiceId,
+      "approval",
+      "Waiting on a person to check the exchange rate a payment went out at and close the incident. PayOnce will not send another payment",
+      "waiting",
+    );
+    return null;
+  }
+  if (!engine.ledger.paidOnce(invoiceId)) {
+    note(
+      engine.ledger,
+      invoiceId,
+      "error",
+      "The ledger does not show this invoice as paid once, so the incident stays open",
+    );
+    return null;
+  }
+  return Date.now();
+}
 
 const RETRY_FAILED_LOOK_MS: number = 60_000;
 
@@ -2876,15 +2898,9 @@ async function act(
       // The first request names the floor as well, as every later one does.
       return escalate(engine, obligation, withFloorReason(engine, obligation, assessment));
     case "close":
-      if (!close(engine, obligation.invoiceId)) {
-        note(
-          engine.ledger,
-          obligation.invoiceId,
-          "error",
-          "The ledger does not show this invoice as paid once, so the incident stays open",
-        );
-      }
-      return null;
+      return close(engine, obligation.invoiceId, obligation.state)
+        ? null
+        : closeRefused(engine, obligation.invoiceId);
   }
 }
 
@@ -3231,17 +3247,9 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
     // incident. A paid original goes to the policy, which may want a person. So
     // does an invoice with a live payout sent outside PayOnce.
     if (paidOriginal(engine.ledger, invoiceId) === undefined && !anyLive(outside)) {
-      // Refused when a payment went out at a rate nobody approved.
-      if (!close(engine, invoiceId)) {
-        note(
-          engine.ledger,
-          invoiceId,
-          "approval",
-          "Waiting on a person to check the exchange rate a payment went out at and close the incident. PayOnce will not send another payment",
-          "waiting",
-        );
-      }
-      return null;
+      // Refused when a payment went out at a rate nobody approved, or when another
+      // process changed the ledger since this look read it.
+      return close(engine, invoiceId, obligation.state) ? null : closeRefused(engine, invoiceId);
     }
   }
   if (liveReplacement !== null) {
@@ -3427,7 +3435,7 @@ export function closeIncident(
     }
     return;
   }
-  if (review === undefined || !ledger.settle(invoiceId, true)) {
+  if (review === undefined || !ledger.settle(invoiceId, "escalated", true)) {
     throw new Error(`${invoiceId} is not waiting on a person to close it`);
   }
   ledger.clearMismatched(invoiceId);

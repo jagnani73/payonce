@@ -1148,6 +1148,27 @@ function nothingWithBank(attempt: Attempt): boolean {
   return !ownLive(attempt) && !stillWithBank(attempt);
 }
 
+// A transfer found late, or one the ledger keeps failed, that the bank has live,
+// while another payment for the invoice, PayOnce's or one sent outside it, is live
+// at the bank too: the supplier may have been paid twice. paidTwice gives it to
+// the look, and settle refuses to close the invoice by itself while there is one.
+export function lateBesideLive(attempts: Attempt[], payouts: OutsidePayout[]): Attempt | undefined {
+  const late: Attempt | undefined = attempts.find(
+    (attempt: Attempt): boolean =>
+      attempt.transferId !== null &&
+      liveAtBank(attempt) &&
+      (attempt.state === "failed" || attempt.foundLateAt !== null),
+  );
+  if (late === undefined) {
+    return undefined;
+  }
+  const other: boolean =
+    attempts.some(
+      (attempt: Attempt): boolean => attempt.requestId !== late.requestId && liveAtBank(attempt),
+    ) || payouts.some((payout: OutsidePayout): boolean => payout.state !== "failed");
+  return other ? late : undefined;
+}
+
 // True when the invoice is paid from another currency's wallet, so each payment
 // converts on a quote a person approved.
 export function crossCurrency(obligation: Obligation): boolean {
@@ -3619,28 +3640,39 @@ export class Ledger {
   // person closes it, by a payout sent outside PayOnce or a transfer under one of
   // its request ids that does not match it. A payment that went out
   // at a rate nobody approved leaves the invoice for a person to close, unless it
-  // failed.
-  settle(invoiceId: string, byPerson: boolean = false): boolean {
-    if (
-      !this.paidOnce(invoiceId) &&
-      !(byPerson && (this.paidOutside(invoiceId) || this.paidMismatched(invoiceId)))
-    ) {
-      return false;
-    }
-    if (
-      !byPerson &&
-      this.attempts(invoiceId).some(
-        (attempt: Attempt): boolean => attempt.rateMismatch !== null && liveAtBank(attempt),
-      )
-    ) {
-      return false;
-    }
-    this.db
-      .prepare("UPDATE obligations SET state = 'settled' WHERE invoice_id = ?")
-      .run(invoiceId);
-    // Nothing is left to approve on a settled invoice.
-    this.voidOpenApprovals(invoiceId);
-    return true;
+  // failed. So does a transfer found late that may have paid it a second time
+  // (lateBesideLive, the test paidTwice makes). The checks and the close run in one
+  // write transaction, and the close only changes an invoice still in the state
+  // the caller read (from), so a payment another process recorded, or a change it
+  // made to the invoice, after the caller looked leaves it as it is. False then.
+  settle(invoiceId: string, from: ObligationState, byPerson: boolean = false): boolean {
+    return this.transaction((): boolean => {
+      if (
+        !this.paidOnce(invoiceId) &&
+        !(byPerson && (this.paidOutside(invoiceId) || this.paidMismatched(invoiceId)))
+      ) {
+        return false;
+      }
+      const attempts: Attempt[] = this.attempts(invoiceId);
+      if (
+        !byPerson &&
+        (attempts.some(
+          (attempt: Attempt): boolean => attempt.rateMismatch !== null && liveAtBank(attempt),
+        ) ||
+          lateBesideLive(attempts, this.outsidePayouts(invoiceId)) !== undefined)
+      ) {
+        return false;
+      }
+      const result: { changes: number | bigint } = this.db
+        .prepare("UPDATE obligations SET state = 'settled' WHERE invoice_id = ? AND state = ?")
+        .run(invoiceId, from);
+      if (Number(result.changes) !== 1) {
+        return false;
+      }
+      // Nothing is left to approve on a settled invoice.
+      this.voidOpenApprovals(invoiceId);
+      return true;
+    });
   }
 
   // A transfer that went to other bank details than the ones it was approved or
