@@ -195,6 +195,7 @@ import {
   SCENARIOS,
   type ScenarioDef,
 } from "./scenario.js";
+import { supplierDetail, supplierList, type SupplierDetail } from "./suppliers.js";
 import { openTunnel, type Tunnel } from "./tunnel.js";
 import { Watcher } from "./watcher.js";
 import { WEBHOOK_PATH, WebhookReceiver, type WebhookEvent } from "./webhooks.js";
@@ -1016,6 +1017,15 @@ function board(params: URLSearchParams): BoardReport {
   });
 }
 
+// One supplier record by its beneficiary id, from the ledger alone.
+function supplier(raw: string): SupplierDetail {
+  const detail: SupplierDetail | null = supplierDetail(engine.ledger, raw);
+  if (detail === null) {
+    throw new HttpError(404, `No invoice or pay run row in the ledger names supplier record ${raw.slice(0, 20)}`);
+  }
+  return detail;
+}
+
 // While alerts are on, the balances are read every 5 minutes even with no page
 // open, so a headroom below 0 is noticed. Null until a balance has been read,
 // and "reading" while none has and a read is running.
@@ -1731,6 +1741,10 @@ async function route(
     sendJson(response, 200, cash(false));
   } else if (method === "GET" && pathname === "/api/board") {
     sendJson(response, 200, board(url.searchParams));
+  } else if (method === "GET" && pathname === "/api/suppliers") {
+    sendJson(response, 200, supplierList(engine.ledger));
+  } else if (method === "GET" && parts[1] === "suppliers" && parts[2] !== undefined && parts.length === 3) {
+    sendJson(response, 200, supplier(parts[2]));
   } else if (method === "GET" && pathname === "/api/inbox") {
     sendJson(response, 200, {
       uploads: engine.ledger.uploads(INBOX_OTHERS_SHOWN).map(uploadSummary),
