@@ -92,10 +92,12 @@ interface TransferList {
   page_after?: string | null;
 }
 
-// Every transfer created since the given ISO time, newest first.
+// Every transfer created since the given ISO time, newest first. pages, when
+// given, counts the GETs.
 export async function listTransfersSince(
   client: AirwallexClient,
   since: string,
+  pages?: { count: number },
 ): Promise<Transfer[]> {
   const transfers: Transfer[] = [];
   let page: string | null | undefined = undefined;
@@ -104,6 +106,9 @@ export async function listTransfersSince(
     const list: TransferList = await client.get<TransferList>(
       `/api/v1/transfers?from_created_at=${encodeURIComponent(since)}&page_size=100${cursor}`,
     );
+    if (pages !== undefined) {
+      pages.count += 1;
+    }
     transfers.push(...(list.items ?? []));
     page = list.page_after;
   } while (page);
