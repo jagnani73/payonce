@@ -201,8 +201,14 @@ const ALERT_BALANCE_EVERY_MS: number = 5 * 60_000;
 const SUBSCRIBE_TRIES: number = 3;
 const SUBSCRIBE_RETRY_MS: number = 5_000;
 const MAX_BODY_BYTES: number = 64 * 1024;
+const BODY_TOO_LARGE_TEXT: string = "Request body is too large";
 // An uploaded email travels as base64 inside JSON: 2 MB of email is about 2.7 MB.
 const MAX_INBOX_BODY_BYTES: number = 3 * 1024 * 1024;
+// How long an uploaded email or pay run file may take to arrive. An upload holds
+// its parse place while its body is read, so a slow one gives it back after this
+// instead of after Node's five minute request timeout.
+const UPLOAD_BODY_MS: number = 30_000;
+const SLOW_UPLOAD_TEXT: string = `The upload took more than ${UPLOAD_BODY_MS / 1000} seconds to arrive, so PayOnce stopped reading it and kept nothing. Try again`;
 const BASE64: RegExp = /^[A-Za-z0-9+/]*={0,2}$/;
 const WEB_DIR: URL = new URL("../web/", import.meta.url);
 const EMAILS_DIR: URL = new URL("../fixtures/emails/", import.meta.url);
@@ -348,20 +354,40 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
   response.end(JSON.stringify(body));
 }
 
+// within, when given, is how long the body may take to arrive. Past it the read
+// is refused with 408, and the connection is closed once that answer is sent.
 async function readJson(
   request: IncomingMessage,
   maxBytes: number = MAX_BODY_BYTES,
-  tooLarge: string = "Request body is too large",
+  tooLarge: string = BODY_TOO_LARGE_TEXT,
+  within: number | null = null,
 ): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let size: number = 0;
-  for await (const chunk of request) {
-    const buffer: Buffer = chunk as Buffer;
-    size += buffer.length;
-    if (size > maxBytes) {
-      throw new HttpError(413, tooLarge);
+  const reading: Promise<void> = (async (): Promise<void> => {
+    for await (const chunk of request) {
+      const buffer: Buffer = chunk as Buffer;
+      size += buffer.length;
+      if (size > maxBytes) {
+        throw new HttpError(413, tooLarge);
+      }
+      chunks.push(buffer);
     }
-    chunks.push(buffer);
+  })();
+  if (within === null) {
+    await reading;
+  } else {
+    // The read left running ends when the connection closes, so its error is dropped.
+    reading.catch((): void => undefined);
+    let timer: NodeJS.Timeout | undefined;
+    const late: Promise<never> = new Promise<never>((_resolve, reject): void => {
+      timer = setTimeout((): void => reject(new HttpError(408, SLOW_UPLOAD_TEXT)), within);
+    });
+    try {
+      await Promise.race([reading, late]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
   try {
     const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
@@ -1271,7 +1297,7 @@ function airwallexDown(error: unknown): HttpError | undefined {
 // type checks cover an upload too, and nothing parses multipart. The checks are a
 // handful of Airwallex GETs, so the answer waits for them.
 async function uploadRunFile(request: IncomingMessage): Promise<unknown> {
-  const body: Record<string, unknown> = await readJson(request);
+  const body: Record<string, unknown> = await readJson(request, MAX_BODY_BYTES, BODY_TOO_LARGE_TEXT, UPLOAD_BODY_MS);
   const uploadedBy: string = name(body, "uploadedBy", "Enter your name");
   const csv: unknown = body["csv"];
   if (typeof csv !== "string") {
@@ -1384,7 +1410,8 @@ function uploadDetail(raw: string): unknown {
 // The page sends the file's bytes, or the pasted source as UTF-8, base64 inside
 // JSON, so the guard's Origin and content type checks cover an upload and
 // nothing parses multipart. Its place in the parse queue is taken before the
-// body is read, so bodies still being read count as waiting too.
+// body is read, so bodies still being read count as waiting too, and a body that
+// takes longer than UPLOAD_BODY_MS to arrive is refused and gives its place back.
 async function addUpload(request: IncomingMessage): Promise<unknown> {
   let giveBack: () => void;
   try {
@@ -1402,7 +1429,12 @@ async function addUpload(request: IncomingMessage): Promise<unknown> {
 async function readUpload(request: IncomingMessage): Promise<unknown> {
   // A body too large to hold a 2 MB email gets the parser's wording, not a
   // generic one.
-  const body: Record<string, unknown> = await readJson(request, MAX_INBOX_BODY_BYTES, TOO_LARGE_TEXT);
+  const body: Record<string, unknown> = await readJson(
+    request,
+    MAX_INBOX_BODY_BYTES,
+    TOO_LARGE_TEXT,
+    UPLOAD_BODY_MS,
+  );
   const uploadedBy: string = name(body, "uploadedBy", "Enter your name");
   const source: unknown = body["source"];
   if (source !== "file" && source !== "paste") {
@@ -1689,6 +1721,11 @@ const server: Server = createServer(
       if (response.headersSent) {
         response.end();
         return;
+      }
+      // A body not read to its end, as after a slow upload, is not waited for: the
+      // connection closes once the answer is sent.
+      if (!request.complete) {
+        response.setHeader("Connection", "close");
       }
       sendJson(response, status, {
         error: message,
