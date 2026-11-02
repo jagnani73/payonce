@@ -286,7 +286,7 @@ function createServer(): McpServer {
     {
       title: "Incident list",
       description:
-        "Every invoice in the ledger, open and closed, newest first: state, amount, origin, board group and its latest timeline line. Use it to find an invoice number for incident.",
+        "Every invoice in the ledger, open and closed, newest first: state, amount, origin, board group and a headline, as the PayOnce page lists them. The headline is the board's reason for an invoice on the board, and otherwise its latest decision, close or standing line, never an error or an email. Use it to find an invoice number for incident.",
       inputSchema: z.strictObject({
         state: z.enum(["open", "escalated", "settled", "rejected"]).optional(),
         limit: z.int().min(1).max(500).optional().describe("How many to list, 100 if left out"),

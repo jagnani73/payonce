@@ -161,18 +161,12 @@ function runAuditSummary(ledger: Ledger, runId: number): AuditSummary {
   };
 }
 
-// The latest line that says how the incident stands, as the incident list shows it.
-function headline(ledger: Ledger, invoiceId: string): string {
-  return (
-    ledger
-      .events(invoiceId)
-      .filter((event: LedgerEvent): boolean => event.kind !== "outbox")
-      .at(-1)?.message ?? ""
-  );
-}
-
+// Each invoice's headline follows the incident list's rule: the board's fixed
+// reason for an invoice on the board, and otherwise its latest decision, close or
+// standing line (Ledger.headlines), never an error, an email or a message draft.
 export function incidentsView(ledger: Ledger, state: ObligationState | null, limit: number): unknown {
   const groups: Map<string, BoardGroupOf> = boardGroups(ledger);
+  const headlines: Map<string, string> = ledger.headlines();
   const all: Obligation[] = ledger
     .obligations()
     .filter((obligation: Obligation): boolean => state === null || obligation.state === state);
@@ -188,7 +182,7 @@ export function incidentsView(ledger: Ledger, state: ObligationState | null, lim
       amountMinor: obligation.amountMinor,
       state: obligation.state,
       origin: obligation.origin,
-      headline: headline(ledger, obligation.invoiceId),
+      headline: groups.get(obligation.invoiceId)?.why ?? headlines.get(obligation.invoiceId) ?? "",
       runId: ledger.runRowOf(obligation.invoiceId)?.runId ?? null,
       board: groups.get(obligation.invoiceId) ?? null,
     })),

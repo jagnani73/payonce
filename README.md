@@ -458,7 +458,7 @@ In the fifth, `inv-05002` has the same supplier, amount and number as INV-5002, 
 | Tool | What it returns |
 | --- | --- |
 | `board` | The incident board, with the page's filters: group, wallet and origin |
-| `incidents` | Every invoice, newest first, with its state, board group and latest timeline line |
+| `incidents` | Every invoice, newest first, with its state, board group and headline as the page lists them: the board's reason for an open invoice, else its latest decision, close or standing line |
 | `incident` | One invoice: its payments and what the bank did, payouts sent outside PayOnce, the active outage on its rail, the latest approval request with its terms, whether a person can close it, what the supplier emails were found to say, the newest timeline lines and its audit check |
 | `cash` | The cash panel, per wallet |
 | `runs`, `run` | The pay runs, and one run's rows, cash check, approval request and timeline |

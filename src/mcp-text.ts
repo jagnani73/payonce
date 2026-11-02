@@ -55,7 +55,7 @@ const PLAIN: RegExp[] = [
   // board: incident-board.ts's fixed text, which names a rail only once it fits RAIL.
   /^entries\[\]\.(why|also\[\])$/,
   /^(groups|origins)\[\]\.label$/,
-  /^incidents\[\]\.board\.label$/,
+  /^incidents\[\]\.board\.(label|why)$/,
   // RAIL_FAILURE_CODES' labels, or "rail failure".
   /^(outages\[\]|outage|active\[\]|recent\[\]|rule)\.codes\[\]\.label$/,
   /^balance\.why$/,
