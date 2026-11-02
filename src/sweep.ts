@@ -45,6 +45,10 @@ function reportOnce(transfer: Transfer, problem: string): void {
   sayWarning(`  sweep    ${transfer.short_reference_id ?? transfer.id}: ${problem}`);
 }
 
+// The supplier name of a found payout whose bank details carry no account name.
+// The supplier view never links records by it.
+export const UNNAMED_PAYEE: string = "Unnamed payee";
+
 // Takes a payout someone else sent on as a new invoice, so the agent runs the
 // incident as it would its own. Its reference is the invoice number when it can
 // be one, and the bank's short reference otherwise, with the payout's reference
@@ -69,7 +73,7 @@ function adopt(engine: Engine, transfer: Transfer, state: FoundState): string | 
   engine.ledger.adoptPayout(
     {
       invoiceId,
-      supplier: transfer.beneficiary?.bank_details?.account_name ?? "Unnamed payee",
+      supplier: transfer.beneficiary?.bank_details?.account_name ?? UNNAMED_PAYEE,
       // No supplier emails are on file, so there is no sender to check.
       supplierDomain: "",
       beneficiaryId,

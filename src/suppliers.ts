@@ -44,6 +44,7 @@ import {
 import { RAIL_FAILURE_CODES, railOf } from "./outages.js";
 import { debitCurrency } from "./reserve.js";
 import { BENEFICIARY_ID_PATTERN } from "./run-file.js";
+import { UNNAMED_PAYEE } from "./sweep.js";
 import { FAILURE_WORDS } from "./why-facts.js";
 
 // The supplier view: one Airwallex beneficiary record, the key every control
@@ -394,10 +395,13 @@ export interface RelatedRecord {
   accounts: string[];
 }
 
+// When PayOnce last stored what the record held, and where: an invoice, or a
+// pay run's row by its line, which may not be an invoice yet.
 export interface RecordStored {
   at: string | null;
   invoiceId: string | null;
   runId: number | null;
+  runLine: number | null;
   account: string;
 }
 
@@ -572,12 +576,23 @@ function recordsOf(read: SupplierRead): Map<string, RecordFacts> {
   for (const failure of read.failures) {
     known(failure.beneficiaryId)?.failures.push(failure);
   }
+  // A run's outage hold is on the rows its release pays: each row released, on
+  // the record of the invoice it became, and while the run waits, its pay rows.
+  // Never a skip row, nor a row dropped at the release.
   const runsOf: Map<number, Set<string>> = new Map<number, Set<string>>();
   for (const row of read.runRows) {
     known(row.beneficiaryId)?.runRows.push(row);
-    const ids: Set<string> = runsOf.get(row.runId) ?? new Set<string>();
-    ids.add(row.beneficiaryId);
-    runsOf.set(row.runId, ids);
+    const id: string | undefined =
+      row.state === "released" && row.invoiceId !== null
+        ? beneficiaryOf.get(row.invoiceId)
+        : waitingPayRow(row)
+          ? row.beneficiaryId
+          : undefined;
+    if (id !== undefined) {
+      const ids: Set<string> = runsOf.get(row.runId) ?? new Set<string>();
+      ids.add(id);
+      runsOf.set(row.runId, ids);
+    }
   }
   for (const hold of read.holds) {
     if (hold.invoiceId !== null) {
@@ -603,6 +618,7 @@ interface Sighting {
   ending: string | null;
   invoiceId: string | null;
   runId: number | null;
+  runLine: number | null;
 }
 
 function ms(at: string | null): number {
@@ -678,8 +694,14 @@ function sentAtOf(attempt: SupplierAttempt): number {
 
 function sightingsOf(facts: RecordFacts): Sighting[] {
   const seen: Sighting[] = [];
-  const add = (sighting: Omit<Sighting, "invoiceId" | "runId"> & { invoiceId?: string | null; runId?: number | null }): void => {
-    seen.push({ invoiceId: null, runId: null, ...sighting });
+  const add = (
+    sighting: Omit<Sighting, "invoiceId" | "runId" | "runLine"> & {
+      invoiceId?: string | null;
+      runId?: number | null;
+      runLine?: number | null;
+    },
+  ): void => {
+    seen.push({ invoiceId: null, runId: null, runLine: null, ...sighting });
   };
   for (const attempt of facts.attempts) {
     if (attempt.accountKey !== null) {
@@ -701,14 +723,16 @@ function sightingsOf(facts: RecordFacts): Sighting[] {
     }
   }
   for (const row of facts.runRows) {
+    // Named by the run and line: the row's invoice number may not be an invoice
+    // in the ledger yet.
     if (row.action === "pay" && row.accountKey !== null) {
       add({
         key: row.accountKey,
         source: "pay-run",
         at: ms(row.checkedAt),
         ending: null,
-        invoiceId: row.invoiceId,
         runId: row.runId,
+        runLine: row.line,
       });
     }
   }
@@ -795,6 +819,15 @@ function addOwner(map: Map<string, Set<string>>, key: string, id: string): void 
   map.set(key, ids);
 }
 
+// A name records may be linked by: not empty, and not the name the sweep gives a
+// payout that carries no account name.
+const UNNAMED_KEY: string = supplierNameKey(UNNAMED_PAYEE);
+
+function linkableName(name: string): boolean {
+  const key: string = supplierNameKey(name);
+  return key !== "" && key !== UNNAMED_KEY;
+}
+
 function ownersOf(links: SupplierLinks): Owners {
   const owners: Owners = {
     byKey: new Map<string, Set<string>>(),
@@ -818,7 +851,9 @@ function ownersOf(links: SupplierLinks): Owners {
     addOwner(owners.byPayee, payee, beneficiaryId);
   }
   for (const { beneficiaryId, name, newest } of links.names) {
-    addOwner(owners.byName, supplierNameKey(name), beneficiaryId);
+    if (linkableName(name)) {
+      addOwner(owners.byName, supplierNameKey(name), beneficiaryId);
+    }
     const held: { name: string; newest: number } | undefined = owners.newestName.get(beneficiaryId);
     if (held === undefined || newest > held.newest) {
       owners.newestName.set(beneficiaryId, { name, newest });
@@ -836,8 +871,11 @@ interface Accounts {
   labelOf: Map<string, string>;
   lastPaid: { transferId: string; reference: string | null; accountKey: string } | undefined;
   unchecked: { transferId: string; reference: string | null } | undefined;
-  stored: { key: string; at: number; invoiceId: string | null; runId: number | null } | null;
+  stored: { key: string; at: number; invoiceId: string | null; runId: number | null; runLine: number | null } | null;
+  // The latest applied callback for the record, as verifiedBankChange reads it,
+  // and the account it verified, null when it kept no details.
   latestApplied: SupplierCallback | undefined;
+  appliedKey: string | null;
 }
 
 function accountsOf(ledger: Ledger, facts: RecordFacts, owners: Owners): Accounts {
@@ -877,11 +915,22 @@ function accountsOf(ledger: Ledger, facts: RecordFacts, owners: Owners): Account
   const stored: Accounts["stored"] =
     storedSighting === undefined
       ? null
-      : { key: storedSighting.key, at: storedSighting.at, invoiceId: storedSighting.invoiceId, runId: storedSighting.runId };
+      : {
+          key: storedSighting.key,
+          at: storedSighting.at,
+          invoiceId: storedSighting.invoiceId,
+          runId: storedSighting.runId,
+          runLine: storedSighting.runLine,
+        };
   const applied: SupplierCallback[] = facts.callbacks.filter(
     (callback: SupplierCallback): boolean => callback.state === "applied" && callback.appliedKey !== null,
   );
-  const latestApplied: SupplierCallback | undefined = applied.at(-1);
+  // verifiedBankChange reads the latest applied callback, whatever it kept.
+  const latestApplied: SupplierCallback | undefined = facts.callbacks
+    .filter((callback: SupplierCallback): boolean => callback.state === "applied")
+    .at(-1);
+  const appliedKey: string | null =
+    latestApplied === undefined || latestApplied.appliedKey === null ? null : keyHash(latestApplied.appliedKey);
   const views: AccountView[] = ordered.map(({ key }: { key: string }): AccountView => {
     const list: Sighting[] = byKey.get(key) ?? [];
     const times: number[] = list.map((sighting: Sighting): number => sighting.at).filter((at: number): boolean => !Number.isNaN(at));
@@ -950,7 +999,7 @@ function accountsOf(ledger: Ledger, facts: RecordFacts, owners: Owners): Account
       alsoOn: [...alsoOn].filter((id: string): boolean => SUPPLIER_KEY_PATTERN.test(id)).sort(),
     };
   });
-  return { views, labelOf, lastPaid, unchecked, stored, latestApplied };
+  return { views, labelOf, lastPaid, unchecked, stored, latestApplied, appliedKey };
 }
 
 // ---------- cautions ----------
@@ -1004,6 +1053,26 @@ function failedAttempt(attempt: SupplierAttempt): boolean {
   return attempt.state === "failed" && attempt.transferId !== null && !liveAtBank(attempt);
 }
 
+// PayOnce's words for a failure code, or null for a code it has none for. Only a
+// code in its own form, and only the table's own entries, never one such as
+// constructor that every object has.
+function wordsFor(table: Readonly<Record<string, string>>, code: string | null): string | null {
+  return code !== null && FAILURE_CODE.test(code) && Object.hasOwn(table, code) ? (table[code] ?? null) : null;
+}
+
+// An invoice the engine sent to a person because the record's bank details
+// changed, by the fixed reasons it gives for that.
+function heldForAccount(obligation: Obligation): boolean {
+  return ACCOUNT_REASONS.some((reason: string): boolean => obligation.escalationReason.startsWith(reason));
+}
+
+// A time in a caution's text, to the minute and labelled UTC as pnpm supplier
+// prints times, so it never contradicts the page's local Since line.
+function utcMinute(at: string | null): string | null {
+  const known: string | null = iso(at);
+  return known === null ? null : `${known.slice(0, 10)} ${known.slice(11, 16)} UTC`;
+}
+
 function cautionsOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts, owners: Owners, now: number): Caution[] {
   const found: CautionDraft[] = [];
   const openOnes: Obligation[] = facts.obligations.filter(open);
@@ -1012,29 +1081,29 @@ function cautionsOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts, owne
     const value: string | undefined = key === undefined || key === null ? undefined : accounts.labelOf.get(key);
     return value === undefined ? [] : [value];
   };
-  const { lastPaid, unchecked, stored, latestApplied } = accounts;
-  const appliedKey: string | null = latestApplied?.appliedKey === null || latestApplied === undefined ? null : keyHash(latestApplied.appliedKey);
-  const lastPaidAttempt: SupplierAttempt | undefined =
-    lastPaid === undefined
-      ? undefined
-      : facts.attempts.find((attempt: SupplierAttempt): boolean => attempt.transferId === lastPaid.transferId);
-  const lastPaidAt: number = lastPaidAttempt === undefined ? Number.NaN : sentAtOf(lastPaidAttempt);
+  const { lastPaid, unchecked, stored, latestApplied, appliedKey } = accounts;
 
-  // The record holds other details than the account last paid, and no callback
-  // since has verified them.
-  const callbackSince: boolean =
-    latestApplied !== undefined && (Number.isNaN(lastPaidAt) || ms(latestApplied.recordedAt) > lastPaidAt);
-  const held: Obligation[] = callbackSince
-    ? []
-    : openOnes.filter((obligation: Obligation): boolean =>
-        ACCOUNT_REASONS.some((reason: string): boolean => obligation.escalationReason.startsWith(reason)),
-      );
+  // As the engine reads it: the record holds details other than the account
+  // PayOnce last paid and checked, and the latest applied callback did not verify
+  // them (verifiedBankChange). The ledger never reads the record, so "holds" is
+  // the account PayOnce last stored for it. Whatever the callbacks, any open
+  // invoice the engine sent to a person because the details changed.
+  const held: Obligation[] = openOnes.filter(heldForAccount);
   const storedChanged: boolean =
     stored !== null && lastPaid !== undefined && stored.key !== lastPaid.accountKey && appliedKey !== stored.key;
   if (held.length > 0 || storedChanged) {
     found.push({
       code: "account-changed",
-      text: "PayOnce found this record holding bank details other than the account it last paid and checked, and no callback has verified them. It pays nothing to them until someone calls the number on file and records the call.",
+      text: [
+        storedChanged
+          ? "PayOnce last found this record holding bank details other than the account it last paid and checked, and no callback has verified them. It pays nothing to them until someone calls the number on file and records the call."
+          : null,
+        held.length > 0
+          ? "These invoices wait for a person because the record's bank details changed after a payment to it was made, decided or approved. PayOnce never pays changed details by itself."
+          : null,
+      ]
+        .filter((sentence: string | null): sentence is string => sentence !== null)
+        .join(" "),
       invoices: ids(held),
       accounts: storedChanged ? label(stored?.key) : [],
       since: storedChanged ? isoOf(stored?.at ?? Number.NaN) : null,
@@ -1042,9 +1111,11 @@ function cautionsOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts, owne
   }
   if (appliedKey !== null && stored?.key === appliedKey && appliedKey !== lastPaid?.accountKey) {
     const shown: string[] = label(appliedKey);
+    const view: AccountView | undefined = accounts.views.find((account: AccountView): boolean => account.accountKey === appliedKey);
+    const when: string | null = utcMinute(latestApplied?.recordedAt ?? null);
     found.push({
       code: "callback-verified",
-      text: `A callback verified account ${shown[0] ?? "on file"}. Until a payment to it is paid, every first payment and replacement to it needs two approvers, and whoever recorded the callback cannot approve.`,
+      text: `A callback${when === null ? "" : ` recorded at ${when}`} verified account ${shown[0] ?? "on file"}${view?.ending === null || view === undefined ? "" : `, ending ${view.ending}`}. Paying a held invoice or a pay run row to that account needs two approvers, and nobody who recorded a callback for it may approve the payment.`,
       invoices: latestApplied === undefined ? [] : [latestApplied.invoiceId],
       accounts: shown,
       since: iso(latestApplied?.recordedAt ?? null),
@@ -1053,7 +1124,7 @@ function cautionsOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts, owne
   if (lastPaid === undefined && unchecked === undefined) {
     found.push({
       code: "new-payee",
-      text: "PayOnce has never paid this record. Paying a held invoice to it, or a pay run row, needs two approvers.",
+      text: "PayOnce has never paid this record. Paying a held invoice or a pay run row to it needs two approvers.",
     });
   }
   if (lastPaid === undefined && unchecked !== undefined) {
@@ -1109,7 +1180,7 @@ function cautionsOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts, owne
     if (latest !== undefined) {
       found.push({
         code: "account-failure",
-        text: `A payment to account ${label(key)[0] ?? "on file"} failed in the last 30 days with an account-level code (${FAILURE_WORDS[latest.failureCode ?? ""] ?? "another code"}). The account may be closed or wrong.`,
+        text: `A payment to account ${label(key)[0] ?? "on file"} failed in the last 30 days with an account-level code (${wordsFor(FAILURE_WORDS, latest.failureCode) ?? "another code"}). The account may be closed or wrong.`,
         invoices: [...new Set<string>(failed.map((attempt: SupplierAttempt): string => attempt.invoiceId))],
         accounts: label(key),
         since: earliest(failed.map(sentAtOf)),
@@ -1153,10 +1224,16 @@ function cautionsOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts, owne
   if (twice.length > 0) {
     found.push({ code: "paid-twice", text: "PayOnce may have paid these invoices twice.", invoices: ids(twice) });
   }
-  if (!facts.obligations.some((obligation: Obligation): boolean => (obligation.supplierPhone ?? "").trim() !== "")) {
+  // A callback is recorded on the escalated invoice itself, from its own phone.
+  const noPhone: Obligation[] = openOnes.filter(
+    (obligation: Obligation): boolean =>
+      obligation.state === "escalated" && (obligation.supplierPhone ?? "").trim() === "",
+  );
+  if (noPhone.length > 0) {
     found.push({
       code: "no-phone",
-      text: "No phone number is on file for this record, so nobody can record a callback for it.",
+      text: "These invoices wait for a person and have no phone number on file, so nobody can record a callback for them.",
+      invoices: ids(noPhone),
     });
   }
   const recent: SupplierAttempt[] = facts.attempts.filter(
@@ -1166,8 +1243,8 @@ function cautionsOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts, owne
     const byWords: Map<string, number> = new Map<string, number>();
     let other: number = 0;
     for (const attempt of recent) {
-      const words: string | undefined = FAILURE_WORDS[attempt.failureCode ?? ""];
-      if (words === undefined) {
+      const words: string | null = wordsFor(FAILURE_WORDS, attempt.failureCode);
+      if (words === null) {
         other += 1;
       } else {
         byWords.set(words, (byWords.get(words) ?? 0) + 1);
@@ -1283,10 +1360,6 @@ function activeOutages(ledger: Ledger, openOnes: Obligation[]): OutageBrief[] {
 
 // ---------- the detail's sections ----------
 
-function failureWordsOf(code: string | null): string | null {
-  return code === null ? null : (FAILURE_WORDS[code] ?? null);
-}
-
 function paymentView(attempt: SupplierAttempt, labelOf: Map<string, string>): PaymentView {
   const key: string | null = attemptKey(attempt);
   const code: string | null = attempt.failureCode !== null && FAILURE_CODE.test(attempt.failureCode) ? attempt.failureCode : null;
@@ -1296,7 +1369,7 @@ function paymentView(attempt: SupplierAttempt, labelOf: Map<string, string>): Pa
     state: attempt.state,
     bankStatus: attempt.bankStatus !== null && STATUS.test(attempt.bankStatus) ? attempt.bankStatus : null,
     failureCode: code,
-    failureWords: failureWordsOf(code),
+    failureWords: wordsFor(FAILURE_WORDS, code),
     amountMinor: attempt.amountMinor,
     currency: attempt.currency,
     feeMinor: attempt.feeMinor,
@@ -1558,7 +1631,7 @@ function outagesOf(ledger: Ledger, facts: RecordFacts): SupplierDetail["outages"
       (failure: SupplierFailure): FailureView => ({
         reference: REFERENCE.test(failure.reference) ? failure.reference : null,
         code: FAILURE_CODE.test(failure.code) ? failure.code : null,
-        codeWords: RAIL_FAILURE_CODES[failure.code] ?? null,
+        codeWords: wordsFor(RAIL_FAILURE_CODES, failure.code),
         failedAt: iso(failure.failedAt),
         invoiceId: failure.invoiceId,
         outageId: countedBy.get(failure.transferId) ?? null,
@@ -1888,6 +1961,7 @@ export function supplierDetail(ledger: Ledger, key: string, now: number = Date.n
               at: isoOf(stored.at),
               invoiceId: stored.invoiceId,
               runId: stored.runId,
+              runLine: stored.runLine,
               account: accounts.labelOf.get(stored.key) ?? "",
             },
       cautions: cautionsOf(ledger, facts, accounts, owners, now),
