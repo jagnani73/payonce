@@ -172,7 +172,7 @@ The estimates come from Airwallex's published payout network tables for the Unit
 
 PayOnce does not switch a payment to a faster route. Each Airwallex beneficiary record holds one transfer method, so paying another way takes another record, and PayOnce treats another record as another account, with a callback and two approvers like any change of bank details. When a route may be too slow, the advice says so and a person decides what to do.
 
-An estimate in approval terms counts from the day its request opened, so an approval given just before midnight still matches after it. The same goes for a pay run checked again after midnight: the approvals it already has still count. A new request counts from the day it opens. While the day in the terms is before today, the approval card and `pnpm approve` also say when the payment usually arrives if it is sent today. That line is advice and is not part of what is approved. An invoice without a due date has the same approval terms as before, and so does a pay run file without due dates.
+An estimate in approval terms counts from the day its request opened, so an approval given just before midnight still matches after it. The same goes for a pay run checked again after midnight: the approvals it already has still count. A new request counts from the day it opens. While the day in the terms is before today and the request is still open, the approval card and `pnpm approve` also say when the payment usually arrives if it is sent today. That line is advice and is not part of what is approved. An invoice without a due date has the same approval terms as before, and so does a pay run file without due dates.
 
 ## Changed bank details
 

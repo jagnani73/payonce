@@ -19,7 +19,13 @@ import {
   type AlertsStatus,
 } from "./alerts.js";
 import type { ApprovalTerms, RunRowTerms, RunTerms } from "./approval.js";
-import { arrivalAdvice, dueDateProblem, feeSeenText } from "./arrival.js";
+import {
+  arrivalAdvice,
+  dueDateProblem,
+  feeSeenText,
+  type ArrivalAdvice,
+  type ArrivalTerms,
+} from "./arrival.js";
 import { describePolicy, policyFromEnv, type Approver, type Barred } from "./approvers.js";
 import {
   auditCsv,
@@ -622,6 +628,17 @@ function sendRunAudit(response: ServerResponse, raw: string, format: string): vo
   response.end(auditCsv(audit));
 }
 
+// "If sent today" says when a payment that can still be approved and sent would
+// arrive, so a used, void or expired request, and a run already released, have none.
+function adviceFor(arrival: ArrivalTerms, live: boolean): ArrivalAdvice {
+  const advice: ArrivalAdvice = arrivalAdvice(arrival);
+  return live ? advice : { ...advice, sentToday: null };
+}
+
+function isLive(approval: Approval | RunApproval): boolean {
+  return (approval.state === "requested" || approval.state === "approved") && !isExpired(approval);
+}
+
 function incidentDetail(invoiceId: string): unknown {
   const obligation: Obligation = requireObligation(invoiceId);
   const findings: string | undefined = engine.ledger.findings(invoiceId);
@@ -657,7 +674,8 @@ function incidentDetail(invoiceId: string): unknown {
             approver: approval.approver,
             terms,
             // How the page words the estimate the terms carry, kept out of them.
-            arrivalAdvice: terms?.arrival === undefined ? null : arrivalAdvice(terms.arrival),
+            arrivalAdvice:
+              terms?.arrival === undefined ? null : adviceFor(terms.arrival, isLive(approval)),
             needed: approval.needed,
             neededWhy: approval.neededWhy,
             signoffs: approval.signoffs.map((signoff: Signoff) => ({
@@ -1182,7 +1200,7 @@ function runDetail(raw: string): unknown {
         row.arrival === null || row.currency === null
           ? null
           : feeSeenText(engine.ledger, row.currency, row.arrival.method),
-      arrivalAdvice: row.arrival === null ? null : arrivalAdvice(row.arrival),
+      arrivalAdvice: row.arrival === null ? null : adviceFor(row.arrival, run.state === "waiting"),
       invoice:
         row.state === "released" && row.invoiceId !== null ? invoiceSummary(row.invoiceId) : null,
     })),
@@ -1199,7 +1217,13 @@ function runDetail(raw: string): unknown {
             arrivalAdvice: terms.rows.flatMap((row: RunRowTerms) =>
               row.arrival === undefined
                 ? []
-                : [{ line: row.line, invoiceId: row.invoiceId, advice: arrivalAdvice(row.arrival) }],
+                : [
+                    {
+                      line: row.line,
+                      invoiceId: row.invoiceId,
+                      advice: adviceFor(row.arrival, run.state === "waiting" && isLive(approval)),
+                    },
+                  ],
             ),
             needed: approval.needed,
             neededWhy: approval.neededWhy,
