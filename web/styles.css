@@ -1403,6 +1403,37 @@ input:read-only {
   color: var(--amber);
 }
 
+/* Ask why */
+
+.why__text {
+  font-size: 14.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.why__text + .why__text {
+  margin-top: 8px;
+}
+
+.why__asking {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.why__legend {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.why .caution {
+  margin-top: 10px;
+}
+
 /* Approval */
 
 .approval--requested {

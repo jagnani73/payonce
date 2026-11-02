@@ -138,6 +138,7 @@ const els = {
   timelineEmpty: byId("timeline-empty"),
   working: byId("working"),
   audit: byId("audit"),
+  why: byId("why"),
   review: byId("review"),
   bankChange: byId("bank-change"),
   approval: byId("approval"),
@@ -279,6 +280,11 @@ const state = {
   board: null,
   boardError: null,
   boardFilters: { group: "", currency: "", origin: "" },
+  // Ask why: per invoice, whether an ask is under way, the last answer and the last
+  // error, for this page's session only. whyRetryAt is when the server's limit
+  // lets the next ask start, for every invoice.
+  why: new Map(),
+  whyRetryAt: 0,
 };
 
 // Signatures of what each section last drew, so an unchanged poll touches nothing.
@@ -583,6 +589,10 @@ async function loadOptions() {
       maxEmailBytes: typeof options.maxEmailBytes === "number" ? options.maxEmailBytes : null,
       reader: typeof options.reader === "string" ? options.reader : "",
       readerIsModel: options.readerIsModel === true,
+      explainer: {
+        on: options.explainer?.on === true,
+        models: typeof options.explainer?.models === "string" ? options.explainer.models : "",
+      },
     };
     state.optionsError = null;
   } catch (error) {
@@ -2220,6 +2230,128 @@ async function submitApproval(invoiceId) {
 // The card for an incident a person has to close: the bank reports the original
 // as paid, so there is no payment to approve. For an invoice held as a likely
 // second bill, closing it pays nothing.
+// ---------- ask why ----------
+
+// A model's explanation of the incident, asked for by a person. It is shown as
+// text only, kept in memory for this session and never written anywhere.
+let whyTimer = 0;
+
+function whyEntry(invoiceId) {
+  return state.why.get(invoiceId) ?? { asking: false, answer: null, error: null };
+}
+
+function lastEventId(detail) {
+  const events = Array.isArray(detail.events) ? detail.events : [];
+  return events.length === 0 ? 0 : Number(events[events.length - 1].id) || 0;
+}
+
+function buildWhy(invoiceId, explainer, entry, limited, stale) {
+  const on = explainer?.on === true;
+  const answer = entry.answer;
+  const label = entry.asking
+    ? "Asking"
+    : answer !== null
+      ? "Ask again"
+      : entry.error !== null
+        ? "Try again"
+        : "Ask why";
+  const button = h("button", { class: "button button--small", type: "button" }, label);
+  button.disabled = !on || entry.asking || limited;
+  button.addEventListener("click", () => askWhy(invoiceId));
+  const at = answer === null ? null : parseDate(answer.at);
+  const when = at === null ? "" : ` at ${minuteFormat.format(at)}`;
+  const children = [
+    h("div", { class: "approval__head" }, h("h2", { id: "why-title" }, "Why this happened"), button),
+    state.options !== null &&
+      !on &&
+      h("p", { class: "hint" }, "The model reader is off. Set READER_API_KEY to ask a model why."),
+    on &&
+      answer === null &&
+      !entry.asking &&
+      h(
+        "p",
+        { class: "hint" },
+        `Sends this invoice's PayOnce records to ${explainer.models} on Google's free tier. It leaves out emails, names and account details.`,
+      ),
+    entry.asking &&
+      h(
+        "p",
+        { class: "why__asking" },
+        h("span", { class: "pulse", "aria-hidden": "true" }),
+        "Asking the model. This can take up to 17 seconds.",
+      ),
+    answer !== null && [
+      h("p", { class: "why__text" }, answer.explanation),
+      answer.notInFacts !== "" && h("p", { class: "why__text" }, `Not in the records: ${answer.notInFacts}`),
+      answer.aliasesLeft &&
+        Array.isArray(answer.legend) &&
+        answer.legend.length > 0 && [
+          h("p", { class: "hint" }, "What the labels in the answer stand for:"),
+          h(
+            "ul",
+            { class: "why__legend" },
+            answer.legend.map((item) => h("li", null, `${item.alias} is ${item.value}`)),
+          ),
+        ],
+      answer.cached &&
+        h("p", { class: "hint" }, `Nothing has changed since${when === "" ? " then" : when}, so this is the same answer.`),
+      stale && caution("The incident has changed since this answer. Ask again for a current one."),
+      h(
+        "p",
+        { class: "footnote" },
+        `Written by ${answer.model}${when} from PayOnce's records for this invoice${answer.cut ? ", and shortened to fit" : ""}. A model can be wrong. The timeline and the cards are the record.`,
+      ),
+    ],
+    entry.error !== null && h("p", { class: "form-error", role: "alert" }, entry.error),
+  ];
+  els.why.replaceChildren(...children.flat(Infinity).filter((child) => child instanceof Node));
+}
+
+function renderWhy(detail) {
+  const invoiceId = detail.obligation.invoiceId;
+  const explainer = state.options?.explainer ?? null;
+  const entry = whyEntry(invoiceId);
+  const limited = state.whyRetryAt > Date.now();
+  const stale = entry.answer !== null && lastEventId(detail) > Number(entry.answer.asOf?.lastEventId ?? 0);
+  if (changed("why", [invoiceId, state.options === null, explainer, entry, limited, stale])) {
+    buildWhy(invoiceId, explainer, entry, limited, stale);
+  }
+}
+
+function redrawWhy(invoiceId) {
+  const detail = currentDetail();
+  if (detail !== null && detail.obligation.invoiceId === invoiceId) {
+    renderWhy(detail);
+  }
+}
+
+async function askWhy(invoiceId) {
+  if (whyEntry(invoiceId).asking) {
+    return;
+  }
+  state.why.set(invoiceId, { ...whyEntry(invoiceId), asking: true, error: null });
+  redrawWhy(invoiceId);
+  try {
+    const answer = await api(`${incidentPath(invoiceId)}/why`, { method: "POST", body: {} });
+    state.why.set(invoiceId, { asking: false, answer, error: null });
+  } catch (error) {
+    const wait = error.status === 429 ? Number(error.data?.retryAfterSeconds) : NaN;
+    if (Number.isFinite(wait) && wait > 0) {
+      state.whyRetryAt = Date.now() + wait * 1000;
+      clearTimeout(whyTimer);
+      // The button comes back by itself once the limit allows the next ask.
+      whyTimer = setTimeout(() => {
+        const detail = currentDetail();
+        if (detail !== null) {
+          renderWhy(detail);
+        }
+      }, wait * 1000 + 50);
+    }
+    state.why.set(invoiceId, { ...whyEntry(invoiceId), asking: false, error: error.message });
+  }
+  redrawWhy(invoiceId);
+}
+
 function buildReview(invoiceId, review, emailSummary) {
   const hasReference = typeof review.reference === "string" && review.reference !== "";
   const duplicate = review.kind === "duplicate";
@@ -2931,6 +3063,7 @@ function renderSelected(id) {
   renderHeader(detail);
   renderTimeline(detail);
   renderAudit(detail);
+  renderWhy(detail);
   renderReview(detail);
   renderBankChange(detail);
   renderApproval(detail);
