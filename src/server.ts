@@ -400,7 +400,6 @@ function sendJson(
   response.writeHead(status, {
     ...headers,
     "Content-Type": "application/json; charset=utf-8",
-    "X-Content-Type-Options": "nosniff",
   });
   response.end(JSON.stringify(body));
 }
@@ -1626,7 +1625,6 @@ function serveStatic(response: ServerResponse, pathname: string): void {
     "Cache-Control": "no-store",
     "Content-Security-Policy":
       "default-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
-    "X-Content-Type-Options": "nosniff",
   });
   response.end(content);
 }
@@ -1845,6 +1843,8 @@ async function route(
 
 const server: Server = createServer(
   (request: IncomingMessage, response: ServerResponse): void => {
+    // Every answer, a CSV download or an error included, says not to guess its type.
+    response.setHeader("X-Content-Type-Options", "nosniff");
     route(request, response).catch((error: unknown): void => {
       const status: number = error instanceof HttpError ? error.status : 500;
       const message: string = error instanceof Error ? error.message : String(error);
