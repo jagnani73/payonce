@@ -16,6 +16,7 @@
     "outage": "tsx src/outage.ts",
     "reset": "tsx src/reset.ts",
     "ui": "tsx --env-file=.env src/server.ts",
+    "mcp": "tsx src/mcp.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
