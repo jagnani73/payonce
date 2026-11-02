@@ -567,7 +567,7 @@ The code holds amounts in minor units and converts at the Airwallex boundary. Th
 
 - Asking a model a question of your own about an incident. The "Why this happened" card asks one fixed question.
 - Pay run timelines in an explanation. A pay run row's facts give only its run and line.
-- Closing an incident without a payment, except a held duplicate. A person can close any other only when the bank reports a payment for the invoice as paid.
+- Closing an incident without a payment, except an invoice held before paying, which a person can close without paying. A person can close any other only when the bank reports a payment for the invoice as paid.
 - Chasing the bank by itself. When a payment passes its deadline, PayOnce tells a person and offers a trace request for them to send to Airwallex.
 - Sending email. Messages are drafted for a person, who sends them from their own mail, and PayOnce keeps no recipient addresses.
 - A floor check on a single incident's first payment. Pay run rows have one.
@@ -590,4 +590,6 @@ The code holds amounts in minor units and converts at the Airwallex boundary. Th
 - Releasing only the rows of a pay run that do not pay on a rail with an outage. The whole run waits.
 - Counting an outage's failures from a webhook or from the status check. A look at the invoice and the sweep count them, so a failure can take up to one sweep, 30 seconds, to count.
 - Grouping failures by bank. Several payees at one bank that fail together still declare an outage on the whole rail.
-- Closing an invoice whose open payment PayOnce held back because a payout sent outside it was live, after that payout is paid. The payment stays open with no transfer, so the close card does not offer it.
+- Currencies with no decimals or three, such as JPY or KWD. Amounts are handled for two-decimal currencies only.
+- A login. Names are typed, so the approval rules stop mistakes, not someone typing another person's name.
+- A keyed hash chain, or one anchored outside the ledger. Anyone who can write `payonce.db` can rewrite a timeline and recompute every hash and the running hash, and `pnpm run audit` then reports it intact.
