@@ -21,6 +21,7 @@
     "supplier": "tsx src/supplier.ts",
     "reconcile": "tsx src/recon-cli.ts",
     "ask": "tsx src/ask.ts",
+    "metrics": "tsx src/metrics-cli.ts",
     "reset": "tsx src/reset.ts",
     "ui": "tsx --env-file=.env src/server.ts",
     "mcp": "tsx src/mcp.ts",
