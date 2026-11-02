@@ -219,6 +219,11 @@ const MAX_BODY_BYTES: number = 64 * 1024;
 const BODY_TOO_LARGE_TEXT: string = "Request body is too large";
 // An uploaded email travels as base64 inside JSON: 2 MB of email is about 2.7 MB.
 const MAX_INBOX_BODY_BYTES: number = 3 * 1024 * 1024;
+// A pay run file travels as a string inside JSON. Its largest, 40,000 characters,
+// takes at most 6 bytes a character once escaped, so this always fits it, and
+// parseRunFile refuses a longer file by its characters.
+const MAX_RUN_BODY_BYTES: number = 256 * 1024;
+const RUN_TOO_LARGE_TEXT: string = `The file is too large. A pay run file can be at most ${MAX_RUN_FILE_CHARS.toLocaleString("en-US")} characters`;
 // How long an uploaded email or pay run file may take to arrive. An upload holds
 // its parse place while its body is read, so a slow one gives it back after this
 // instead of after Node's five minute request timeout.
@@ -1408,7 +1413,7 @@ function airwallexDown(error: unknown): HttpError | undefined {
 // type checks cover an upload too, and nothing parses multipart. The checks are a
 // handful of Airwallex GETs, so the answer waits for them.
 async function uploadRunFile(request: IncomingMessage): Promise<unknown> {
-  const body: Record<string, unknown> = await readJson(request, MAX_BODY_BYTES, BODY_TOO_LARGE_TEXT, UPLOAD_BODY_MS);
+  const body: Record<string, unknown> = await readJson(request, MAX_RUN_BODY_BYTES, RUN_TOO_LARGE_TEXT, UPLOAD_BODY_MS);
   const uploadedBy: string = name(body, "uploadedBy", "Enter your name");
   const csv: unknown = body["csv"];
   if (typeof csv !== "string") {
