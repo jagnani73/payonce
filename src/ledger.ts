@@ -1744,6 +1744,8 @@ export class RailOutageError extends Error {
 
 export class Ledger {
   private readonly db: DatabaseSync;
+  // False only for a file opened read-only from before the meta table.
+  private readonly hasMeta: boolean;
 
   // readOnly opens an existing file as it is, without creating or upgrading it,
   // so a check cannot change what it checks.
@@ -1752,8 +1754,11 @@ export class Ledger {
     // waits for the other instead of failing on the first lock.
     this.db = new DatabaseSync(path, { timeout: BUSY_TIMEOUT_MS, readOnly });
     if (readOnly) {
+      this.hasMeta =
+        (this.db.prepare("PRAGMA table_info(meta)").all() as unknown as ColumnRow[]).length > 0;
       return;
     }
+    this.hasMeta = true;
     this.db.exec(SCHEMA);
     this.addColumns();
     this.db
@@ -1808,7 +1813,7 @@ export class Ledger {
 
   // True once the timeline is a hash chain: any record of the chain in meta, or
   // any line with a hash, counts. A file opened read-only from before the chain
-  // has no hash column.
+  // has no hash column, and one from before meta has no meta table.
   chainStarted(): boolean {
     const hashColumn: boolean = (
       this.db.prepare("PRAGMA table_info(events)").all() as unknown as ColumnRow[]
@@ -1927,6 +1932,9 @@ export class Ledger {
   }
 
   private metaValue(key: string): string | null {
+    if (!this.hasMeta) {
+      return null;
+    }
     const row: MetaRow | undefined = this.db
       .prepare("SELECT value FROM meta WHERE key = ?")
       .get(key) as unknown as MetaRow | undefined;
