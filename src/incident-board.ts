@@ -145,6 +145,9 @@ export interface BoardEntry {
   kind: "invoice" | "run-row";
   invoiceId: string;
   supplier: string;
+  // The Airwallex beneficiary record it pays, which the supplier view is keyed by.
+  // Empty for a run row with none.
+  beneficiaryId: string;
   amountMinor: number;
   currency: string;
   // The wallet the money leaves.
@@ -628,6 +631,7 @@ function invoiceEntry(
       kind: "invoice",
       invoiceId,
       supplier: obligation.supplier,
+      beneficiaryId: obligation.beneficiaryId,
       amountMinor: obligation.amountMinor,
       currency: obligation.currency,
       wallet: debitCurrency(obligation),
@@ -673,6 +677,7 @@ function runRowEntry(
       kind: "run-row",
       invoiceId: row.invoiceId ?? "",
       supplier: row.payee ?? row.supplier ?? "",
+      beneficiaryId: row.beneficiaryId ?? "",
       amountMinor: row.amountMinor ?? 0,
       currency: row.currency ?? "",
       wallet: row.currency ?? "",
@@ -970,16 +975,21 @@ export function boardGroups(ledger: Ledger, now: number = Date.now()): Map<strin
 }
 
 // The board as the page and pnpm board show it, with the filters applied.
+// beneficiaryId, when given, keeps only the entries that pay that beneficiary
+// record, as the supplier view shows them. It is applied with the currency and
+// origin filters and is not echoed in filters.
 export function boardReport(
   ledger: Ledger,
   filters: BoardFilters,
   now: number = Date.now(),
+  beneficiaryId: string | null = null,
 ): BoardReport {
   const { ranked, invoices, outages }: Board = rankedBoard(ledger, now);
   const others: Ranked[] = ranked.filter(
     (item: Ranked): boolean =>
       (filters.currency === null || inCurrency(item.entry, filters.currency)) &&
-      (filters.origin === null || item.entry.origin === filters.origin),
+      (filters.origin === null || item.entry.origin === filters.origin) &&
+      (beneficiaryId === null || item.entry.beneficiaryId === beneficiaryId),
   );
   const shown: Ranked[] = others.filter(
     (item: Ranked): boolean => filters.group === null || item.entry.group === filters.group,
