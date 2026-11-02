@@ -2067,6 +2067,11 @@ input[type="file"] {
 
 /* Supplier view */
 
+/* The record sits above the outages and the cash panel. */
+.supplier {
+  margin-bottom: 20px;
+}
+
 .supplier__cards {
   display: grid;
   gap: 20px;

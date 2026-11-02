@@ -300,12 +300,12 @@ const state = {
   // lets the next ask start, for every invoice.
   why: new Map(),
   whyRetryAt: 0,
-  // Suppliers: the list and when it was last asked for, and the record on screen
-  // with the key and time of the last ask, so neither is fetched more than once
-  // an idle poll.
+  // Suppliers: the list, fetched only while its sidebar section is on screen,
+  // and the record on screen with the key and time of the last ask, so it is not
+  // fetched more than once an idle poll.
   suppliers: null,
   suppliersError: null,
-  suppliersAskedAt: 0,
+  suppliersShown: false,
   supplier: null,
   supplierKey: null,
   supplierError: null,
@@ -773,12 +773,12 @@ async function loadUploadDetail(uploadId) {
   }
 }
 
-// The list is asked for at most once every idle poll, whatever the poll rate.
+// Only while the Suppliers section of the sidebar is on screen, and then on
+// every refresh, as the incident list is.
 async function loadSuppliers() {
-  if (state.suppliers !== null && Date.now() - state.suppliersAskedAt < POLL_IDLE_MS) {
+  if (!state.suppliersShown) {
     return;
   }
-  state.suppliersAskedAt = Date.now();
   try {
     const data = await api("/api/suppliers");
     state.suppliers = Array.isArray(data.suppliers) ? data.suppliers : [];
@@ -786,6 +786,25 @@ async function loadSuppliers() {
   } catch (error) {
     state.suppliersError = `Could not refresh the suppliers. ${error.message}`;
   }
+}
+
+// The Suppliers section coming on screen, as the sidebar scrolls or the window
+// changes, loads the list at once. Without IntersectionObserver it counts as
+// always shown.
+function watchSupplierList() {
+  const section = els.supplierList.closest("section") ?? els.supplierList;
+  if (typeof IntersectionObserver !== "function") {
+    state.suppliersShown = true;
+    return;
+  }
+  new IntersectionObserver((entries) => {
+    const shown = entries.some((entry) => entry.isIntersecting);
+    const appeared = shown && !state.suppliersShown;
+    state.suppliersShown = shown;
+    if (appeared) {
+      loadSuppliers().then(renderSupplierList);
+    }
+  }).observe(section);
 }
 
 // "supplier/6170b987-..." is a supplier record, by its beneficiary id. A slash
@@ -5182,7 +5201,11 @@ function supplierHeader(detail) {
           : [
               "PayOnce last stored what this record held on ",
               whenNode(stored.at),
-              stored.invoiceId !== null ? [" (", invoiceLink(stored.invoiceId), ")"] : stored.runId !== null ? [" (", runLink(stored.runId), ")"] : "",
+              stored.invoiceId !== null
+                ? [" (", invoiceLink(stored.invoiceId), ")"]
+                : stored.runId !== null
+                  ? [" (", Number.isInteger(stored.runLine) ? `row ${stored.runLine} of ` : "", runLink(stored.runId), ")"]
+                  : "",
               `, account ${stored.account}. It reads the record again before every payment.`,
             ],
       ),
@@ -6625,4 +6648,5 @@ document.addEventListener("visibilitychange", () => {
 
 setSelected(idFromHash());
 render();
+watchSupplierList();
 refresh();
