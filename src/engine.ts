@@ -1715,9 +1715,9 @@ function awaitApproval(
   }
 
   let latest: Approval | undefined = engine.ledger.latestApproval(invoiceId);
-  const sameRequest: boolean =
+  let sameRequest: boolean =
     latest?.state === "requested" && latest.binding === binding && latest.needed >= rule.needed;
-  const opening: boolean = !sameRequest || latest === undefined || isExpired(latest);
+  let opening: boolean = !sameRequest || latest === undefined || isExpired(latest);
   // Terms built on an open request's quote that now need a new request: that one
   // is withdrawn, and the next look, at once, takes a fresh quote for its own.
   if (opening && terms.fx !== undefined && rate?.fresh !== true) {
@@ -1737,6 +1737,11 @@ function awaitApproval(
   if (opening) {
     terms = countedFromToday(terms);
     binding = bindingOf(terms);
+    // Another process may have opened today's request on these terms after the
+    // look read the day an open request kept, so it is compared again.
+    sameRequest =
+      latest?.state === "requested" && latest.binding === binding && latest.needed >= rule.needed;
+    opening = !sameRequest || latest === undefined || isExpired(latest);
   }
   const previous: FxTerms | undefined =
     latest === undefined ? undefined : (JSON.parse(latest.terms) as ApprovalTerms).fx;

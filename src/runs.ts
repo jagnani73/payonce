@@ -858,12 +858,13 @@ function settleRunRequest(
   }
 
   let latest: RunApproval | undefined = ledger.latestRunApproval(run.id);
-  const same: boolean =
+  const keeps = (key: string): boolean =>
     latest !== undefined &&
     (latest.state === "requested" || latest.state === "approved") &&
-    latest.binding === binding &&
+    latest.binding === key &&
     latest.needed >= rule.needed &&
     !isExpired(latest);
+  let same: boolean = keeps(binding);
   if (!same) {
     // A new request counts from today, even when the check counted from the open
     // request's day to keep it. The stored rows count from today too.
@@ -873,7 +874,12 @@ function settleRunRequest(
       ledger.setRunArrivals(run.id, rows);
       terms = termsOf(run, rows, cash);
       binding = bindingOf(terms);
+      // Another process may have opened today's request on these rows after the
+      // check read the day the old one kept, so it is compared again.
+      same = keeps(binding);
     }
+  }
+  if (!same) {
     if (latest?.state === "requested" && isExpired(latest)) {
       say(
         "approval",
