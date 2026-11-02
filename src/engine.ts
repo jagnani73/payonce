@@ -2585,7 +2585,13 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
   // A supplier who asks to hold, cancel or not pay the invoice is named in the
   // reason it is held for, so the alert, the request and the card say so.
   const reason: string = namingNotToPay(obligation.escalationReason, findings.asksNotToPay === true);
-  if (reason !== obligation.escalationReason && engine.ledger.rewordEscalation(invoiceId, obligation.escalationReason, reason)) {
+  if (reason !== obligation.escalationReason) {
+    // Another process changed the reason or the invoice since this look read it.
+    // Terms built on the reason read would open a request the next look voids, so
+    // the look comes again at once and reads the invoice as it is then.
+    if (!engine.ledger.rewordEscalation(invoiceId, obligation.escalationReason, reason)) {
+      return Date.now();
+    }
     note(engine.ledger, invoiceId, "decision", `Escalate: ${reason}`, "decision");
   }
   if (emailsNotRead(findings, stored, emails)) {
