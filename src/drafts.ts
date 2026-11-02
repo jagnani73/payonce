@@ -76,6 +76,7 @@ const REFERENCE: RegExp = /^[A-Z0-9-]{1,30}$/;
 const BANK_STATUS: RegExp = /^[A-Z_]{1,30}$/;
 const DAY: RegExp = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
 const CURRENCY: RegExp = /^[A-Z]{3}$/;
+const METHOD: RegExp = /^(?:LOCAL|SWIFT)$/;
 
 function matching(value: string | null | undefined, pattern: RegExp): string | null {
   return typeof value === "string" && pattern.test(value) ? value : null;
@@ -429,7 +430,7 @@ const TEMPLATES: Record<DraftTemplate, Template> = {
           crossCurrency(context.obligation) && late.amountMinor !== null && late.currency !== null
             ? formatMoney(late.amountMinor, late.currency)
             : null,
-        method: context.obligation.transferMethod,
+        method: matching(context.obligation.transferMethod, METHOD),
         createdAt: timeText(late.bankCreatedAt),
         status,
       };
@@ -449,7 +450,7 @@ const TEMPLATES: Record<DraftTemplate, Template> = {
           `Invoice: ${facts["invoice"] ?? ""}`,
           `Amount: ${facts["amount"] ?? ""}`,
           facts["debited"] !== null && `Debited: ${facts["debited"] ?? ""}`,
-          `Method: ${facts["method"] ?? ""}`,
+          facts["method"] !== null && `Method: ${facts["method"] ?? ""}`,
           facts["createdAt"] !== null && `Created: ${facts["createdAt"] ?? ""}`,
           `Status when we last checked: ${facts["status"] ?? ""}`,
           "",
@@ -491,7 +492,7 @@ const TEMPLATES: Record<DraftTemplate, Template> = {
         debited: refundAmount(refund),
         status: matching(transfer?.status, BANK_STATUS),
         failedDay: failedAt === null ? null : dayText(today(new Date(failedAt))),
-        method: context.obligation.transferMethod,
+        method: matching(context.obligation.transferMethod, METHOD),
       };
     },
     suggest(_context: Context, facts: Facts): string | null {
@@ -507,7 +508,7 @@ const TEMPLATES: Record<DraftTemplate, Template> = {
           "",
           `Transfer reference: ${facts["reference"] ?? ""}`,
           facts["debited"] !== null && `Amount taken from our wallet: ${facts["debited"] ?? ""}`,
-          `Method: ${facts["method"] ?? ""}`,
+          facts["method"] !== null && `Method: ${facts["method"] ?? ""}`,
           facts["failedDay"] !== null && `Failed on: ${facts["failedDay"] ?? ""}`,
           facts["status"] !== null && `Status when we last checked: ${facts["status"] ?? ""}`,
           "",
