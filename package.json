@@ -18,6 +18,7 @@
     "payrun": "tsx --env-file=.env src/payrun.ts",
     "outbox": "tsx --env-file-if-exists=.env src/outbox.ts",
     "outage": "tsx src/outage.ts",
+    "supplier": "tsx src/supplier.ts",
     "ask": "tsx src/ask.ts",
     "reset": "tsx src/reset.ts",
     "ui": "tsx --env-file=.env src/server.ts",
