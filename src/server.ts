@@ -68,6 +68,19 @@ import {
 } from "./drafts.js";
 import { MAX_EMAIL_BYTES, noteTexts, TOO_LARGE_TEXT, type ParsedEmail } from "./eml.js";
 import type { EmailFindings, SupplierEmail } from "./emails.js";
+import {
+  ASKS_PER_DAY,
+  ASKS_PER_MINUTE,
+  ExplainError,
+  explainerFromEnv,
+  ExplainLimiter,
+  factsKey,
+  shownAnswer,
+  type Explainer,
+  type ModelAnswer,
+  type Refusal,
+  type ShownAnswer,
+} from "./explainer.js";
 import { describeQuotes } from "./fx.js";
 import {
   boardGroups,
@@ -180,6 +193,7 @@ import {
 import { openTunnel, type Tunnel } from "./tunnel.js";
 import { Watcher } from "./watcher.js";
 import { WEBHOOK_PATH, WebhookReceiver, type WebhookEvent } from "./webhooks.js";
+import { whyFacts, type WhyBuild } from "./why-facts.js";
 
 // Local demo server. It binds to loopback only and has no authentication.
 const HOST: string = "127.0.0.1";
@@ -230,15 +244,22 @@ const CONTENT_TYPES: Record<string, string> = {
 };
 
 // extra is merged into the error's JSON, such as a file's problems or the run a
-// refused upload names.
+// refused upload names. headers go on the response, such as Retry-After.
 class HttpError extends Error {
   readonly status: number;
   readonly extra: Record<string, unknown>;
+  readonly headers: Record<string, string>;
 
-  constructor(status: number, message: string, extra: Record<string, unknown> = {}) {
+  constructor(
+    status: number,
+    message: string,
+    extra: Record<string, unknown> = {},
+    headers: Record<string, string> = {},
+  ) {
     super(message);
     this.status = status;
     this.extra = extra;
+    this.headers = headers;
   }
 }
 
@@ -259,6 +280,10 @@ const engine: Engine = {
   bank,
 };
 const agent: Dispatcher = new Dispatcher(engine);
+// Explains an incident on the reader's key and models. Null without
+// READER_API_KEY, and then the page's button says the model reader is off.
+const explainer: Explainer | null = explainerFromEnv();
+const explainLimiter: ExplainLimiter = new ExplainLimiter();
 
 // Starts releasing an approved run in its turn and does not wait for it, because
 // the release goes on to send its rows one at a time.
@@ -346,8 +371,14 @@ function emailThreads(): string[] {
     );
 }
 
-function sendJson(response: ServerResponse, status: number, body: unknown): void {
+function sendJson(
+  response: ServerResponse,
+  status: number,
+  body: unknown,
+  headers: Record<string, string> = {},
+): void {
   response.writeHead(status, {
+    ...headers,
     "Content-Type": "application/json; charset=utf-8",
     "X-Content-Type-Options": "nosniff",
   });
@@ -1062,6 +1093,63 @@ function resume(invoiceId: string): unknown {
   return { ok: true };
 }
 
+// ---------- ask why ----------
+
+// A model's explanation of the invoice, from the facts why-facts.ts builds. It
+// does not take the invoice's turn, because it writes nothing: the facts are read
+// in one snapshot, and the model is asked after the snapshot closes. The answer
+// is returned to the page only. The console gets one line, with no text.
+async function askWhy(request: IncomingMessage, invoiceId: string): Promise<ShownAnswer> {
+  await readJson(request);
+  if (explainer === null) {
+    throw new HttpError(503, "The model reader is off, so PayOnce cannot ask a model. Set READER_API_KEY in .env and restart");
+  }
+  requireObligation(invoiceId);
+  let build: WhyBuild | undefined;
+  try {
+    build = whyFacts(engine.ledger, invoiceId, { approvals: engine.approvals, reserve: engine.reserve });
+  } catch (error: unknown) {
+    throw new HttpError(
+      500,
+      `PayOnce could not build the facts for this invoice, so it sent nothing: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (build === undefined) {
+    throw new HttpError(404, `${invoiceId} is not in the ledger`);
+  }
+  if (build.unrecognised > 0) {
+    console.warn(`  why      ${build.unrecognised} unrecognised reason${build.unrecognised === 1 ? "" : "s"} on ${invoiceId}`);
+  }
+  const key: string = factsKey(invoiceId, build.facts, explainer.models);
+  const remembered: { answer: ModelAnswer; at: number } | undefined = explainLimiter.remembered(key, Date.now());
+  if (remembered !== undefined) {
+    return shownAnswer(remembered.answer, build, remembered.at, true);
+  }
+  const refused: Refusal | null = explainLimiter.begin(Date.now());
+  if (refused !== null) {
+    throw new HttpError(
+      refused.status,
+      refused.message,
+      refused.retryAfterSeconds === null ? {} : { retryAfterSeconds: refused.retryAfterSeconds },
+      refused.retryAfterSeconds === null ? {} : { "Retry-After": String(refused.retryAfterSeconds) },
+    );
+  }
+  let answer: ModelAnswer | null = null;
+  let limited: boolean = false;
+  try {
+    answer = await explainer.explain(build.facts);
+  } catch (error: unknown) {
+    limited = error instanceof ExplainError && error.limited;
+    throw new HttpError(502, error instanceof ExplainError ? error.message : "No model gave an explanation");
+  } finally {
+    explainLimiter.end(key, Date.now(), answer, limited);
+  }
+  console.log(
+    `  why      ${invoiceId} answered by ${answer.model} in ${(answer.ms / 1000).toFixed(1)} s (${answer.explanation.length} characters)`,
+  );
+  return shownAnswer(answer, build, Date.now(), false);
+}
+
 // ---------- outbox ----------
 
 const DRAFT_MOVES: Record<string, DraftMove> = {
@@ -1550,6 +1638,13 @@ async function route(
       // The page warns that a model on Google's free tier reads uploads.
       reader: engine.reader.name,
       readerIsModel: !(engine.reader instanceof KeywordReader),
+      // The "Ask why" card: off without READER_API_KEY, and the page's limits.
+      explainer: {
+        on: explainer !== null,
+        models: explainer?.name ?? "",
+        perMinute: ASKS_PER_MINUTE,
+        perDay: ASKS_PER_DAY,
+      },
       approvers: engine.approvals.approvers.map((approver: Approver) => ({
         name: approver.name,
         limitMinor: approver.limitMinor,
@@ -1670,6 +1765,14 @@ async function route(
     method === "POST" &&
     parts[1] === "incidents" &&
     invoiceId !== undefined &&
+    parts[3] === "why" &&
+    parts.length === 4
+  ) {
+    sendJson(response, 200, await askWhy(request, invoiceId));
+  } else if (
+    method === "POST" &&
+    parts[1] === "incidents" &&
+    invoiceId !== undefined &&
     parts[3] === "pay-again" &&
     parts.length === 4
   ) {
@@ -1731,10 +1834,15 @@ const server: Server = createServer(
       if (!request.complete) {
         response.setHeader("Connection", "close");
       }
-      sendJson(response, status, {
-        error: message,
-        ...(error instanceof HttpError ? error.extra : {}),
-      });
+      sendJson(
+        response,
+        status,
+        {
+          error: message,
+          ...(error instanceof HttpError ? error.extra : {}),
+        },
+        error instanceof HttpError ? error.headers : {},
+      );
     });
   },
 );
