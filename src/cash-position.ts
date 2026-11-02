@@ -266,17 +266,22 @@ export function cashLines(
       }
       // A transfer under the attempt's request id that does not match the invoice
       // left the wallet it was sent from like any payment with the bank, until the
-      // bank pays or fails it. Before its amount was read, the invoice's stands in.
+      // bank pays or fails it. Before its amount was read, what the attempt would
+      // take from that wallet stands in, estimated: the invoice's amount, or for a
+      // payment from another currency's wallet its quote's, or 0 with none.
       if (mismatchedLive(attempt) && attempt.mismatchedStatus !== "PAID") {
+        const stand: LineAmount | null =
+          attempt.mismatchedAmountMinor === null ? lineAmount(ledger, obligation, attempt, now) : null;
         lines.push({
           kind: "with-bank",
           invoiceId,
           currency: attempt.mismatchedCurrency ?? wallet,
-          amountMinor: attempt.mismatchedAmountMinor ?? obligation.amountMinor,
+          amountMinor: attempt.mismatchedAmountMinor ?? stand?.amountMinor ?? 0,
           feeMinor: 0,
           feeKnown: false,
           reference: attempt.mismatchedReference,
-          estimated: attempt.mismatchedAmountMinor === null,
+          estimated: stand !== null,
+          fromQuote: stand?.fromQuote ?? false,
           runId: null,
         });
       }
