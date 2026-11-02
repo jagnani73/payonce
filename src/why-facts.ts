@@ -295,7 +295,7 @@ export const FAILURE_WORDS: Readonly<Record<string, string>> = {
 const RESENDABLE: ReadonlySet<string> = new Set<string>(["91401", "91402"]);
 
 // The Airwallex error codes PayOnce passes on. Any other becomes UNPASSED_CODE.
-const KNOWN_CODES: ReadonlySet<string> = new Set<string>([
+export const KNOWN_CODES: ReadonlySet<string> = new Set<string>([
   "duplicate_request_id",
   "quote_expired",
   "quote_id_invalid",
@@ -477,75 +477,103 @@ function evidenceText(text: string | null | undefined): string | null {
     : null;
 }
 
+// What the leading part of a reason a person was sent for says, for the metrics.
+// A part that never leads such a reason has none.
+export type ReasonCode =
+  | "bank-deadline"
+  | "status"
+  | "not-resendable"
+  | "refused"
+  | "sent-outside"
+  | "bank-details"
+  | "second-bill"
+  | "supplier-email"
+  | "cash"
+  | "two-approvers"
+  | "exchange-rate"
+  | "outage"
+  | "paid-twice"
+  | "other";
+
 interface ReasonPart {
   test: RegExp;
   render: (match: RegExpExecArray, builder: FactsBuilder) => string | null;
+  code: ReasonCode | null;
 }
 
-function fixedPart(text: string): ReasonPart {
-  return { test: new RegExp(escapeRegExp(text), "y"), render: (): string => text };
+function fixedPart(text: string, code: ReasonCode | null = null): ReasonPart {
+  return { test: new RegExp(escapeRegExp(text), "y"), render: (): string => text, code };
 }
 
-function slotPart(source: string, render: ReasonPart["render"]): ReasonPart {
-  return { test: new RegExp(source, "y"), render };
+function slotPart(source: string, render: ReasonPart["render"], code: ReasonCode | null = null): ReasonPart {
+  return { test: new RegExp(source, "y"), render, code };
 }
 
 // A reason is one or more of these parts joined by ", and ". Each part is matched
 // whole, at its position, so a part that holds ", and " itself is never split.
 // The fixed parts come from the exported constants, so a reworded constant stays
-// in step. Anything else fails closed to UNPASSED_REASON.
+// in step. Anything else fails closed to UNPASSED_REASON. Each part's code is what
+// the metrics count a reason under when it leads.
 const REASON_PARTS: readonly ReasonPart[] = [
-  ...[
-    OUTSIDE_PAYOUT_REASON,
-    NEW_BANK_DETAILS_REASON,
-    NOT_TO_PAY_REASON,
-    CHANGED_BANK_DETAILS_REASON,
-    UNVERIFIED_SENDER_REASON,
-    EMAILS_UNREAD_REASON,
-    PARTLY_UNREAD_REASON,
-    UNKNOWN_STATUS_REASON,
-    NON_RECEIPT_REASON,
-    SETTLED_REASON,
-    ORIGINAL_DEADLINE_REASON,
-    IN_FLIGHT_REASON,
-    REPLACEMENT_FAILED_REASON,
-    NOT_RESENDABLE_REASON,
-    SENT_OUTSIDE_REASON,
-    BELOW_FLOOR_REASON,
-    UNREADABLE_CASH_REASON,
-    NO_FLOOR_REASON,
-    NO_FLOOR_CLAUSE,
-    TWO_APPROVERS_REASON,
-    REPLACE_REASON,
-    OUTAGE_REASON,
-    NOT_TO_PAY_CLAUSE,
-    EMAILS_BEFORE_PAYMENT_REASON,
-    CASH_HOLD_REASON,
-    REPLACEMENT_DEADLINE_REASON,
-    LATE_TRANSFER_REASON,
-    MISMATCHED_TRANSFER_REASON,
-    MISMATCHED_FAILED_REASON,
-    LAST_PAID_CHANGED_REASON,
-    UNCONFIRMED_ACCOUNT_REASON,
-    ACCOUNT_CHANGED_REASON,
-    RUN_ACCOUNT_CHANGED_REASON,
-    // accountProblem's other reason in engine.ts, which it does not export.
-    "the beneficiary is no longer in Airwallex",
-  ]
-    .sort((a: string, b: string): number => b.length - a.length)
-    .map(fixedPart),
+  ...(
+    [
+      [OUTSIDE_PAYOUT_REASON, "sent-outside"],
+      [NEW_BANK_DETAILS_REASON, "bank-details"],
+      [NOT_TO_PAY_REASON, "supplier-email"],
+      [CHANGED_BANK_DETAILS_REASON, "bank-details"],
+      [UNVERIFIED_SENDER_REASON, "supplier-email"],
+      [EMAILS_UNREAD_REASON, "supplier-email"],
+      [PARTLY_UNREAD_REASON, "supplier-email"],
+      [UNKNOWN_STATUS_REASON, "status"],
+      [NON_RECEIPT_REASON, "supplier-email"],
+      [SETTLED_REASON, null],
+      [ORIGINAL_DEADLINE_REASON, "bank-deadline"],
+      [IN_FLIGHT_REASON, "status"],
+      [REPLACEMENT_FAILED_REASON, "not-resendable"],
+      [NOT_RESENDABLE_REASON, "not-resendable"],
+      [SENT_OUTSIDE_REASON, "sent-outside"],
+      [BELOW_FLOOR_REASON, "cash"],
+      [UNREADABLE_CASH_REASON, "cash"],
+      [NO_FLOOR_REASON, "cash"],
+      [NO_FLOOR_CLAUSE, "cash"],
+      [TWO_APPROVERS_REASON, "two-approvers"],
+      [REPLACE_REASON, null],
+      [OUTAGE_REASON, "outage"],
+      [NOT_TO_PAY_CLAUSE, "supplier-email"],
+      [EMAILS_BEFORE_PAYMENT_REASON, "supplier-email"],
+      [CASH_HOLD_REASON, "cash"],
+      [REPLACEMENT_DEADLINE_REASON, "bank-deadline"],
+      [LATE_TRANSFER_REASON, "paid-twice"],
+      [MISMATCHED_TRANSFER_REASON, "paid-twice"],
+      [MISMATCHED_FAILED_REASON, "paid-twice"],
+      [LAST_PAID_CHANGED_REASON, "bank-details"],
+      [UNCONFIRMED_ACCOUNT_REASON, "bank-details"],
+      [ACCOUNT_CHANGED_REASON, "bank-details"],
+      [RUN_ACCOUNT_CHANGED_REASON, "bank-details"],
+      // accountProblem's other reason in engine.ts, which it does not export.
+      ["the beneficiary is no longer in Airwallex", "bank-details"],
+    ] as [string, ReasonCode | null][]
+  )
+    .sort((a: [string, ReasonCode | null], b: [string, ReasonCode | null]): number => b[0].length - a[0].length)
+    .map(([text, code]: [string, ReasonCode | null]): ReasonPart => fixedPart(text, code)),
   slotPart(
     `a replacement paid from (${CUR}) takes a new exchange rate, so a person approves it`,
     (match: RegExpExecArray): string => match[0],
+    "exchange-rate",
   ),
   slotPart(
     `it is paid from (${CUR}), so a person approves the exchange rate before PayOnce pays it`,
     (match: RegExpExecArray): string => match[0],
+    "exchange-rate",
   ),
-  slotPart(`it looks like a second bill for (${INV}), which is paid`, (match: RegExpExecArray, builder: FactsBuilder) => {
-    const alias: string | null = builder.aliases.invoice(match[1] ?? "");
-    return alias === null ? null : `it looks like a second bill for ${alias}, which is paid`;
-  }),
+  slotPart(
+    `it looks like a second bill for (${INV}), which is paid`,
+    (match: RegExpExecArray, builder: FactsBuilder) => {
+      const alias: string | null = builder.aliases.invoice(match[1] ?? "");
+      return alias === null ? null : `it looks like a second bill for ${alias}, which is paid`;
+    },
+    "second-bill",
+  ),
   slotPart(
     `it looks like a second bill for (${INV_LIST}): the same supplier and amount, and the same invoice number apart from (case, spacing, leading zeros or letters added at the end|case, spacing, zeros or a letter suffix)`,
     (match: RegExpExecArray, builder: FactsBuilder) => {
@@ -554,6 +582,7 @@ const REASON_PARTS: readonly ReasonPart[] = [
         ? null
         : `it looks like a second bill for ${list}: the same supplier and amount, and the same invoice number apart from ${match[2] ?? ""}`;
     },
+    "second-bill",
   ),
   slotPart(
     `it has the same invoice number as (${INV_LIST}), apart from case, spacing, leading zeros or letters added at the end, for the same supplier, and PayOnce pays an invoice number once`,
@@ -563,6 +592,7 @@ const REASON_PARTS: readonly ReasonPart[] = [
         ? null
         : `it has the same invoice number as ${list}, apart from case, spacing, leading zeros or letters added at the end, for the same supplier, and PayOnce pays an invoice number once`;
     },
+    "second-bill",
   ),
   slotPart(
     String.raw`Airwallex refused the original payment(?: \(([^()]{1,60})\))?, so nothing was sent`,
@@ -570,24 +600,37 @@ const REASON_PARTS: readonly ReasonPart[] = [
       match[1] === undefined
         ? "Airwallex refused the original payment, so nothing was sent"
         : `Airwallex refused the original payment (${failureText(match[1]) ?? UNPASSED_CODE}), so nothing was sent`,
+    "refused",
   ),
   slotPart(
     String.raw`(?:${KIND}) ${REF} went out (?:with no exchange rate on it|at ${RATE} \((?:${MONEY}|amount not readable)\))(?:, and no approval covers the quote it was sent with|, not the approved ${RATE} \(${MONEY}\))`,
     (match: RegExpExecArray): string => match[0],
+    "exchange-rate",
   ),
   slotPart(
     `(?:${KIND}) ${REF} went to bank details that are not the ones it was (?:decided or )?approved for`,
     (match: RegExpExecArray): string => match[0],
+    "bank-details",
   ),
   slotPart(
     `(?:${KIND}) ${REF} shows no bank details, so PayOnce cannot check they are the ones it was decided or approved for`,
     (match: RegExpExecArray): string => match[0],
+    "bank-details",
   ),
   slotPart(
     `(?:${KIND}) ${REF} was found in Airwallex after the invoice was closed`,
     (match: RegExpExecArray): string => match[0],
+    "paid-twice",
   ),
 ];
+
+// The reason grammar's parts and their codes, for the metrics' reasonCode, so a
+// reason added to the grammar is coded in the same place.
+export interface ReasonLead {
+  readonly test: RegExp;
+  readonly code: ReasonCode | null;
+}
+export const REASON_LEADS: readonly ReasonLead[] = REASON_PARTS;
 
 // Why a payment needs more than one approver, in the words approvers.ts and the
 // engine use. signoffProblem's "it now needs N approvers, because ..." holds one.

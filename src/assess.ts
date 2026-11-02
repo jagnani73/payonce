@@ -29,7 +29,7 @@ const FAILED_STATUSES: ReadonlySet<string> = new Set<string>(FAILED_STATUS_LIST)
 // beneficiary details were never rejected and the same payment can be sent again.
 // The sandbox reports failure.details.type as INCORRECT_ROUTING for every failure,
 // so the code is the only field worth reading.
-const RESENDABLE_FAILURE_CODES: ReadonlySet<string> = new Set<string>([
+export const RESENDABLE_FAILURE_CODES: ReadonlySet<string> = new Set<string>([
   "91401",
   "91402",
 ]);

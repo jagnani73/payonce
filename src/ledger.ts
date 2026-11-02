@@ -1255,7 +1255,7 @@ export type LiveTested = Pick<
 
 // The attempt's own payment: not failed, or a transfer the ledger keeps failed
 // that the bank has live.
-function ownLive(attempt: LiveTested): boolean {
+export function ownLive(attempt: LiveTested): boolean {
   if (attempt.state !== "failed") {
     return true;
   }
@@ -1876,6 +1876,108 @@ export class RailOutageError extends Error {
     this.outageId = outage.id;
     this.what = what;
   }
+}
+
+// What the metrics read of an invoice: never its supplier, phone, references or
+// the invoices it was held for, only whether it was held as a likely second bill.
+// startedAt is its first timeline line's time, and closedAt its latest closed
+// line's, only while it is settled or rejected.
+export interface MetricsObligation {
+  invoiceId: string;
+  currency: string;
+  wallet: string;
+  amountMinor: number;
+  state: ObligationState;
+  origin: ObligationOrigin;
+  fromRun: boolean;
+  transferMethod: string;
+  escalationReason: string;
+  heldDuplicate: boolean;
+  escalatedAt: string | null;
+  startedAt: string | null;
+  closedAt: string | null;
+}
+
+// What the metrics read of an attempt: what liveAtBank reads, and its times.
+export interface MetricsAttempt extends LiveTested {
+  invoiceId: string;
+  kind: AttemptKind;
+  failureCode: string | null;
+  feeMinor: number | null;
+  feeCurrency: string | null;
+  approved: boolean;
+  bankCreatedAt: string | null;
+  openedAt: string | null;
+  triedAt: string | null;
+  failedAt: string | null;
+  paidAt: string | null;
+}
+
+export interface MetricsPayout {
+  invoiceId: string;
+  state: PayoutState;
+  foundAt: string;
+  feeMinor: number | null;
+  feeCurrency: string | null;
+}
+
+// An invoice's or a run's approval request, with no terms and no names. owner is
+// the invoice or the run, and signoffs are the times of its signoffs in order.
+export interface MetricsRequest {
+  id: number;
+  owner: string;
+  state: ApprovalState;
+  requestedAt: string | null;
+  expiresAt: string | null;
+  needed: number;
+  signoffs: string[];
+}
+
+export interface MetricsOutage {
+  id: number;
+  currency: string;
+  method: string;
+  codes: string;
+  state: string;
+  declaredAt: string;
+  endedAt: string | null;
+  payees: number;
+  // Hold rows by what they hold, without counted.
+  held: Record<string, number>;
+}
+
+export interface MetricsRead {
+  startedAt: string | null;
+  obligations: MetricsObligation[];
+  attempts: MetricsAttempt[];
+  payouts: MetricsPayout[];
+  requests: MetricsRequest[];
+  runRequests: MetricsRequest[];
+  outages: MetricsOutage[];
+}
+
+// As SQLite gives them, with 0 or 1 for the booleans.
+interface MetricsObligationRow extends Omit<MetricsObligation, "fromRun" | "heldDuplicate"> {
+  fromRun: number;
+  heldDuplicate: number;
+}
+
+interface MetricsAttemptRow extends Omit<MetricsAttempt, "approved"> {
+  approved: number;
+}
+
+interface MetricsRequestRow {
+  id: number;
+  owner: string | number;
+  state: ApprovalState;
+  requestedAt: string | null;
+  expiresAt: string | null;
+  needed: number;
+}
+
+interface MetricsSignoffRow {
+  approvalId: number;
+  at: string;
 }
 
 export class Ledger {
@@ -2664,6 +2766,115 @@ export class Ledger {
       this.db.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  // Changes whenever this connection writes or another connection commits, for a
+  // cache of what was read. Writes nothing.
+  changeStamp(): string {
+    const version: { data_version: number } = this.db.prepare("PRAGMA data_version").get() as unknown as {
+      data_version: number;
+    };
+    const changes: { n: number } = this.db.prepare("SELECT total_changes() AS n").get() as unknown as { n: number };
+    return `${version.data_version}:${changes.n}`;
+  }
+
+  // Everything the metrics read, one query per table, with only the columns they
+  // use: no names, notes, references, terms, facts or email text, and of the
+  // timeline only each invoice's first line's time and its latest closed line's.
+  // It only reads, so it runs inside readSnapshot.
+  metricsRead(): MetricsRead {
+    const obligations: MetricsObligation[] = (
+      this.db
+        .prepare(
+          `SELECT o.invoice_id AS invoiceId, o.currency, COALESCE(o.source_currency, o.currency) AS wallet,
+                  o.amount_minor AS amountMinor, o.state, o.origin, o.run_row_id IS NOT NULL AS fromRun,
+                  o.transfer_method AS transferMethod, o.escalation_reason AS escalationReason,
+                  COALESCE(json_valid(o.duplicate_of) AND json_array_length(o.duplicate_of) > 0, 0) AS heldDuplicate,
+                  o.escalated_at AS escalatedAt,
+                  (SELECT at FROM events WHERE events.invoice_id = o.invoice_id ORDER BY id LIMIT 1) AS startedAt,
+                  CASE WHEN o.state IN ('settled', 'rejected') THEN
+                    (SELECT at FROM events WHERE events.invoice_id = o.invoice_id AND kind = 'closed'
+                      ORDER BY id DESC LIMIT 1)
+                  END AS closedAt
+             FROM obligations o ORDER BY o.rowid`,
+        )
+        .all() as unknown as MetricsObligationRow[]
+    ).map(
+      (row: MetricsObligationRow): MetricsObligation => ({
+        ...row,
+        fromRun: row.fromRun === 1,
+        heldDuplicate: row.heldDuplicate === 1,
+      }),
+    );
+    const attempts: MetricsAttempt[] = (
+      this.db
+        .prepare(
+          `SELECT invoice_id AS invoiceId, kind, transfer_id AS transferId, state, failure_code AS failureCode,
+                  fee_minor AS feeMinor, fee_currency AS feeCurrency, approval_id IS NOT NULL AS approved,
+                  bank_created_at AS bankCreatedAt, bank_status AS bankStatus, found_late_at AS foundLateAt,
+                  mismatched_transfer_id AS mismatchedTransferId, mismatched_status AS mismatchedStatus,
+                  opened_at AS openedAt, tried_at AS triedAt, failed_at AS failedAt, paid_at AS paidAt
+             FROM attempts ORDER BY rowid`,
+        )
+        .all() as unknown as MetricsAttemptRow[]
+    ).map((row: MetricsAttemptRow): MetricsAttempt => ({ ...row, approved: row.approved === 1 }));
+    const payouts: MetricsPayout[] = this.db
+      .prepare(
+        `SELECT invoice_id AS invoiceId, state, found_at AS foundAt, fee_minor AS feeMinor,
+                fee_currency AS feeCurrency
+           FROM outside_payouts ORDER BY rowid`,
+      )
+      .all() as unknown as MetricsPayout[];
+    const requestsOf = (requests: string, signoffs: string, owner: string): MetricsRequest[] => {
+      const times: Map<number, string[]> = new Map();
+      for (const row of this.db
+        .prepare(`SELECT approval_id AS approvalId, at FROM ${signoffs} ORDER BY approval_id, at, rowid`)
+        .all() as unknown as MetricsSignoffRow[]) {
+        const list: string[] = times.get(row.approvalId) ?? [];
+        list.push(row.at);
+        times.set(row.approvalId, list);
+      }
+      return (
+        this.db
+          .prepare(
+            `SELECT id, ${owner} AS owner, state, requested_at AS requestedAt, expires_at AS expiresAt, needed
+               FROM ${requests} ORDER BY id`,
+          )
+          .all() as unknown as MetricsRequestRow[]
+      ).map(
+        (row: MetricsRequestRow): MetricsRequest => ({
+          ...row,
+          owner: String(row.owner),
+          signoffs: times.get(row.id) ?? [],
+        }),
+      );
+    };
+    const held: Map<number, Record<string, number>> = new Map();
+    for (const row of this.db
+      .prepare(
+        `SELECT outage_id AS outageId, what, COUNT(*) AS n FROM outage_holds
+          WHERE what <> 'counted' GROUP BY outage_id, what`,
+      )
+      .all() as unknown as { outageId: number; what: string; n: number }[]) {
+      held.set(row.outageId, { ...held.get(row.outageId), [row.what]: row.n });
+    }
+    const outages: MetricsOutage[] = (
+      this.db
+        .prepare(
+          `SELECT id, currency, method, codes, state, declared_at AS declaredAt, ended_at AS endedAt, payees
+             FROM outages ORDER BY id`,
+        )
+        .all() as unknown as Omit<MetricsOutage, "held">[]
+    ).map((row: Omit<MetricsOutage, "held">): MetricsOutage => ({ ...row, held: held.get(row.id) ?? {} }));
+    return {
+      startedAt: this.metaValue("started_at"),
+      obligations,
+      attempts,
+      payouts,
+      requests: requestsOf("approvals", "signoffs", "invoice_id"),
+      runRequests: requestsOf("run_approvals", "run_signoffs", "run_id"),
+      outages,
+    };
   }
 
   // What an audit checks, read in one transaction so a line another process adds

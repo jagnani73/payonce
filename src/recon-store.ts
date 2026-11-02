@@ -172,6 +172,14 @@ export interface RefundBreak extends ReconBreak {
   transfer: ReconTransfer | null;
 }
 
+export interface BreakTimes {
+  kind: string;
+  state: string;
+  openedAt: string;
+  explainedAt: string | null;
+  clearedAt: string | null;
+}
+
 // One window of balance history, read to its last page, in Airwallex's order.
 export interface WindowRead {
   fromMs: number;
@@ -488,6 +496,18 @@ export class ReconStore {
   // False on a file opened read-only that no PayOnce with reconciliation opened.
   hasTables(): boolean {
     return (this.db.prepare("PRAGMA table_info(recon_events)").all() as unknown as ColumnRow[]).length > 0;
+  }
+
+  // Every break that opened, with its kind, state and times only, for the
+  // metrics: never its facts, note or who explained it. Only on a file that
+  // hasTables, inside the caller's readSnapshot.
+  breakTimes(): BreakTimes[] {
+    return this.db
+      .prepare(
+        `SELECT kind, state, opened_at AS openedAt, explained_at AS explainedAt, cleared_at AS clearedAt
+           FROM recon_breaks WHERE opened_at IS NOT NULL ORDER BY id`,
+      )
+      .all() as unknown as BreakTimes[];
   }
 
   private meta(key: string): string | null {

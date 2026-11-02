@@ -9,6 +9,7 @@ import {
   type Approval,
   type Attempt,
   type Ledger,
+  type LiveTested,
   type Obligation,
   type OutsidePayout,
   type PayRunRow,
@@ -159,6 +160,18 @@ function couldStillPay(
   );
 }
 
+// A transfer that kept its fee: one the bank does not have live whose fee is not
+// 0. A fee not recorded yet counts, as not known. A transfer the ledger keeps
+// failed that the bank has live lost no fee. The cash panel's fee-lost lines and
+// the metrics' fees lost both use these.
+export function attemptLostFee(attempt: LiveTested & { feeMinor: number | null }): boolean {
+  return !liveAtBank(attempt) && attempt.transferId !== null && attempt.feeMinor !== 0;
+}
+
+export function payoutLostFee(payout: { state: string; feeMinor: number | null }): boolean {
+  return payout.state === "failed" && payout.feeMinor !== 0;
+}
+
 function feeLost(
   invoiceId: string,
   currency: string,
@@ -210,15 +223,13 @@ export function cashLines(
     const attempts: Attempt[] = ledger.attempts(invoiceId);
     const payouts: OutsidePayout[] = ledger.outsidePayouts(invoiceId);
 
-    // A fee of 0 lost nothing. One not recorded yet is listed as not known. A
-    // transfer the ledger keeps failed that the bank has live lost no fee.
     for (const attempt of attempts) {
-      if (!liveAtBank(attempt) && attempt.transferId !== null && attempt.feeMinor !== 0) {
+      if (attemptLostFee(attempt)) {
         lines.push(feeLost(invoiceId, attempt.feeCurrency ?? wallet, attempt.feeMinor, attempt.reference));
       }
     }
     for (const payout of payouts) {
-      if (payout.state === "failed" && payout.feeMinor !== 0) {
+      if (payoutLostFee(payout)) {
         lines.push(feeLost(invoiceId, payout.feeCurrency ?? wallet, payout.feeMinor, payout.reference));
       }
     }
