@@ -435,7 +435,12 @@ const zonedDayFormat = new Intl.DateTimeFormat(undefined, {
   timeZoneName: "short",
 });
 
+// Null for anything that is not a time on file. new Date(null) is 1970, not an
+// invalid date, so a balance never read would otherwise read as read at 1970.
 function parseDate(value) {
+  if (typeof value !== "string" || value === "") {
+    return null;
+  }
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
 }
@@ -462,8 +467,7 @@ function sameName(a, b) {
 // page, with the zone named: "03:03 GMT+5:30", or "Oct 28, 21:33 GMT+5:30" on
 // another day. Null when it cannot be read.
 function zonedTime(value) {
-  // new Date(null) is 1970, not an invalid date.
-  const date = typeof value === "string" && value !== "" ? parseDate(value) : null;
+  const date = parseDate(value);
   if (date === null) {
     return null;
   }
@@ -4972,8 +4976,7 @@ function buildBoardTotal(total) {
 }
 
 function boardWhen(value) {
-  // new Date(null) is 1970, not an invalid date.
-  const date = typeof value === "string" && value !== "" ? parseDate(value) : null;
+  const date = parseDate(value);
   if (date === null) {
     return null;
   }
