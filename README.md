@@ -341,11 +341,11 @@ The text is fixed when it is drafted. Its SHA-256 goes on the incident's timelin
 
 ## Ask this incident why
 
-Each incident has a "Why this happened" card at the top of its side column, and `pnpm why <INVOICE>` does the same in the terminal. It asks the model reader's models for a short account in plain English of what PayOnce did on the invoice, why it did it, and what it is waiting on now. Nobody types a question, so nothing from the page reaches the prompt. The answer is only for reading: PayOnce never stores it in the ledger, the timeline, approval terms, alerts or drafts, and nothing it decides reads it.
+Each incident has a "Why this happened" card at the top of its side column, and `pnpm ask <INVOICE>` does the same in the terminal. The command is `pnpm ask` because pnpm runs its own `why` command, a dependency check, in place of a script named `why`. It asks the model reader's models for a short account in plain English of what PayOnce did on the invoice, why it did it, and what it is waiting on now. Nobody types a question, so nothing from the page reaches the prompt. The answer is only for reading: PayOnce never stores it in the ledger, the timeline, approval terms, alerts or drafts, and nothing it decides reads it.
 
-The model gets PayOnce's own records and nothing else. That means states, amounts, bank references and statuses, failure codes in PayOnce's words, the reasons its rules gave, the approval request and where it stands, the settings PayOnce reads now, active outages and the timeline. It never gets an email, a subject, a sender, a display name, an attachment name, anything from an upload, account details, a phone number, a payout reference, a note someone typed or an error message. People and other invoices go in as labels such as [person 1] and [invoice 2], and PayOnce puts the real names back only in the answer it shows. A timeline line goes in only when PayOnce recognises it as one of its own templates. Any other line goes in as a stand-in such as "(an error line PayOnce does not pass on)", and a reason PayOnce does not recognise goes in as "(a reason PayOnce does not pass on)". `pnpm why <INVOICE> facts` prints exactly what would be sent and asks nothing.
+The model gets PayOnce's own records and nothing else. That means states, amounts, bank references and statuses, failure codes in PayOnce's words, the reasons its rules gave, the approval request and where it stands, the settings PayOnce reads now, active outages and the timeline. It never gets an email, a subject, a sender, a display name, an attachment name, anything from an upload, account details, a phone number, a payout reference, a note someone typed or an error message. People and other invoices go in as labels such as [person 1] and [invoice 2], and PayOnce puts the real names back only in the answer it shows. A timeline line goes in only when it matches one of PayOnce's own templates and has the kind PayOnce gives that template, so an error message or a typed name that reads like a decision or a bank update goes in as a stand-in. Any other line goes in as a stand-in such as "(an error line PayOnce does not pass on)", and a reason PayOnce does not recognise goes in as "(a reason PayOnce does not pass on)". `pnpm ask <INVOICE> facts` prints exactly what would be sent and asks nothing.
 
-The request uses the reader's key, base URL, model list and 8 second timeout, and PayOnce cuts the key out of any error. The page allows 2 asks a minute and 30 a day per server, one at a time, which leaves most of the free-tier quota to the email reader. If nothing on the invoice has changed, asking again gives the same answer from memory and sends no request. If every model answers 429, the page waits a minute before it asks again. The terminal has no limit. Without `READER_API_KEY` the card says the model reader is off.
+The request uses the reader's key, base URL, model list and 8 second timeout, and PayOnce cuts the key out of any error: as written, URL-encoded or in base64, and any run of 20 or more characters from one of those forms. The card says the records go to Google's free tier when the reader uses Google's endpoint, and names the host for any other service. The page allows 2 asks a minute and 30 a day per server, one at a time, which leaves most of the free-tier quota to the email reader. If nothing on the invoice has changed, asking again gives the same answer from memory and sends no request. If every model answers 429, the page waits a minute before it asks again. The terminal has no limit. Without `READER_API_KEY` the card says the model reader is off.
 
 ## Run it
 
@@ -393,11 +393,11 @@ pnpm outbox <INVOICE> dismiss <DRAFT> <NAME> [NOTE]
 pnpm outage
 pnpm outage end <ID> <NAME> <NOTE>
 pnpm mcp
-pnpm why <INVOICE> [facts]
+pnpm ask <INVOICE> [facts]
 pnpm reset
 ```
 
-`pnpm why` asks the model why PayOnce did what it did on one invoice (see [Ask this incident why](#ask-this-incident-why)). With `facts` it prints the facts and the system message exactly as they would be sent, then the legend of labels, which stays on this machine, and asks nothing. It opens the ledger read-only and never calls Airwallex.
+`pnpm ask` asks the model why PayOnce did what it did on one invoice (see [Ask this incident why](#ask-this-incident-why)). With `facts` it prints the facts and the system message exactly as they would be sent, then the legend of labels, which stays on this machine, and asks nothing. It opens the ledger read-only and never calls Airwallex, so it refuses a ledger an older PayOnce wrote: open that ledger once with `pnpm ui` or `pnpm board` first. It strips control and format characters from names and invoice numbers after it swaps the labels back, as `pnpm board` does.
 
 `pnpm outage` lists the active outages and the last few ended, with the payouts each counted and what it held. `pnpm outage end` ends one, as the button on the page does. It writes only the ledger, and the server's watcher picks up what the outage held on its next check.
 
@@ -541,7 +541,7 @@ Quit Claude Desktop fully and start it again. It writes the server's stderr to `
 | `src/mcp.ts` | The read-only MCP server over stdio, and the only file that imports the MCP SDK |
 | `src/mcp-views.ts` | What the MCP tools answer, from the ledger alone |
 | `src/mcp-text.ts` | Marks the text PayOnce did not write in an MCP answer, and masks phone numbers |
-| `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/audit.ts`, `src/cash.ts`, `src/board.ts`, `src/payrun.ts`, `src/outbox.ts`, `src/outage.ts`, `src/why.ts`, `src/reset.ts`, `src/index.ts` | The commands |
+| `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/audit.ts`, `src/cash.ts`, `src/board.ts`, `src/payrun.ts`, `src/outbox.ts`, `src/outage.ts`, `src/ask.ts`, `src/reset.ts`, `src/index.ts` | The commands |
 | `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, exchange rate quotes, balances and their cache for the cash panel, the webhook subscription and the simulation calls |
 | `web/` | The page: plain HTML, CSS and JavaScript with no build step |
 | `fixtures/emails/` | Sample supplier emails |
