@@ -10,6 +10,7 @@ import {
   type ChainedEvent,
   type ChainedRunEvent,
   type EventFields,
+  type LedgerReport,
   type RunAuditSnapshot,
   type RunEventFields,
 } from "./audit-trail.js";
@@ -54,6 +55,12 @@ const LIVE_ATTEMPT: string = `SELECT 1 FROM attempts WHERE invoice_id = ?
 const UNCLEARED_MISMATCH: string = `SELECT 1 FROM attempts WHERE invoice_id = ?
   AND mismatched_transfer_id IS NOT NULL AND mismatched_cleared_at IS NULL`;
 const BUSY_TIMEOUT_MS: number = 5_000;
+// How often runningHashCheck hashes every line again, so a line rewritten in place
+// is caught within a minute, as the alert loop's audit check catches it.
+const FULL_HEAD_CHECK_MS: number = 60_000;
+// A line the incident list may show: a line about a message draft does not stand
+// for how the incident is.
+const HEADLINE_LINE: string = "kind <> 'outbox'";
 
 // The partial unique index is the duplicate lock: an invoice can hold one attempt
 // that is not failed, so a second live payment is refused by the database itself.
@@ -103,6 +110,9 @@ const SCHEMA: string = `
     message TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS events_by_invoice ON events(invoice_id, id);
+  CREATE INDEX IF NOT EXISTS attempts_by_invoice ON attempts(invoice_id);
+  CREATE INDEX IF NOT EXISTS approvals_by_invoice ON approvals(invoice_id, id);
+  CREATE INDEX IF NOT EXISTS emails_by_invoice ON emails(invoice_id, id);
   CREATE TABLE IF NOT EXISTS webhook_events (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -113,6 +123,7 @@ const SCHEMA: string = `
     invoice_id TEXT NOT NULL REFERENCES obligations(invoice_id),
     found_at TEXT NOT NULL
   );
+  CREATE INDEX IF NOT EXISTS outside_payouts_by_invoice ON outside_payouts(invoice_id);
   CREATE TABLE IF NOT EXISTS signoffs (
     approval_id INTEGER NOT NULL REFERENCES approvals(id),
     approver TEXT NOT NULL,
@@ -814,6 +825,22 @@ interface HashRow {
 
 interface LedgerRow extends HashRow {
   invoice_id: string;
+}
+
+interface IdHashRow extends LedgerRow {
+  id: number;
+}
+
+// How far the running hash has been worked out: through which line, how many lines
+// that covers and the last one's hash, so a line removed since is noticed, and
+// when every line was last hashed again from the genesis.
+interface HeadProgress {
+  throughId: number;
+  lines: number;
+  lastHash: string | null;
+  computed: string;
+  invoices: Set<string>;
+  fullAt: number;
 }
 
 interface EventRow {
@@ -1746,6 +1773,8 @@ export class Ledger {
   private readonly db: DatabaseSync;
   // False only for a file opened read-only from before the meta table.
   private readonly hasMeta: boolean;
+  // How far runningHashCheck has hashed the ledger's lines, in this process.
+  private headProgress: HeadProgress | undefined;
 
   // readOnly opens an existing file as it is, without creating or upgrading it,
   // so a check cannot change what it checks.
@@ -2442,6 +2471,137 @@ export class Ledger {
         "SELECT id, at, kind, message, topic FROM events WHERE invoice_id = ? ORDER BY id LIMIT 1",
       )
       .get(invoiceId) as unknown as LedgerEvent | undefined;
+  }
+
+  // One invoice's timeline with its hashes, for the page's audit line.
+  chainedEvents(invoiceId: string): ChainedEvent[] {
+    return (
+      this.db
+        .prepare("SELECT * FROM events WHERE invoice_id = ? ORDER BY id")
+        .all(invoiceId) as unknown as EventRow[]
+    ).map(toChainedEvent);
+  }
+
+  // Each invoice's latest line the incident list may show. Each lookup walks back
+  // from the invoice's last line on events_by_invoice, so the list does not read
+  // every timeline.
+  headlines(): Map<string, string> {
+    const rows: { invoice_id: string; message: string | null }[] = this.db
+      .prepare(
+        `SELECT invoice_id,
+                (SELECT message FROM events
+                  WHERE events.invoice_id = obligations.invoice_id AND ${HEADLINE_LINE}
+                  ORDER BY id DESC LIMIT 1) AS message
+           FROM obligations`,
+      )
+      .all() as unknown as { invoice_id: string; message: string | null }[];
+    const headlines: Map<string, string> = new Map<string, string>();
+    for (const row of rows) {
+      if (row.message !== null) {
+        headlines.set(row.invoice_id, row.message);
+      }
+    }
+    return headlines;
+  }
+
+  // The run each invoice from a pay run was released from.
+  runIdsByInvoice(): Map<string, number> {
+    const rows: { invoice_id: string; run_id: number }[] = this.db
+      .prepare(
+        `SELECT obligations.invoice_id, run_rows.run_id FROM obligations
+           JOIN run_rows ON run_rows.id = obligations.run_row_id`,
+      )
+      .all() as unknown as { invoice_id: string; run_id: number }[];
+    return new Map(rows.map((row): [string, number] => [row.invoice_id, row.run_id]));
+  }
+
+  // Every attempt that may still be with the bank, from any invoice: more than
+  // withBank takes, never fewer, so the incident list tests them in code without
+  // reading each invoice's attempts. A paid attempt, and a failed one with no
+  // transfer or one the bank failed, are left out.
+  attemptsMaybeWithBank(): Attempt[] {
+    const rows: AttemptRow[] = this.db
+      .prepare(
+        `SELECT * FROM attempts
+          WHERE state <> 'paid'
+            AND (state <> 'failed'
+              OR (transfer_id IS NOT NULL AND (bank_status IS NULL OR bank_status NOT IN (${FAILED_IN_SQL}))))
+          ORDER BY rowid`,
+      )
+      .all() as unknown as AttemptRow[];
+    return rows.map(toAttempt);
+  }
+
+  // The invoices with a payout sent outside PayOnce in flight.
+  invoicesWithPayoutInFlight(): Set<string> {
+    const rows: { invoice_id: string }[] = this.db
+      .prepare("SELECT DISTINCT invoice_id FROM outside_payouts WHERE state = 'in_flight'")
+      .all() as unknown as { invoice_id: string }[];
+    return new Set(rows.map((row: { invoice_id: string }): string => row.invoice_id));
+  }
+
+  // Whether the running hash matches every line in the ledger, as auditSnapshot and
+  // ledgerReport check it, without hashing every line on every look at an invoice.
+  // It hashes only the lines added since the last check in this process, and every
+  // line again once a minute, as the alert loop's audit check does, so a line
+  // rewritten or removed in the middle is caught within a minute. The last line it
+  // hashed is read again each time, so lines removed from the end are caught at
+  // once: ids are never reused, so its hash then reads as missing.
+  runningHashCheck(now: number = Date.now()): LedgerReport {
+    this.db.exec("BEGIN");
+    try {
+      let progress: HeadProgress | undefined = this.headProgress;
+      if (progress !== undefined && now - progress.fullAt >= FULL_HEAD_CHECK_MS) {
+        progress = undefined;
+      }
+      if (progress !== undefined && progress.throughId > 0) {
+        const last: HashRow | undefined = this.db
+          .prepare("SELECT hash FROM events WHERE id = ?")
+          .get(progress.throughId) as unknown as HashRow | undefined;
+        if (last === undefined || last.hash !== progress.lastHash) {
+          progress = undefined;
+        }
+      }
+      const from: HeadProgress = progress ?? {
+        throughId: 0,
+        lines: 0,
+        lastHash: null,
+        computed: GENESIS,
+        invoices: new Set<string>(),
+        fullAt: now,
+      };
+      const rows: IdHashRow[] = this.db
+        .prepare("SELECT id, invoice_id, hash FROM events WHERE id > ? ORDER BY id")
+        .all(from.throughId) as unknown as IdHashRow[];
+      let computed: string = from.computed;
+      for (const row of rows) {
+        if (row.hash !== null) {
+          computed = nextLedgerHead(computed, row.hash);
+        }
+        from.invoices.add(row.invoice_id);
+      }
+      const last: IdHashRow | undefined = rows.at(-1);
+      this.headProgress = {
+        throughId: last?.id ?? from.throughId,
+        lines: from.lines + rows.length,
+        lastHash: last === undefined ? from.lastHash : last.hash,
+        computed,
+        invoices: from.invoices,
+        fullAt: from.fullAt,
+      };
+      const stored: string | null = this.metaValue(LEDGER_HEAD_KEY);
+      this.db.exec("COMMIT");
+      return {
+        lines: this.headProgress.lines,
+        invoices: from.invoices.size,
+        stored,
+        computed,
+        intact: stored === computed,
+      };
+    } catch (error: unknown) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   private insertAttempt(

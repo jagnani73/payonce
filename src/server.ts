@@ -34,12 +34,10 @@ import {
   describeBreaks,
   describeLedger,
   describeRunLedger,
-  ledgerReport,
   runAuditExport,
   runChainReport,
   runLedgerReport,
   type AuditExport,
-  type AuditSnapshot,
   type ChainReport,
   type LedgerReport,
   type RunAuditExport,
@@ -146,7 +144,6 @@ import {
   type Attempt,
   type Draft,
   type DraftMove,
-  type LedgerEvent,
   type Obligation,
   type Outage,
   type OutsidePayout,
@@ -610,9 +607,26 @@ function requireObligation(invoiceId: string): Obligation {
   return obligation;
 }
 
+// The invoices with a payment with the bank, the test isWatching makes, for every
+// invoice at once.
+function watchedInvoices(): Set<string> {
+  const watched: Set<string> = engine.ledger.invoicesWithPayoutInFlight();
+  for (const attempt of engine.ledger.attemptsMaybeWithBank()) {
+    if (withBank(attempt)) {
+      watched.add(attempt.invoiceId);
+    }
+  }
+  return watched;
+}
+
+// The page polls this, so it reads the ledger a few times in all, never once per
+// invoice.
 function listIncidents(): unknown {
   // The board's group of each open invoice, so the list can say it too.
   const groups: Map<string, BoardGroupOf> = boardGroups(engine.ledger);
+  const headlines: Map<string, string> = engine.ledger.headlines();
+  const runs: Map<string, number> = engine.ledger.runIdsByInvoice();
+  const watched: Set<string> = watchedInvoices();
   return {
     incidents: engine.ledger.obligations().map((obligation: Obligation) => ({
       invoiceId: obligation.invoiceId,
@@ -620,15 +634,10 @@ function listIncidents(): unknown {
       currency: obligation.currency,
       amountMinor: obligation.amountMinor,
       state: obligation.state,
-      // A line about a message draft does not stand for how the incident is.
-      headline:
-        engine.ledger
-          .events(obligation.invoiceId)
-          .filter((event: LedgerEvent): boolean => event.kind !== "outbox")
-          .at(-1)?.message ?? "",
+      headline: headlines.get(obligation.invoiceId) ?? "",
       busy: isBusy(obligation.invoiceId),
-      watching: isWatching(obligation.invoiceId),
-      runId: engine.ledger.runRowOf(obligation.invoiceId)?.runId ?? null,
+      watching: watched.has(obligation.invoiceId),
+      runId: runs.get(obligation.invoiceId) ?? null,
       board: groups.get(obligation.invoiceId) ?? null,
     })),
   };
@@ -642,10 +651,12 @@ interface AuditSummary {
   problem: string | null;
 }
 
+// The page polls an incident, so the running hash is checked by runningHashCheck,
+// which hashes only the lines added since its last check and every line once a
+// minute. The audit export and pnpm run audit hash every line every time.
 function auditSummary(invoiceId: string): AuditSummary {
-  const snapshot: AuditSnapshot = engine.ledger.auditSnapshot(invoiceId);
-  const report: ChainReport = chainReport(invoiceId, snapshot.events);
-  const ledger: LedgerReport = ledgerReport(snapshot);
+  const report: ChainReport = chainReport(invoiceId, engine.ledger.chainedEvents(invoiceId));
+  const ledger: LedgerReport = engine.ledger.runningHashCheck();
   const problem: string | null =
     describeBreaks(report.breaks) ?? (ledger.intact ? null : describeLedger(ledger));
   return {
