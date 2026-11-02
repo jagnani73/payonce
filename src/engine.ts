@@ -1711,6 +1711,28 @@ function escalate(
     return null;
   }
 
+  // A person closed it without paying, and continueEscalated could not close it
+  // again, as when another process changed it meanwhile. Nobody is asked to
+  // approve paying it.
+  if (obligation.rejectedBy !== null) {
+    if (engine.ledger.voidOpenApprovals(obligation.invoiceId)) {
+      note(
+        engine.ledger,
+        obligation.invoiceId,
+        "approval",
+        `Approval request withdrawn: ${obligation.rejectedBy} closed this invoice without paying`,
+      );
+    }
+    note(
+      engine.ledger,
+      obligation.invoiceId,
+      "approval",
+      `Waiting on a person. ${obligation.rejectedBy} closed this invoice without paying, so PayOnce asks nobody to approve paying it`,
+      "waiting",
+    );
+    return null;
+  }
+
   // An account the original did not go to is paid only once a person has called
   // the supplier on the number on file and the record matches what they confirmed.
   if (assessment.incident.beneficiaryChanged && assessment.bankChange === null) {
@@ -1943,6 +1965,18 @@ async function continueEscalated(
   obligation: Obligation,
   originalId: string,
 ): Promise<NextLook> {
+  // A person closed it without paying, and a payment found since reopened it. Once
+  // every payment for it has failed at the bank, it is closed again and nobody is
+  // asked to pay it.
+  if (obligation.rejectedBy !== null && engine.ledger.rejectAgain(obligation.invoiceId)) {
+    note(
+      engine.ledger,
+      obligation.invoiceId,
+      "closed",
+      `Closed without paying again. Every payment for this invoice has failed at the bank, and ${obligation.rejectedBy} had already closed it without paying`,
+    );
+    return null;
+  }
   // Once an invoice has gone to a person, only an approval releases a payment and
   // only a person closes it, even if the policy would now do either unprompted.
   const assessed: Assessment = withFloorReason(

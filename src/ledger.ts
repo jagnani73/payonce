@@ -2934,6 +2934,25 @@ export class Ledger {
     return true;
   }
 
+  // Closes again without paying an invoice a person had closed without paying,
+  // which a payment found since reopened, once nothing for it is live at the bank,
+  // PayOnce's or sent outside it. False when something is, or it is no longer
+  // escalated.
+  rejectAgain(invoiceId: string): boolean {
+    const result: { changes: number | bigint } = this.db
+      .prepare(
+        `UPDATE obligations SET state = 'rejected'
+          WHERE invoice_id = ? AND state = 'escalated' AND rejected_by IS NOT NULL
+            AND NOT EXISTS (${LIVE_ATTEMPT}) AND NOT EXISTS (${LIVE_OUTSIDE_PAYOUT})`,
+      )
+      .run(invoiceId, invoiceId, invoiceId);
+    if (Number(result.changes) !== 1) {
+      return false;
+    }
+    this.voidOpenApprovals(invoiceId);
+    return true;
+  }
+
   addEmails(invoiceId: string, emails: SupplierEmail[]): void {
     for (const email of emails) {
       this.db
@@ -3306,8 +3325,9 @@ export class Ledger {
   // moment and never as neither. Undefined, with nothing changed, when it is no
   // longer approved, for example because another process voided it in the
   // meantime, or when it has expired since the look checked it. Also when the
-  // invoice is no longer escalated, as when a person closed it, a payout for it
-  // sent outside PayOnce is live, or another payment for it is live at the bank.
+  // invoice is no longer escalated, as when a person closed it, a person once
+  // closed it without paying, a payout for it sent outside PayOnce is live, or
+  // another payment for it is live at the bank.
   // Also when unchanged, run under the write lock, returns false. The attempt
   // keeps the approval, and the quote in its terms for a payment from another
   // currency's wallet.
@@ -3327,7 +3347,8 @@ export class Ledger {
         .prepare(
           `UPDATE approvals SET state = 'used'
             WHERE id = ? AND invoice_id = ? AND state = 'approved' AND expires_at > ?
-              AND EXISTS (SELECT 1 FROM obligations WHERE invoice_id = ? AND state = 'escalated')
+              AND EXISTS (SELECT 1 FROM obligations WHERE invoice_id = ? AND state = 'escalated'
+                AND rejected_by IS NULL)
               AND NOT EXISTS (${LIVE_OUTSIDE_PAYOUT}) AND NOT EXISTS (${LIVE_ATTEMPT})`,
         )
         .run(approvalId, invoiceId, new Date().toISOString(), invoiceId, invoiceId, invoiceId);
