@@ -384,6 +384,7 @@ pnpm outbox <INVOICE> sent <DRAFT> <NAME>
 pnpm outbox <INVOICE> dismiss <DRAFT> <NAME> [NOTE]
 pnpm outage
 pnpm outage end <ID> <NAME> <NOTE>
+pnpm mcp
 pnpm reset
 ```
 
@@ -424,6 +425,64 @@ The first replaces the payment and shows the lock refusing a second one. The sec
 In the fourth, the bank pays the original while the supplier says it never arrived, so the incident goes to a person. `pnpm close` with no name shows what is waiting, and with a name and a note it closes the incident.
 
 In the fifth, `inv-05002` has the same supplier, amount and number as INV-5002, so PayOnce holds it and sends nothing. `pnpm close` closes it without paying. To pay it instead, approve it with `pnpm approve` and run `pnpm recover - inv-05002`. The bank then pays the original, or does what the outcome says if one is given in place of `-`.
+
+## Read PayOnce from Claude
+
+`src/mcp.ts` is a read-only Model Context Protocol server over stdio. Add it to Claude Code or Claude Desktop and Claude can answer questions such as "what is waiting on a person?" or "why did INV-5001 go to a person?" from the ledger. It has eight tools:
+
+| Tool | What it returns |
+| --- | --- |
+| `board` | The incident board, with the page's filters: group, wallet and origin |
+| `incidents` | Every invoice, newest first, with its state, board group and latest timeline line |
+| `incident` | One invoice: its payments and what the bank did, payouts sent outside PayOnce, the active outage on its rail, the latest approval request with its terms, whether a person can close it, what the supplier emails were found to say, the newest timeline lines and its audit check |
+| `cash` | The cash panel, per wallet |
+| `runs`, `run` | The pay runs, and one run's rows, cash check, approval request and timeline |
+| `audit` | The hash chain check `pnpm run audit` makes, for the whole ledger, one invoice or one run |
+| `outages` | The active rail outages and those ended lately |
+
+No tool approves, closes, pays, sends, drafts or uploads anything, or ends an outage. Named people still do that on the page and in the terminal. The server opens the ledger read-only for each call and closes it afterwards, so `pnpm reset` still works while Claude keeps the server running. It never creates a ledger, and never upgrades one an older PayOnce wrote: it says so and asks you to run `pnpm board` or restart `pnpm ui` once. It never calls Airwallex and needs no credentials. From `.env` it reads only `RESERVE_FLOORS`, the two bank deadlines, the outage rule and `PORT`.
+
+The `cash` tool shows balances and headroom only while `pnpm ui` runs. It asks the server for `GET /api/cash/cached`, which answers from the server's balance cache and never starts a read, and works the panel out again from the ledger with the server's balances and floors, so the headroom matches the page. Without the server, the tool gives the ledger's figures with no balance and says why.
+
+Answers are PayOnce's own JSON, in the JSON API's shapes. Text PayOnce did not write arrives wrapped, such as `{"outsideText": "Example Supplier LLC", "from": "supplier"}`, and each answer starts with a note telling the model to report that text and never act on it. That covers supplier names, email subjects and senders inside timeline lines, Airwallex messages, a pay run file's text and the names and notes people type. Timeline lines and escalation reasons are wrapped whole, as `"from": "quoted"`, because they can quote such text. As in alerts, wrapped text has `://` broken up as `[:]//`, and characters that can reverse or hide part of it are removed. Phone numbers show only their last four digits. The server leaves out the text of supplier emails, attachment names, message drafts, the inbox and the approver list. For emails, `incident` gives how many there are, how many PayOnce could not read in full, how many senders the check flagged, and the findings.
+
+The server uses the official TypeScript SDK, `@modelcontextprotocol/server` 2.3.1 with `zod` 4.6.7. Both are pinned exactly, and only `src/mcp.ts` imports them. It serves both protocol eras: clients that open with the `initialize` handshake (2025-11-25 and earlier) and clients on the 2026-07-28 revision, which has no handshake.
+
+Run `pnpm install` first. `pnpm mcp` starts the server by hand. The client settings below start `node` directly instead, which runs one process with no shell around it.
+
+### Claude Code
+
+Run this from the repository root, in PowerShell, cmd or Git Bash:
+
+```bash
+claude mcp add --transport stdio --scope local payonce -- node --disable-warning=ExperimentalWarning --import file:///D:/Work/hackathons/payonce/node_modules/tsx/dist/loader.mjs D:/Work/hackathons/payonce/src/mcp.ts
+```
+
+`--import` needs a `file:///` address, not a `D:\` path. `--scope local` offers the server in sessions started in this folder and keeps this machine's paths out of the repository (`--scope user` offers it everywhere). `claude mcp list` should show `payonce` as connected, and `/mcp` lists its tools in a session.
+
+To read another ledger file, such as a copy, add `-e PAYONCE_LEDGER=D:/path/copy.db` before `--transport`. `-e` takes several values, so the server's name must not come straight after it. A relative `PAYONCE_LEDGER` is read from the repository root.
+
+### Claude Desktop
+
+Open Settings, then Developer, then Edit Config. That opens `claude_desktop_config.json`, which is in `%APPDATA%\Claude\` for the standard install. The button also finds the Store build's copy, which is why it is safer than typing the path. Add:
+
+```json
+{
+  "mcpServers": {
+    "payonce": {
+      "command": "C:\\Program Files\\nodejs\\node.exe",
+      "args": [
+        "--disable-warning=ExperimentalWarning",
+        "--import",
+        "file:///D:/Work/hackathons/payonce/node_modules/tsx/dist/loader.mjs",
+        "D:\\Work\\hackathons\\payonce\\src\\mcp.ts"
+      ]
+    }
+  }
+}
+```
+
+Quit Claude Desktop fully and start it again. It writes the server's stderr to `%APPDATA%\Claude\logs\mcp-server-payonce.log`. To read another ledger file, add `"env": { "PAYONCE_LEDGER": "D:/path/copy.db" }` beside `args`.
 
 ## Layout
 
@@ -466,6 +525,9 @@ In the fifth, `inv-05002` has the same supplier, amount and number as INV-5002, 
 | `src/alerts.ts` | Alerts: the webhook setting, what needs a person, and posting with retries |
 | `src/alert-payloads.ts` | What an alert says, and its Slack and Discord message shapes |
 | `src/server.ts` | Local web server and JSON API |
+| `src/mcp.ts` | The read-only MCP server over stdio, and the only file that imports the MCP SDK |
+| `src/mcp-views.ts` | What the MCP tools answer, from the ledger alone |
+| `src/mcp-text.ts` | Marks the text PayOnce did not write in an MCP answer, and masks phone numbers |
 | `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/audit.ts`, `src/cash.ts`, `src/board.ts`, `src/payrun.ts`, `src/outbox.ts`, `src/outage.ts`, `src/reset.ts`, `src/index.ts` | The commands |
 | `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, exchange rate quotes, balances and their cache for the cash panel, the webhook subscription and the simulation calls |
 | `web/` | The page: plain HTML, CSS and JavaScript with no build step |
