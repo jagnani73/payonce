@@ -164,6 +164,13 @@
           <ul id="run-list" class="incident-list"></ul>
         </section>
 
+        <section class="runs" aria-labelledby="suppliers-title">
+          <h2 id="suppliers-title">Suppliers</h2>
+          <p id="suppliers-error" class="form-error" role="status" hidden></p>
+          <p id="suppliers-empty" class="empty" hidden>No supplier records yet</p>
+          <ul id="supplier-list" class="incident-list"></ul>
+        </section>
+
         <section class="incidents" aria-labelledby="incidents-title">
           <h2 id="incidents-title">Incidents</h2>
           <p id="list-error" class="form-error" role="status" hidden></p>
@@ -290,6 +297,24 @@
 
               <section id="inbox-dismiss" class="card approval" aria-labelledby="inbox-dismiss-title" hidden></section>
             </div>
+          </div>
+        </article>
+
+        <!-- One Airwallex beneficiary record. It only reads: every row links to the incident, run, upload or outage that acts. -->
+        <article id="supplier-detail" class="detail supplier" hidden>
+          <header id="supplier-header" class="detail__header"></header>
+
+          <div class="supplier__cards">
+            <section id="supplier-cautions" class="card" aria-labelledby="supplier-cautions-title" hidden></section>
+            <section id="supplier-money" class="card" aria-labelledby="supplier-money-title" hidden></section>
+            <section id="supplier-accounts" class="card" aria-labelledby="supplier-accounts-title" hidden></section>
+            <section id="supplier-invoices" class="card" aria-labelledby="supplier-invoices-title" hidden></section>
+            <section id="supplier-changes" class="card" aria-labelledby="supplier-changes-title" hidden></section>
+            <section id="supplier-emails" class="card" aria-labelledby="supplier-emails-title" hidden></section>
+            <section id="supplier-messages" class="card" aria-labelledby="supplier-messages-title" hidden></section>
+            <section id="supplier-duplicates" class="card" aria-labelledby="supplier-duplicates-title" hidden></section>
+            <section id="supplier-outages" class="card" aria-labelledby="supplier-outages-title" hidden></section>
+            <section id="supplier-runs" class="card" aria-labelledby="supplier-runs-title" hidden></section>
           </div>
         </article>
 

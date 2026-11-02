@@ -196,6 +196,21 @@ const els = {
   boardError: byId("board-error"),
   boardTotals: byId("board-totals"),
   boardGroups: byId("board-groups"),
+  suppliersError: byId("suppliers-error"),
+  suppliersEmpty: byId("suppliers-empty"),
+  supplierList: byId("supplier-list"),
+  supplierDetail: byId("supplier-detail"),
+  supplierHeader: byId("supplier-header"),
+  supplierCautions: byId("supplier-cautions"),
+  supplierMoney: byId("supplier-money"),
+  supplierAccounts: byId("supplier-accounts"),
+  supplierInvoices: byId("supplier-invoices"),
+  supplierChanges: byId("supplier-changes"),
+  supplierEmails: byId("supplier-emails"),
+  supplierMessages: byId("supplier-messages"),
+  supplierDuplicates: byId("supplier-duplicates"),
+  supplierOutages: byId("supplier-outages"),
+  supplierRuns: byId("supplier-runs"),
 };
 
 const state = {
@@ -285,6 +300,16 @@ const state = {
   // lets the next ask start, for every invoice.
   why: new Map(),
   whyRetryAt: 0,
+  // Suppliers: the list and when it was last asked for, and the record on screen
+  // with the key and time of the last ask, so neither is fetched more than once
+  // an idle poll.
+  suppliers: null,
+  suppliersError: null,
+  suppliersAskedAt: 0,
+  supplier: null,
+  supplierKey: null,
+  supplierError: null,
+  supplierAsked: null,
 };
 
 // Signatures of what each section last drew, so an unchanged poll touches nothing.
@@ -748,9 +773,67 @@ async function loadUploadDetail(uploadId) {
   }
 }
 
+// The list is asked for at most once every idle poll, whatever the poll rate.
+async function loadSuppliers() {
+  if (state.suppliers !== null && Date.now() - state.suppliersAskedAt < POLL_IDLE_MS) {
+    return;
+  }
+  state.suppliersAskedAt = Date.now();
+  try {
+    const data = await api("/api/suppliers");
+    state.suppliers = Array.isArray(data.suppliers) ? data.suppliers : [];
+    state.suppliersError = null;
+  } catch (error) {
+    state.suppliersError = `Could not refresh the suppliers. ${error.message}`;
+  }
+}
+
+// "supplier/6170b987-..." is a supplier record, by its beneficiary id. A slash
+// cannot be in an invoice number.
+function supplierKeyOf(id) {
+  const match = /^supplier\/([A-Za-z0-9-]{1,64})$/.exec(String(id ?? ""));
+  return match === null ? null : match[1];
+}
+
+// Only while the record is on screen, and at most once every idle poll.
+async function loadSupplierDetail(key) {
+  const id = state.selectedId;
+  const asked = state.supplierAsked;
+  if (asked !== null && asked.key === key && Date.now() - asked.at < POLL_IDLE_MS) {
+    return;
+  }
+  state.supplierAsked = { key, at: Date.now() };
+  try {
+    const detail = await api(`/api/suppliers/${key}`);
+    if (state.selectedId !== id) {
+      return;
+    }
+    if (typeof detail.key !== "string" || !Array.isArray(detail.invoices) || !Array.isArray(detail.cautions)) {
+      throw new Error("The server sent a supplier record this page could not read.");
+    }
+    state.supplier = detail;
+    state.supplierKey = key;
+    state.supplierError = null;
+  } catch (error) {
+    if (state.selectedId === id) {
+      state.supplierError = error.message;
+    }
+  }
+}
+
+function currentSupplier() {
+  const key = supplierKeyOf(state.selectedId);
+  return key !== null && state.supplierKey === key ? state.supplier : null;
+}
+
 async function loadDetail() {
   const id = state.selectedId;
   if (id === null) {
+    return;
+  }
+  const supplierKey = supplierKeyOf(id);
+  if (supplierKey !== null) {
+    await loadSupplierDetail(supplierKey);
     return;
   }
   const runId = runIdOf(id);
@@ -850,6 +933,7 @@ function refresh() {
         loadCash(),
         loadOutages(),
         loadBoard(),
+        loadSuppliers(),
       ]);
       render();
     } while (refreshAgain);
@@ -890,8 +974,15 @@ function setSelected(id) {
   state.uploadLoadError = null;
   state.deliverError = null;
   state.dismissError = null;
+  // A record picked again is asked for at once.
+  state.supplierError = null;
+  state.supplierAsked = null;
   const hash =
-    id === null ? "" : runIdOf(id) !== null || inboxIdOf(id) !== null ? `#${id}` : `#${encodeURIComponent(id)}`;
+    id === null
+      ? ""
+      : runIdOf(id) !== null || inboxIdOf(id) !== null || supplierKeyOf(id) !== null
+        ? `#${id}`
+        : `#${encodeURIComponent(id)}`;
   if (window.location.hash !== hash) {
     window.history.replaceState(null, "", hash === "" ? window.location.pathname : hash);
   }
@@ -1210,6 +1301,7 @@ function renderHeader(detail) {
     changed("header", [
       invoiceId,
       obligation.supplier,
+      obligation.beneficiaryId,
       obligation.currency,
       obligation.amountMinor,
       paidFrom,
@@ -1244,7 +1336,7 @@ function renderHeader(detail) {
         { class: "detail__title" },
         h("p", { class: "eyebrow" }, "Incident"),
         h("h1", null, invoiceId),
-        h("p", { class: "detail__supplier" }, obligation.supplier),
+        h("p", { class: "detail__supplier" }, supplierLink(obligation.beneficiaryId, whyText(obligation.supplier))),
         startedBy !== null &&
           h(
             "p",
@@ -2015,7 +2107,7 @@ function buildApproval(invoiceId, approval, outage) {
       "p",
       { class: "terms__meta" },
       meta("Invoice", terms.invoiceId),
-      meta("Beneficiary id", terms.beneficiaryId),
+      meta("Beneficiary id", supplierLink(terms.beneficiaryId, terms.beneficiaryId)),
     ),
   ];
 
@@ -3074,6 +3166,7 @@ function renderMain() {
     els.detail.hidden = true;
     els.runDetail.hidden = true;
     els.inboxDetail.hidden = true;
+    els.supplierDetail.hidden = true;
     els.placeholder.hidden = true;
     els.board.hidden = false;
     showMessage(els.connection, null);
@@ -3082,12 +3175,36 @@ function renderMain() {
   }
   renderSelected(id);
   // Leaving the board, it stays on screen until what was picked can be shown.
-  if (!els.detail.hidden || !els.runDetail.hidden || !els.inboxDetail.hidden || !els.placeholder.hidden) {
+  if (
+    !els.detail.hidden ||
+    !els.runDetail.hidden ||
+    !els.inboxDetail.hidden ||
+    !els.supplierDetail.hidden ||
+    !els.placeholder.hidden
+  ) {
     els.board.hidden = true;
   }
 }
 
+// A supplier record, and any view after one, leaves the view before it on screen
+// until it or its placeholder can be shown.
 function renderSelected(id) {
+  if (supplierKeyOf(id) !== null) {
+    renderSupplierMain();
+    if (!els.supplierDetail.hidden || !els.placeholder.hidden) {
+      els.detail.hidden = true;
+      els.runDetail.hidden = true;
+      els.inboxDetail.hidden = true;
+    }
+    return;
+  }
+  renderOtherSelected(id);
+  if (!els.detail.hidden || !els.runDetail.hidden || !els.inboxDetail.hidden || !els.placeholder.hidden) {
+    els.supplierDetail.hidden = true;
+  }
+}
+
+function renderOtherSelected(id) {
   if (inboxIdOf(id) !== null) {
     els.detail.hidden = true;
     els.runDetail.hidden = true;
@@ -3756,7 +3873,7 @@ function buildRunRow(row, columns) {
       h("span", { class: "run-row__amount" }, amount),
       chip,
     ),
-    h("p", { class: "run-row__payee" }, row.payTo ?? row.supplier ?? cellOf(columns, row, "supplier")),
+    h("p", { class: "run-row__payee" }, supplierLink(pays ? row.beneficiaryId : null, row.payTo ?? row.supplier ?? cellOf(columns, row, "supplier"))),
     arrival !== null &&
       h(
         "p",
@@ -4871,6 +4988,658 @@ function renderInboxMain() {
   els.inboxDetail.hidden = false;
 }
 
+// ---------- suppliers ----------
+
+const SUPPLIER_KEY = /^[A-Za-z0-9-]{1,64}$/;
+
+// The board's groups as a sidebar tag counts them. open is never tagged.
+const SUPPLIER_GROUP_WORDS = {
+  person: "waiting on a person",
+  deadline: "past the bank deadline",
+  bank: "with the bank",
+};
+
+const PAYMENT_CHECKS = {
+  checked: "checked",
+  misdirected: "went to other details",
+  "not-kept": "account not kept",
+  "not-sent": "not sent",
+  outside: "sent outside PayOnce",
+};
+
+const ACCOUNT_SOURCES = {
+  decided: "decided for",
+  sent: "sent to",
+  approval: "asked to approve",
+  "pay-run": "in a pay run",
+  callback: "verified by a callback",
+  "before-callback": "on the record before a callback",
+  outside: "paid outside PayOnce",
+};
+
+const HOLD_WORDS = {
+  counted: "counted its failure",
+  original: "first payment",
+  replacement: "replacement",
+  approved: "approved payment",
+  run: "pay run release",
+};
+
+function supplierLink(key, text) {
+  return typeof key === "string" && SUPPLIER_KEY.test(key) ? h("a", { href: `#supplier/${key}` }, text) : text;
+}
+
+function invoiceLink(invoiceId) {
+  return typeof invoiceId === "string" && invoiceId !== ""
+    ? h("a", { class: "mono", href: `#${encodeURIComponent(invoiceId)}` }, invoiceId)
+    : "an invoice";
+}
+
+function runLink(runId) {
+  return Number.isInteger(runId) ? h("a", { href: `#run/${runId}` }, `pay run ${runId}`) : "a pay run";
+}
+
+// Nodes and text with a separator between each, for a line of links.
+function joinedNodes(items, separator = ", ") {
+  return items.flatMap((item, index) => (index === 0 ? [item] : [separator, item]));
+}
+
+function countText(count, one, many) {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+function whenNode(value) {
+  return zonedTime(value) ?? "a time not on file";
+}
+
+function largestRisk(atRisk) {
+  const list = Array.isArray(atRisk) ? atRisk : [];
+  return list.reduce((most, money) => (most === null || money.minor > most.minor ? money : most), null);
+}
+
+function createSupplierNode(key) {
+  const button = h("button", { class: "incident supplier-row", type: "button" });
+  button.addEventListener("click", () => {
+    if (key !== state.selectedId) {
+      window.scrollTo(0, 0);
+    }
+    select(key);
+  });
+  return h("li", { dataset: { id: key } }, button);
+}
+
+function supplierRowParts(summary) {
+  const invoices = summary.invoices ?? {};
+  const open = (invoices.open ?? 0) + (invoices.escalated ?? 0);
+  const cautions = Array.isArray(summary.cautions) ? summary.cautions.length : 0;
+  const risk = largestRisk(summary.atRisk);
+  const tags = Object.entries(SUPPLIER_GROUP_WORDS)
+    .filter(([group]) => (summary.groups?.[group] ?? 0) > 0)
+    .map(([group, words]) => h("span", { class: "tag" }, `${summary.groups[group]} ${words}`));
+  return [
+    h(
+      "span",
+      { class: "incident__top" },
+      h("span", { class: "supplier-row__name" }, whyText(summary.name) || "(no name)"),
+      cautions > 0 && h("span", { class: "tag tag--caution" }, countText(cautions, "caution", "cautions")),
+    ),
+    h(
+      "span",
+      { class: "incident__meta" },
+      risk !== null && h("span", { class: "incident__amount" }, `${formatMoney(risk.minor, risk.currency)} at risk`),
+      h(
+        "span",
+        { class: risk === null ? "supplier-row__count" : "incident__supplier" },
+        `${open} open of ${countText(invoices.total ?? 0, "invoice", "invoices")}`,
+        summary.runRows > 0 ? `, ${countText(summary.runRows, "pay run row", "pay run rows")} waiting` : "",
+      ),
+    ),
+    tags.length > 0 && h("span", { class: "supplier-row__tags" }, tags),
+    summary.key === null && h("span", { class: "incident__headline" }, "Its record id cannot be linked"),
+  ];
+}
+
+function updateSupplierNode(node, summary, key) {
+  const button = node.firstElementChild;
+  const signature = JSON.stringify(summary);
+  if (node.dataset.signature !== signature) {
+    node.dataset.signature = signature;
+    button.replaceChildren(...supplierRowParts(summary).filter(Boolean));
+    button.disabled = summary.key === null;
+  }
+  if (key === state.selectedId) {
+    button.setAttribute("aria-current", "true");
+  } else {
+    button.removeAttribute("aria-current");
+  }
+}
+
+function renderSupplierList() {
+  const suppliers = state.suppliers ?? [];
+  reconcile(
+    els.supplierList,
+    suppliers,
+    (summary, index) => (summary.key === null ? `supplier-unlinked/${index}` : `supplier/${summary.key}`),
+    (node, summary, key) => {
+      const target = node ?? createSupplierNode(key);
+      updateSupplierNode(target, summary, key);
+      return target;
+    },
+  );
+  els.suppliersEmpty.hidden = state.suppliers === null || suppliers.length > 0;
+  showMessage(els.suppliersError, state.suppliersError);
+}
+
+// Fills a card, or hides it when there is nothing to show.
+function fillCard(section, title, body) {
+  const nodes = body.flat(Infinity).filter((node) => node !== null && node !== undefined && node !== false);
+  section.hidden = nodes.length === 0;
+  section.replaceChildren(...(nodes.length === 0 ? [] : [h("h2", { id: `${section.id}-title` }, title), ...nodes]));
+}
+
+function supplierHeader(detail) {
+  const names = (Array.isArray(detail.names) ? detail.names : []).map(whyText).filter((name) => name !== "");
+  const domains = (Array.isArray(detail.domains) ? detail.domains : []).map((entry) => whyText(entry.domain));
+  const related = Array.isArray(detail.related) ? detail.related : [];
+  const stored = detail.recordStored;
+  const currencies = Array.isArray(detail.currencies) ? detail.currencies : [];
+  const methods = Array.isArray(detail.methods) ? detail.methods : [];
+  return [
+    h(
+      "div",
+      { class: "detail__title" },
+      h("p", { class: "eyebrow" }, "Supplier record"),
+      h("h1", { class: "supplier__name" }, whyText(detail.name) || "(no name)"),
+      h("p", { class: "detail__started" }, "Record ", h("span", { class: "mono" }, detail.key)),
+      names.length > 0 && h("p", { class: "detail__started" }, `Also on file as ${names.join(", ")}`),
+      h(
+        "p",
+        { class: "detail__started" },
+        detail.phoneLast4 === null ? "No phone on file" : `Phone on file ending ${detail.phoneLast4}`,
+        ". ",
+        domains.length === 0 ? "No email domain on file" : `Email ${domains.length === 1 ? "domain" : "domains"} ${domains.join(", ")}`,
+        currencies.length > 0 ? `. Pays in ${currencies.join(", ")}${methods.length > 0 ? ` by ${methods.join(", ")}` : ""}` : "",
+      ),
+      related.map((record) =>
+        h(
+          "p",
+          { class: "detail__started" },
+          record.why.includes("same-name") ? "Same name: " : "Same account: ",
+          supplierLink(record.key, whyText(record.name) || record.key),
+          record.why.includes("same-name") ? " (may be another company)" : "",
+          record.why.includes("same-account")
+            ? record.accounts.length > 0
+              ? `, shares account ${record.accounts.join(", ")}`
+              : ", shares an account"
+            : "",
+        ),
+      ),
+      h(
+        "p",
+        { class: "hint" },
+        stored === null
+          ? "PayOnce has not stored what this record holds. It reads the record again before every payment."
+          : [
+              "PayOnce last stored what this record held on ",
+              whenNode(stored.at),
+              stored.invoiceId !== null ? [" (", invoiceLink(stored.invoiceId), ")"] : stored.runId !== null ? [" (", runLink(stored.runId), ")"] : "",
+              `, account ${stored.account}. It reads the record again before every payment.`,
+            ],
+      ),
+    ),
+  ];
+}
+
+function cautionNode(caution) {
+  const links = [
+    ...(Array.isArray(caution.invoices) ? caution.invoices.map(invoiceLink) : []),
+    ...(Array.isArray(caution.runs) ? caution.runs.map(runLink) : []),
+    ...(Array.isArray(caution.keys) ? caution.keys.map((key) => supplierLink(key, `record ${key}`)) : []),
+  ];
+  const info = caution.level !== "caution";
+  return h(
+    "div",
+    { class: info ? "caution caution--info" : "caution" },
+    icon(info ? "other" : "warning"),
+    h("p", { class: "caution__title" }, caution.text),
+    links.length > 0 && h("p", { class: "supplier-caution__links" }, joinedNodes(links)),
+    caution.since !== null && h("p", { class: "supplier-caution__links" }, "Since ", whenNode(caution.since)),
+  );
+}
+
+function countLine(label, count) {
+  return count.total === 0
+    ? null
+    : `${label}: ${count.paid} paid, ${count.failed} failed, ${count.live} with the bank`;
+}
+
+function accountNode(account) {
+  const tags = [
+    account.lastPaid && h("span", { class: "tag" }, "Last paid and checked"),
+    account.recordLastStored && h("span", { class: "tag" }, "Last stored"),
+    account.verifiedBy !== null && h("span", { class: "tag tag--caution" }, "Verified by a callback"),
+  ].filter(Boolean);
+  const counts = [countLine("PayOnce", account.payonce), countLine("Outside PayOnce", account.outside)].filter(Boolean);
+  const verified = account.verifiedBy;
+  return h(
+    "li",
+    { class: "supplier-item" },
+    h(
+      "p",
+      { class: "supplier-item__top" },
+      h("strong", null, `Account ${account.label}`),
+      h("span", { class: "mono" }, account.ending === null ? "ending not on file" : `ending ${account.ending}`),
+      tags,
+    ),
+    account.lastPaid &&
+      account.lastPaidReference !== null &&
+      h("p", null, "Last paid by ", h("span", { class: "mono" }, account.lastPaidReference)),
+    h("p", null, counts.length === 0 ? "No payment to it" : counts.join(". ")),
+    h(
+      "p",
+      { class: "supplier-item__sub" },
+      `Seen as ${account.seenAs.map((source) => ACCOUNT_SOURCES[source] ?? humanize(source)).join(", ")}`,
+      account.firstSeen !== null ? [", first ", whenNode(account.firstSeen)] : "",
+      account.lastSeen !== null && account.lastSeen !== account.firstSeen ? [", last ", whenNode(account.lastSeen)] : "",
+    ),
+    verified !== null &&
+      h(
+        "p",
+        null,
+        `Callback ${verified.callbackId} from ${whyText(verified.calledBy)} on `,
+        whenNode(verified.calledAt),
+        " (",
+        invoiceLink(verified.invoiceId),
+        ")",
+      ),
+    account.superseded.length > 0 &&
+      h("p", { class: "supplier-item__sub" }, `Older callbacks for it: ${account.superseded.join(", ")}`),
+    account.barred.length > 0 &&
+      h("p", { class: "hint hint--caution" }, `${account.barred.map(whyText).join(", ")} cannot approve payments to it`),
+    account.alsoOn.length > 0 &&
+      h("p", null, "Also on ", joinedNodes(account.alsoOn.map((key) => supplierLink(key, `record ${key}`)))),
+  );
+}
+
+function paymentNode(payment) {
+  const parts = [
+    payment.bankStatus !== null ? payment.bankStatus : null,
+    payment.failureCode !== null ? `${payment.failureCode} (${payment.failureWords ?? "a code PayOnce has no words for"})` : null,
+    typeof payment.amountMinor === "number" ? formatMoney(payment.amountMinor, payment.currency ?? "") : "amount not on file",
+    payment.account !== null ? `to account ${payment.account}` : "account not on file",
+    PAYMENT_CHECKS[payment.check] ?? humanize(payment.check),
+    payment.foundLate ? "found late" : null,
+    payment.rateMismatch ? "rate did not match its approval" : null,
+  ].filter((part) => part !== null);
+  const state = payment.kind === "outside" ? null : ATTEMPT_STATES[payment.state];
+  return h(
+    "li",
+    { class: "supplier-payment" },
+    h(
+      "span",
+      { class: "supplier-payment__top" },
+      h("span", null, payment.kind === "outside" ? "Sent outside PayOnce" : (ATTEMPT_KINDS[payment.kind] ?? humanize(payment.kind))),
+      h("span", { class: "mono" }, payment.reference ?? "no reference"),
+      badge(state ?? null, payment.state),
+    ),
+    h("span", { class: "supplier-item__sub" }, parts.join(", "), ". ", payment.kind === "outside" ? "Found " : "Sent ", whenNode(payment.sentAt)),
+    payment.mismatchedReference !== null &&
+      h(
+        "span",
+        { class: "hint hint--caution" },
+        "A transfer under its request id does not match the invoice: ",
+        h("span", { class: "mono" }, payment.mismatchedReference),
+        payment.mismatchedStatus !== null ? ` (${payment.mismatchedStatus})` : "",
+      ),
+  );
+}
+
+function paidByNode(paid) {
+  return h(
+    "p",
+    null,
+    "Paid by ",
+    paid.reference === null ? "a payment" : h("span", { class: "mono" }, paid.reference),
+    paid.kind === "outside" ? ", found " : ", sent ",
+    whenNode(paid.sentAt),
+    paid.account !== null ? ` to account ${paid.account}` : "",
+    ` (${PAYMENT_CHECKS[paid.check] ?? humanize(paid.check)})`,
+    paid.arrivesBy !== null ? `. It usually arrives by ${paid.arrivesBy}` : "",
+  );
+}
+
+function supplierInvoiceNode(invoice, recordName) {
+  const board = invoice.board;
+  const amount =
+    invoice.wallet === invoice.currency
+      ? formatMoney(invoice.amountMinor, invoice.currency)
+      : `${formatMoney(invoice.amountMinor, invoice.currency)}, paid from ${invoice.wallet}`;
+  const facts = [
+    invoice.origin === "outside" ? "Found in Airwallex" : null,
+    invoice.runId !== null ? ["From ", runLink(invoice.runId), `, row ${invoice.runLine}`] : null,
+    invoice.startedBy !== null ? `Started by ${whyText(invoice.startedBy)}` : null,
+    invoice.rejectedBy !== null ? `Closed without paying by ${whyText(invoice.rejectedBy)}` : null,
+    invoice.dueDate !== null ? `Due ${invoice.dueDate}` : null,
+    invoice.duplicateOf.length > 0 ? ["Held as a likely second bill for ", joinedNodes(invoice.duplicateOf.map(invoiceLink))] : null,
+  ].filter((part) => part !== null);
+  const risk = Array.isArray(invoice.atRisk) ? invoice.atRisk : [];
+  const emails = invoice.emails;
+  return h(
+    "li",
+    { class: "supplier-item" },
+    h(
+      "p",
+      { class: "supplier-item__top" },
+      h("strong", null, invoiceLink(invoice.invoiceId)),
+      badge(OBLIGATION_STATES[invoice.state], invoice.state),
+      board !== null && board.group !== "open" && board.label !== OBLIGATION_STATES[invoice.state]?.label && h("span", { class: "tag" }, board.label),
+      h("span", { class: "supplier-item__amount" }, amount),
+    ),
+    whyText(invoice.supplier) !== "" &&
+      whyText(invoice.supplier).toLowerCase() !== whyText(recordName).toLowerCase() &&
+      h("p", { class: "supplier-item__sub" }, `On file as ${whyText(invoice.supplier)}`),
+    board !== null && h("p", null, withPeriod(board.why)),
+    board !== null && board.also.map((line) => h("p", { class: "board-entry__also" }, `Also: ${withPeriod(line)}`)),
+    risk.length > 0 && h("p", null, `${risk.map(boardMoneyText).join(", ")} at risk`),
+    invoice.paidBy !== null && paidByNode(invoice.paidBy),
+    facts.length > 0 && h("p", { class: "supplier-item__sub" }, joinedNodes(facts, ". ")),
+    invoice.payments.length > 0 && h("ul", { class: "supplier-payments" }, invoice.payments.map(paymentNode)),
+    emails !== null &&
+      h(
+        "p",
+        { class: "supplier-item__sub" },
+        countText(emails.count, "email", "emails"),
+        emails.partlyUnread > 0 ? `, ${emails.partlyUnread} partly unread` : "",
+        emails.sendersFlagged > 0 ? `, ${countText(emails.sendersFlagged, "sender", "senders")} flagged` : "",
+        emails.findings === null ? ", not read yet" : `: ${emails.findings.summary}`,
+      ),
+  );
+}
+
+function supplierInvoices(detail) {
+  const closed = detail.closed;
+  const older = closed.settled + closed.rejected - closed.listed;
+  return [
+    h("ol", { class: "supplier-list" }, detail.invoices.map((invoice) => supplierInvoiceNode(invoice, detail.name))),
+    older > 0 && h("p", { class: "footnote" }, `${countText(older, "older closed invoice is", "older closed invoices are")} not listed. The incident list has them.`),
+  ];
+}
+
+function bankChangeNode(change) {
+  return h(
+    "li",
+    { class: "supplier-item" },
+    h(
+      "p",
+      { class: "supplier-item__top" },
+      h("strong", null, `Callback ${change.id}`),
+      badge({ label: humanize(change.state), tone: change.state === "applied" ? "paid" : change.state === "failed" ? "failed" : "neutral" }, change.state),
+      change.latest && h("span", { class: "tag" }, "Latest applied"),
+    ),
+    h(
+      "p",
+      null,
+      `By ${whyText(change.calledBy)} to the number ending ${change.numberCalledLast4 ?? "not on file"}, on `,
+      whenNode(change.calledAt),
+      " (",
+      invoiceLink(change.invoiceId),
+      ")",
+    ),
+    (change.from !== null || change.to !== null) &&
+      h("p", null, change.from !== null ? `From account ${change.from}` : "From an account not on file", change.to !== null ? ` to account ${change.to}` : ""),
+    h("p", { class: "supplier-item__sub" }, "Recorded ", whenNode(change.recordedAt)),
+    change.barred.length > 0 && h("p", { class: "hint hint--caution" }, `${change.barred.map(whyText).join(", ")} cannot approve payments to it`),
+  );
+}
+
+function supplierEmails(detail) {
+  const withEmails = detail.invoices.filter((invoice) => invoice.emails !== null);
+  const inbox = Array.isArray(detail.inbox) ? detail.inbox : [];
+  return [
+    withEmails.length > 0 &&
+      h(
+        "ul",
+        { class: "supplier-list" },
+        withEmails.map((invoice) =>
+          h(
+            "li",
+            { class: "supplier-item" },
+            h("p", { class: "supplier-item__top" }, h("strong", null, invoiceLink(invoice.invoiceId))),
+            h(
+              "p",
+              null,
+              countText(invoice.emails.count, "email", "emails"),
+              invoice.emails.partlyUnread > 0 ? `, ${invoice.emails.partlyUnread} partly unread` : "",
+              invoice.emails.sendersFlagged > 0 ? `, ${countText(invoice.emails.sendersFlagged, "sender", "senders")} flagged` : "",
+            ),
+            invoice.emails.findings !== null &&
+              h(
+                "p",
+                { class: "supplier-item__sub" },
+                `Found: ${invoice.emails.findings.summary}`,
+                invoice.emails.findings.readBy !== null ? ` (read by ${whyText(invoice.emails.findings.readBy)})` : "",
+              ),
+          ),
+        ),
+      ),
+    inbox.length > 0 && h("h3", { class: "supplier__sub" }, "Waiting in the inbox"),
+    inbox.length > 0 &&
+      h(
+        "ul",
+        { class: "supplier-list" },
+        inbox.map((upload) =>
+          h(
+            "li",
+            { class: "supplier-item" },
+            h("a", { href: `#inbox/${upload.uploadId}` }, `Email ${upload.uploadId}`),
+            " names ",
+            joinedNodes(upload.invoices.map(invoiceLink)),
+            upload.suggested ? ". The inbox offers it to one of them first" : "",
+          ),
+        ),
+      ),
+  ];
+}
+
+function draftNode(draft) {
+  const moves = [
+    draft.copiedBy !== null ? [`copied by ${whyText(draft.copiedBy)} `, whenNode(draft.copiedAt)] : null,
+    draft.sentBy !== null ? [`marked sent by ${whyText(draft.sentBy)} `, whenNode(draft.sentAt)] : null,
+    draft.dismissedBy !== null ? [`dismissed by ${whyText(draft.dismissedBy)} `, whenNode(draft.dismissedAt)] : null,
+  ].filter((move) => move !== null);
+  return h(
+    "li",
+    { class: "supplier-item" },
+    h(
+      "p",
+      { class: "supplier-item__top" },
+      h("strong", null, draft.label ?? "A message PayOnce has no template for"),
+      badge(DRAFT_STATES[draft.state], draft.state),
+      draft.audience !== null && h("span", { class: "tag" }, `For the ${(AUDIENCES[draft.audience] ?? humanize(draft.audience)).toLowerCase()}`),
+    ),
+    h("p", null, `Draft ${draft.id} on `, invoiceLink(draft.invoiceId), `, created by ${whyText(draft.createdBy)} `, whenNode(draft.createdAt)),
+    moves.length > 0 && h("p", { class: "supplier-item__sub" }, "Then ", joinedNodes(moves, ", ")),
+  );
+}
+
+function duplicateNodeOf(group) {
+  return h(
+    "li",
+    { class: "supplier-item" },
+    h("p", { class: "supplier-item__top" }, h("strong", null, group.kind === "same-bill" ? "Same bill" : "Same number, other amount or currency")),
+    h(
+      "ul",
+      { class: "supplier-payments" },
+      group.invoices.map((member) =>
+        h(
+          "li",
+          { class: "supplier-payment" },
+          h(
+            "span",
+            { class: "supplier-payment__top" },
+            invoiceLink(member.invoiceId),
+            badge(OBLIGATION_STATES[member.state], member.state),
+            h("span", null, formatMoney(member.amountMinor, member.currency)),
+            member.held && h("span", { class: "tag" }, "Held as a second bill"),
+            !member.thisRecord && supplierLink(member.key, "another record"),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+function supplierOutages(detail) {
+  const outages = detail.outages ?? { active: [], holds: [], failures: [] };
+  return [
+    outages.active.map((outage) =>
+      h(
+        "div",
+        { class: "caution" },
+        icon("outage"),
+        h("p", { class: "caution__title" }, `Outage ${outage.id}${outage.rail === null ? "" : ` on ${outage.rail}`} is active`),
+        h(
+          "p",
+          { class: "supplier-caution__links" },
+          "Since ",
+          whenNode(outage.declaredAt),
+          ". It holds ",
+          joinedNodes(outage.invoices.map(invoiceLink)),
+          ". ",
+          h("a", { href: "#" }, "End it on the board"),
+        ),
+      ),
+    ),
+    outages.holds.length > 0 &&
+      h(
+        "ul",
+        { class: "supplier-list" },
+        outages.holds.map((hold) =>
+          h(
+            "li",
+            { class: "supplier-item" },
+            `Outage ${hold.outageId}${hold.rail === null ? "" : ` on ${hold.rail}`} held `,
+            hold.invoiceId !== null ? invoiceLink(hold.invoiceId) : runLink(hold.runId),
+            ` (${HOLD_WORDS[hold.what] ?? humanize(hold.what)}) `,
+            whenNode(hold.heldAt),
+            hold.state === "ended" ? [". Ended ", whenNode(hold.endedAt)] : ". Still active",
+          ),
+        ),
+      ),
+    outages.failures.length > 0 && h("h3", { class: "supplier__sub" }, "Rail failures"),
+    outages.failures.length > 0 &&
+      h(
+        "ul",
+        { class: "supplier-list" },
+        outages.failures.map((failure) =>
+          h(
+            "li",
+            { class: "supplier-item" },
+            failure.reference === null ? "A payout" : h("span", { class: "mono" }, failure.reference),
+            ` failed with ${failure.code === null ? "a code PayOnce does not show" : `${failure.code} (${failure.codeWords ?? "rail failure"})`} `,
+            whenNode(failure.failedAt),
+            failure.invoiceId !== null ? [" on ", invoiceLink(failure.invoiceId)] : "",
+            failure.outageId !== null ? `. Outage ${failure.outageId} counted it` : "",
+          ),
+        ),
+      ),
+  ];
+}
+
+function supplierRunRow(row) {
+  const facts = [
+    row.account !== null ? `account ${row.account}` : null,
+    row.newPayee ? "new payee" : null,
+    row.callbackVerified ? "account verified by a callback" : null,
+    row.action === "skip" ? `skipped for ${countText(row.skipReasons, "reason", "reasons")}` : null,
+  ].filter((part) => part !== null);
+  return h(
+    "li",
+    { class: "supplier-item" },
+    h(
+      "p",
+      { class: "supplier-item__top" },
+      runLink(row.runId),
+      `row ${row.line}`,
+      badge(row.runState === "waiting" ? { label: "Waiting", tone: "waiting" } : RUN_STATES[row.runState], row.runState),
+      h("span", { class: "supplier-item__amount" }, typeof row.amountMinor === "number" ? formatMoney(row.amountMinor, row.currency ?? "") : ""),
+    ),
+    h(
+      "p",
+      null,
+      row.invoiceId === null ? "No invoice number" : invoiceLink(row.invoiceId),
+      `, ${row.action === "pay" ? "pays" : "skipped"}, row ${row.state}`,
+      facts.length > 0 ? `, ${facts.join(", ")}` : "",
+    ),
+  );
+}
+
+function renderSupplierDetail(detail) {
+  els.supplierHeader.replaceChildren(...supplierHeader(detail));
+  fillCard(els.supplierCautions, "Cautions", detail.cautions.map(cautionNode));
+  fillCard(
+    els.supplierMoney,
+    "Money at risk now",
+    detail.money.length === 0 ? [h("p", { class: "empty" }, "Nothing at risk.")] : detail.money.map(buildBoardTotal),
+  );
+  fillCard(
+    els.supplierAccounts,
+    "Accounts",
+    detail.accounts.length === 0
+      ? [h("p", { class: "empty" }, "PayOnce has not kept an account for this record.")]
+      : [h("ul", { class: "supplier-list" }, detail.accounts.map(accountNode))],
+  );
+  fillCard(els.supplierInvoices, "Invoices", detail.invoices.length === 0 ? [] : supplierInvoices(detail));
+  fillCard(
+    els.supplierChanges,
+    "Bank details callbacks",
+    detail.bankChanges.length === 0 ? [] : [h("ul", { class: "supplier-list" }, detail.bankChanges.map(bankChangeNode))],
+  );
+  fillCard(els.supplierEmails, "Supplier emails", supplierEmails(detail));
+  fillCard(
+    els.supplierMessages,
+    "Messages",
+    detail.drafts.length === 0 ? [] : [h("ul", { class: "supplier-list" }, detail.drafts.map(draftNode))],
+  );
+  fillCard(
+    els.supplierDuplicates,
+    "Likely duplicates",
+    detail.duplicates.length === 0 ? [] : [h("ul", { class: "supplier-list" }, detail.duplicates.map(duplicateNodeOf))],
+  );
+  fillCard(els.supplierOutages, "Outages", supplierOutages(detail));
+  fillCard(
+    els.supplierRuns,
+    "Pay runs",
+    detail.runs.length === 0 ? [] : [h("ul", { class: "supplier-list" }, detail.runs.map(supplierRunRow))],
+  );
+}
+
+function renderSupplierMain() {
+  const key = supplierKeyOf(state.selectedId);
+  const detail = currentSupplier();
+  if (detail === null) {
+    if (state.supplierError === null && Date.now() - state.selectedAt < LOADING_DELAY_MS) {
+      return;
+    }
+    setText(els.placeholderTitle, state.supplierError === null ? "Loading the supplier record" : "Could not load this supplier record");
+    setText(els.placeholderText, state.supplierError ?? `Record ${key}`);
+    els.supplierDetail.hidden = true;
+    els.placeholder.hidden = false;
+    showMessage(els.connection, null);
+    return;
+  }
+  showMessage(
+    els.connection,
+    state.supplierError === null ? null : `Could not refresh this supplier record. ${state.supplierError}`,
+  );
+  const { generatedAt, ...shown } = detail;
+  if (changed("supplier", shown)) {
+    renderSupplierDetail(detail);
+  }
+  els.placeholder.hidden = true;
+  els.supplierDetail.hidden = false;
+}
+
 // ---------- incident board ----------
 
 const BOARD_ALL = { group: "All groups", currency: "All wallets", origin: "All origins" };
@@ -5068,7 +5837,6 @@ function buildBoardEntry(entry, now) {
         "span",
         { class: "board-entry__meta" },
         h("span", { class: "board-entry__amount" }, amount),
-        h("span", { class: "board-entry__supplier" }, entry.supplier),
         h("span", { class: "board-entry__age", "data-board-since": entry.waitingSince ?? "" }),
       ),
       h(
@@ -5081,6 +5849,8 @@ function buildBoardEntry(entry, now) {
         h("span", { class: "board-entry__also" }, `Also: ${withPeriod(line)}`),
       ),
     ),
+    // Outside the entry's own link, since a link cannot hold another.
+    h("p", { class: "board-entry__supplier" }, supplierLink(entry.beneficiaryId, whyText(entry.supplier))),
   );
 }
 
@@ -5779,6 +6549,7 @@ function render() {
   renderRunForm();
   renderList();
   renderRunList();
+  renderSupplierList();
   renderEmailForm();
   renderInboxList();
   renderCash();
