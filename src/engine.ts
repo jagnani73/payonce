@@ -2444,16 +2444,16 @@ async function accountProblem(
     : "its bank details changed after the pay run was approved";
 }
 
-// True when PayOnce has paid this supplier before, to an account the record no
-// longer holds, and no callback verified the details on file. Reads only the
-// ledger.
-function newAccountUnverified(ledger: Ledger, obligation: Obligation, record: TransferBankDetails): boolean {
+// Why a first payment to the record as it is now waits for a person because of
+// where PayOnce last paid this supplier, or null: LAST_PAID_CHANGED_REASON when
+// the record no longer holds the account of PayOnce's last checked payment to
+// it, whether or not a callback verified the one it holds. continueHeld then
+// waits for a callback, and once there is one needs two approvers and bars
+// whoever recorded it. A supplier PayOnce has never paid is not held for this.
+// Reads only the ledger.
+function lastPaidHold(ledger: Ledger, obligation: Obligation, record: TransferBankDetails): string | null {
   const last: { accountKey: string } | undefined = ledger.lastPaidTransfer(obligation.beneficiaryId);
-  return (
-    last !== undefined &&
-    last.accountKey !== accountKeyOf(record) &&
-    ledger.verifiedBankChange(obligation.beneficiaryId, bankDetailsKey(record)) === undefined
-  );
+  return last !== undefined && last.accountKey !== accountKeyOf(record) ? LAST_PAID_CHANGED_REASON : null;
 }
 
 // Why a new invoice is held before paying because of other invoices: it looks
@@ -2492,11 +2492,11 @@ function heldForOthers(
 // the account a pay run approved, and a pay run's row is held too when the
 // record no longer holds it, or when paying it would take cash below the floor.
 // Any other first payment is decided on the record as it is read here, and is
-// held when PayOnce has paid this supplier before, to another account, and no
-// callback verified the one on file. A supplier PayOnce has never paid is not
-// held for this. The attempt keeps the account either way, so every retry is
-// checked against it. A pay run's row is never paid from another currency's
-// wallet. Call it in the invoice's turn.
+// held when PayOnce last paid this supplier another account, even one a callback
+// verified (lastPaidHold). A supplier PayOnce has never paid is not held for
+// this. The attempt keeps the account either way, so every retry is checked
+// against it. A pay run's row is never paid from another currency's wallet.
+// Call it in the invoice's turn.
 //
 // It holds the currency lock of the wallet the money leaves throughout. The reads
 // from Airwallex come first, with the beneficiary record last, and every check
@@ -2566,10 +2566,12 @@ export async function startPayment(
           return held;
         }
         // An account PayOnce has not paid this supplier, when it has paid them
-        // another, waits for a callback, as a replacement does.
-        if (record !== undefined && newAccountUnverified(engine.ledger, now, record)) {
-          engine.ledger.holdBeforePaying(invoiceId, [], LAST_PAID_CHANGED_REASON);
-          return { kind: "held", duplicateOf: [], sameNumber: [], reason: LAST_PAID_CHANGED_REASON, detail: null };
+        // another, waits for a person, as a replacement does: a callback first,
+        // then two approvers.
+        const lastPaid: string | null = record === undefined ? null : lastPaidHold(engine.ledger, now, record);
+        if (lastPaid !== null) {
+          engine.ledger.holdBeforePaying(invoiceId, [], lastPaid);
+          return { kind: "held", duplicateOf: [], sameNumber: [], reason: lastPaid, detail: null };
         }
         // A supplier who wrote before anything was paid may be asking not to pay
         // it, or to pay elsewhere, so a person reads the email first. That

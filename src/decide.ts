@@ -16,7 +16,8 @@ export const NEW_BANK_DETAILS_REASON: string = "supplier asked for payment to di
 export const CHANGED_BANK_DETAILS_REASON: string =
   "the supplier's bank details on file changed after the original payment";
 // Why a first payment is held when the record no longer holds the account
-// PayOnce last paid this supplier and no callback verified the one it holds.
+// PayOnce last paid this supplier, whether or not a callback verified the one it
+// holds: it needs a callback first, then two approvers.
 export const LAST_PAID_CHANGED_REASON: string =
   "the supplier's bank details on file changed since PayOnce last paid this supplier";
 export const ORIGINAL_DEADLINE_REASON: string =
