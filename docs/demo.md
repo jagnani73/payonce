@@ -9,7 +9,7 @@ pnpm reset
 pnpm ui
 ```
 
-`pnpm reset` moves the current ledger aside, so the page opens with no incidents. Stop `pnpm ui` first if it is running, because the reset cannot move a ledger that is open.
+`pnpm reset` moves the current ledger aside, so the page opens with no incidents. Stop `pnpm ui` first if it is running, because the reset cannot move a ledger that is open. Skipping it on a ledger from before PayOnce kept which account each payment went to can hold the first payment to a supplier paid back then for two approvers.
 
 Open `http://127.0.0.1:4310`. Use a window at least 1500 pixels wide at 125% zoom. Below that the timeline and the cards stack into one column and the approval card moves above the timeline.
 
