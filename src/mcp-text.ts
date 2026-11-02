@@ -62,9 +62,11 @@ const PLAIN: RegExp[] = [
   // summarise, from the three findings.
   /^emails\.findings\.summary$/,
   /^approval\.barred\[\]\.why$/,
-  // feeSeenText, for a row whose currency is a three-letter code.
+  // feeSeenText, for a row whose currency is a three-letter code and whose
+  // estimate is in PayOnce's own forms (vouchedArrival).
   /^rows\[\]\.feeSeen$/,
-  // arrivalAdvice, from an estimate whose country is two capital letters or none.
+  // arrivalAdvice, from an estimate in PayOnce's own forms, with a country only
+  // as two capital letters.
   /^(approval\.arrivalAdvice|approval\.arrivalAdvice\[\]\.advice|rows\[\]\.arrivalAdvice)\.(text|route|due|note|sentToday\.text)$/,
   /^approval\.terms\.evidence\.bankChange\.numberCalledLast4$/,
   // The audit check's wording, with line numbers and counts.

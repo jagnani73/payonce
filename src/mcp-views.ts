@@ -1,7 +1,7 @@
 import type { Balance, BalanceState } from "./airwallex/balances.js";
 import type { ApprovalTerms, BankChangeEvidence, RunRowTerms, RunTerms } from "./approval.js";
 import { policyFromEnv, type Barred } from "./approvers.js";
-import { arrivalAdvice, feeSeenText, type ArrivalAdvice, type ArrivalTerms } from "./arrival.js";
+import { arrivalAdvice, feeSeenText, ROUTES, type ArrivalAdvice, type ArrivalTerms } from "./arrival.js";
 import {
   chainReport,
   chainReports,
@@ -69,6 +69,8 @@ export const NOT_CHAINED: string =
 const RUNS_NOT_CHAINED: string =
   "This ledger's pay run timelines are not a hash chain yet. The next pnpm ui or other command that opens it starts the chain";
 const CURRENCY: RegExp = /^[A-Z]{3}$/;
+const DAY: RegExp = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
+const METHODS: readonly string[] = ["LOCAL", "SWIFT"];
 const BALANCE_MAX_AGE_MS: number = 30_000;
 
 const NO_BALANCES: BalanceState = {
@@ -90,13 +92,41 @@ interface AuditSummary {
   problem: string | null;
 }
 
-// The advice for an estimate, which is PayOnce's own sentence. The country comes
-// from the beneficiary record in Airwallex, so one that is not two capital
-// letters is left out of it. The terms still show it, wrapped.
-function adviceOf(arrival: ArrivalTerms): ArrivalAdvice {
-  return arrivalAdvice(
-    arrival.country === null || COUNTRY_CODE.test(arrival.country) ? arrival : { ...arrival, country: null },
-  );
+function isDay(value: unknown): boolean {
+  return typeof value === "string" && DAY.test(value);
+}
+
+function isDayCount(value: unknown): boolean {
+  return value === null || (typeof value === "number" && Number.isSafeInteger(value) && value >= 0);
+}
+
+// A stored estimate the advice can be built from: a method, a route PayOnce
+// knows or none, and days and day counts in PayOnce's own forms. Null for
+// anything else, so the advice never repeats text PayOnce did not write there.
+// The country comes from the beneficiary record in Airwallex, so one that is not
+// two capital letters is left out instead. The terms still show the estimate,
+// wrapped where it does not fit.
+function vouchedArrival(arrival: ArrivalTerms): ArrivalTerms | null {
+  const fits: boolean =
+    METHODS.includes(arrival.method) &&
+    (arrival.route === null || ROUTES.includes(arrival.route)) &&
+    isDay(arrival.from) &&
+    [arrival.earliest, arrival.latest, arrival.dueDate].every(
+      (day: string | null): boolean => day === null || isDay(day),
+    ) &&
+    isDayCount(arrival.minDays) &&
+    isDayCount(arrival.maxDays);
+  if (!fits) {
+    return null;
+  }
+  return arrival.country === null || COUNTRY_CODE.test(arrival.country) ? arrival : { ...arrival, country: null };
+}
+
+// The advice for an estimate, which is PayOnce's own sentence, or null when the
+// estimate is not in PayOnce's own forms.
+function adviceOf(arrival: ArrivalTerms): ArrivalAdvice | null {
+  const vouched: ArrivalTerms | null = vouchedArrival(arrival);
+  return vouched === null ? null : arrivalAdvice(vouched);
 }
 
 // The newest lines, oldest first.
@@ -310,15 +340,18 @@ export function runView(ledger: Ledger, runId: number, lines: number): unknown {
     status: runStatus(ledger, run),
     counts: runCounts(rows),
     // The cells are left out: what the check made of them is all a reader needs.
-    rows: rows.map(({ cells, ...row }: RunRow) => ({
-      ...row,
-      feeSeen:
-        row.arrival === null || row.currency === null || !CURRENCY.test(row.currency)
-          ? null
-          : feeSeenText(ledger, row.currency, row.arrival.method),
-      arrivalAdvice: row.arrival === null ? null : adviceOf(row.arrival),
-      invoice: row.state === "released" && row.invoiceId !== null ? invoiceSummary(ledger, row.invoiceId) : null,
-    })),
+    rows: rows.map(({ cells, ...row }: RunRow) => {
+      const arrival: ArrivalTerms | null = row.arrival === null ? null : vouchedArrival(row.arrival);
+      return {
+        ...row,
+        feeSeen:
+          arrival === null || row.currency === null || !CURRENCY.test(row.currency)
+            ? null
+            : feeSeenText(ledger, row.currency, arrival.method),
+        arrivalAdvice: arrival === null ? null : arrivalAdvice(arrival),
+        invoice: row.state === "released" && row.invoiceId !== null ? invoiceSummary(ledger, row.invoiceId) : null,
+      };
+    }),
     cash: JSON.parse(run.cash) as RunCash[],
     approval:
       approval === undefined || terms === null
@@ -328,11 +361,10 @@ export function runView(ledger: Ledger, runId: number, lines: number): unknown {
             state: approval.state,
             approver: approval.approver,
             terms,
-            arrivalAdvice: terms.rows.flatMap((row: RunRowTerms) =>
-              row.arrival === undefined
-                ? []
-                : [{ line: row.line, invoiceId: row.invoiceId, advice: adviceOf(row.arrival) }],
-            ),
+            arrivalAdvice: terms.rows.flatMap((row: RunRowTerms) => {
+              const advice: ArrivalAdvice | null = row.arrival === undefined ? null : adviceOf(row.arrival);
+              return advice === null ? [] : [{ line: row.line, invoiceId: row.invoiceId, advice }];
+            }),
             needed: approval.needed,
             neededWhy: approval.neededWhy,
             signoffs: approval.signoffs.map((signoff: Signoff) => ({ approver: signoff.approver, at: signoff.at })),
