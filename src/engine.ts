@@ -3187,9 +3187,12 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
   // A transfer found at a rate nobody approved may have escalated it above.
   obligation = engine.ledger.obligation(invoiceId) ?? obligation;
   // Before anything is decided, held or released for a closed invoice reopened by
-  // it, or for one with nothing sent.
+  // it, or for one with nothing sent. Payouts sent outside PayOnce are read first,
+  // so one the bank has paid or failed since is recorded, and the watcher stops
+  // waking the invoice for it.
   const mismatched: Attempt | undefined = engine.ledger.attempts(invoiceId).find(mismatchedLive);
   if (mismatched !== undefined && obligation.state !== "settled") {
+    await syncOutsidePayouts(engine, invoiceId);
     return holdMismatched(engine, invoiceId, mismatched);
   }
 
