@@ -206,7 +206,13 @@ export class Explainer {
       const started: number = Date.now();
       try {
         const answer: { explanation: string; notInFacts: string } = toAnswer(await this.complete(model, prompt));
-        return { ...answer, model, ms: Date.now() - started };
+        // A service that echoes the key in an error can echo it in an answer too.
+        return {
+          explanation: this.redact(answer.explanation),
+          notInFacts: this.redact(answer.notInFacts),
+          model,
+          ms: Date.now() - started,
+        };
       } catch (error: unknown) {
         failure = this.redact(error instanceof Error ? error.message : String(error));
         limited = limited && error instanceof ModelError && error.status === 429;
