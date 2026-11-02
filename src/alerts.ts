@@ -11,6 +11,7 @@ import {
   type InvoiceNeed,
   type OutageAlertFacts,
   type PayoutAlertFacts,
+  type ReconAlertFacts,
   type RunAlertFacts,
   type SummaryAlertFacts,
 } from "./alert-payloads.js";
@@ -68,6 +69,9 @@ import {
 } from "./ledger.js";
 import { formatMoney } from "./money.js";
 import { say, sayWarning } from "./printable.js";
+import { shownCurrency, shownInvoice, shownReference } from "./recon-match.js";
+import type { ReconAlertState, ReconBreak } from "./recon-store.js";
+import { kindCounts, type KindCount } from "./reconcile.js";
 import { runStatus } from "./runs.js";
 
 // How often the server looks for conditions that need a person, how long a new
@@ -94,6 +98,7 @@ const OUTAGE_REFERENCES_SHOWN: number = 5;
 
 const SUMMARY_KEY: string = "summary";
 const INBOX_KEY: string = "inbox";
+const RECON_KEY: string = "recon";
 const SLACK_HOSTS: readonly string[] = ["hooks.slack.com"];
 const DISCORD_HOSTS: readonly string[] = ["discord.com", "discordapp.com"];
 const LOOPBACK_HOSTS: readonly string[] = ["127.0.0.1", "localhost", "[::1]"];
@@ -493,7 +498,47 @@ function inboxCondition(inbox: InboxWaiting): FoundCondition | null {
   return condition(INBOX_KEY, { newest: inbox.newest }, facts);
 }
 
-function summaryOf(found: FoundCondition[], inbox: InboxWaiting): FoundCondition {
+// Reconciliation's breaks that wait on a person, as one condition. Its
+// fingerprint is the newest line saying a break is new or has new facts, in any
+// state, so a new or changed break alerts and one clearing or explained does not.
+function reconCondition(state: ReconAlertState): FoundCondition | null {
+  const newest: ReconBreak | undefined = state.open.reduce<ReconBreak | undefined>(
+    (latest: ReconBreak | undefined, item: ReconBreak): ReconBreak =>
+      latest === undefined || item.id > latest.id ? item : latest,
+    undefined,
+  );
+  if (newest === undefined) {
+    return null;
+  }
+  let reference: string | null;
+  try {
+    reference = shownReference((JSON.parse(newest.facts) as { reference?: unknown }).reference);
+  } catch {
+    reference = null;
+  }
+  const facts: ReconAlertFacts = {
+    kind: "recon",
+    open: state.open.length,
+    kinds: kindCounts(state.open).map((entry: KindCount): { kind: string; count: number } => ({
+      kind: entry.kind,
+      count: entry.count,
+    })),
+    currencies: [
+      ...new Set(
+        state.open
+          .map((item: ReconBreak): string | null => shownCurrency(item.currency))
+          .filter((code: string | null): code is string => code !== null),
+      ),
+    ].sort(),
+    newestKind: newest.kind,
+    newestCurrency: shownCurrency(newest.currency),
+    newestInvoice: shownInvoice(newest.invoiceId),
+    newestReference: reference,
+  };
+  return condition(RECON_KEY, { newest: state.newest }, facts);
+}
+
+function summaryOf(found: FoundCondition[], inbox: InboxWaiting, recon: number): FoundCondition {
   const count = (kind: string): number => found.filter((item: FoundCondition): boolean => item.kind === kind).length;
   const active: string = hashOf({ state: "active" });
   const facts: SummaryAlertFacts = {
@@ -505,6 +550,7 @@ function summaryOf(found: FoundCondition[], inbox: InboxWaiting): FoundCondition
     inbox: inbox.waiting,
     outages: found.filter((item: FoundCondition): boolean => item.kind === "outage" && item.fingerprint === active)
       .length,
+    recon,
   };
   return condition(SUMMARY_KEY, "first", facts);
 }
@@ -696,6 +742,11 @@ export class Alerts {
       found.push(emails);
     }
     found.push(...outageConditions(this.ledger, now));
+    const recon: ReconAlertState = this.ledger.recon().alertState();
+    const wallet: FoundCondition | null = reconCondition(recon);
+    if (wallet !== null) {
+      found.push(wallet);
+    }
     found.push(...this.audit);
     // Before the first balance read the cash is not known, so a standing cash
     // condition is neither found nor cleared.
@@ -707,7 +758,7 @@ export class Alerts {
     }
     const recorded: RecordedConditions = this.ledger.recordConditions(
       found,
-      summaryOf(found, inbox),
+      summaryOf(found, inbox, recon.open.length),
       now,
       SETTLE_MS,
       CLEAR_AFTER_MS,

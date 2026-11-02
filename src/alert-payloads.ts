@@ -5,6 +5,7 @@
 // alert is a count: no sender, name, subject or text of an uploaded email.
 
 import { RAIL_FAILURE_CODES } from "./outages.js";
+import { isBreakKind, KIND_LABELS } from "./recon-match.js";
 
 export type AlertFormat = "slack" | "discord";
 
@@ -104,6 +105,20 @@ export interface OutageAlertFacts {
   held: number;
 }
 
+// Reconciliation's breaks that wait on a person, by count and kind, with the
+// newest one's wallet, invoice and the bank's short reference. Never Airwallex's
+// description or reference text, a note or a name.
+export interface ReconAlertFacts {
+  kind: "recon";
+  open: number;
+  kinds: { kind: string; count: number }[];
+  currencies: string[];
+  newestKind: string;
+  newestCurrency: string | null;
+  newestInvoice: string | null;
+  newestReference: string | null;
+}
+
 export interface SummaryAlertFacts {
   kind: "summary";
   invoices: number;
@@ -114,6 +129,8 @@ export interface SummaryAlertFacts {
   inbox?: number;
   // Active outages. Absent in a summary queued before outages.
   outages?: number;
+  // Open reconciliation breaks. Absent in a summary queued before reconciliation.
+  recon?: number;
 }
 
 export type AlertFacts =
@@ -124,6 +141,7 @@ export type AlertFacts =
   | CashAlertFacts
   | InboxAlertFacts
   | OutageAlertFacts
+  | ReconAlertFacts
   | SummaryAlertFacts;
 
 // Text in a message. outside is text PayOnce did not write itself, such as a
@@ -487,9 +505,52 @@ function outageMessage(facts: OutageAlertFacts, base: string): AlertMessage {
   };
 }
 
+const BALANCE_KINDS: readonly string[] = ["balance-gap", "balance-differs"];
+
+function reconMessage(facts: ReconAlertFacts, base: string): AlertMessage {
+  const currency: string | null =
+    facts.newestCurrency !== null && /^[A-Z]{3}$/.test(facts.newestCurrency) ? facts.newestCurrency : null;
+  const kinds: string = facts.kinds
+    .map((entry: { kind: string; count: number }): string =>
+      isBreakKind(entry.kind) && Number.isSafeInteger(entry.count) ? `${KIND_LABELS[entry.kind]}: ${entry.count}` : "",
+    )
+    .filter((text: string): boolean => text !== "")
+    .join(", ");
+  const wallets: string = facts.currencies.filter((code: string): boolean => /^[A-Z]{3}$/.test(code)).join(", ");
+  const reference: string | null =
+    facts.newestReference !== null && /^[A-Z0-9-]{1,30}$/.test(facts.newestReference) ? facts.newestReference : null;
+  const invoice: string = identifier(facts.newestInvoice, "");
+  const newest: string[] = [
+    ...(isBreakKind(facts.newestKind) ? [KIND_LABELS[facts.newestKind]] : []),
+    ...(reference === null ? [] : [reference]),
+    ...(invoice === "" ? [] : [invoice]),
+  ];
+  return {
+    title:
+      BALANCE_KINDS.includes(facts.newestKind) && currency !== null
+        ? `The ${currency} balance does not add up from its movements`
+        : `${plural(facts.open, "wallet movement needs", "wallet movements need")} a person`,
+    line: [
+      ours(
+        "PayOnce matched each wallet's movements in Airwallex with its transfers and its ledger. It moved no money and changed no invoice",
+      ),
+    ],
+    fields: [
+      field("Waiting on a person", ours(String(facts.open))),
+      ...(wallets === "" ? [] : [field("Wallets", ours(wallets))]),
+      ...(kinds === "" ? [] : [field("Kinds", ours(kinds), false)]),
+      ...(newest.length === 0 ? [] : [field("Newest", ours(newest.join(", ")), false)]),
+    ],
+    link: `${base}/#recon`,
+    linkText: "Open reconciliation in PayOnce",
+    urgent: facts.kinds.some((entry: { kind: string }): boolean => entry.kind === "paid-then-returned"),
+  };
+}
+
 function summaryMessage(facts: SummaryAlertFacts, base: string): AlertMessage {
   const inbox: number = facts.inbox ?? 0;
   const outages: number = facts.outages ?? 0;
+  const recon: number = facts.recon ?? 0;
   const parts: string[] = [
     `${plural(facts.invoices, "invoice is", "invoices are")} waiting on a person`,
     `${plural(facts.runs, "pay run waits", "pay runs wait")} for approval`,
@@ -497,6 +558,7 @@ function summaryMessage(facts: SummaryAlertFacts, base: string): AlertMessage {
     ...(inbox === 0 ? [] : [`${plural(inbox, "supplier email waits", "supplier emails wait")} in the inbox`]),
     ...(facts.audit === 0 ? [] : [`${plural(facts.audit, "audit trail does", "audit trails do")} not verify`]),
     ...(facts.cash === 0 ? [] : [`${plural(facts.cash, "currency is", "currencies are")} below 0 headroom`]),
+    ...(recon === 0 ? [] : [`${plural(recon, "wallet movement needs", "wallet movements need")} a person`]),
   ];
   return {
     title: "PayOnce alerts are on",
@@ -529,6 +591,8 @@ export function alertMessage(facts: AlertFacts, base: string): AlertMessage {
       return inboxMessage(facts, base);
     case "outage":
       return outageMessage(facts, base);
+    case "recon":
+      return reconMessage(facts, base);
     case "summary":
       return summaryMessage(facts, base);
   }
