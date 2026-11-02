@@ -3276,28 +3276,33 @@ function renderSelected(id) {
   }
 }
 
+// Reconciliation, an email, a pay run or an incident. The view left stays on screen
+// until the one picked, or its loading placeholder, is shown.
 function renderOtherSelected(id) {
+  const views = [els.recon, els.inboxDetail, els.runDetail, els.detail];
+  let picked = els.detail;
   if (id === RECON_ID) {
-    els.detail.hidden = true;
-    els.runDetail.hidden = true;
-    els.inboxDetail.hidden = true;
+    picked = els.recon;
     renderReconMain();
-    return;
-  }
-  els.recon.hidden = true;
-  if (inboxIdOf(id) !== null) {
-    els.detail.hidden = true;
-    els.runDetail.hidden = true;
+  } else if (inboxIdOf(id) !== null) {
+    picked = els.inboxDetail;
     renderInboxMain();
-    return;
-  }
-  els.inboxDetail.hidden = true;
-  if (runIdOf(id) !== null) {
-    els.detail.hidden = true;
+  } else if (runIdOf(id) !== null) {
+    picked = els.runDetail;
     renderRunMain();
-    return;
+  } else {
+    renderIncidentMain();
   }
-  els.runDetail.hidden = true;
+  if (!picked.hidden || !els.placeholder.hidden) {
+    for (const view of views) {
+      if (view !== picked) {
+        view.hidden = true;
+      }
+    }
+  }
+}
+
+function renderIncidentMain() {
   const detail = currentDetail();
   if (detail === null && state.detailError === null && Date.now() - state.selectedAt < LOADING_DELAY_MS) {
     // Leave the previous incident, or the board, on screen for a moment so switching does not flash.
