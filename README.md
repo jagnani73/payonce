@@ -263,6 +263,22 @@ Each active rail outage gets a card at the top of the board, whatever the filter
 
 `pnpm board` prints the same ranking in the terminal, after any active outages. It takes the same filters as words in any order, such as `pnpm board deadline USD outside`. A word that is not a group, an origin or a currency prints the usage.
 
+## Supplier view
+
+When a supplier calls to say "you never paid us" or "we changed banks", the supplier view answers for that supplier on one page: what was owed, what PayOnce sent and to which account, whether it checked that account, what changed, who called whom, what the emails said in PayOnce's words, what is still at risk and what to be careful of. The sidebar lists every supplier, those with something waiting on a person first. The supplier name on an incident, the beneficiary id on an approval card, a paying row's payee on a pay run and each row of the incident board link to it. `pnpm supplier` prints the same in the terminal.
+
+A supplier here is one Airwallex beneficiary record, because that is what PayOnce checks every payment against: which account it last paid, whether a callback verified the account on file, who may approve. PayOnce never merges two records. Records that share a name, or an account, link to each other, and the page says what that means: a callback or a payment on one does not count for the other.
+
+The page shows, in order:
+
+- Cautions in PayOnce's fixed words, such as a record holding other bank details than the account PayOnce last paid, an account a callback verified, a supplier PayOnce has never paid, a transfer that went somewhere it was not meant to, an account on another record, an account-level failure in the last 30 days, a new email domain, a supplier asking not to pay or to pay another account, a payment that may have gone out twice, and no phone number on file for a callback. Each links to the invoices it is about.
+- Money at risk now, per wallet, taken from the incident board's entries, so the two always agree.
+- The accounts PayOnce has seen for the record, labelled A, B and so on, with the last four characters only, which one it last paid and checked, which one a callback verified and who may not approve payments to it.
+- Every open invoice and the 25 newest closed ones, each with its board group, what paid it and when the payment usually arrives, and each payment with its account and whether PayOnce checked it. The incident list has the older ones.
+- Callbacks, with the number's last four digits, a summary of each invoice's emails, message drafts by name and state, likely duplicates across records with the same name, outages and pay run rows.
+
+The view only reads the ledger. It has no buttons: each row links to the incident, pay run, email or outage where a person acts. It never shows an email's text, subject or sender, a draft's text, what someone typed about a callback, an escalation reason or a timeline line, and shows a phone number or account only by its last four characters. To show the last four, PayOnce keeps where each transfer went (`attempts.sent_key` and `sent_ending`, and the same on payouts sent outside PayOnce) as it reads the transfer. Payments from before that show "ending not on file". Nothing PayOnce decides reads those two columns.
+
 ## Pay runs
 
 A pay run pays a batch of invoices from one CSV file on one approval. Upload the file on the page under "Pay run", or with `pnpm payrun upload <FILE> <NAME>`.
@@ -412,6 +428,7 @@ pnpm outbox <INVOICE> sent <DRAFT> <NAME>
 pnpm outbox <INVOICE> dismiss <DRAFT> <NAME> [NOTE]
 pnpm outage
 pnpm outage end <ID> <NAME> <NOTE>
+pnpm supplier [RECORD|INVOICE]
 pnpm mcp
 pnpm ask <INVOICE> [facts]
 pnpm reset
@@ -420,6 +437,8 @@ pnpm reset
 `pnpm ask` asks the model why PayOnce did what it did on one invoice (see [Ask this incident why](#ask-this-incident-why)). With `facts` it prints the facts and the system message exactly as they would be sent, then the legend of labels, which stays on this machine, and asks nothing. It opens the ledger read-only and never calls Airwallex, so it refuses a ledger an older PayOnce wrote: open that ledger once with `pnpm ui` or `pnpm board` first. It strips control and format characters from names and invoice numbers after it swaps the labels back, as `pnpm board` does.
 
 `pnpm outage` lists the active outages and the last few ended, with the payouts each counted and what it held. `pnpm outage end` ends one, as the button on the page does. It writes only the ledger, and the server's watcher picks up what the outage held on its next check.
+
+`pnpm supplier` lists every supplier record, and `pnpm supplier <RECORD>` prints one as the supplier view shows it (see [Supplier view](#supplier-view)). Give an invoice number instead to see the record that invoice pays. It reads only the ledger and never calls Airwallex.
 
 `pnpm outbox` lists an invoice's drafts and the messages that fit now. The templates are `payment-sent`, `replacement-sent`, `checking`, `callback-notice` and `bank-trace`. It reads and writes only the ledger, and runs without a `.env`. When there is one, it takes the bank deadlines from it.
 
@@ -459,7 +478,7 @@ In the fifth, `inv-05002` has the same supplier, amount and number as INV-5002, 
 
 ## Read PayOnce from Claude
 
-`src/mcp.ts` is a read-only Model Context Protocol server over stdio. Add it to Claude Code or Claude Desktop and Claude can answer questions such as "what is waiting on a person?" or "why did INV-5001 go to a person?" from the ledger. It has eight tools:
+`src/mcp.ts` is a read-only Model Context Protocol server over stdio. Add it to Claude Code or Claude Desktop and Claude can answer questions such as "what is waiting on a person?" or "why did INV-5001 go to a person?" from the ledger. It has ten tools:
 
 | Tool | What it returns |
 | --- | --- |
@@ -470,6 +489,7 @@ In the fifth, `inv-05002` has the same supplier, amount and number as INV-5002, 
 | `runs`, `run` | The pay runs, and one run's rows, cash check, approval request and timeline |
 | `audit` | The hash chain check `pnpm run audit` makes, for the whole ledger, one invoice or one run |
 | `outages` | The active rail outages and those ended lately |
+| `suppliers`, `supplier` | Every supplier record, and one record as the supplier view shows it, without its waiting emails and drafts. `supplier` takes a record id or an invoice number |
 
 No tool approves, closes, pays, sends, drafts or uploads anything, or ends an outage. Named people still do that on the page and in the terminal. The server opens the ledger read-only for each call and closes it afterwards, so `pnpm reset` still works while Claude keeps the server running. It never creates a ledger, and never upgrades one an older PayOnce wrote: it says so and asks you to run `pnpm board` or restart `pnpm ui` once. If a write was cut off and left its journal beside the ledger, it says that too, until `pnpm ui` or `pnpm board` rolls the write back. It never calls Airwallex and needs no credentials. Of `.env` it parses only the lines that set `RESERVE_FLOORS`, the two bank deadlines, the outage rule and `PORT`, and ignores the rest.
 
@@ -539,6 +559,7 @@ Quit Claude Desktop fully and start it again. It writes the server's stderr to `
 | `src/reserve.ts` | The reserve floors from `RESERVE_FLOORS`, the floor one invoice's replacement is held to, and the wallet a payment leaves |
 | `src/cash-position.ts` | The cash panel's figures, and the committed money the policy also takes off, pay runs included |
 | `src/incident-board.ts` | The incident board: active outages and what they hold, then every open invoice in its group, with the money it has at risk and why |
+| `src/suppliers.ts` | The supplier view: one Airwallex beneficiary record, its accounts, invoices, payments and cautions, read from the ledger, for the page, `pnpm supplier` and the MCP server |
 | `src/run-file.ts` | Reads a pay run CSV file and the cells of each row |
 | `src/runs.ts` | Pay runs: the checks, the terms and the request, approving, releasing and cancelling a run |
 | `src/currency-lock.ts` | The lease that lets one payment at a time be sent in each currency |
@@ -584,6 +605,9 @@ A ledger from before PayOnce kept which account each payment went to keeps that 
 - Totals across currencies. They need exchange rates. A run's approver limits are compared with each currency's total on its own, and the incident board ranks amounts in different currencies as plain numbers.
 - Editing a run, approving part of one, or scheduling one for a later date. Cancel it and upload a corrected file.
 - Recording a callback for a supplier outside an incident, so a run can pay a supplier who changed banks.
+- What a supplier's Airwallex record holds right now. The supplier view shows what PayOnce last stored, and PayOnce reads the record again before every payment.
+- Spotting look-alike supplier names, such as a Cyrillic letter in place of a Latin one. The supplier view links records whose names read the same once case, spacing and invisible characters are set aside.
+- The last four characters of an account for payments made before PayOnce kept where each transfer went. The supplier view shows "ending not on file" for them.
 - Pay run rows paid from another currency's wallet. Each row pays in its own currency from that currency's wallet.
 - Paying a replacement from the currency a failed converting payment is refunded in. By Airwallex's docs that refund lands in the transfer currency by default, so a replacement from that wallet would need no new rate. The sandbox simulator cannot fail a converting payment, so the refund cannot be seen and the replacement pays from the original's wallet again, on a new quote.
 - A fee estimate for the first payment of an invoice paid from another wallet. The card says the fee is charged when it is sent.
