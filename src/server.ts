@@ -1581,6 +1581,10 @@ async function route(
     sendJson(response, 200, await endOutageByPerson(request, parts[2]));
   } else if (method === "GET" && pathname === "/api/cash") {
     sendJson(response, 200, cash());
+  } else if (method === "GET" && pathname === "/api/cash/cached") {
+    // The same panel from the cache as it is, never starting an Airwallex read,
+    // for the read-only MCP server.
+    sendJson(response, 200, cash(false));
   } else if (method === "GET" && pathname === "/api/board") {
     sendJson(response, 200, board(url.searchParams));
   } else if (method === "GET" && pathname === "/api/inbox") {
