@@ -6647,6 +6647,7 @@ const WALLET_STATUS = {
 
 const MOVEMENT_HOW = {
   payonce: "PayOnce's payment",
+  mismatched: "Kept beside a payment because it does not match its invoice",
   outside: "Sent outside PayOnce, tied to an invoice",
   untied: "Sent outside PayOnce, tied to no invoice",
   before: "From before the ledger",
@@ -6823,7 +6824,7 @@ function renderReconWallets(report) {
           h(
             "p",
             { class: "hint" },
-            `${wallet.movements} movements: ${wallet.payonce} PayOnce's payments, ${wallet.outside} sent outside PayOnce and tied to an invoice, ${wallet.untied} tied to no invoice, ${wallet.before} from before the ledger, ${wallet.holds} holds, ${wallet.waiting} waiting, ${wallet.unexplained} not explained.`,
+            `${wallet.movements} movements: ${wallet.payonce} PayOnce's payments, ${wallet.mismatched ?? 0} kept beside a payment because they do not match its invoice, ${wallet.outside} sent outside PayOnce and tied to an invoice, ${wallet.untied} tied to no invoice, ${wallet.before} from before the ledger, ${wallet.holds} holds, ${wallet.waiting} waiting, ${wallet.unexplained} not explained.`,
           ),
         wallet.movements > 0 && button,
         buildMovements(code),
@@ -6867,14 +6868,14 @@ function buildBreak(item, draft, sync) {
           "Found ",
           zonedTime(item.openedAt ?? item.foundAt),
           ".",
-          item.goneAt !== null && " Airwallex's records no longer show this. It still waits for a person.",
+          item.goneAt !== null && " No longer found. It still waits for a person.",
         ),
       ),
     ),
   };
 }
 
-function buildKindGroup(kind, items) {
+function buildKindGroup(kind, items, count) {
   const draft = reconDraft(kind);
   const shown = new Set(items.map((item) => item.id));
   for (const id of [...draft.picked]) {
@@ -6930,8 +6931,9 @@ function buildKindGroup(kind, items) {
   return h(
     "section",
     { class: "recon-kind" },
-    h("h3", null, `${first.label}: ${items.length}`),
+    h("h3", null, `${first.label}: ${count}`),
     h("p", { class: "hint" }, first.action),
+    count > items.length && h("p", { class: "hint" }, `The newest ${items.length} of them are listed here.`),
     list,
     form,
   );
@@ -6957,15 +6959,29 @@ function syncReconGroup(refs) {
 
 function renderReconOpen(report) {
   const open = report.open;
-  if (changed("reconOpen", open.map((item) => [item.id, item.fingerprint, item.goneAt, item.text]))) {
+  const total = report.openCount ?? open.length;
+  const counts = new Map((report.byKind ?? []).map((entry) => [entry.kind, entry.count]));
+  if (changed("reconOpen", [total, report.byKind, open.map((item) => [item.id, item.fingerprint, item.goneAt, item.text])])) {
     const focus = focusedControl(els.reconOpen);
     reconRefs = new Map();
     const kinds = [...new Set(open.map((item) => item.kind))];
+    const unlisted = (report.byKind ?? []).filter((entry) => !kinds.includes(entry.kind));
     els.reconOpen.replaceChildren(
-      h("h2", { id: "recon-open-title" }, open.length === 0 ? "Nothing needs a person" : `Needs a person: ${open.length}`),
+      h("h2", { id: "recon-open-title" }, total === 0 ? "Nothing needs a person" : `Needs a person: ${total}`),
+      total > open.length &&
+        h(
+          "p",
+          { class: "hint" },
+          `The newest ${open.length} are listed here, and ${total - open.length} more are open.`,
+          unlisted.length > 0 &&
+            ` Not listed yet: ${unlisted.map((entry) => `${entry.label} (${entry.count})`).join(", ")}. Older breaks move up as the listed ones are explained.`,
+        ),
       ...(open.length === 0
         ? [h("p", { class: "hint" }, "Every movement the last check read is explained, or still inside its window.")]
-        : kinds.map((kind) => buildKindGroup(kind, open.filter((item) => item.kind === kind)))),
+        : kinds.map((kind) => {
+            const items = open.filter((item) => item.kind === kind);
+            return buildKindGroup(kind, items, counts.get(kind) ?? items.length);
+          })),
     );
     restoreFocus(focus);
   }

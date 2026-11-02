@@ -14,6 +14,7 @@ import {
   reconcileOnce,
   reconReport,
   type BreakView,
+  type KindCount,
   type ReconReport,
   type RunOutcome,
   type RunView,
@@ -88,7 +89,7 @@ function printBreak(item: BreakView, withAction: boolean): void {
   const where: string[] = [
     ...(item.invoiceId === null ? [] : [item.invoiceId]),
     `found ${item.openedAt ?? item.foundAt}`,
-    ...(item.goneAt === null ? [] : ["Airwallex no longer shows this"]),
+    ...(item.goneAt === null ? [] : ["no longer found, still waits for a person"]),
   ];
   say(`    ${printable(`#${item.id}  ${item.text}`)}`);
   say(`          ${printable(where.join(", "))}`);
@@ -122,7 +123,7 @@ function printReport(report: ReconReport, currency: string | null): void {
         `       ${wallet.movements} movements: opening ${money(wallet.openingMinor, code)}, in ${money(wallet.inMinor, code)}, out ${money(Math.abs(wallet.outMinor), code)}, closing ${money(wallet.closingMinor, code)}`,
       );
       say(
-        `       ${wallet.payonce} PayOnce's payments, ${wallet.outside} sent outside PayOnce and tied, ${wallet.untied} tied to no invoice, ${wallet.before} from before the ledger, ${wallet.holds} holds left out, ${wallet.waiting} waiting, ${wallet.unexplained} not explained`,
+        `       ${wallet.payonce} PayOnce's payments, ${wallet.mismatched ?? 0} kept beside a payment because they do not match its invoice, ${wallet.outside} sent outside PayOnce and tied, ${wallet.untied} tied to no invoice, ${wallet.before} from before the ledger, ${wallet.holds} holds, ${wallet.waiting} waiting, ${wallet.unexplained} not explained`,
       );
     }
     say(`       Airwallex's available balance ${money(wallet.availableMinor, code)}`);
@@ -131,11 +132,25 @@ function printReport(report: ReconReport, currency: string | null): void {
     (item: BreakView): boolean => currency === null || item.currency === currency,
   );
   say("");
-  say(open.length === 0 ? "Nothing needs a person" : `Needs a person: ${open.length}`);
+  // The counts cover every open break. A currency filter counts what is listed.
+  const total: number = currency === null ? report.openCount : open.length;
+  say(total === 0 ? "Nothing needs a person" : `Needs a person: ${total}`);
   const kinds: string[] = [...new Set(open.map((item: BreakView): string => item.kind))];
+  if (currency === null && report.openCount > report.open.length) {
+    const unlisted: KindCount[] = report.byKind.filter((entry: KindCount): boolean => !kinds.includes(entry.kind));
+    say(
+      `  The newest ${report.open.length} are listed here, and ${report.openCount - report.open.length} more are open${
+        unlisted.length === 0
+          ? ""
+          : `. Not listed yet: ${unlisted.map((entry: KindCount): string => `${entry.label} (${entry.count})`).join(", ")}`
+      }`,
+    );
+  }
   for (const kind of kinds) {
     const ofKind: BreakView[] = open.filter((item: BreakView): boolean => item.kind === kind);
-    say(`  ${ofKind[0]?.label ?? kind}: ${ofKind.length}. ${ofKind[0]?.action ?? ""}`);
+    const counted: number =
+      currency === null ? (report.byKind.find((entry: KindCount): boolean => entry.kind === kind)?.count ?? ofKind.length) : ofKind.length;
+    say(`  ${ofKind[0]?.label ?? kind}: ${counted}. ${ofKind[0]?.action ?? ""}`);
     for (const item of ofKind) {
       printBreak(item, false);
     }
@@ -187,7 +202,7 @@ function exitFor(report: ReconReport, outcome: RunOutcome | null): number {
   const bad: boolean = report.wallets.some(
     (wallet: WalletSummary): boolean => wallet.status === "gap" || wallet.status === "differs" || wallet.status === "unreadable",
   );
-  return bad || report.open.length > 0 ? 1 : 0;
+  return bad || report.openCount > 0 ? 1 : 0;
 }
 
 function sayOutcome(outcome: RunOutcome): void {
