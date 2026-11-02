@@ -12,7 +12,12 @@ import {
   type Engine,
 } from "./engine.js";
 import type { OriginalTransferState } from "./incident.js";
-import { INVOICE_ID_PATTERN, type Attempt, type TransferMethod } from "./ledger.js";
+import {
+  INVOICE_ID_PATTERN,
+  type Attempt,
+  type ObligationState,
+  type TransferMethod,
+} from "./ledger.js";
 import { toMinor } from "./money.js";
 import { railFailureSeen } from "./outages.js";
 
@@ -100,13 +105,16 @@ function adopt(engine: Engine, transfer: Transfer, state: FoundState): string | 
 
 async function sweepOne(engine: Engine, agent: Dispatcher, transfer: Transfer): Promise<void> {
   // One of PayOnce's own that the ledger has no transfer on, such as an attempt
-  // marked failed before Airwallex listed it, which no look reads again.
+  // marked failed before Airwallex listed it, which no look reads again. A closed
+  // invoice is not looked at: recording a transfer that may still pay it reopens
+  // it.
   const late: Attempt | undefined = unrecordedAttemptOf(engine.ledger, transfer);
   if (late !== undefined) {
     const recorded: boolean = await agent.run(late.invoiceId, (): Promise<boolean> =>
       recordLateTransfer(engine, transfer),
     );
-    if (recorded) {
+    const state: ObligationState | undefined = engine.ledger.obligation(late.invoiceId)?.state;
+    if (recorded && (state === "open" || state === "escalated")) {
       agent.wake(late.invoiceId);
     }
     return;

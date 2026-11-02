@@ -2663,9 +2663,10 @@ export async function resumeIncident(
 // approves it on a new quote.
 //
 // Undefined, with nothing sent, when the ledger shows a payout for the invoice
-// sent outside PayOnce live, or the attempt no longer pending with no transfer,
-// just before the create call. Another process may have tied the payout, or
-// failed or recorded the attempt, while this one waited for the lock.
+// sent outside PayOnce live, the invoice closed, or the attempt no longer pending
+// with no transfer, just before the create call. Another process may have tied
+// the payout, closed the invoice, or failed or recorded the attempt, while this
+// one waited for the lock.
 async function retry(
   engine: Engine,
   obligation: Obligation,
@@ -2693,7 +2694,9 @@ async function retry(
   }
   const lapsed: boolean = quoteLapsed(obligation, attempt);
   const invoiceId: string = obligation.invoiceId;
+  const state: ObligationState | undefined = engine.ledger.obligation(invoiceId)?.state;
   if (
+    (state !== "open" && state !== "escalated") ||
     anyLive(engine.ledger.outsidePayouts(invoiceId)) ||
     !engine.ledger
       .attempts(invoiceId)
@@ -2860,11 +2863,13 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
   }
   const outside: OutsidePayout[] = await syncOutsidePayouts(engine, invoiceId);
   await readNewEmails(engine, obligation);
+  // Closed already, by the policy or by a person, so nothing is decided or sent,
+  // whatever its payments show now. A payment found late that may still pay it
+  // reopened it when it was recorded.
+  if (obligation.state === "settled" || obligation.state === "rejected") {
+    return null;
+  }
   if (engine.ledger.paidOnce(invoiceId)) {
-    // Closed already, by the policy or by a person.
-    if (obligation.state === "settled") {
-      return null;
-    }
     // A paid replacement was sent on a decision already made, so it closes the
     // incident. A paid original goes to the policy, which may want a person. So
     // does an invoice with a live payout sent outside PayOnce.
