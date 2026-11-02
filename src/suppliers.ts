@@ -7,13 +7,11 @@ import { numberOf, numbersOf, sameInvoiceNumber, supplierNameKey } from "./dupli
 import { summarise, unverifiedSenders, type SupplierEmail } from "./emails.js";
 import { ACCOUNT_CHANGED_REASON, LATE_TRANSFER_REASON } from "./engine.js";
 import {
-  boardReport,
+  boardEntriesFor,
   GROUP_LABELS,
   type BoardEntry,
-  type BoardFilters,
   type BoardGroup,
   type BoardMoney,
-  type BoardReport,
   type BoardTotal,
 } from "./incident-board.js";
 import { candidatesFor, invoiceIndex, type InvoiceIndex, type Match } from "./intake.js";
@@ -36,7 +34,11 @@ import {
   type SupplierFailure,
   type SupplierHold,
   type SupplierLinks,
+  type SupplierListRead,
+  type SupplierObligation,
+  type SupplierPayment,
   type SupplierPayout,
+  type SupplierPayoutView,
   type SupplierRead,
   type SupplierRunRow,
   type Upload,
@@ -80,8 +82,6 @@ const ACCOUNT_REASONS: readonly string[] = [
   LAST_PAID_CHANGED_REASON,
   ACCOUNT_CHANGED_REASON,
 ];
-
-const NO_FILTERS: BoardFilters = { group: null, currency: null, origin: null };
 
 export type CautionCode =
   | "account-changed"
@@ -461,9 +461,11 @@ interface Findings {
   readBy: string | null;
 }
 
+// What the list and a detail know of one record. A detail's invoices, attempts
+// and payouts are read in full, and it shows them from its own read.
 interface RecordFacts {
   id: string;
-  obligations: Obligation[];
+  obligations: SupplierObligation[];
   attempts: SupplierAttempt[];
   payouts: SupplierPayout[];
   approvals: SupplierApproval[];
@@ -520,7 +522,7 @@ function waitingPayRow(row: SupplierRunRow): boolean {
 // Every record the read names, with its facts. A record exists when an invoice
 // pays it or a pay row of the waiting run would. A skip row never makes one,
 // since its id may be one Airwallex does not have.
-function recordsOf(read: SupplierRead): Map<string, RecordFacts> {
+function recordsOf(read: SupplierListRead): Map<string, RecordFacts> {
   const records: Map<string, RecordFacts> = new Map<string, RecordFacts>();
   const facts = (id: string): RecordFacts => {
     const found: RecordFacts = records.get(id) ?? blankFacts(id);
@@ -549,7 +551,10 @@ function recordsOf(read: SupplierRead): Map<string, RecordFacts> {
     known(callback.beneficiaryId)?.callbacks.push(callback);
   }
   const beneficiaryOf: Map<string, string> = new Map<string, string>(
-    read.obligations.map((obligation: Obligation): [string, string] => [obligation.invoiceId, obligation.beneficiaryId]),
+    read.obligations.map((obligation: SupplierObligation): [string, string] => [
+      obligation.invoiceId,
+      obligation.beneficiaryId,
+    ]),
   );
   for (const email of read.emails) {
     const id: string | undefined = beneficiaryOf.get(email.invoiceId);
@@ -862,6 +867,59 @@ function ownersOf(links: SupplierLinks): Owners {
   return owners;
 }
 
+// What supplierLinks gives, built from the list's read of every record, so the
+// list reads each table once.
+function linksOf(read: SupplierListRead): SupplierLinks {
+  const names: SupplierLinks["names"] = read.obligations.map(
+    (obligation: SupplierObligation, index: number): SupplierLinks["names"][number] => ({
+      beneficiaryId: obligation.beneficiaryId,
+      name: obligation.supplier,
+      newest: read.obligations.length - index,
+    }),
+  );
+  const keys: SupplierLinks["keys"] = [];
+  const key = (beneficiaryId: string, value: string | null): void => {
+    if (value !== null) {
+      keys.push({ beneficiaryId, key: value });
+    }
+  };
+  for (const attempt of read.attempts) {
+    key(attempt.beneficiaryId, attempt.accountKey);
+    key(attempt.beneficiaryId, attempt.sentKey);
+  }
+  for (const payout of read.payouts) {
+    key(payout.beneficiaryId, payout.sentKey);
+  }
+  for (const approval of read.approvals) {
+    key(approval.beneficiaryId, approval.accountKey);
+  }
+  for (const row of read.runRows) {
+    if (waitingPayRow(row) && row.supplier !== null) {
+      names.push({ beneficiaryId: row.beneficiaryId, name: row.supplier, newest: 0 });
+    }
+    if (row.action === "pay") {
+      key(row.beneficiaryId, row.accountKey);
+    }
+  }
+  return {
+    names,
+    keys,
+    callbacks: read.callbacks.map(
+      (callback: SupplierCallback): SupplierLinks["callbacks"][number] => ({
+        beneficiaryId: callback.beneficiaryId,
+        appliedKey: callback.appliedKey,
+        oldDetails: callback.oldDetails,
+      }),
+    ),
+    payees: read.failures.map(
+      (failure: SupplierFailure): SupplierLinks["payees"][number] => ({
+        beneficiaryId: failure.beneficiaryId,
+        payee: failure.payee,
+      }),
+    ),
+  };
+}
+
 function others(ids: Set<string> | undefined, self: string): string[] {
   return [...(ids ?? [])].filter((id: string): boolean => id !== self);
 }
@@ -876,6 +934,21 @@ interface Accounts {
   // and the account it verified, null when it kept no details.
   latestApplied: SupplierCallback | undefined;
   appliedKey: string | null;
+  // The record's attempts by transfer id.
+  byTransfer: Map<string, SupplierAttempt>;
+}
+
+function grouped<T>(items: T[], keyOf: (item: T) => string | null): Map<string, T[]> {
+  const groups: Map<string, T[]> = new Map<string, T[]>();
+  for (const item of items) {
+    const key: string | null = keyOf(item);
+    if (key !== null) {
+      const list: T[] = groups.get(key) ?? [];
+      list.push(item);
+      groups.set(key, list);
+    }
+  }
+  return groups;
 }
 
 function accountsOf(ledger: Ledger, facts: RecordFacts, owners: Owners): Accounts {
@@ -922,53 +995,56 @@ function accountsOf(ledger: Ledger, facts: RecordFacts, owners: Owners): Account
           runId: storedSighting.runId,
           runLine: storedSighting.runLine,
         };
-  const applied: SupplierCallback[] = facts.callbacks.filter(
-    (callback: SupplierCallback): boolean => callback.state === "applied" && callback.appliedKey !== null,
-  );
   // verifiedBankChange reads the latest applied callback, whatever it kept.
   const latestApplied: SupplierCallback | undefined = facts.callbacks
     .filter((callback: SupplierCallback): boolean => callback.state === "applied")
     .at(-1);
   const appliedKey: string | null =
     latestApplied === undefined || latestApplied.appliedKey === null ? null : keyHash(latestApplied.appliedKey);
+  // Each payment, payout, callback and failure under the account it went to, so
+  // each account reads only its own.
+  const byTransfer: Map<string, SupplierAttempt> = new Map<string, SupplierAttempt>();
+  for (const attempt of facts.attempts) {
+    if (attempt.transferId !== null) {
+      byTransfer.set(attempt.transferId, attempt);
+    }
+  }
+  const attemptsTo: Map<string, SupplierAttempt[]> = grouped(facts.attempts, attemptKey);
+  const payoutsTo: Map<string, SupplierPayout[]> = grouped(facts.payouts, (payout: SupplierPayout): string | null => payout.sentKey);
+  const verifyingOf: Map<string, SupplierCallback[]> = grouped(
+    facts.callbacks.filter((callback: SupplierCallback): boolean => callback.state === "applied"),
+    (callback: SupplierCallback): string | null => (callback.appliedKey === null ? null : keyHash(callback.appliedKey)),
+  );
+  const payeesTo: Map<string, SupplierFailure[]> = grouped(facts.failures, (failure: SupplierFailure): string | null => {
+    const attempt: SupplierAttempt | undefined = byTransfer.get(failure.transferId);
+    return attempt === undefined ? null : attemptKey(attempt);
+  });
   const views: AccountView[] = ordered.map(({ key }: { key: string }): AccountView => {
     const list: Sighting[] = byKey.get(key) ?? [];
     const times: number[] = list.map((sighting: Sighting): number => sighting.at).filter((at: number): boolean => !Number.isNaN(at));
     const payonce: PaymentCount = blankCount();
-    for (const attempt of facts.attempts) {
-      if (attemptKey(attempt) === key) {
-        countAttempt(payonce, attempt);
-      }
+    for (const attempt of attemptsTo.get(key) ?? []) {
+      countAttempt(payonce, attempt);
     }
     const outside: PaymentCount = blankCount();
-    for (const payout of facts.payouts) {
-      if (payout.sentKey === key) {
-        countPayout(outside, payout);
-      }
+    for (const payout of payoutsTo.get(key) ?? []) {
+      countPayout(outside, payout);
     }
-    const verifying: SupplierCallback[] = applied.filter(
-      (callback: SupplierCallback): boolean => keyHash(callback.appliedKey ?? "") === key,
-    );
+    const verifying: SupplierCallback[] = verifyingOf.get(key) ?? [];
     const latest: SupplierCallback | undefined =
       latestApplied !== undefined && verifying.includes(latestApplied) ? latestApplied : undefined;
     const barred: Set<string> = new Set<string>();
-    for (const appliedKey of new Set<string>(verifying.map((callback: SupplierCallback): string => callback.appliedKey ?? ""))) {
-      for (const stored of ledger.bankChangeRecorders(facts.id, appliedKey)) {
+    for (const detailsKey of new Set<string>(verifying.map((callback: SupplierCallback): string => callback.appliedKey ?? ""))) {
+      for (const stored of ledger.bankChangeRecorders(facts.id, detailsKey)) {
         const name: string | null = knownName(stored);
         if (name !== null) {
           barred.add(name);
         }
       }
     }
-    const payeesHere: Set<string> = new Set<string>();
-    for (const failure of facts.failures) {
-      const attempt: SupplierAttempt | undefined = facts.attempts.find(
-        (candidate: SupplierAttempt): boolean => candidate.transferId === failure.transferId,
-      );
-      if (attempt !== undefined && attemptKey(attempt) === key) {
-        payeesHere.add(failure.payee);
-      }
-    }
+    const payeesHere: Set<string> = new Set<string>(
+      (payeesTo.get(key) ?? []).map((failure: SupplierFailure): string => failure.payee),
+    );
     const alsoOn: Set<string> = new Set<string>(others(owners.byKey.get(key), facts.id));
     for (const payee of payeesHere) {
       for (const id of others(owners.byPayee.get(payee), facts.id)) {
@@ -999,12 +1075,12 @@ function accountsOf(ledger: Ledger, facts: RecordFacts, owners: Owners): Account
       alsoOn: [...alsoOn].filter((id: string): boolean => SUPPLIER_KEY_PATTERN.test(id)).sort(),
     };
   });
-  return { views, labelOf, lastPaid, unchecked, stored, latestApplied, appliedKey };
+  return { views, labelOf, lastPaid, unchecked, stored, latestApplied, appliedKey, byTransfer };
 }
 
 // ---------- cautions ----------
 
-function open(obligation: Obligation): boolean {
+function open(obligation: SupplierObligation): boolean {
   return obligation.state === "open" || obligation.state === "escalated";
 }
 
@@ -1062,7 +1138,7 @@ function wordsFor(table: Readonly<Record<string, string>>, code: string | null):
 
 // An invoice the engine sent to a person because the record's bank details
 // changed, by the fixed reasons it gives for that.
-function heldForAccount(obligation: Obligation): boolean {
+function heldForAccount(obligation: SupplierObligation): boolean {
   return ACCOUNT_REASONS.some((reason: string): boolean => obligation.escalationReason.startsWith(reason));
 }
 
@@ -1075,8 +1151,9 @@ function utcMinute(at: string | null): string | null {
 
 function cautionsOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts, owners: Owners, now: number): Caution[] {
   const found: CautionDraft[] = [];
-  const openOnes: Obligation[] = facts.obligations.filter(open);
-  const ids = (list: Obligation[]): string[] => list.map((obligation: Obligation): string => obligation.invoiceId);
+  const openOnes: SupplierObligation[] = facts.obligations.filter(open);
+  const ids = (list: SupplierObligation[]): string[] =>
+    list.map((obligation: SupplierObligation): string => obligation.invoiceId);
   const label = (key: string | undefined | null): string[] => {
     const value: string | undefined = key === undefined || key === null ? undefined : accounts.labelOf.get(key);
     return value === undefined ? [] : [value];
@@ -1088,7 +1165,7 @@ function cautionsOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts, owne
   // them (verifiedBankChange). The ledger never reads the record, so "holds" is
   // the account PayOnce last stored for it. Whatever the callbacks, any open
   // invoice the engine sent to a person because the details changed.
-  const held: Obligation[] = openOnes.filter(heldForAccount);
+  const held: SupplierObligation[] = openOnes.filter(heldForAccount);
   const storedChanged: boolean =
     stored !== null && lastPaid !== undefined && stored.key !== lastPaid.accountKey && appliedKey !== stored.key;
   if (held.length > 0 || storedChanged) {
@@ -1128,9 +1205,7 @@ function cautionsOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts, owne
     });
   }
   if (lastPaid === undefined && unchecked !== undefined) {
-    const paid: SupplierAttempt | undefined = facts.attempts.find(
-      (attempt: SupplierAttempt): boolean => attempt.transferId === unchecked.transferId,
-    );
+    const paid: SupplierAttempt | undefined = accounts.byTransfer.get(unchecked.transferId);
     found.push({
       code: "unconfirmed-account",
       text: "PayOnce paid this record only before it kept which account each payment went to, so its next first payment waits for two approvers.",
@@ -1187,8 +1262,12 @@ function cautionsOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts, owne
       });
     }
   }
-  const withDomain: Obligation[] = facts.obligations.filter((obligation: Obligation): boolean => obligation.supplierDomain !== "");
-  const domains: Set<string> = new Set<string>(withDomain.map((obligation: Obligation): string => obligation.supplierDomain));
+  const withDomain: SupplierObligation[] = facts.obligations.filter(
+    (obligation: SupplierObligation): boolean => obligation.supplierDomain !== "",
+  );
+  const domains: Set<string> = new Set<string>(
+    withDomain.map((obligation: SupplierObligation): string => obligation.supplierDomain),
+  );
   const [newest, before] = withDomain;
   if (domains.size >= 2 && newest !== undefined && before !== undefined && newest.supplierDomain !== before.supplierDomain) {
     found.push({
@@ -1197,12 +1276,12 @@ function cautionsOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts, owne
       invoices: [newest.invoiceId, before.invoiceId],
     });
   }
-  const asked = (test: (findings: Findings) => boolean): Obligation[] =>
-    openOnes.filter((obligation: Obligation): boolean => {
+  const asked = (test: (findings: Findings) => boolean): SupplierObligation[] =>
+    openOnes.filter((obligation: SupplierObligation): boolean => {
       const findings: Findings | undefined = facts.findings.get(obligation.invoiceId);
       return findings !== undefined && test(findings);
     });
-  const notToPay: Obligation[] = asked((findings: Findings): boolean => findings.asksNotToPay);
+  const notToPay: SupplierObligation[] = asked((findings: Findings): boolean => findings.asksNotToPay);
   if (notToPay.length > 0) {
     found.push({
       code: "asks-not-to-pay",
@@ -1210,7 +1289,7 @@ function cautionsOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts, owne
       invoices: ids(notToPay),
     });
   }
-  const newDetails: Obligation[] = asked((findings: Findings): boolean => findings.asksForNewBankDetails);
+  const newDetails: SupplierObligation[] = asked((findings: Findings): boolean => findings.asksForNewBankDetails);
   if (newDetails.length > 0) {
     found.push({
       code: "asks-new-details",
@@ -1218,15 +1297,15 @@ function cautionsOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts, owne
       invoices: ids(newDetails),
     });
   }
-  const twice: Obligation[] = openOnes.filter((obligation: Obligation): boolean =>
+  const twice: SupplierObligation[] = openOnes.filter((obligation: SupplierObligation): boolean =>
     obligation.escalationReason.startsWith(LATE_TRANSFER_REASON),
   );
   if (twice.length > 0) {
     found.push({ code: "paid-twice", text: "PayOnce may have paid these invoices twice.", invoices: ids(twice) });
   }
   // A callback is recorded on the escalated invoice itself, from its own phone.
-  const noPhone: Obligation[] = openOnes.filter(
-    (obligation: Obligation): boolean =>
+  const noPhone: SupplierObligation[] = openOnes.filter(
+    (obligation: SupplierObligation): boolean =>
       obligation.state === "escalated" && (obligation.supplierPhone ?? "").trim() === "",
   );
   if (noPhone.length > 0) {
@@ -1261,8 +1340,8 @@ function cautionsOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts, owne
       since: earliest(recent.map(sentAtOf)),
     });
   }
-  const nonReceipt: Obligation[] = facts.obligations.filter(
-    (obligation: Obligation): boolean => facts.findings.get(obligation.invoiceId)?.claimsNonReceipt === true,
+  const nonReceipt: SupplierObligation[] = facts.obligations.filter(
+    (obligation: SupplierObligation): boolean => facts.findings.get(obligation.invoiceId)?.claimsNonReceipt === true,
   );
   if (nonReceipt.length > 0) {
     found.push({
@@ -1271,8 +1350,9 @@ function cautionsOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts, owne
       invoices: ids(nonReceipt),
     });
   }
-  const flagged: Obligation[] = withDomain.filter(
-    (obligation: Obligation): boolean => unverifiedSenders(emailsOf(facts, obligation.invoiceId), obligation.supplierDomain).length > 0,
+  const flagged: SupplierObligation[] = withDomain.filter(
+    (obligation: SupplierObligation): boolean =>
+      unverifiedSenders(emailsOf(facts, obligation.invoiceId), obligation.supplierDomain).length > 0,
   );
   if (flagged.length > 0) {
     found.push({
@@ -1281,12 +1361,17 @@ function cautionsOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts, owne
       invoices: ids(flagged),
     });
   }
-  const noDomain: Obligation[] = facts.obligations.filter((obligation: Obligation): boolean => obligation.supplierDomain === "");
+  const noDomain: SupplierObligation[] = facts.obligations.filter(
+    (obligation: SupplierObligation): boolean => obligation.supplierDomain === "",
+  );
   if (noDomain.length > 0) {
     found.push({
       code: "no-domain",
       text: `${plural(noDomain.length, "invoice has", "invoices have")} no email domain on file, so every sender on ${noDomain.length === 1 ? "it" : "them"} is flagged.`,
-      invoices: ids([...noDomain.filter(open), ...noDomain.filter((obligation: Obligation): boolean => !open(obligation))]),
+      invoices: ids([
+        ...noDomain.filter(open),
+        ...noDomain.filter((obligation: SupplierObligation): boolean => !open(obligation)),
+      ]),
     });
   }
   const outsideLive: string[] = [
@@ -1303,13 +1388,14 @@ function cautionsOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts, owne
       invoices: outsideLive,
     });
   }
-  const heldDuplicates: Obligation[] = facts.obligations.filter(
-    (obligation: Obligation): boolean =>
-      obligation.state === "escalated" &&
-      obligation.duplicateOf.length > 0 &&
-      facts.attempts
-        .filter((attempt: SupplierAttempt): boolean => attempt.invoiceId === obligation.invoiceId)
-        .every((attempt: SupplierAttempt): boolean => attempt.transferId === null && attempt.state === "failed"),
+  const sentFor: Set<string> = new Set<string>(
+    facts.attempts
+      .filter((attempt: SupplierAttempt): boolean => attempt.transferId !== null || attempt.state !== "failed")
+      .map((attempt: SupplierAttempt): string => attempt.invoiceId),
+  );
+  const heldDuplicates: SupplierObligation[] = facts.obligations.filter(
+    (obligation: SupplierObligation): boolean =>
+      obligation.state === "escalated" && obligation.duplicateOf.length > 0 && !sentFor.has(obligation.invoiceId),
   );
   if (heldDuplicates.length > 0) {
     found.push({ code: "held-duplicate", text: "These invoices are held as likely second bills.", invoices: ids(heldDuplicates) });
@@ -1339,7 +1425,7 @@ function emailsOf(facts: RecordFacts, invoiceId: string): SupplierEmail[] {
 }
 
 // The active outages on the rails these open invoices pay on, oldest first.
-function activeOutages(ledger: Ledger, openOnes: Obligation[]): OutageBrief[] {
+function activeOutages(ledger: Ledger, openOnes: SupplierObligation[]): OutageBrief[] {
   const byId: Map<number, OutageBrief> = new Map<number, OutageBrief>();
   for (const obligation of openOnes) {
     const outage: Outage | undefined = ledger.activeOutage(obligation.currency, obligation.transferMethod);
@@ -1360,7 +1446,7 @@ function activeOutages(ledger: Ledger, openOnes: Obligation[]): OutageBrief[] {
 
 // ---------- the detail's sections ----------
 
-function paymentView(attempt: SupplierAttempt, labelOf: Map<string, string>): PaymentView {
+function paymentView(attempt: SupplierPayment, labelOf: Map<string, string>): PaymentView {
   const key: string | null = attemptKey(attempt);
   const code: string | null = attempt.failureCode !== null && FAILURE_CODE.test(attempt.failureCode) ? attempt.failureCode : null;
   return {
@@ -1378,7 +1464,7 @@ function paymentView(attempt: SupplierAttempt, labelOf: Map<string, string>): Pa
     account: key === null ? null : (labelOf.get(key) ?? null),
     check: checkOf(attempt),
     foundLate: attempt.foundLateAt !== null,
-    rateMismatch: attempt.rateMismatch !== null,
+    rateMismatch: attempt.rateMismatch,
     mismatchedReference:
       attempt.mismatchedReference !== null && REFERENCE.test(attempt.mismatchedReference) ? attempt.mismatchedReference : null,
     mismatchedStatus:
@@ -1386,7 +1472,7 @@ function paymentView(attempt: SupplierAttempt, labelOf: Map<string, string>): Pa
   };
 }
 
-function payoutView(payout: SupplierPayout, labelOf: Map<string, string>): PaymentView {
+function payoutView(payout: SupplierPayoutView, labelOf: Map<string, string>): PaymentView {
   return {
     kind: "outside",
     reference: REFERENCE.test(payout.reference) ? payout.reference : null,
@@ -1408,21 +1494,36 @@ function payoutView(payout: SupplierPayout, labelOf: Map<string, string>): Payme
   };
 }
 
-function paidByOf(attempts: SupplierAttempt[], payouts: SupplierPayout[], labelOf: Map<string, string>): PaidBy | null {
-  const paid: SupplierAttempt | undefined = attempts.filter((attempt: SupplierAttempt): boolean => attempt.state === "paid").at(-1);
+// The route advisory's latest usual day in the JSON an attempt keeps, or null.
+function latestDayOf(arrival: string | null): string | null {
+  if (arrival === null) {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(arrival);
+    const latest: unknown = parsed !== null && typeof parsed === "object" ? (parsed as { latest?: unknown }).latest : null;
+    return typeof latest === "string" && /^\d{4}-\d{2}-\d{2}$/.test(latest) ? latest : null;
+  } catch {
+    return null;
+  }
+}
+
+function paidByOf(attempts: SupplierPayment[], payouts: SupplierPayoutView[], labelOf: Map<string, string>): PaidBy | null {
+  const paid: SupplierPayment | undefined = attempts.filter((attempt: SupplierPayment): boolean => attempt.state === "paid").at(-1);
   if (paid !== undefined) {
     const view: PaymentView = paymentView(paid, labelOf);
-    const latest: string | null = paid.arrival?.latest ?? null;
     return {
       kind: view.kind,
       reference: view.reference,
       sentAt: view.sentAt,
       account: view.account,
       check: view.check,
-      arrivesBy: latest !== null && /^\d{4}-\d{2}-\d{2}$/.test(latest) ? latest : null,
+      arrivesBy: latestDayOf(paid.arrival),
     };
   }
-  const outside: SupplierPayout | undefined = payouts.filter((payout: SupplierPayout): boolean => payout.state === "paid").at(-1);
+  const outside: SupplierPayoutView | undefined = payouts
+    .filter((payout: SupplierPayoutView): boolean => payout.state === "paid")
+    .at(-1);
   if (outside === undefined) {
     return null;
   }
@@ -1430,7 +1531,7 @@ function paidByOf(attempts: SupplierAttempt[], payouts: SupplierPayout[], labelO
   return { kind: "outside", reference: view.reference, sentAt: view.sentAt, account: view.account, check: "outside", arrivesBy: null };
 }
 
-function emailsView(facts: RecordFacts, obligation: Obligation): EmailsView | null {
+function emailsView(facts: RecordFacts, obligation: SupplierObligation): EmailsView | null {
   const emails: SupplierEmail[] = emailsOf(facts, obligation.invoiceId);
   const findings: Findings | undefined = facts.findings.get(obligation.invoiceId);
   if (emails.length === 0 && findings === undefined) {
@@ -1462,8 +1563,8 @@ function invoiceView(
   facts: RecordFacts,
   obligation: Obligation,
   entry: BoardEntry | undefined,
-  attempts: SupplierAttempt[],
-  payouts: SupplierPayout[],
+  attempts: SupplierPayment[],
+  payouts: SupplierPayoutView[],
   labelOf: Map<string, string>,
 ): InvoiceView {
   const row: SupplierRunRow | undefined =
@@ -1487,8 +1588,8 @@ function invoiceView(
     duplicateOf: obligation.duplicateOf,
     paidBy: paidByOf(attempts, payouts, labelOf),
     payments: [
-      ...attempts.map((attempt: SupplierAttempt): PaymentView => paymentView(attempt, labelOf)),
-      ...payouts.map((payout: SupplierPayout): PaymentView => payoutView(payout, labelOf)),
+      ...attempts.map((attempt: SupplierPayment): PaymentView => paymentView(attempt, labelOf)),
+      ...payouts.map((payout: SupplierPayoutView): PaymentView => payoutView(payout, labelOf)),
     ],
     emails: emailsView(facts, obligation),
   };
@@ -1532,8 +1633,8 @@ function bankChangesOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts): 
 // invoices. Numbers are bucketed by their base first, since two numbers it
 // matches always share one, so the work grows with the invoices, not their
 // pairs.
-function duplicatesOf(facts: RecordFacts, sameName: Obligation[]): DuplicateGroup[] {
-  const pool: Obligation[] = [...facts.obligations, ...sameName];
+function duplicatesOf(mineOnes: Obligation[], sameName: Obligation[]): DuplicateGroup[] {
+  const pool: Obligation[] = [...mineOnes, ...sameName];
   const buckets: Map<string, Obligation[]> = new Map<string, Obligation[]>();
   for (const obligation of pool) {
     for (const number of numbersOf(obligation)) {
@@ -1580,7 +1681,7 @@ function duplicatesOf(facts: RecordFacts, sameName: Obligation[]): DuplicateGrou
     }
     groups.set(root, list);
   }
-  const mine: Set<string> = new Set<string>(facts.obligations.map((obligation: Obligation): string => obligation.invoiceId));
+  const mine: Set<string> = new Set<string>(mineOnes.map((obligation: Obligation): string => obligation.invoiceId));
   return [...groups.values()]
     .filter((list: Obligation[]): boolean => list.length > 1 && list.some((obligation: Obligation): boolean => mine.has(obligation.invoiceId)))
     .map((list: Obligation[]): DuplicateGroup => {
@@ -1659,14 +1760,17 @@ function runsOf(facts: RecordFacts, labelOf: Map<string, string>): RunRowView[] 
   );
 }
 
-// Waiting uploads that name this record's invoices, matched with one index.
-function inboxOf(ledger: Ledger, facts: RecordFacts): InboxView[] {
+// Waiting uploads that name this record's invoices, matched with the one index
+// the board's entries used.
+function inboxOf(ledger: Ledger, facts: RecordFacts, indexOf: () => InvoiceIndex): InboxView[] {
   const waiting: Upload[] = ledger.uploads(0).filter((upload: Upload): boolean => upload.state === "waiting");
   if (waiting.length === 0) {
     return [];
   }
-  const mine: Set<string> = new Set<string>(facts.obligations.map((obligation: Obligation): string => obligation.invoiceId));
-  const index: InvoiceIndex = invoiceIndex(ledger);
+  const mine: Set<string> = new Set<string>(
+    facts.obligations.map((obligation: SupplierObligation): string => obligation.invoiceId),
+  );
+  const index: InvoiceIndex = indexOf();
   const found: InboxView[] = [];
   for (const upload of waiting) {
     const match: Match = candidatesFor(ledger, upload, index);
@@ -1701,16 +1805,16 @@ function draftsOf(facts: RecordFacts): DraftSummary[] {
 }
 
 function domainsOf(facts: RecordFacts): SupplierDetail["domains"] {
-  const byDomain: Map<string, Obligation[]> = new Map<string, Obligation[]>();
+  const byDomain: Map<string, SupplierObligation[]> = new Map<string, SupplierObligation[]>();
   for (const obligation of facts.obligations) {
     if (obligation.supplierDomain === "") {
       continue;
     }
-    const list: Obligation[] = byDomain.get(obligation.supplierDomain) ?? [];
+    const list: SupplierObligation[] = byDomain.get(obligation.supplierDomain) ?? [];
     list.push(obligation);
     byDomain.set(obligation.supplierDomain, list);
   }
-  return [...byDomain.entries()].map(([domain, list]: [string, Obligation[]]) => ({
+  return [...byDomain.entries()].map(([domain, list]: [string, SupplierObligation[]]) => ({
     domain,
     invoices: list.length,
     first: list.at(-1)?.invoiceId ?? "",
@@ -1724,7 +1828,7 @@ function namesOf(facts: RecordFacts, run: SupplierRunRow | undefined): string[] 
   const names: string[] = [];
   const keys: Set<string> = new Set<string>();
   const spellings: string[] = [
-    ...facts.obligations.map((obligation: Obligation): string => obligation.supplier),
+    ...facts.obligations.map((obligation: SupplierObligation): string => obligation.supplier),
     ...(run?.supplier === null || run === undefined ? [] : [run.supplier]),
   ];
   for (const name of spellings) {
@@ -1821,7 +1925,7 @@ function summaryOf(
     groups[entry.group] += 1;
   }
   const count = (state: ObligationState): number =>
-    facts.obligations.filter((obligation: Obligation): boolean => obligation.state === state).length;
+    facts.obligations.filter((obligation: SupplierObligation): boolean => obligation.state === state).length;
   const names: string[] = namesOf(facts, undefined);
   const sameName: Set<string> = new Set<string>();
   for (const name of names) {
@@ -1856,22 +1960,37 @@ function largest(money: BoardMoney[]): number {
   return money.reduce((most: number, entry: BoardMoney): number => Math.max(most, entry.minor), 0);
 }
 
+// The index of every invoice, built on the first call only.
+function lazyIndex(ledger: Ledger): () => InvoiceIndex {
+  let index: InvoiceIndex | undefined;
+  return (): InvoiceIndex => {
+    index ??= invoiceIndex(ledger);
+    return index;
+  };
+}
+
+function entriesByInvoice(entries: BoardEntry[]): Map<string, BoardEntry> {
+  return new Map<string, BoardEntry>(
+    entries
+      .filter((entry: BoardEntry): boolean => entry.kind === "invoice")
+      .map((entry: BoardEntry): [string, BoardEntry] => [entry.invoiceId, entry]),
+  );
+}
+
 // Every supplier record, a record with an entry waiting on a person first, then
 // one with a must-tier caution, then the most money at risk (amounts in
 // different currencies compared as plain numbers, as the board does), then by
-// name and key.
+// name and key. The board's entries are built for the invoices that are not
+// closed and the waiting run's pay rows only, each as the whole board has it.
 export function supplierList(ledger: Ledger, now: number = Date.now()): SupplierList {
   return ledger.readSnapshot((): SupplierList => {
-    const read: SupplierRead = ledger.supplierRead(null);
+    const read: SupplierListRead = ledger.supplierListRead();
     const records: Map<string, RecordFacts> = recordsOf(read);
-    const owners: Owners = ownersOf(ledger.supplierLinks());
-    const report: BoardReport | null = needsBoard([...records.values()]) ? boardReport(ledger, NO_FILTERS, now) : null;
-    const entriesOf: Map<string, BoardEntry[]> = new Map<string, BoardEntry[]>();
-    for (const entry of report?.entries ?? []) {
-      const list: BoardEntry[] = entriesOf.get(entry.beneficiaryId) ?? [];
-      list.push(entry);
-      entriesOf.set(entry.beneficiaryId, list);
-    }
+    const owners: Owners = ownersOf(linksOf(read));
+    const entries: BoardEntry[] = needsBoard([...records.values()])
+      ? boardEntriesFor(ledger, ledger.openObligations(), null, now, lazyIndex(ledger)).entries
+      : [];
+    const entriesOf: Map<string, BoardEntry[]> = grouped(entries, (entry: BoardEntry): string => entry.beneficiaryId);
     const summaries: (SupplierSummary & { mustCaution: boolean })[] = [...records.values()].map(
       (facts: RecordFacts) => summaryOf(ledger, facts, entriesOf.get(facts.id) ?? [], owners, now),
     );
@@ -1894,7 +2013,8 @@ export function supplierList(ledger: Ledger, now: number = Date.now()): Supplier
 }
 
 // One supplier record, or null when the key breaks the pattern or nothing in the
-// ledger names it.
+// ledger names it. The board's entries are built for its own invoices and pay
+// rows only.
 export function supplierDetail(ledger: Ledger, key: string, now: number = Date.now()): SupplierDetail | null {
   if (!SUPPLIER_KEY_PATTERN.test(key)) {
     return null;
@@ -1905,24 +2025,33 @@ export function supplierDetail(ledger: Ledger, key: string, now: number = Date.n
     if (facts === undefined) {
       return null;
     }
-    const owners: Owners = ownersOf(ledger.supplierLinks());
+    // The links leave out this record's approvals, read already.
+    const links: SupplierLinks = ledger.supplierLinks(key);
+    const owners: Owners = ownersOf({
+      ...links,
+      keys: [
+        ...links.keys,
+        ...facts.approvals.flatMap((approval: SupplierApproval): SupplierLinks["keys"] =>
+          approval.accountKey === null ? [] : [{ beneficiaryId: key, key: approval.accountKey }],
+        ),
+      ],
+    });
     const accounts: Accounts = accountsOf(ledger, facts, owners);
-    const report: BoardReport | null = needsBoard([facts]) ? boardReport(ledger, NO_FILTERS, now, key) : null;
-    const entries: Map<string, BoardEntry> = new Map<string, BoardEntry>(
-      (report?.entries ?? [])
-        .filter((entry: BoardEntry): boolean => entry.kind === "invoice")
-        .map((entry: BoardEntry): [string, BoardEntry] => [entry.invoiceId, entry]),
+    const indexOf: () => InvoiceIndex = lazyIndex(ledger);
+    const board: { entries: BoardEntry[]; totals: BoardTotal[] } | null = needsBoard([facts])
+      ? boardEntriesFor(ledger, read.obligations, key, now, indexOf)
+      : null;
+    const entries: Map<string, BoardEntry> = entriesByInvoice(board?.entries ?? []);
+    const attemptsBy: Map<string, SupplierPayment[]> = grouped(
+      read.attempts,
+      (attempt: SupplierPayment): string => attempt.invoiceId,
     );
-    const attemptsBy: Map<string, SupplierAttempt[]> = new Map<string, SupplierAttempt[]>();
-    for (const attempt of facts.attempts) {
-      attemptsBy.set(attempt.invoiceId, [...(attemptsBy.get(attempt.invoiceId) ?? []), attempt]);
-    }
-    const payoutsBy: Map<string, SupplierPayout[]> = new Map<string, SupplierPayout[]>();
-    for (const payout of facts.payouts) {
-      payoutsBy.set(payout.invoiceId, [...(payoutsBy.get(payout.invoiceId) ?? []), payout]);
-    }
-    const openOnes: Obligation[] = facts.obligations.filter(open);
-    const closed: Obligation[] = facts.obligations.filter((obligation: Obligation): boolean => !open(obligation));
+    const payoutsBy: Map<string, SupplierPayoutView[]> = grouped(
+      read.payouts,
+      (payout: SupplierPayoutView): string => payout.invoiceId,
+    );
+    const openOnes: Obligation[] = read.obligations.filter(open);
+    const closed: Obligation[] = read.obligations.filter((obligation: Obligation): boolean => !open(obligation));
     const listed: Obligation[] = [...openOnes, ...closed.slice(0, CLOSED_LISTED)];
     const run: SupplierRunRow | undefined = facts.runRows.find(
       (row: SupplierRunRow): boolean => waitingPayRow(row) && row.supplier !== null,
@@ -1936,8 +2065,8 @@ export function supplierDetail(ledger: Ledger, key: string, now: number = Date.n
       }
     }
     const sameName: Obligation[] = [...sameNameIds].flatMap((id: string): Obligation[] => ledger.obligationsFor(id));
-    const phone: Obligation | undefined = facts.obligations.find(
-      (obligation: Obligation): boolean => (obligation.supplierPhone ?? "").trim() !== "",
+    const phone: SupplierObligation | undefined = facts.obligations.find(
+      (obligation: SupplierObligation): boolean => (obligation.supplierPhone ?? "").trim() !== "",
     );
     const stored: Accounts["stored"] = accounts.stored;
     return {
@@ -1947,10 +2076,12 @@ export function supplierDetail(ledger: Ledger, key: string, now: number = Date.n
       names: names.filter((each: string): boolean => supplierNameKey(each) !== supplierNameKey(name)),
       phoneLast4: lastFourDigits(phone?.supplierPhone ?? null),
       domains: domainsOf(facts),
-      currencies: [...new Set<string>(facts.obligations.map((obligation: Obligation): string => obligation.currency))]
+      currencies: [...new Set<string>(facts.obligations.map((obligation: SupplierObligation): string => obligation.currency))]
         .filter((currency: string): boolean => CURRENCY.test(currency))
         .sort(),
-      methods: [...new Set<string>(facts.obligations.map((obligation: Obligation): string => obligation.transferMethod))]
+      methods: [
+        ...new Set<string>(facts.obligations.map((obligation: SupplierObligation): string => obligation.transferMethod)),
+      ]
         .filter((method: string): boolean => METHOD.test(method))
         .sort(),
       related: relatedOf(facts, accounts, owners, names),
@@ -1965,7 +2096,7 @@ export function supplierDetail(ledger: Ledger, key: string, now: number = Date.n
               account: accounts.labelOf.get(stored.key) ?? "",
             },
       cautions: cautionsOf(ledger, facts, accounts, owners, now),
-      money: report?.totals ?? [],
+      money: board?.totals ?? [],
       accounts: accounts.views,
       invoices: listed.map(
         (obligation: Obligation): InvoiceView =>
@@ -1984,10 +2115,10 @@ export function supplierDetail(ledger: Ledger, key: string, now: number = Date.n
         rejected: closed.filter((obligation: Obligation): boolean => obligation.state === "rejected").length,
       },
       bankChanges: bankChangesOf(ledger, facts, accounts),
-      duplicates: duplicatesOf(facts, sameName),
+      duplicates: duplicatesOf(read.obligations, sameName),
       outages: outagesOf(ledger, facts),
       runs: runsOf(facts, accounts.labelOf),
-      inbox: inboxOf(ledger, facts),
+      inbox: inboxOf(ledger, facts, indexOf),
       drafts: draftsOf(facts),
     };
   });
@@ -2006,7 +2137,7 @@ export function resolveSupplier(ledger: Ledger, word: string): Resolved | null {
   if (!SUPPLIER_KEY_PATTERN.test(word)) {
     return null;
   }
-  if (ledger.supplierLinks().names.some((entry: { beneficiaryId: string }): boolean => entry.beneficiaryId === word)) {
+  if (ledger.supplierNamed(word)) {
     return { key: word, viaInvoice: null };
   }
   const obligation: Obligation | undefined = ledger.obligation(word);

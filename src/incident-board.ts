@@ -705,14 +705,15 @@ function add(map: Map<string, CashLine[]>, key: string, line: CashLine): void {
 }
 
 // How many waiting uploads name each invoice, split as the inbox's match card
-// offers them. The invoices are indexed once for every upload.
-function inboxNames(ledger: Ledger): Map<string, InboxNames> {
+// offers them. The invoices are indexed once for every upload, and only when an
+// upload waits.
+function inboxNames(ledger: Ledger, indexOf: () => InvoiceIndex): Map<string, InboxNames> {
   const names: Map<string, InboxNames> = new Map<string, InboxNames>();
   const waiting: Upload[] = ledger.uploads(0).filter((upload: Upload): boolean => upload.state === "waiting");
   if (waiting.length === 0) {
     return names;
   }
-  const index: InvoiceIndex = invoiceIndex(ledger);
+  const index: InvoiceIndex = indexOf();
   for (const upload of waiting) {
     const match: Match = candidatesFor(ledger, upload, index);
     for (const candidate of match.candidates) {
@@ -748,12 +749,27 @@ function compare(a: Ranked, b: Ranked): number {
   );
 }
 
-// Every entry on the board, ranked, and how many invoices the ledger holds.
-function rankedBoard(ledger: Ledger, now: number): Board {
+// Some invoices and some of the waiting run's pay rows, for a caller that needs
+// only their entries: closed invoices among them are skipped, as the board skips
+// them, and a null beneficiaryId keeps every pay row.
+interface Scope {
+  obligations: Obligation[];
+  beneficiaryId: string | null;
+}
+
+// Every entry on the board, ranked, and how many invoices the ledger holds. With
+// a scope, only its entries, each as the whole board has it, and the number of
+// invoices in the scope.
+function rankedBoard(
+  ledger: Ledger,
+  now: number,
+  scope: Scope | null = null,
+  indexOf: () => InvoiceIndex = (): InvoiceIndex => invoiceIndex(ledger),
+): Board {
   const run: Run | undefined = ledger.waitingRun();
   const byInvoice: Map<string, CashLine[]> = new Map<string, CashLine[]>();
   const byRow: Map<string, CashLine[]> = new Map<string, CashLine[]>();
-  for (const line of cashLines(ledger, now, { openOnly: true })) {
+  for (const line of cashLines(ledger, now, { openOnly: true, obligations: scope?.obligations })) {
     if (AT_RISK.has(line.kind)) {
       add(byInvoice, line.invoiceId, line);
     }
@@ -764,13 +780,13 @@ function rankedBoard(ledger: Ledger, now: number): Board {
     add(run !== undefined && line.runId === run.id ? byRow : byInvoice, line.invoiceId, line);
   }
 
-  const inbox: Map<string, InboxNames> = inboxNames(ledger);
+  const inbox: Map<string, InboxNames> = inboxNames(ledger, indexOf);
   const outages: Outage[] = ledger
     .outages()
     .filter((outage: Outage): boolean => outage.state === "active")
     .reverse();
   const held: Set<string> = outageHeld(ledger, outages);
-  const obligations: Obligation[] = ledger.obligations();
+  const obligations: Obligation[] = scope?.obligations ?? ledger.obligations();
   const ranked: Ranked[] = [];
   for (const obligation of obligations) {
     if (obligation.state === "settled" || obligation.state === "rejected") {
@@ -800,8 +816,12 @@ function rankedBoard(ledger: Ledger, now: number): Board {
             `Pay run ${run.id} is approved, and outage ${mark.id} on ${railName(mark)} holds its release. PayOnce releases the whole run once a person ends the outage, if the approval still counts`,
           )
         : runSituation(run, status, ledger.latestRunApproval(run.id));
+    // The run's outage and status are the whole run's, so a scope picks its rows
+    // only now.
     for (const row of rows) {
-      ranked.push(runRowEntry(run, found, row, byRow.get(row.invoiceId ?? "") ?? [], mark));
+      if (scope === null || scope.beneficiaryId === null || row.beneficiaryId === scope.beneficiaryId) {
+        ranked.push(runRowEntry(run, found, row, byRow.get(row.invoiceId ?? "") ?? [], mark));
+      }
     }
   }
   return { ranked: ranked.sort(compare), invoices: obligations.length, outages };
@@ -974,22 +994,34 @@ export function boardGroups(ledger: Ledger, now: number = Date.now()): Map<strin
   return groups;
 }
 
+// The board's entries for these invoices and the waiting run's pay rows to
+// beneficiaryId (every pay row when it is null), ranked, with their totals, each
+// as the whole board with no filter has it, without building an entry for any
+// other invoice. The supplier view takes its money and groups from it. indexOf
+// gives the index of every invoice for the waiting uploads, read only when one
+// waits, so a caller that needs it too reads it once.
+export function boardEntriesFor(
+  ledger: Ledger,
+  obligations: Obligation[],
+  beneficiaryId: string | null,
+  now: number,
+  indexOf: () => InvoiceIndex,
+): { entries: BoardEntry[]; totals: BoardTotal[] } {
+  const { ranked }: Board = rankedBoard(ledger, now, { obligations, beneficiaryId }, indexOf);
+  return { entries: ranked.map((item: Ranked): BoardEntry => item.entry), totals: totalsOf(ranked, null) };
+}
+
 // The board as the page and pnpm board show it, with the filters applied.
-// beneficiaryId, when given, keeps only the entries that pay that beneficiary
-// record, as the supplier view shows them. It is applied with the currency and
-// origin filters and is not echoed in filters.
 export function boardReport(
   ledger: Ledger,
   filters: BoardFilters,
   now: number = Date.now(),
-  beneficiaryId: string | null = null,
 ): BoardReport {
   const { ranked, invoices, outages }: Board = rankedBoard(ledger, now);
   const others: Ranked[] = ranked.filter(
     (item: Ranked): boolean =>
       (filters.currency === null || inCurrency(item.entry, filters.currency)) &&
-      (filters.origin === null || item.entry.origin === filters.origin) &&
-      (beneficiaryId === null || item.entry.beneficiaryId === beneficiaryId),
+      (filters.origin === null || item.entry.origin === filters.origin),
   );
   const shown: Ranked[] = others.filter(
     (item: Ranked): boolean => filters.group === null || item.entry.group === filters.group,

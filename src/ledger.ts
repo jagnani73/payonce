@@ -1186,13 +1186,19 @@ function toObligation(row: ObligationRow): Obligation {
 // an attempt in hand.
 // A transfer under the attempt's request id that does not match its invoice
 // counts too, while the bank has not failed it.
-export function liveAtBank(attempt: Attempt): boolean {
+export function liveAtBank(attempt: LiveTested): boolean {
   return ownLive(attempt) || mismatchedLive(attempt);
 }
 
+// What liveAtBank reads of an attempt.
+export type LiveTested = Pick<
+  Attempt,
+  "state" | "transferId" | "bankStatus" | "foundLateAt" | "mismatchedTransferId" | "mismatchedStatus"
+>;
+
 // The attempt's own payment: not failed, or a transfer the ledger keeps failed
 // that the bank has live.
-function ownLive(attempt: Attempt): boolean {
+function ownLive(attempt: LiveTested): boolean {
   if (attempt.state !== "failed") {
     return true;
   }
@@ -1204,7 +1210,7 @@ function ownLive(attempt: Attempt): boolean {
 
 // A transfer under the attempt's request id that does not match its invoice, which
 // the bank has not failed.
-export function mismatchedLive(attempt: Attempt): boolean {
+export function mismatchedLive(attempt: LiveTested): boolean {
   return (
     attempt.mismatchedTransferId !== null &&
     (attempt.mismatchedStatus === null || !failedStatus(attempt.mismatchedStatus))
@@ -2473,6 +2479,15 @@ export class Ledger {
       .prepare("SELECT * FROM obligations ORDER BY rowid DESC")
       .all() as unknown as ObligationRow[];
     return rows.map(toObligation);
+  }
+
+  // The invoices that are not closed, newest first: the ones the board lists.
+  openObligations(): Obligation[] {
+    return (
+      this.db
+        .prepare("SELECT * FROM obligations WHERE state IN ('open', 'escalated') ORDER BY rowid DESC")
+        .all() as unknown as ObligationRow[]
+    ).map(toObligation);
   }
 
   // The invoices that pay one beneficiary record, newest first.
@@ -4235,50 +4250,149 @@ export class Ledger {
 
   // ---------- supplier view ----------
 
-  // What the supplier view reads for one beneficiary record, or for every record
-  // when beneficiaryId is null: only the columns it shows or tests, never an
-  // email's subject or body, a draft's text or facts, a callback's notes or typed
-  // details, or a timeline line. Each query runs once, filtered by the record
-  // when one is given. It only reads, so it runs inside readSnapshot.
-  supplierRead(beneficiaryId: string | null): SupplierRead {
+  // What the supplier list reads for every record: only the columns its cautions
+  // and counts use from invoices, attempts and payouts, and no drafts or outage
+  // holds, which only a record's detail shows. Never an email's subject or body,
+  // a callback's notes or typed details, or a timeline line. Each query runs once,
+  // and it only reads, so it runs inside readSnapshot.
+  supplierListRead(): SupplierListRead {
+    const obligations: SupplierObligation[] = (
+      this.db
+        .prepare(
+          `SELECT invoice_id, beneficiary_id, supplier, state, escalation_reason, supplier_domain,
+                  supplier_phone, duplicate_of, currency, transfer_method
+             FROM obligations ORDER BY rowid DESC`,
+        )
+        .all() as unknown as SupplierObligationRow[]
+    ).map(toSupplierObligation);
+    const attempts: SupplierAttempt[] = (
+      this.db
+        .prepare(
+          `SELECT ${SUPPLIER_ATTEMPT_COLUMNS} FROM attempts
+             JOIN obligations ON obligations.invoice_id = attempts.invoice_id ORDER BY attempts.rowid`,
+        )
+        .all() as unknown as SupplierAttemptRow[]
+    ).map(toSupplierAttempt);
+    const payouts: SupplierPayout[] = (
+      this.db
+        .prepare(
+          `SELECT ${SUPPLIER_PAYOUT_COLUMNS} FROM outside_payouts
+             JOIN obligations ON obligations.invoice_id = outside_payouts.invoice_id
+            ORDER BY outside_payouts.rowid`,
+        )
+        .all() as unknown as SupplierPayoutRow[]
+    ).map(toSupplierPayout);
+    return { obligations, attempts, payouts, ...this.supplierShared(null), drafts: [], holds: [] };
+  }
+
+  // What a record's detail reads of that one beneficiary record: what the list
+  // reads, with the invoices in full and what the page shows of each payment, its
+  // drafts by template and state, and its outage holds. Never a draft's text or
+  // facts, nor anything supplierListRead leaves out.
+  supplierRead(beneficiaryId: string): SupplierRead {
+    const obligations: Obligation[] = this.obligationsFor(beneficiaryId);
+    const attempts: SupplierPayment[] = (
+      this.db
+        .prepare(
+          `SELECT ${SUPPLIER_ATTEMPT_COLUMNS}, attempts.kind, attempts.reference, attempts.amount_minor,
+                  attempts.currency, attempts.fee_minor, attempts.fee_currency,
+                  attempts.rate_mismatch IS NOT NULL AS rate_mismatch, attempts.mismatched_reference,
+                  attempts.arrival
+             FROM attempts JOIN obligations ON obligations.invoice_id = attempts.invoice_id
+            WHERE obligations.beneficiary_id = ? ORDER BY attempts.rowid`,
+        )
+        .all(beneficiaryId) as unknown as SupplierPaymentRow[]
+    ).map(
+      (row: SupplierPaymentRow): SupplierPayment => ({
+        ...toSupplierAttempt(row),
+        kind: row.kind,
+        reference: row.reference,
+        amountMinor: row.amount_minor,
+        currency: row.currency,
+        feeMinor: row.fee_minor,
+        feeCurrency: row.fee_currency,
+        rateMismatch: row.rate_mismatch === 1,
+        mismatchedReference: row.mismatched_reference ?? null,
+        arrival: row.arrival ?? null,
+      }),
+    );
+    const payouts: SupplierPayoutView[] = (
+      this.db
+        .prepare(
+          `SELECT ${SUPPLIER_PAYOUT_COLUMNS}, outside_payouts.transfer_id, outside_payouts.reference,
+                  outside_payouts.amount_minor, outside_payouts.currency, outside_payouts.fee_minor,
+                  outside_payouts.fee_currency
+             FROM outside_payouts JOIN obligations ON obligations.invoice_id = outside_payouts.invoice_id
+            WHERE obligations.beneficiary_id = ? ORDER BY outside_payouts.rowid`,
+        )
+        .all(beneficiaryId) as unknown as (SupplierPayoutRow & OutsideRow)[]
+    ).map(
+      (row: SupplierPayoutRow & OutsideRow): SupplierPayoutView => ({
+        ...toOutsidePayout(row),
+        ...toSupplierPayout(row),
+      }),
+    );
+    const drafts: SupplierDraft[] = (
+      this.db
+        .prepare(
+          `SELECT outbox.id, outbox.invoice_id, outbox.template, outbox.audience, outbox.state,
+                  outbox.created_by, outbox.created_at, outbox.copied_by, outbox.copied_at,
+                  outbox.sent_by, outbox.sent_at, outbox.dismissed_by, outbox.dismissed_at
+             FROM outbox JOIN obligations ON obligations.invoice_id = outbox.invoice_id
+            WHERE obligations.beneficiary_id = ? ORDER BY outbox.id`,
+        )
+        .all(beneficiaryId) as unknown as SupplierDraftRow[]
+    ).map(
+      (row: SupplierDraftRow): SupplierDraft => ({
+        id: row.id,
+        invoiceId: row.invoice_id,
+        template: row.template,
+        audience: row.audience,
+        state: row.state,
+        createdBy: row.created_by,
+        createdAt: row.created_at,
+        copiedBy: row.copied_by,
+        copiedAt: row.copied_at,
+        sentBy: row.sent_by,
+        sentAt: row.sent_at,
+        dismissedBy: row.dismissed_by,
+        dismissedAt: row.dismissed_at,
+      }),
+    );
+    const holds: SupplierHold[] = (
+      this.db
+        .prepare(
+          `SELECT outage_holds.*, outages.currency, outages.method, outages.state AS outage_state, outages.ended_at
+             FROM outage_holds JOIN outages ON outages.id = outage_holds.outage_id
+            WHERE outage_holds.invoice_id IN (SELECT invoice_id FROM obligations WHERE beneficiary_id = ?)
+               OR outage_holds.run_id IN (SELECT run_id FROM run_rows WHERE beneficiary_id = ?)
+            ORDER BY outage_holds.rowid`,
+        )
+        .all(beneficiaryId, beneficiaryId) as unknown as SupplierHoldRow[]
+    ).map(
+      (row: SupplierHoldRow): SupplierHold => ({
+        outageId: row.outage_id,
+        invoiceId: row.invoice_id,
+        runId: row.run_id,
+        what: row.what,
+        heldAt: row.held_at,
+        currency: row.currency,
+        method: row.method,
+        outageState: row.outage_state,
+        endedAt: row.ended_at,
+      }),
+    );
+    return { obligations, attempts, payouts, ...this.supplierShared(beneficiaryId), drafts, holds };
+  }
+
+  // What the list and a detail both read: approvals with only the account their
+  // terms name, callbacks, emails' addresses, findings, rail failures and pay run
+  // rows, for one record, or for every record when beneficiaryId is null.
+  private supplierShared(beneficiaryId: string | null): SupplierShared {
     const one: boolean = beneficiaryId !== null;
     const args: string[] = beneficiaryId === null ? [] : [beneficiaryId];
     const where = (column: string): string => (one ? `WHERE ${column} = ?` : "");
-    const all = <T>(sql: string, params: string[] = args): T[] =>
-      this.db.prepare(sql).all(...params) as unknown as T[];
-    const obligations: Obligation[] = all<ObligationRow>(
-      `SELECT * FROM obligations ${where("beneficiary_id")} ORDER BY rowid DESC`,
-    ).map(toObligation);
-    const attempts: SupplierAttempt[] = all<AttemptRow & SentRow & { beneficiary_id: string; misdirected: number }>(
-      `SELECT attempts.*, obligations.beneficiary_id FROM attempts
-         JOIN obligations ON obligations.invoice_id = attempts.invoice_id
-         ${where("obligations.beneficiary_id")} ORDER BY attempts.rowid`,
-    ).map(
-      (row: AttemptRow & SentRow & { beneficiary_id: string; misdirected: number }): SupplierAttempt => ({
-        ...toAttempt(row),
-        beneficiaryId: row.beneficiary_id,
-        misdirected: row.misdirected === 1,
-        sentKey: row.sent_key ?? null,
-        sentEnding: row.sent_ending ?? null,
-      }),
-    );
-    const payouts: SupplierPayout[] = all<PayoutRow>(
-      `SELECT outside_payouts.transfer_id, outside_payouts.reference, outside_payouts.state,
-              outside_payouts.amount_minor, outside_payouts.currency, outside_payouts.fee_minor,
-              outside_payouts.fee_currency, outside_payouts.invoice_id, outside_payouts.found_at,
-              outside_payouts.sent_key, outside_payouts.sent_ending, obligations.beneficiary_id
-         FROM outside_payouts JOIN obligations ON obligations.invoice_id = outside_payouts.invoice_id
-         ${where("obligations.beneficiary_id")} ORDER BY outside_payouts.rowid`,
-    ).map(
-      (row: PayoutRow): SupplierPayout => ({
-        ...toOutsidePayout(row),
-        invoiceId: row.invoice_id,
-        beneficiaryId: row.beneficiary_id,
-        foundAt: row.found_at,
-        sentKey: row.sent_key ?? null,
-        sentEnding: row.sent_ending ?? null,
-      }),
-    );
+    const all = <T>(sql: string): T[] => this.db.prepare(sql).all(...args) as unknown as T[];
     const approvals: SupplierApproval[] = all<SupplierApprovalRow>(
       `SELECT approvals.id, approvals.invoice_id, obligations.beneficiary_id, approvals.state,
               approvals.requested_at,
@@ -4335,53 +4449,6 @@ export class Ledger {
         findings: row.findings,
       }),
     );
-    const drafts: SupplierDraft[] = all<SupplierDraftRow>(
-      `SELECT outbox.id, outbox.invoice_id, outbox.template, outbox.audience, outbox.state,
-              outbox.created_by, outbox.created_at, outbox.copied_by, outbox.copied_at,
-              outbox.sent_by, outbox.sent_at, outbox.dismissed_by, outbox.dismissed_at
-         FROM outbox JOIN obligations ON obligations.invoice_id = outbox.invoice_id
-         ${where("obligations.beneficiary_id")} ORDER BY outbox.id`,
-    ).map(
-      (row: SupplierDraftRow): SupplierDraft => ({
-        id: row.id,
-        invoiceId: row.invoice_id,
-        template: row.template,
-        audience: row.audience,
-        state: row.state,
-        createdBy: row.created_by,
-        createdAt: row.created_at,
-        copiedBy: row.copied_by,
-        copiedAt: row.copied_at,
-        sentBy: row.sent_by,
-        sentAt: row.sent_at,
-        dismissedBy: row.dismissed_by,
-        dismissedAt: row.dismissed_at,
-      }),
-    );
-    const holds: SupplierHold[] = all<SupplierHoldRow>(
-      `SELECT outage_holds.*, outages.currency, outages.method, outages.state AS outage_state, outages.ended_at
-         FROM outage_holds JOIN outages ON outages.id = outage_holds.outage_id
-         ${
-           one
-             ? `WHERE outage_holds.invoice_id IN (SELECT invoice_id FROM obligations WHERE beneficiary_id = ?)
-                   OR outage_holds.run_id IN (SELECT run_id FROM run_rows WHERE beneficiary_id = ?)`
-             : ""
-         }
-         ORDER BY outage_holds.rowid`,
-      [...args, ...args],
-    ).map(
-      (row: SupplierHoldRow): SupplierHold => ({
-        outageId: row.outage_id,
-        invoiceId: row.invoice_id,
-        runId: row.run_id,
-        what: row.what,
-        heldAt: row.held_at,
-        currency: row.currency,
-        method: row.method,
-        outageState: row.outage_state,
-        endedAt: row.ended_at,
-      }),
-    );
     const failures: SupplierFailure[] = all<RailFailureRow & { beneficiary_id: string }>(
       `SELECT rail_failures.*, obligations.beneficiary_id FROM rail_failures
          JOIN obligations ON obligations.invoice_id = rail_failures.invoice_id
@@ -4421,14 +4488,33 @@ export class Ledger {
         skipReasons: row.skip_reasons ?? 0,
       }),
     );
-    return { obligations, attempts, payouts, approvals, callbacks, emails, findings, drafts, holds, failures, runRows };
+    return { approvals, callbacks, emails, findings, failures, runRows };
   }
 
-  // Every name and account the ledger keeps for each beneficiary record, for the
-  // supplier view's links between records that share a name or an account. The
-  // pay rows of the waiting run count, since no invoice holds them yet.
-  supplierLinks(): SupplierLinks {
-    const all = <T>(sql: string): T[] => this.db.prepare(sql).all() as unknown as T[];
+  // Whether an invoice, or a pay row of the waiting run, names this beneficiary
+  // record, which is when the supplier view has a record for it.
+  supplierNamed(beneficiaryId: string): boolean {
+    return (
+      this.db
+        .prepare(
+          `SELECT 1 FROM obligations WHERE beneficiary_id = ?
+            UNION ALL
+           SELECT 1 FROM run_rows JOIN runs ON runs.id = run_rows.run_id
+            WHERE runs.state = 'waiting' AND run_rows.action = 'pay' AND run_rows.state = 'waiting'
+              AND run_rows.beneficiary_id = ?
+            LIMIT 1`,
+        )
+        .get(beneficiaryId, beneficiaryId) !== undefined
+    );
+  }
+
+  // Every name and account the ledger keeps for each beneficiary record, for one
+  // record's links to records that share a name or an account. The pay rows of
+  // the waiting run count, since no invoice holds them yet. The accounts asked to
+  // approve leave out except's own approvals, which its detail has read already,
+  // so no terms JSON is parsed twice. The list builds the same from its own read.
+  supplierLinks(except: string): SupplierLinks {
+    const all = <T>(sql: string, ...params: string[]): T[] => this.db.prepare(sql).all(...params) as unknown as T[];
     // newest is the newest invoice with the name, and 0 for a waiting run's row.
     const names: { beneficiaryId: string; name: string; newest: number }[] = all<{
       beneficiary_id: string;
@@ -4460,10 +4546,12 @@ export class Ledger {
         UNION
        SELECT obligations.beneficiary_id, json_extract(approvals.terms, '$.accountKey') FROM approvals
          JOIN obligations ON obligations.invoice_id = approvals.invoice_id
-        WHERE json_valid(approvals.terms) AND json_type(approvals.terms, '$.accountKey') = 'text'
+        WHERE obligations.beneficiary_id <> ?
+          AND json_valid(approvals.terms) AND json_type(approvals.terms, '$.accountKey') = 'text'
         UNION
        SELECT beneficiary_id, account_key FROM run_rows
         WHERE action = 'pay' AND account_key IS NOT NULL AND beneficiary_id IS NOT NULL`,
+      except,
     ).map((row: { beneficiary_id: string; key: string }) => ({ beneficiaryId: row.beneficiary_id, key: row.key }));
     const callbacks: { beneficiaryId: string; appliedKey: string | null; oldDetails: string }[] = all<{
       beneficiary_id: string;
@@ -5690,15 +5778,112 @@ function toAlert(row: AlertRow): Alert {
 
 // ---------- supplier view ----------
 
-interface SentRow {
+interface SupplierObligationRow {
+  invoice_id: string;
+  beneficiary_id: string;
+  supplier: string;
+  state: ObligationState;
+  escalation_reason: string;
+  supplier_domain: string;
+  supplier_phone: string | null;
+  duplicate_of: string | null;
+  currency: string;
+  transfer_method: TransferMethod;
+}
+
+function toSupplierObligation(row: SupplierObligationRow): SupplierObligation {
+  return {
+    invoiceId: row.invoice_id,
+    beneficiaryId: row.beneficiary_id,
+    supplier: row.supplier,
+    state: row.state,
+    escalationReason: row.escalation_reason,
+    supplierDomain: row.supplier_domain,
+    supplierPhone: row.supplier_phone,
+    duplicateOf: row.duplicate_of === null ? [] : stringsOf(row.duplicate_of),
+    currency: row.currency,
+    transferMethod: row.transfer_method,
+  };
+}
+
+// What the list and a detail read of every attempt.
+const SUPPLIER_ATTEMPT_COLUMNS: string = `attempts.invoice_id, obligations.beneficiary_id, attempts.transfer_id,
+  attempts.state, attempts.failure_code, attempts.account_key, attempts.sent_key, attempts.sent_ending,
+  attempts.misdirected, attempts.bank_created_at, attempts.opened_at, attempts.bank_status,
+  attempts.found_late_at, attempts.mismatched_transfer_id, attempts.mismatched_status`;
+
+interface SupplierAttemptRow {
+  invoice_id: string;
+  beneficiary_id: string;
+  transfer_id: string | null;
+  state: AttemptState;
+  failure_code: string | null;
+  account_key: string | null;
+  sent_key: string | null;
+  sent_ending: string | null;
+  misdirected: number;
+  bank_created_at: string | null;
+  opened_at: string | null;
+  bank_status: string | null;
+  found_late_at: string | null;
+  mismatched_transfer_id: string | null;
+  mismatched_status: string | null;
+}
+
+function toSupplierAttempt(row: SupplierAttemptRow): SupplierAttempt {
+  return {
+    invoiceId: row.invoice_id,
+    beneficiaryId: row.beneficiary_id,
+    transferId: row.transfer_id,
+    state: row.state,
+    failureCode: row.failure_code,
+    accountKey: row.account_key ?? null,
+    sentKey: row.sent_key ?? null,
+    sentEnding: row.sent_ending ?? null,
+    misdirected: row.misdirected === 1,
+    bankCreatedAt: row.bank_created_at ?? null,
+    openedAt: row.opened_at ?? null,
+    bankStatus: row.bank_status ?? null,
+    foundLateAt: row.found_late_at ?? null,
+    mismatchedTransferId: row.mismatched_transfer_id ?? null,
+    mismatchedStatus: row.mismatched_status ?? null,
+  };
+}
+
+interface SupplierPaymentRow extends SupplierAttemptRow {
+  kind: AttemptKind;
+  reference: string | null;
+  amount_minor: number | null;
+  currency: string | null;
+  fee_minor: number | null;
+  fee_currency: string | null;
+  rate_mismatch: number;
+  mismatched_reference: string | null;
+  arrival: string | null;
+}
+
+// What the list and a detail read of every payout sent outside PayOnce.
+const SUPPLIER_PAYOUT_COLUMNS: string = `outside_payouts.invoice_id, obligations.beneficiary_id,
+  outside_payouts.state, outside_payouts.found_at, outside_payouts.sent_key, outside_payouts.sent_ending`;
+
+interface SupplierPayoutRow {
+  invoice_id: string;
+  beneficiary_id: string;
+  state: PayoutState;
+  found_at: string;
   sent_key: string | null;
   sent_ending: string | null;
 }
 
-interface PayoutRow extends OutsideRow, SentRow {
-  invoice_id: string;
-  beneficiary_id: string;
-  found_at: string;
+function toSupplierPayout(row: SupplierPayoutRow): SupplierPayout {
+  return {
+    invoiceId: row.invoice_id,
+    beneficiaryId: row.beneficiary_id,
+    state: row.state,
+    foundAt: row.found_at,
+    sentKey: row.sent_key ?? null,
+    sentEnding: row.sent_ending ?? null,
+  };
 }
 
 interface SupplierApprovalRow {
@@ -5762,22 +5947,76 @@ function stringsOf(json: string): string[] {
   }
 }
 
-// An attempt as the supplier view reads it: with its invoice's beneficiary
-// record, whether its transfer went to other details than it was meant for, and
-// where the transfer went as last read.
-export interface SupplierAttempt extends Attempt {
+// An invoice as the supplier list reads it: only what its cautions, counts and
+// names use. A detail reads its record's invoices in full.
+export type SupplierObligation = Pick<
+  Obligation,
+  | "invoiceId"
+  | "beneficiaryId"
+  | "supplier"
+  | "state"
+  | "escalationReason"
+  | "supplierDomain"
+  | "supplierPhone"
+  | "duplicateOf"
+  | "currency"
+  | "transferMethod"
+>;
+
+// An attempt as the supplier view's accounts and cautions read it: with its
+// invoice's beneficiary record, whether its transfer went to other details than
+// it was meant for, where the transfer went as last read, and what liveAtBank
+// tests.
+export interface SupplierAttempt {
+  invoiceId: string;
   beneficiaryId: string;
+  transferId: string | null;
+  state: AttemptState;
+  failureCode: string | null;
+  accountKey: string | null;
+  sentKey: string | null;
+  sentEnding: string | null;
   misdirected: boolean;
+  bankCreatedAt: string | null;
+  openedAt: string | null;
+  bankStatus: string | null;
+  foundLateAt: string | null;
+  mismatchedTransferId: string | null;
+  mismatchedStatus: string | null;
+}
+
+// An attempt as a record's detail shows it. rateMismatch says only whether the
+// rate did not match, and arrival is the route advisory's JSON as kept, read only
+// for the payment that paid a listed invoice.
+export interface SupplierPayment extends SupplierAttempt {
+  kind: AttemptKind;
+  reference: string | null;
+  amountMinor: number | null;
+  currency: string | null;
+  feeMinor: number | null;
+  feeCurrency: string | null;
+  rateMismatch: boolean;
+  mismatchedReference: string | null;
+  arrival: string | null;
+}
+
+export interface SupplierPayout {
+  invoiceId: string;
+  beneficiaryId: string;
+  state: PayoutState;
+  foundAt: string;
   sentKey: string | null;
   sentEnding: string | null;
 }
 
-export interface SupplierPayout extends OutsidePayout {
-  invoiceId: string;
-  beneficiaryId: string;
-  foundAt: string;
-  sentKey: string | null;
-  sentEnding: string | null;
+// A payout as a record's detail shows it.
+export interface SupplierPayoutView extends SupplierPayout {
+  transferId: string;
+  reference: string;
+  amountMinor: number | null;
+  currency: string | null;
+  feeMinor: number | null;
+  feeCurrency: string | null;
 }
 
 // An approval request with the account its terms name, never the terms.
@@ -5868,20 +6107,30 @@ export interface SupplierRunRow {
   skipReasons: number;
 }
 
-export interface SupplierRead {
-  // Newest first.
-  obligations: Obligation[];
-  attempts: SupplierAttempt[];
-  payouts: SupplierPayout[];
+interface SupplierShared {
   approvals: SupplierApproval[];
   callbacks: SupplierCallback[];
   emails: SupplierEmailFacts[];
   findings: SupplierFindings[];
-  drafts: SupplierDraft[];
-  holds: SupplierHold[];
   failures: SupplierFailure[];
   // Newest run first, in file order within a run.
   runRows: SupplierRunRow[];
+}
+
+export interface SupplierListRead extends SupplierShared {
+  // Newest first.
+  obligations: SupplierObligation[];
+  attempts: SupplierAttempt[];
+  payouts: SupplierPayout[];
+  // Empty: only a detail reads them.
+  drafts: SupplierDraft[];
+  holds: SupplierHold[];
+}
+
+export interface SupplierRead extends SupplierListRead {
+  obligations: Obligation[];
+  attempts: SupplierPayment[];
+  payouts: SupplierPayoutView[];
 }
 
 export interface SupplierLinks {
