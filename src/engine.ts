@@ -1585,10 +1585,12 @@ export const ACCOUNT_CHANGED_REASON: string =
 
 // The record no longer holds the account a pending payment was decided or
 // approved for, so it is not sent again. Restoring those details in Airwallex
-// lets the next look send it. Once it is marked failed, the invoice is with a
-// person like any other whose payment failed: held before paying for an original,
-// or the policy's bank-details rule for a replacement.
-function accountChangedCause(engine: Engine, invoiceId: string): NeverSentCause {
+// lets the next look send it. Once it is marked failed, restoring them sends
+// nothing by itself: the invoice is with a person like any other whose payment
+// failed, held before paying for an original, or under the policy's bank-details
+// rule for a replacement, and pays only on an approval. The waiting line says so
+// until the next look, at once, says what the invoice waits on.
+function accountChangedCause(engine: Engine, invoiceId: string, kind: AttemptKind): NeverSentCause {
   const hold = (): NextLook => {
     note(
       engine.ledger,
@@ -1604,7 +1606,16 @@ function accountChangedCause(engine: Engine, invoiceId: string): NeverSentCause 
     then: "a person decides how to pay the invoice, or closes it without paying",
     reason: ACCOUNT_CHANGED_REASON,
     hold,
-    afterFail: (): NextLook => Date.now(),
+    afterFail: (): NextLook => {
+      note(
+        engine.ledger,
+        invoiceId,
+        "approval",
+        `Waiting on a person. The ${kind} was marked failed without being sent, so restoring those details no longer sends it: paying this invoice now takes a person's approval, or a person closes it without paying`,
+        "waiting",
+      );
+      return Date.now();
+    },
   };
 }
 
@@ -3358,7 +3369,7 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
         if (!(error instanceof AccountChangedError)) {
           throw error;
         }
-        return failNeverSent(engine, obligation, attempt, accountChangedCause(engine, invoiceId));
+        return failNeverSent(engine, obligation, attempt, accountChangedCause(engine, invoiceId, attempt.kind));
       }
       // The next look, at once, holds or records it as the ledger now stands.
       if (sent === undefined) {
