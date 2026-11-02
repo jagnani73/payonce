@@ -223,17 +223,21 @@ export function rowFromCells(line: number, columns: string[], cells: string[]): 
       problems.push(problem);
     }
   };
-  // The column is named and the cell is never repeated, so nothing in it reaches a
-  // reason, the timeline or a terminal.
+  // A cell with a line break, over the length cap or with a character the test
+  // refuses reads as empty: the column is named and the cell is never repeated,
+  // so nothing in it reaches a reason, the timeline or a terminal.
   const unsafe: Set<string> = new Set<string>();
   columns.forEach((name: string, index: number): void => {
     const cell: string = cells[index] ?? "";
-    if (/[\r\n]/.test(cell)) {
-      problems.push(`The ${name} cell has a line break in it`);
-    } else if (cell.length > MAX_CELL_LENGTH) {
-      problems.push(`The ${name} cell is longer than ${MAX_CELL_LENGTH} characters`);
-    } else if (UNSAFE_CELL.test(cell)) {
-      problems.push(`The ${name} cell has a control character or a character nothing draws in it`);
+    const problem: string | null = /[\r\n]/.test(cell)
+      ? `The ${name} cell has a line break in it`
+      : cell.length > MAX_CELL_LENGTH
+        ? `The ${name} cell is longer than ${MAX_CELL_LENGTH} characters`
+        : UNSAFE_CELL.test(cell)
+          ? `The ${name} cell has a control character or a character nothing draws in it`
+          : null;
+    if (problem !== null) {
+      problems.push(problem);
       unsafe.add(name);
     }
     if (cell.includes("�")) {
