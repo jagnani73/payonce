@@ -25,10 +25,14 @@ export interface Balance {
 }
 
 // The cash account only. An account with yield or credit balances lists those too,
-// in the same currencies.
+// in the same currencies. An answer that is not a list cannot be read, so it fails
+// as any other unreadable read does.
 async function cashRows(client: AirwallexClient): Promise<BalanceRow[]> {
-  const rows: BalanceRow[] = await client.get<BalanceRow[]>("/api/v1/balances/current");
-  return rows.filter(
+  const rows: unknown = await client.get<unknown>("/api/v1/balances/current");
+  if (!Array.isArray(rows)) {
+    throw new Error("GET /api/v1/balances/current did not answer with a list of balances, so PayOnce could not read them");
+  }
+  return (rows as BalanceRow[]).filter(
     (row: BalanceRow): boolean =>
       row.account_type === undefined || row.account_type.toLowerCase() === "cash",
   );
