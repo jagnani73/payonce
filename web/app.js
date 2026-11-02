@@ -6968,14 +6968,18 @@ function renderReconOpen(report) {
     const unlisted = (report.byKind ?? []).filter((entry) => !kinds.includes(entry.kind));
     els.reconOpen.replaceChildren(
       h("h2", { id: "recon-open-title" }, total === 0 ? "Nothing needs a person" : `Needs a person: ${total}`),
-      total > open.length &&
-        h(
-          "p",
-          { class: "hint" },
-          `The newest ${open.length} are listed here, and ${total - open.length} more are open.`,
-          unlisted.length > 0 &&
-            ` Not listed yet: ${unlisted.map((entry) => `${entry.label} (${entry.count})`).join(", ")}. Older breaks move up as the listed ones are explained.`,
-        ),
+      // replaceChildren writes false as text, so a hint not shown is left out.
+      ...(total > open.length
+        ? [
+            h(
+              "p",
+              { class: "hint" },
+              `The newest ${open.length} are listed here, and ${total - open.length} more are open.`,
+              unlisted.length > 0 &&
+                ` Not listed yet: ${unlisted.map((entry) => `${entry.label} (${entry.count})`).join(", ")}. Older breaks move up as the listed ones are explained.`,
+            ),
+          ]
+        : []),
       ...(open.length === 0
         ? [h("p", { class: "hint" }, "Every movement the last check read is explained, or still inside its window.")]
         : kinds.map((kind) => {
