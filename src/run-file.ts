@@ -42,6 +42,13 @@ const MAX_FILE_NAME_LENGTH: number = 100;
 // line break inside a cell has its own problem.
 const UNSAFE_CELL: RegExp =
   /[\u0000-\u0009\u000b\u000c\u000e-\u001f\u007f-\u009f\u2028\u2029\p{Cf}\p{Default_Ignorable_Code_Point}\u{e0000}-\u{e007f}]/u;
+// What a name can need that the test refuses: the zero-width non-joiner and joiner
+// (Persian and other scripts, emoji sequences) and the variation selectors U+FE00
+// to U+FE0F (an emoji's form). Only the supplier cell may hold them. Every other
+// cell, and every other format or default-ignorable character, bidi controls
+// included, is refused as before. The name is shown as any other is: printable
+// drops the two joiners, as it drops every format character.
+const NAME_JOINERS: RegExp = /[‌‍︀-️]/gu;
 const UNSAFE_NAME: RegExp =
   /[\u0000-\u001f\u007f-\u009f\u2028\u2029\p{Cf}\p{Default_Ignorable_Code_Point}\u{e0000}-\u{e007f}]/gu;
 
@@ -233,7 +240,7 @@ export function rowFromCells(line: number, columns: string[], cells: string[]): 
       ? `The ${name} cell has a line break in it`
       : cell.length > MAX_CELL_LENGTH
         ? `The ${name} cell is longer than ${MAX_CELL_LENGTH} characters`
-        : UNSAFE_CELL.test(cell)
+        : UNSAFE_CELL.test(name === "supplier" ? cell.replace(NAME_JOINERS, "") : cell)
           ? `The ${name} cell has a control character or a character nothing draws in it`
           : null;
     if (problem !== null) {
