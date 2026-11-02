@@ -1,7 +1,7 @@
 import type { Balance, BalanceState } from "./airwallex/balances.js";
 import type { ApprovalTerms, BankChangeEvidence, RunRowTerms, RunTerms } from "./approval.js";
 import { policyFromEnv, type Barred } from "./approvers.js";
-import { arrivalAdvice, feeSeenText } from "./arrival.js";
+import { arrivalAdvice, feeSeenText, type ArrivalAdvice, type ArrivalTerms } from "./arrival.js";
 import {
   chainReport,
   chainReports,
@@ -37,7 +37,7 @@ import {
   type RunRow,
   type Signoff,
 } from "./ledger.js";
-import { lastFour } from "./mcp-text.js";
+import { COUNTRY_CODE, lastFour, SERVER_FLOORS_UNREADABLE } from "./mcp-text.js";
 import { outagesReport, outageView, type OutagesReport } from "./outages.js";
 import { reserveFromEnv, type ReservePolicy } from "./reserve.js";
 import {
@@ -70,8 +70,6 @@ const RUNS_NOT_CHAINED: string =
   "This ledger's pay run timelines are not a hash chain yet. The next pnpm ui or other command that opens it starts the chain";
 const CURRENCY: RegExp = /^[A-Z]{3}$/;
 const BALANCE_MAX_AGE_MS: number = 30_000;
-// PayOnce's words in place of the server's, which this process cannot vouch for.
-const SERVER_FLOORS_UNREADABLE: string = "PayOnce's server could not read RESERVE_FLOORS";
 
 const NO_BALANCES: BalanceState = {
   readAt: null,
@@ -90,6 +88,15 @@ interface Timeline {
 interface AuditSummary {
   lines: number;
   problem: string | null;
+}
+
+// The advice for an estimate, which is PayOnce's own sentence. The country comes
+// from the beneficiary record in Airwallex, so one that is not two capital
+// letters is left out of it. The terms still show it, wrapped.
+function adviceOf(arrival: ArrivalTerms): ArrivalAdvice {
+  return arrivalAdvice(
+    arrival.country === null || COUNTRY_CODE.test(arrival.country) ? arrival : { ...arrival, country: null },
+  );
 }
 
 // The newest lines, oldest first.
@@ -233,7 +240,7 @@ export function incidentView(ledger: Ledger, invoiceId: string, lines: number): 
             state: approval.state,
             approver: approval.approver,
             terms: shownTerms(terms),
-            arrivalAdvice: terms.arrival === undefined ? null : arrivalAdvice(terms.arrival),
+            arrivalAdvice: terms.arrival === undefined ? null : adviceOf(terms.arrival),
             needed: approval.needed,
             neededWhy: approval.neededWhy,
             signoffs: approval.signoffs.map((signoff: Signoff) => ({ approver: signoff.approver, at: signoff.at })),
@@ -306,8 +313,10 @@ export function runView(ledger: Ledger, runId: number, lines: number): unknown {
     rows: rows.map(({ cells, ...row }: RunRow) => ({
       ...row,
       feeSeen:
-        row.arrival === null || row.currency === null ? null : feeSeenText(ledger, row.currency, row.arrival.method),
-      arrivalAdvice: row.arrival === null ? null : arrivalAdvice(row.arrival),
+        row.arrival === null || row.currency === null || !CURRENCY.test(row.currency)
+          ? null
+          : feeSeenText(ledger, row.currency, row.arrival.method),
+      arrivalAdvice: row.arrival === null ? null : adviceOf(row.arrival),
       invoice: row.state === "released" && row.invoiceId !== null ? invoiceSummary(ledger, row.invoiceId) : null,
     })),
     cash: JSON.parse(run.cash) as RunCash[],
@@ -322,7 +331,7 @@ export function runView(ledger: Ledger, runId: number, lines: number): unknown {
             arrivalAdvice: terms.rows.flatMap((row: RunRowTerms) =>
               row.arrival === undefined
                 ? []
-                : [{ line: row.line, invoiceId: row.invoiceId, advice: arrivalAdvice(row.arrival) }],
+                : [{ line: row.line, invoiceId: row.invoiceId, advice: adviceOf(row.arrival) }],
             ),
             needed: approval.needed,
             neededWhy: approval.neededWhy,

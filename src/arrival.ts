@@ -38,6 +38,9 @@ const CORRIDORS: readonly Corridor[] = [
   { country: "DE", currency: null, method: "SWIFT", clearing: null, route: "SWIFT", minDays: 0, maxDays: 3 },
 ];
 
+// The route names an estimate can carry.
+export const ROUTES: readonly string[] = [...new Set<string>(CORRIDORS.map((corridor: Corridor): string => corridor.route))];
+
 const DEFAULT_US_CLEARING: string = "ACH";
 const DUE_DATE_PATTERN: RegExp = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/;
 const FIRST_YEAR: number = 2000;
