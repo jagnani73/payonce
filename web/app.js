@@ -2235,6 +2235,17 @@ async function submitApproval(invoiceId) {
 // text only, kept in memory for this session and never written anywhere.
 let whyTimer = 0;
 
+// As pnpm ask prints them: control characters and line breaks become spaces, and
+// format characters (bidi controls, zero-width characters and the rest of
+// Unicode's Cf) and the rest of the tag block are dropped, so a name swapped back
+// into an answer cannot reverse or hide part of it.
+const WHY_CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
+const WHY_HIDDEN = /[\p{Cf}\u{e0000}-\u{e007f}]/gu;
+
+function whyText(text) {
+  return typeof text === "string" ? text.replace(WHY_HIDDEN, "").replace(WHY_CONTROL, " ").trim() : "";
+}
+
 function whyEntry(invoiceId) {
   return state.why.get(invoiceId) ?? { asking: false, answer: null, error: null };
 }
@@ -2286,8 +2297,9 @@ function buildWhy(invoiceId, explainer, entry, limited, stale) {
         "Asking the model. This can take up to 17 seconds.",
       ),
     answer !== null && [
-      h("p", { class: "why__text" }, answer.explanation),
-      answer.notInFacts !== "" && h("p", { class: "why__text" }, `Not in the records: ${answer.notInFacts}`),
+      h("p", { class: "why__text" }, whyText(answer.explanation)),
+      whyText(answer.notInFacts) !== "" &&
+        h("p", { class: "why__text" }, `Not in the records: ${whyText(answer.notInFacts)}`),
       answer.aliasesLeft &&
         Array.isArray(answer.legend) &&
         answer.legend.length > 0 && [
@@ -2295,7 +2307,7 @@ function buildWhy(invoiceId, explainer, entry, limited, stale) {
           h(
             "ul",
             { class: "why__legend" },
-            answer.legend.map((item) => h("li", null, `${item.alias} is ${item.value}`)),
+            answer.legend.map((item) => h("li", null, `${whyText(item.alias)} is ${whyText(item.value)}`)),
           ),
         ],
       // A cached answer that has gone stale shows only the stale notice.
@@ -2306,7 +2318,7 @@ function buildWhy(invoiceId, explainer, entry, limited, stale) {
       h(
         "p",
         { class: "footnote" },
-        `Written by ${answer.model}${when} from PayOnce's records for this invoice${answer.cut ? ", and shortened to fit" : ""}. A model can be wrong. The timeline and the cards are the record.`,
+        `Written by ${whyText(answer.model)}${when} from PayOnce's records for this invoice${answer.cut ? ", and shortened to fit" : ""}. A model can be wrong. The timeline and the cards are the record.`,
       ),
     ],
     entry.error !== null && h("p", { class: "form-error", role: "alert" }, entry.error),
