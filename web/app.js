@@ -187,6 +187,16 @@ const els = {
   inboxMatch: byId("inbox-match"),
   inboxDismiss: byId("inbox-dismiss"),
   boardButton: byId("board-button"),
+  reconButton: byId("recon-button"),
+  recon: byId("recon"),
+  reconCheck: byId("recon-check"),
+  reconError: byId("recon-error"),
+  reconLast: byId("recon-last"),
+  reconWallets: byId("recon-wallets"),
+  reconOpen: byId("recon-open"),
+  reconWaiting: byId("recon-waiting"),
+  reconExplained: byId("recon-explained"),
+  reconAudit: byId("recon-audit"),
   board: byId("board"),
   boardOutages: byId("board-outages"),
   boardGroup: byId("board-group"),
@@ -310,7 +320,22 @@ const state = {
   supplierKey: null,
   supplierError: null,
   supplierAsked: null,
+  // Reconciliation as /api/reconcile last returned it, the check or explanation
+  // under way and what it came back with, the forms' drafts by kind, and each
+  // wallet's movements list.
+  recon: null,
+  reconError: null,
+  reconChecking: false,
+  reconCheckError: null,
+  reconExplaining: null,
+  reconExplainError: null,
+  reconDrafts: new Map(),
+  reconMovements: new Map(),
 };
+
+// "#recon" is the reconciliation view. An invoice called recon is written
+// "#%72econ", so the two never meet.
+const RECON_ID = "recon/";
 
 // Signatures of what each section last drew, so an unchanged poll touches nothing.
 const painted = new Map();
@@ -865,6 +890,10 @@ async function loadDetail() {
     await loadUploadDetail(uploadId);
     return;
   }
+  if (id === RECON_ID) {
+    await loadRecon();
+    return;
+  }
   try {
     const detail = await api(incidentPath(id));
     if (state.selectedId !== id) {
@@ -913,6 +942,9 @@ function expectsWork() {
   }
   const run = currentRun();
   if (run?.busy === true || run?.watching === true || run?.status === "approved") {
+    return true;
+  }
+  if (state.selectedId === RECON_ID && state.recon?.running === true) {
     return true;
   }
   if ((state.runs ?? []).some((entry) => entry.busy === true || entry.watching === true)) {
@@ -970,6 +1002,9 @@ function idFromHash() {
   if (raw === "") {
     return null;
   }
+  if (raw === "recon") {
+    return RECON_ID;
+  }
   try {
     return decodeURIComponent(raw);
   } catch {
@@ -999,9 +1034,13 @@ function setSelected(id) {
   const hash =
     id === null
       ? ""
-      : runIdOf(id) !== null || inboxIdOf(id) !== null || supplierKeyOf(id) !== null
-        ? `#${id}`
-        : `#${encodeURIComponent(id)}`;
+      : id === RECON_ID
+        ? "#recon"
+        : id === "recon"
+          ? "#%72econ"
+          : runIdOf(id) !== null || inboxIdOf(id) !== null || supplierKeyOf(id) !== null
+            ? `#${id}`
+            : `#${encodeURIComponent(id)}`;
   if (window.location.hash !== hash) {
     window.history.replaceState(null, "", hash === "" ? window.location.pathname : hash);
   }
@@ -3177,6 +3216,11 @@ function renderMain() {
   } else {
     els.boardButton.removeAttribute("aria-current");
   }
+  if (id === RECON_ID) {
+    els.reconButton.setAttribute("aria-current", "true");
+  } else {
+    els.reconButton.removeAttribute("aria-current");
+  }
   if (id === null) {
     // Coming back to the board, the view left stays a moment while a fresh board loads.
     if (state.board === null && state.boardError === null && Date.now() - state.selectedAt < LOADING_DELAY_MS) {
@@ -3186,6 +3230,7 @@ function renderMain() {
     els.runDetail.hidden = true;
     els.inboxDetail.hidden = true;
     els.supplierDetail.hidden = true;
+    els.recon.hidden = true;
     els.placeholder.hidden = true;
     els.board.hidden = false;
     showMessage(els.connection, null);
@@ -3199,6 +3244,7 @@ function renderMain() {
     !els.runDetail.hidden ||
     !els.inboxDetail.hidden ||
     !els.supplierDetail.hidden ||
+    !els.recon.hidden ||
     !els.placeholder.hidden
   ) {
     els.board.hidden = true;
@@ -3214,16 +3260,31 @@ function renderSelected(id) {
       els.detail.hidden = true;
       els.runDetail.hidden = true;
       els.inboxDetail.hidden = true;
+      els.recon.hidden = true;
     }
     return;
   }
   renderOtherSelected(id);
-  if (!els.detail.hidden || !els.runDetail.hidden || !els.inboxDetail.hidden || !els.placeholder.hidden) {
+  if (
+    !els.detail.hidden ||
+    !els.runDetail.hidden ||
+    !els.inboxDetail.hidden ||
+    !els.recon.hidden ||
+    !els.placeholder.hidden
+  ) {
     els.supplierDetail.hidden = true;
   }
 }
 
 function renderOtherSelected(id) {
+  if (id === RECON_ID) {
+    els.detail.hidden = true;
+    els.runDetail.hidden = true;
+    els.inboxDetail.hidden = true;
+    renderReconMain();
+    return;
+  }
+  els.recon.hidden = true;
   if (inboxIdOf(id) !== null) {
     els.detail.hidden = true;
     els.runDetail.hidden = true;
@@ -6571,6 +6632,525 @@ async function submitEndOutage(id, place) {
   }
 }
 
+// ---------- reconciliation ----------
+
+const WALLET_STATUS = {
+  "adds-up": { text: "Adds up to Airwallex's available balance", tone: "good" },
+  gap: { text: "The movements do not add up", tone: "bad" },
+  differs: { text: "The movements do not end at Airwallex's available balance", tone: "bad" },
+  moved: { text: "The balance moved while PayOnce read it, so the closing balance was not checked", tone: "neutral" },
+  unchecked: { text: "The movements add up. The closing balance was not checked", tone: "neutral" },
+  empty: { text: "No movements since the ledger started", tone: "neutral" },
+  "not-two-decimal": { text: "Not reconciled: PayOnce handles two-decimal currencies only", tone: "neutral" },
+  unreadable: { text: "A movement cannot be read, so the wallet is not checked", tone: "bad" },
+};
+
+const MOVEMENT_HOW = {
+  payonce: "PayOnce's payment",
+  outside: "Sent outside PayOnce, tied to an invoice",
+  untied: "Sent outside PayOnce, tied to no invoice",
+  before: "From before the ledger",
+  hold: "Hold, left out",
+  waiting: "Waiting for its transfer to be read",
+  unexplained: "Not explained",
+  unreadable: "Cannot be read",
+  "not-two-decimal": "Not reconciled",
+};
+
+// The explain form of each kind on screen.
+let reconRefs = new Map();
+
+async function loadRecon() {
+  try {
+    const report = await api("/api/reconcile");
+    if (report.built !== true || !Array.isArray(report.open) || !Array.isArray(report.wallets)) {
+      throw new Error("The server sent a reconciliation this page could not read.");
+    }
+    state.recon = report;
+    state.reconError = null;
+  } catch (error) {
+    state.reconError = error.message;
+  }
+}
+
+async function loadMovements(currency) {
+  const entry = state.reconMovements.get(currency) ?? { open: true, rows: null, error: null };
+  try {
+    const data = await api(`/api/reconcile/movements?currency=${encodeURIComponent(currency)}`);
+    if (!Array.isArray(data.movements)) {
+      throw new Error("The server sent movements this page could not read.");
+    }
+    state.reconMovements.set(currency, { ...entry, rows: data.movements, error: null });
+  } catch (error) {
+    state.reconMovements.set(currency, { ...entry, error: error.message });
+  }
+}
+
+function runWords(run) {
+  const from = run.ranFrom === "server" ? "the server" : "the terminal";
+  const what = run.mode === "offline" ? "an offline match" : run.fullRead ? "a full read" : "the last seven days";
+  return `from ${from}, ${what}, ${run.reads} ${run.reads === 1 ? "read" : "reads"}`;
+}
+
+function renderReconLast(report) {
+  if (!changed("reconLast", [report.lastRun, report.lastProblem, report.running, report.everyMinutes, report.startedAt])) {
+    return;
+  }
+  const last = report.lastRun;
+  const problem = report.lastProblem;
+  const every =
+    report.everyMinutes === null
+      ? "The server checks only when asked."
+      : `The server checks a minute after it starts, then every ${report.everyMinutes} ${report.everyMinutes === 1 ? "minute" : "minutes"}.`;
+  const shown = [
+    h("h2", null, "Last check"),
+    last === null
+      ? h("p", null, "No check is recorded yet. ", every)
+      : h("p", null, "Checked ", zonedTime(last.finishedAt ?? last.startedAt), ` ${runWords(last)}. `, every),
+    problem !== null &&
+      h(
+        "p",
+        { class: "form-error" },
+        "The latest check, started ",
+        zonedTime(problem.startedAt),
+        problem.outcome === "stale"
+          ? ", recorded nothing, because a check that started later was recorded first."
+          : `, failed and changed no break: ${problem.error ?? "no reason was recorded"}.`,
+      ),
+    report.running && h("p", { class: "hint" }, "Checking now."),
+    h("p", { class: "hint" }, "Movements are counted from when the ledger started, ", zonedTime(report.startedAt), "."),
+  ];
+  els.reconLast.replaceChildren(...shown.filter((node) => node !== false && node !== null));
+}
+
+function walletRow(label, value) {
+  return [h("dt", null, label), h("dd", null, value)];
+}
+
+function buildMovements(currency) {
+  const entry = state.reconMovements.get(currency);
+  if (entry === undefined || !entry.open) {
+    return null;
+  }
+  if (entry.error !== null) {
+    return h("p", { class: "form-error" }, `Could not load the movements. ${entry.error}`);
+  }
+  if (entry.rows === null) {
+    return h("p", { class: "hint" }, "Loading the movements.");
+  }
+  if (entry.rows.length === 0) {
+    return h("p", { class: "hint" }, "No movements are stored for this wallet.");
+  }
+  return h(
+    "ol",
+    { class: "recon-moves" },
+    entry.rows.map((row) =>
+      h(
+        "li",
+        { class: "recon-move" },
+        h(
+          "div",
+          { class: "recon-move__line" },
+          h("span", { class: "recon-move__when" }, zonedTime(row.postedAt)),
+          h("span", null, row.typeText),
+          h("span", { class: "recon-move__amount" }, row.amountMinor === null ? "Cannot be read" : formatMoney(row.amountMinor, currency)),
+          h("span", { class: "recon-move__balance" }, row.balanceMinor === null ? "" : `Balance ${formatMoney(row.balanceMinor, currency)}`),
+        ),
+        h(
+          "p",
+          { class: "recon-move__how" },
+          MOVEMENT_HOW[row.how] ?? "Not explained",
+          row.reference !== null && `, transfer ${row.reference}`,
+          row.invoiceId !== null && [", ", h("a", { href: `#${encodeURIComponent(row.invoiceId)}` }, row.invoiceId)],
+          row.breakId !== null && `, break ${row.breakId}`,
+        ),
+      ),
+    ),
+  );
+}
+
+async function toggleMovements(currency) {
+  const entry = state.reconMovements.get(currency);
+  if (entry?.open === true) {
+    state.reconMovements.set(currency, { ...entry, open: false });
+    renderReconWallets(state.recon);
+    return;
+  }
+  state.reconMovements.set(currency, { open: true, rows: null, error: null });
+  renderReconWallets(state.recon);
+  await loadMovements(currency);
+  if (state.recon !== null) {
+    renderReconWallets(state.recon);
+  }
+}
+
+function renderReconWallets(report) {
+  const movements = [...state.reconMovements].map(([currency, entry]) => [currency, entry.open, entry.rows, entry.error]);
+  if (!changed("reconWallets", [report.wallets, movements])) {
+    return;
+  }
+  els.reconWallets.replaceChildren(
+    ...report.wallets.map((wallet) => {
+      const status = WALLET_STATUS[wallet.status] ?? { text: "Not checked", tone: "neutral" };
+      const code = wallet.currency;
+      const open = state.reconMovements.get(code)?.open === true;
+      const button = h("button", { class: "button button--small", type: "button" }, open ? "Hide movements" : "Show movements");
+      button.addEventListener("click", () => {
+        toggleMovements(code);
+      });
+      return h(
+        "section",
+        { class: `card recon-wallet recon-wallet--${status.tone}` },
+        h("div", { class: "recon-wallet__head" }, h("h2", null, `${code} wallet`), h("p", { class: "recon-wallet__status" }, status.text)),
+        wallet.movements > 0 &&
+          h(
+            "dl",
+            { class: "terms" },
+            walletRow("Opening balance", wallet.openingMinor === null ? "Not known" : formatMoney(wallet.openingMinor, code)),
+            walletRow("Money in", formatMoney(wallet.inMinor, code)),
+            walletRow("Money out", formatMoney(Math.abs(wallet.outMinor), code)),
+            wallet.holdsMinor !== 0 && walletRow("Holds, left out", formatMoney(wallet.holdsMinor, code)),
+            walletRow("Closing balance", wallet.closingMinor === null ? "Not known" : formatMoney(wallet.closingMinor, code)),
+            walletRow("Airwallex's available balance", wallet.availableMinor === null ? "Not read" : formatMoney(wallet.availableMinor, code)),
+          ),
+        wallet.movements === 0 &&
+          h(
+            "p",
+            { class: "hint" },
+            `Airwallex's available balance: ${wallet.availableMinor === null ? "not read" : formatMoney(wallet.availableMinor, code)}.`,
+          ),
+        wallet.movements > 0 &&
+          h(
+            "p",
+            { class: "hint" },
+            `${wallet.movements} movements: ${wallet.payonce} PayOnce's payments, ${wallet.outside} sent outside PayOnce and tied to an invoice, ${wallet.untied} tied to no invoice, ${wallet.before} from before the ledger, ${wallet.holds} holds, ${wallet.waiting} waiting, ${wallet.unexplained} not explained.`,
+          ),
+        wallet.movements > 0 && button,
+        buildMovements(code),
+      );
+    }),
+  );
+}
+
+function reconDraft(kind) {
+  const draft = state.reconDrafts.get(kind) ?? { name: readStoredName(), note: "", picked: new Set() };
+  state.reconDrafts.set(kind, draft);
+  return draft;
+}
+
+function buildBreak(item, draft, sync) {
+  const box = h("input", { type: "checkbox", id: `recon-pick-${item.id}` });
+  box.checked = draft.picked.has(item.id);
+  box.addEventListener("change", () => {
+    if (box.checked) {
+      draft.picked.add(item.id);
+    } else {
+      draft.picked.delete(item.id);
+    }
+    sync();
+  });
+  return {
+    box,
+    node: h(
+      "li",
+      { class: "recon-break" },
+      box,
+      h(
+        "label",
+        { for: `recon-pick-${item.id}`, class: "recon-break__text" },
+        h("span", { class: "recon-break__id" }, `Break ${item.id}`),
+        h("span", null, item.text),
+        h(
+          "span",
+          { class: "recon-break__meta" },
+          item.invoiceId !== null && [h("a", { href: `#${encodeURIComponent(item.invoiceId)}` }, item.invoiceId), ". "],
+          "Found ",
+          zonedTime(item.openedAt ?? item.foundAt),
+          ".",
+          item.goneAt !== null && " Airwallex's records no longer show this. It still waits for a person.",
+        ),
+      ),
+    ),
+  };
+}
+
+function buildKindGroup(kind, items) {
+  const draft = reconDraft(kind);
+  const shown = new Set(items.map((item) => item.id));
+  for (const id of [...draft.picked]) {
+    if (!shown.has(id)) {
+      draft.picked.delete(id);
+    }
+  }
+  const refs = { kind, items, boxes: [], name: null, note: null, button: null, error: null, all: null };
+  const sync = () => syncReconGroup(refs);
+  const list = h("ul", { class: "recon-breaks" });
+  for (const item of items) {
+    const built = buildBreak(item, draft, sync);
+    refs.boxes.push(built.box);
+    list.append(built.node);
+  }
+  const name = h("input", { type: "text", id: `recon-name-${kind}`, autocomplete: "name", maxlength: "80" });
+  name.value = draft.name;
+  name.addEventListener("input", () => {
+    draft.name = name.value;
+  });
+  const note = h("input", { type: "text", id: `recon-note-${kind}`, autocomplete: "off", maxlength: "200" });
+  note.value = draft.note;
+  note.addEventListener("input", () => {
+    draft.note = note.value;
+  });
+  const button = h("button", { class: "button", type: "submit" }, "Explain");
+  const all = h("button", { class: "button button--small", type: "button" }, "Select all");
+  all.addEventListener("click", () => {
+    const every = draft.picked.size === items.length;
+    draft.picked = new Set(every ? [] : items.map((item) => item.id));
+    refs.boxes.forEach((box, index) => {
+      box.checked = draft.picked.has(items[index].id);
+    });
+    sync();
+  });
+  const error = h("p", { class: "form-error", role: "alert", hidden: true });
+  const form = h(
+    "form",
+    { class: "close-form", novalidate: true },
+    h("label", { class: "field" }, h("span", { class: "field__label" }, "Your name"), name),
+    h("label", { class: "field" }, h("span", { class: "field__label" }, "What these are"), note),
+    h("div", { class: "recon-explain__actions" }, button, all),
+    error,
+    h("p", { class: "hint" }, "Explaining moves no money and changes no invoice. It covers the breaks ticked here with the facts shown. If they change, they open again."),
+  );
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitExplain(kind);
+  });
+  Object.assign(refs, { name, note, button, error, all });
+  reconRefs.set(kind, refs);
+  const first = items[0];
+  return h(
+    "section",
+    { class: "recon-kind" },
+    h("h3", null, `${first.label}: ${items.length}`),
+    h("p", { class: "hint" }, first.action),
+    list,
+    form,
+  );
+}
+
+function syncReconGroup(refs) {
+  const draft = reconDraft(refs.kind);
+  const busy = state.reconExplaining === refs.kind;
+  refs.button.disabled = state.reconExplaining !== null || draft.picked.size === 0;
+  refs.name.readOnly = busy;
+  refs.note.readOnly = busy;
+  setText(
+    refs.button,
+    busy ? "Explaining" : draft.picked.size === 0 ? "Tick the breaks to explain" : `Explain ${draft.picked.size === 1 ? "this break" : `these ${draft.picked.size} breaks`}`,
+  );
+  setText(refs.all, draft.picked.size === refs.items.length ? "Clear all" : "Select all");
+  const error = state.reconExplainError;
+  if (error !== null && error.kind === refs.kind && liveMessage("reconOpen", error.error) === null) {
+    state.reconExplainError = null;
+  }
+  showMessage(refs.error, state.reconExplainError?.kind === refs.kind ? state.reconExplainError.error.message : null);
+}
+
+function renderReconOpen(report) {
+  const open = report.open;
+  if (changed("reconOpen", open.map((item) => [item.id, item.fingerprint, item.goneAt, item.text]))) {
+    const focus = focusedControl(els.reconOpen);
+    reconRefs = new Map();
+    const kinds = [...new Set(open.map((item) => item.kind))];
+    els.reconOpen.replaceChildren(
+      h("h2", { id: "recon-open-title" }, open.length === 0 ? "Nothing needs a person" : `Needs a person: ${open.length}`),
+      ...(open.length === 0
+        ? [h("p", { class: "hint" }, "Every movement the last check read is explained, or still inside its window.")]
+        : kinds.map((kind) => buildKindGroup(kind, open.filter((item) => item.kind === kind)))),
+    );
+    restoreFocus(focus);
+  }
+  for (const refs of reconRefs.values()) {
+    syncReconGroup(refs);
+  }
+}
+
+function renderReconWaiting(report) {
+  if (!changed("reconWaiting", [report.waiting, report.pending])) {
+    return;
+  }
+  const shown = report.waiting.length > 0 || report.pending > 0;
+  els.reconWaiting.replaceChildren(
+    h("h2", { id: "recon-waiting-title" }, "Waiting"),
+    h(
+      "ul",
+      { class: "recon-waiting" },
+      report.waiting.map((item) =>
+        h("li", null, item.text, item.dueAt !== null && [" Due ", zonedTime(item.dueAt), "."]),
+      ),
+      report.pending > 0 &&
+        h(
+          "li",
+          null,
+          `${report.pending} ${report.pending === 1 ? "break was" : "breaks were"} found once. PayOnce opens one when the next check finds the same facts.`,
+        ),
+    ),
+  );
+  els.reconWaiting.hidden = !shown;
+}
+
+function renderReconExplained(report) {
+  if (!changed("reconExplained", report.explained.map((item) => [item.id, item.goneAt]))) {
+    return;
+  }
+  els.reconExplained.replaceChildren(
+    h("h2", { id: "recon-explained-title" }, "Explained"),
+    h(
+      "ul",
+      { class: "recon-waiting" },
+      report.explained.map((item) =>
+        h(
+          "li",
+          null,
+          h("strong", null, `Break ${item.id}, ${item.label}. `),
+          item.text,
+          h(
+            "span",
+            { class: "recon-break__meta" },
+            `Explained by ${item.explainedBy ?? "a name PayOnce does not know"} `,
+            zonedTime(item.explainedAt),
+            ": ",
+            item.note ?? "",
+          ),
+        ),
+      ),
+    ),
+  );
+  els.reconExplained.hidden = report.explained.length === 0;
+}
+
+function renderReconAudit(report) {
+  const audit = report.audit;
+  if (!changed("reconAudit", audit)) {
+    return;
+  }
+  els.reconAudit.replaceChildren(
+    audit.problem === null
+      ? `Hash chain intact over ${audit.lines} ${audit.lines === 1 ? "line" : "lines"}. pnpm run audit checks it too.`
+      : h("strong", { class: "audit__broken" }, `Hash chain broken. ${audit.problem}.`),
+  );
+  els.reconAudit.hidden = false;
+}
+
+function syncReconCheck() {
+  const running = state.recon?.running === true;
+  els.reconCheck.disabled = state.reconChecking || running;
+  setText(els.reconCheck, state.reconChecking || running ? "Checking" : "Check now");
+}
+
+function renderReconMain() {
+  const report = state.recon;
+  if (report === null) {
+    if (state.reconError === null && Date.now() - state.selectedAt < LOADING_DELAY_MS) {
+      return;
+    }
+    setText(els.placeholderTitle, state.reconError === null ? "Loading reconciliation" : "Could not load reconciliation");
+    setText(els.placeholderText, state.reconError ?? "");
+    els.recon.hidden = true;
+    els.placeholder.hidden = false;
+    showMessage(els.connection, null);
+    return;
+  }
+  showMessage(els.connection, null);
+  showMessage(
+    els.reconError,
+    state.reconCheckError ?? (state.reconError === null ? null : `Could not refresh reconciliation. ${state.reconError}`),
+  );
+  renderReconLast(report);
+  renderReconWallets(report);
+  renderReconOpen(report);
+  renderReconWaiting(report);
+  renderReconExplained(report);
+  renderReconAudit(report);
+  syncReconCheck();
+  els.placeholder.hidden = true;
+  els.recon.hidden = false;
+}
+
+async function checkRecon() {
+  if (state.reconChecking) {
+    return;
+  }
+  state.reconChecking = true;
+  state.reconCheckError = null;
+  syncReconCheck();
+  try {
+    await api("/api/reconcile/run", { method: "POST", body: {} });
+    state.fastUntil = Date.now() + EXPECT_WORK_MS;
+  } catch (error) {
+    state.reconCheckError = error.message;
+  }
+  try {
+    await refresh();
+  } finally {
+    state.reconChecking = false;
+    syncReconCheck();
+    if (state.selectedId === RECON_ID) {
+      renderReconMain();
+    }
+  }
+}
+
+async function submitExplain(kind) {
+  const refs = reconRefs.get(kind);
+  if (state.reconExplaining !== null || refs === undefined) {
+    return;
+  }
+  const draft = reconDraft(kind);
+  const explainedBy = refs.name.value.trim();
+  const note = refs.note.value.trim();
+  const breaks = refs.items
+    .filter((item) => draft.picked.has(item.id))
+    .map((item) => ({ id: item.id, fingerprint: item.fingerprint }));
+  const missing =
+    breaks.length === 0
+      ? { field: refs.boxes[0], message: "Tick the breaks to explain." }
+      : explainedBy === ""
+        ? { field: refs.name, message: "Enter your name to explain them." }
+        : note === ""
+          ? { field: refs.note, message: "Say what these are." }
+          : null;
+  if (missing !== null) {
+    state.reconExplainError = { kind, error: actionError("reconOpen", missing.message) };
+    syncReconGroup(refs);
+    missing.field?.focus();
+    return;
+  }
+  state.reconExplaining = kind;
+  state.reconExplainError = null;
+  for (const group of reconRefs.values()) {
+    syncReconGroup(group);
+  }
+  let failure = null;
+  try {
+    await api("/api/reconcile/explain", { method: "POST", body: { breaks, explainedBy, note } });
+    storeName(explainedBy);
+    state.reconDrafts.delete(kind);
+  } catch (error) {
+    failure = error.message;
+  }
+  try {
+    await refresh();
+  } finally {
+    state.reconExplaining = null;
+    if (failure !== null) {
+      state.reconExplainError = { kind, error: actionError("reconOpen", failure) };
+    }
+    for (const group of reconRefs.values()) {
+      syncReconGroup(group);
+    }
+  }
+}
+
 function render() {
   renderForm();
   renderRunForm();
@@ -6629,6 +7209,11 @@ els.boardButton.addEventListener("click", () => {
   window.scrollTo(0, 0);
   select(null);
 });
+els.reconButton.addEventListener("click", () => {
+  window.scrollTo(0, 0);
+  select(RECON_ID);
+});
+els.reconCheck.addEventListener("click", checkRecon);
 for (const [name, select] of [
   ["group", els.boardGroup],
   ["currency", els.boardCurrency],

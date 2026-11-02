@@ -63,6 +63,7 @@
         <span class="brand__name">PayOnce</span>
         <span class="brand__what">Payment incident agent</span>
         <button id="board-button" class="board-nav" type="button">Incident board</button>
+        <button id="recon-button" class="board-nav" type="button">Reconciliation</button>
       </div>
       <p class="sandbox-note">Sandbox only. No real money.</p>
     </header>
@@ -249,6 +250,23 @@
           </section>
           <div id="board-groups" class="board__groups"></div>
           <p class="hint board__foot">These are the cash panel's figures. PayOnce has no exchange rates, so amounts in different currencies are ranked as plain numbers. "Waiting" counts from when PayOnce took the invoice on, or from when the pay run was uploaded.</p>
+        </article>
+
+        <article id="recon" class="board recon" aria-labelledby="recon-title" hidden>
+          <header class="board__head">
+            <div>
+              <h1 id="recon-title">Reconciliation</h1>
+              <p class="board__lead">Every movement in each wallet since the ledger started, matched with Airwallex's transfers and PayOnce's ledger. PayOnce reads Airwallex with GETs only. It moves no money and changes no invoice.</p>
+            </div>
+            <button id="recon-check" class="button button--small" type="button">Check now</button>
+          </header>
+          <p id="recon-error" class="banner" role="status" hidden></p>
+          <section id="recon-last" class="card recon__last" aria-label="Last check"></section>
+          <div id="recon-wallets" class="recon__wallets"></div>
+          <section id="recon-open" class="card" aria-labelledby="recon-open-title"></section>
+          <section id="recon-waiting" class="card" aria-labelledby="recon-waiting-title" hidden></section>
+          <section id="recon-explained" class="card" aria-labelledby="recon-explained-title" hidden></section>
+          <p id="recon-audit" class="footnote audit" hidden></p>
         </article>
 
         <article id="detail" class="detail" hidden>

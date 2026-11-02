@@ -2201,6 +2201,144 @@ input[type="file"] {
   margin-top: -8px;
 }
 
+/* Reconciliation */
+
+.recon__last p + p {
+  margin-top: 6px;
+}
+
+.recon__wallets {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  align-items: start;
+  gap: 14px;
+}
+
+.recon-wallet .terms dd {
+  white-space: nowrap;
+}
+
+.recon-wallet {
+  border-left-width: 4px;
+}
+
+.recon-wallet--good {
+  border-left-color: var(--green-line);
+}
+
+.recon-wallet--bad {
+  border-left-color: var(--red-line);
+}
+
+.recon-wallet__head h2 {
+  margin-bottom: 2px;
+}
+
+.recon-wallet__status {
+  color: var(--ink-2);
+  font-size: 14px;
+}
+
+.recon-wallet--bad .recon-wallet__status {
+  color: var(--red);
+  font-weight: 600;
+}
+
+.recon-wallet .button {
+  margin-top: 10px;
+}
+
+.recon-moves {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  max-height: 480px;
+  overflow-y: auto;
+  font-size: 13.5px;
+}
+
+.recon-move {
+  padding: 6px 0;
+  border-top: 1px solid var(--line);
+}
+
+.recon-move__line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+}
+
+.recon-move__amount {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.recon-move__when,
+.recon-move__balance,
+.recon-move__how {
+  color: var(--muted);
+}
+
+.recon-kind + .recon-kind {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.recon-kind h3 {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.recon-breaks {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.recon-break {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.recon-break input {
+  margin-top: 4px;
+}
+
+.recon-break__text {
+  display: grid;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+
+.recon-break__id {
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.recon-break__meta {
+  display: block;
+  color: var(--muted);
+  font-size: 13.5px;
+}
+
+.recon-explain__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.recon-waiting {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 1180px) {
   .detail__grid {
     grid-template-columns: minmax(0, 1fr);
