@@ -1,5 +1,7 @@
 import { capped, defanged } from "./alert-payloads.js";
 import { ROUTES } from "./arrival.js";
+import { RAIL_FAILURE_CODES } from "./outages.js";
+import { FAILURE_WORDS } from "./why-facts.js";
 
 // Where text PayOnce did not write came from. quoted is PayOnce's own wording
 // that can carry such text: timeline lines, escalation reasons, skip and close
@@ -34,6 +36,15 @@ export const COUNTRY_CODE: RegExp = /^[A-Z]{2}$/;
 const ROUTE: RegExp = new RegExp(
   `^(${ROUTES.map((route: string): string => route.replace(/[^A-Za-z0-9 ]/g, "\\$&")).join("|")})$`,
 );
+// PayOnce's words for a failure code, exactly as FAILURE_WORDS and
+// RAIL_FAILURE_CODES give them.
+const CODE_WORDS: RegExp = new RegExp(
+  `^(${[...new Set<string>([...Object.values(FAILURE_WORDS), ...Object.values(RAIL_FAILURE_CODES)])]
+    .map((words: string): string => words.replace(/[^A-Za-z0-9 ]/g, "\\$&"))
+    .join("|")})$`,
+);
+// The last four characters of an account, as the supplier view keeps them.
+const ENDING: RegExp = /^[A-Za-z0-9]{1,4}$/;
 
 // The email evidence as emailEvidence and summarise word it now. An older
 // PayOnce named the sender's address here, so anything else is wrapped. A change
@@ -75,6 +86,12 @@ const PLAIN: RegExp[] = [
   /^runs\.problem$/,
   // The outage rule's wording, with setting names and numbers.
   /^rule\.problem$/,
+  // supplier: the cautions' fixed sentences, with account labels, counts, code
+  // words and a rail only in its own form, and the board's own text and the
+  // summary from the three findings for each invoice.
+  /^cautions\[\]\.text$/,
+  /^invoices\[\]\.board\.(label|why|also\[\])$/,
+  /^invoices\[\]\.emails\.findings\.summary$/,
 ];
 
 // PayOnce's words for a server whose floors are unreadable, in place of the
@@ -101,6 +118,12 @@ const RULES: Rule[] = [
   { path: /(^|\.)failureCode$/, from: "airwallex", unless: FAILURE_CODE },
   { path: /(^|\.)(bankStatus|mismatchedStatus)$/, from: "airwallex", unless: STATUS },
   { path: /(^|\.)readBy$/, from: "unknown", unless: READER_NAME },
+  // supplier: the record's names and domains, the last four characters of an
+  // account, and a failure code's words.
+  { path: /^(name|names\[\]|suppliers\[\]\.name|related\[\]\.name)$/, from: "supplier" },
+  { path: /^domains\[\]\.domain$/, from: "supplier" },
+  { path: /(^|\.)ending$/, from: "airwallex", unless: ENDING },
+  { path: /(^|\.)(failureWords|codeWords)$/, from: "unknown", unless: CODE_WORDS },
   { path: /(^|\.)(rows|domains)\[\]\.(supplier|supplierDomain|domain|onFile)$/, from: "run-file" },
   { path: /(^|\.)domains\[\]\.inRun\[\]$/, from: "run-file" },
   { path: /(^|\.)(supplier|supplierDomain)$/, from: "supplier" },
@@ -111,6 +134,7 @@ const RULES: Rule[] = [
     from: "person",
   },
   { path: /(^|\.)barred\[\]\.name$/, from: "person" },
+  { path: /(^|\.)(barred\[\]|verifiedBy\.calledBy)$/, from: "person" },
   { path: /(^|\.)(message|headline|escalationReason|rateMismatch|note|text|reason|problem)$/, from: "quoted" },
   { path: /(^|\.)reasons\[\]$/, from: "quoted" },
 ];

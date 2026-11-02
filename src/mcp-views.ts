@@ -50,6 +50,7 @@ import {
   type DomainCheck,
   type RunCash,
 } from "./runs.js";
+import { resolveSupplier, supplierDetail, supplierList, type Resolved, type SupplierDetail } from "./suppliers.js";
 
 // What the read-only MCP server answers, built from the ledger alone. The shapes
 // follow the JSON API's, without the server's busy and watching, and with the
@@ -383,6 +384,25 @@ export function runView(ledger: Ledger, runId: number, lines: number): unknown {
 export function outagesView(ledger: Ledger): unknown {
   const { enders, ...report }: OutagesReport = outagesReport(ledger, policyFromEnv({}), outageHolding(ledger));
   return report;
+}
+
+// Every supplier record, as GET /api/suppliers gives them. The builder is the
+// server's own, so there is no copy to drift.
+export function suppliersView(ledger: Ledger): unknown {
+  return supplierList(ledger);
+}
+
+// One supplier record, by its beneficiary id or by an invoice number, as GET
+// /api/suppliers/:key gives it, without the inbox and the drafts, which the MCP
+// leaves out everywhere.
+export function supplierView(ledger: Ledger, word: string): unknown {
+  const resolved: Resolved | null = resolveSupplier(ledger, word);
+  const detail: SupplierDetail | null = resolved === null ? null : supplierDetail(ledger, resolved.key);
+  if (resolved === null || detail === null) {
+    throw new ToolRefusal(`No invoice or pay run row in the ledger names supplier record ${word.slice(0, 20)}`);
+  }
+  const { inbox, drafts, ...shown }: SupplierDetail = detail;
+  return { ...shown, viaInvoice: resolved.viaInvoice };
 }
 
 // The cash panel on this ledger. Given what a running server holds, its balances
