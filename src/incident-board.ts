@@ -382,6 +382,10 @@ function personSituation(
     }
     return situation("person", "with-person", "Its payments failed, and no approval request is open");
   }
+  // Paid once, and only a person closes it, as the incident page's close card says.
+  if (paidWaitingForClose(ledger, obligation)) {
+    return situation("person", "close", "Paid once, and waits for a person to close it");
+  }
   if (inbox.offered > 0 && kinds.size > 0) {
     return situation("person", "inbox", offeredText(inbox.offered));
   }
@@ -407,11 +411,19 @@ function otherSituation(
     return situation("open", "approved", "The payment is approved, and PayOnce sends it on its next look");
   }
   if (obligation.state === "escalated") {
-    return pendingClose(ledger, obligation.invoiceId) === undefined
-      ? situation("open", "escalated", "Waiting on a person, with nothing left to pay")
-      : situation("open", "close", "Paid once, and waits for a person to close it");
+    return situation("open", "escalated", "Waiting on a person, with nothing left to pay");
   }
   return situation("open", "open", "Open, with no payment being sent, approved or with the bank");
+}
+
+// An escalated invoice the bank reports paid, which only a person closes: the
+// close card offers it for a payment, not for closing it without paying.
+function paidWaitingForClose(ledger: Ledger, obligation: Obligation): boolean {
+  if (obligation.state !== "escalated") {
+    return false;
+  }
+  const kind: string | undefined = pendingClose(ledger, obligation.invoiceId)?.kind;
+  return kind !== undefined && kind !== "duplicate" && kind !== "unpaid";
 }
 
 // The invoices each active outage held, as "outage-id invoice-id". An invoice has
