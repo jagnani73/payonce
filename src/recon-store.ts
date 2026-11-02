@@ -110,7 +110,9 @@ const RECON_SCHEMA: string = `
 `;
 
 const RECON_HEAD_KEY: string = "recon_events_head";
-const RECON_CHAIN_STARTED_KEY: string = "recon_chain_started_at";
+// Set with the chain's first line and never removed, so a chain that has started
+// and holds no line, or has lost its running hash, shows as broken.
+const RECON_FIRST_LINE_KEY: string = "recon_first_line_at";
 // The newest run whose findings are recorded. A run that started before it
 // commits nothing.
 const COMMITTED_RUN_KEY: string = "recon_committed_run";
@@ -447,10 +449,11 @@ export class ReconStore {
     this.db = db;
   }
 
-  // Creates the tables and starts the chain, once, under the write lock, so two
+  // Creates the tables and starts the chain, under the write lock, so two
   // processes opening a file at once do not both add a column. There is nothing
-  // to backfill, so the running hash starts at the genesis, and only while no line
-  // exists: a running hash removed later stays missing, and the audit says so.
+  // to backfill, so the running hash starts at the genesis, and only on a chain
+  // that never had a line. Once it has, a running hash removed later stays
+  // missing, and the audit says so, as it does for the invoice chain.
   ensure(): void {
     this.within("BEGIN IMMEDIATE", (): void => {
       this.db.exec(RECON_SCHEMA);
@@ -460,15 +463,17 @@ export class ReconStore {
       if (!columns.includes("paid_seen_ms")) {
         this.db.exec("ALTER TABLE recon_transfers ADD COLUMN paid_seen_ms INTEGER");
       }
+      // A chain whose lines came before the key takes it from its first line.
       this.db
-        .prepare("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)")
-        .run(RECON_CHAIN_STARTED_KEY, new Date().toISOString());
+        .prepare("INSERT OR IGNORE INTO meta (key, value) SELECT ?, at FROM recon_events ORDER BY id LIMIT 1")
+        .run(RECON_FIRST_LINE_KEY);
       this.db
         .prepare(
           `INSERT OR IGNORE INTO meta (key, value)
-           SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM recon_events)`,
+           SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM recon_events)
+             AND NOT EXISTS (SELECT 1 FROM meta WHERE key = ?)`,
         )
-        .run(RECON_HEAD_KEY, GENESIS);
+        .run(RECON_HEAD_KEY, GENESIS, RECON_FIRST_LINE_KEY);
     });
   }
 
@@ -765,7 +770,14 @@ export class ReconStore {
     this.db
       .prepare("INSERT INTO recon_events (break_id, at, kind, message, prev_hash, hash) VALUES (?, ?, ?, ?, ?, ?)")
       .run(line.breakId, line.at, line.kind, line.message, prevHash, hash);
-    this.setMeta(RECON_HEAD_KEY, nextLedgerHead(this.meta(RECON_HEAD_KEY) ?? GENESIS, hash));
+    // The first line starts the running hash from the genesis. After that a
+    // running hash that is missing stays missing, so a chain emptied together with
+    // its running hash cannot pass as new.
+    const head: string | null = this.meta(RECON_HEAD_KEY);
+    if (head !== null || this.meta(RECON_FIRST_LINE_KEY) === null) {
+      this.setMeta(RECON_HEAD_KEY, nextLedgerHead(head ?? GENESIS, hash));
+    }
+    this.db.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)").run(RECON_FIRST_LINE_KEY, at);
   }
 
   private insertBreak(found: FoundBreak, state: "pending" | "open", at: string): number {
@@ -1080,7 +1092,7 @@ export class ReconStore {
         }),
       ),
       ledgerHead: this.meta(RECON_HEAD_KEY),
-      chainStartedAt: this.meta(RECON_CHAIN_STARTED_KEY),
+      chainStartedAt: this.meta(RECON_FIRST_LINE_KEY),
     }));
   }
 

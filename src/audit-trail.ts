@@ -182,12 +182,17 @@ export interface ChainedReconEvent extends ReconEventFields {
 export interface ReconAuditSnapshot {
   events: ChainedReconEvent[];
   ledgerHead: string | null;
+  // When the chain's first line was written, kept apart from the lines. Null
+  // until the chain has a line.
   chainStartedAt: string | null;
 }
 
 export interface ReconChainReport {
   lines: number;
   breaks: ChainBreak[];
+  // The chain has started, and its first line is gone: it holds no line, or line
+  // 1 is not the line it started with.
+  lostStart: "empty" | "cut" | null;
   stored: string | null;
   computed: string;
   intact: boolean;
@@ -350,12 +355,16 @@ export function describeLedger(report: LedgerReport): string {
 export function reconChainReport(snapshot: ReconAuditSnapshot): ReconChainReport {
   const breaks: ChainBreak[] = breaksOf(snapshot.events, reconEventHash);
   const computed: string = runningHash(snapshot.events.map((event: ChainedReconEvent): string | null => event.hash));
+  const first: ChainedReconEvent | undefined = snapshot.events[0];
+  const lostStart: ReconChainReport["lostStart"] =
+    snapshot.chainStartedAt === null ? null : first === undefined ? "empty" : first.at !== snapshot.chainStartedAt ? "cut" : null;
   return {
     lines: snapshot.events.length,
     breaks,
+    lostStart,
     stored: snapshot.ledgerHead,
     computed,
-    intact: breaks.length === 0 && snapshot.ledgerHead === computed,
+    intact: breaks.length === 0 && lostStart === null && snapshot.ledgerHead === computed,
   };
 }
 
@@ -364,6 +373,12 @@ export function reconChainProblem(report: ReconChainReport): string | null {
   const broken: string | null = describeBreaks(report.breaks);
   if (broken !== null) {
     return broken;
+  }
+  if (report.lostStart === "empty") {
+    return "the reconciliation record has started but holds no line, so its lines were removed";
+  }
+  if (report.lostStart === "cut") {
+    return "line 1 is not the line the reconciliation record started with, so the lines before it were removed";
   }
   if (report.stored === null) {
     return "the running hash of reconciliation lines is missing from the ledger, so lines removed from it cannot be ruled out";
