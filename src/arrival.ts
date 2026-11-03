@@ -236,15 +236,22 @@ function methodText(arrival: ArrivalTerms): string {
   return `${arrival.method}${arrival.country === null ? "" : ` to ${arrival.country}`}`;
 }
 
-// The route and how long it usually takes, such as "SWIFT, usually 0 to 3
-// business days", or "LOCAL to SG, arrival not known".
+// The transfer method with the route it takes, such as "LOCAL (ACH)", or "SWIFT"
+// when the route is the method, so the route reads the same as the fee beside it.
+function routeName(arrival: ArrivalTerms, route: string): string {
+  return route === arrival.method ? route : `${arrival.method} (${route})`;
+}
+
+// The route and how long it usually takes, such as "LOCAL (ACH), usually 0 to 2
+// business days", "SWIFT, usually 0 to 3 business days", or "LOCAL to SG,
+// arrival not known". Only the words change: terms keep the route as it was.
 export function routeText(arrival: ArrivalTerms): string {
   return arrival.route === null || arrival.minDays === null || arrival.maxDays === null
     ? `${methodText(arrival)}, arrival not known`
-    : `${arrival.route}, usually ${daysText(arrival.minDays, arrival.maxDays)}`;
+    : `${routeName(arrival, arrival.route)}, usually ${daysText(arrival.minDays, arrival.maxDays)}`;
 }
 
-// "SWIFT, usually 0 to 3 business days, by 2026-11-02 if sent on 2026-10-28"
+// "LOCAL (ACH), usually 0 to 2 business days, by 2026-10-30 if sent on 2026-10-28"
 function byText(arrival: ArrivalTerms): string {
   const by: string = arrival.latest === null ? "" : `, by ${arrival.latest} if sent on ${arrival.from}`;
   return `${routeText(arrival)}${by}`;
