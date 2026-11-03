@@ -114,7 +114,7 @@ function main(): void {
   try {
     by = personName(closedBy);
   } catch (error: unknown) {
-    console.log(error instanceof Error ? error.message : String(error));
+    say(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
     return;
   }

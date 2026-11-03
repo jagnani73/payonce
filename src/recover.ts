@@ -6,7 +6,7 @@ import { note, noteError, type Engine } from "./engine.js";
 import { describeQuotes } from "./fx.js";
 import { Ledger, LEDGER_PATH, type Obligation, type RunRow } from "./ledger.js";
 import { describeOutageRule, outageRuleFromEnv } from "./outages.js";
-import { say } from "./printable.js";
+import { printableJson, say } from "./printable.js";
 import { readerFromEnv } from "./reader.js";
 import { describeFloors, reserveFromEnv } from "./reserve.js";
 import { SandboxBank } from "./sandbox-bank.js";
@@ -57,8 +57,10 @@ async function main(): Promise<void> {
     startedBy = personName(given || login);
   } catch (error: unknown) {
     const rule: string = error instanceof Error ? error.message : String(error);
-    console.log(
-      `${given === "" ? `Your login name, ${JSON.stringify(login)}, is not a name PayOnce takes. ${rule}` : rule}. Give the name of who starts the incident as NAME: pnpm recover OUTCOME INVOICE EMAILS SCENARIO NAME`,
+    // The login name is quoted as JSON with every character a terminal could act
+    // on escaped, so it shows as it is without moving the cursor.
+    say(
+      `${given === "" ? `Your login name, ${printableJson(JSON.stringify(login))}, is not a name PayOnce takes. ${rule}` : rule}. Give the name of who starts the incident as NAME: pnpm recover OUTCOME INVOICE EMAILS SCENARIO NAME`,
     );
     process.exitCode = 1;
     return;
