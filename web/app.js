@@ -3719,10 +3719,14 @@ let runHeaderRefs = null;
 let runApprovalRefs = null;
 let runCancelRefs = null;
 
-function runTotalsText(totals) {
-  return Array.isArray(totals) && totals.length > 0
-    ? totals.map((total) => formatMoney(total.amountMinor, total.currency)).join(" and ")
-    : "Nothing to pay";
+// What a run pays. Every pay row the server counts has an amount, so pay rows
+// with no totals are rows whose amounts PayOnce could not read, not a run with
+// nothing to pay.
+function runTotalsText(totals, payRows = 0) {
+  if (Array.isArray(totals) && totals.length > 0) {
+    return totals.map((total) => formatMoney(total.amountMinor, total.currency)).join(" and ");
+  }
+  return Number.isInteger(payRows) && payRows > 0 ? "Amounts not read" : "Nothing to pay";
 }
 
 function runCountsText(counts) {
@@ -3873,7 +3877,7 @@ function updateRunNode(node, run, key) {
   setText(button.querySelector(".incident__id"), `Run ${run.id}`);
   setClass(badgeNode, badgeClass(entry));
   setText(badgeNode, entry?.label ?? humanize(run.status));
-  setText(button.querySelector(".incident__amount"), runTotalsText(run.counts?.totals));
+  setText(button.querySelector(".incident__amount"), runTotalsText(run.counts?.totals, run.counts?.pay));
   setText(button.querySelector(".incident__supplier"), run.fileName);
   setText(button.querySelector(".incident__headline"), runCountsText(run.counts));
   button.querySelector(".incident__busy").hidden = run.busy !== true;
@@ -3974,7 +3978,7 @@ function renderRunHeader(run) {
       h(
         "div",
         { class: "detail__facts" },
-        h("p", { class: "detail__amount" }, runTotalsText(run.counts?.totals)),
+        h("p", { class: "detail__amount" }, runTotalsText(run.counts?.totals, run.counts?.pay)),
         h("p", { class: "detail__started" }, runCountsText(run.counts)),
         h(
           "div",
