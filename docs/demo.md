@@ -19,8 +19,8 @@ Set `READER_API_KEY` in `.env` so a model reads the emails. After `pnpm ui` star
 
 Set `APPROVERS` in `.env`, for example `APPROVERS=Yash:50000,Alex:10000,Kim:10000,Sam:4200`, and restart `pnpm ui` after changing it. The name typed on the start form cannot approve that incident, so approve under another name. Each approval in the run below needs one approver. These need two:
 
-- `eur-from-usd`, while PayOnce has not yet paid the EUR supplier: a held invoice to a supplier PayOnce has never paid takes two approvers.
-- The sample pay run on a fresh ledger, where every row pays a supplier PayOnce has never paid.
+- `eur-from-usd`, until a payment a person approved has paid the EUR supplier: a held invoice to a supplier PayOnce has never paid on a person's approval takes two approvers. A payment PayOnce sent by itself, such as an automatic replacement, does not count.
+- The sample pay run, while any row pays a supplier PayOnce has never paid on a person's approval. On a fresh ledger every row does.
 - `usd-local-bank-change`, because it pays an account the original did not go to. Whoever records the callback cannot approve it either.
 
 With the list above, each of these still has two approvers left after the starter is barred. Sam's 4,200 limit is below the 4,476 USD that `eur-from-usd` takes from the USD wallet, so Sam is refused there.
