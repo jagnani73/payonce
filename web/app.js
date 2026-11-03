@@ -4277,7 +4277,7 @@ function buildRunApproveForm(runId, approval, error) {
 function runOutageNote(runId, approval, expired, outage) {
   const held = `Outage ${outage.id} on ${outage.rail} is active, so pay run ${runId} is released only once a person ends it.`;
   if (expired || (approval.state !== "requested" && approval.state !== "approved")) {
-    return `${held} That holds for a new request too.`;
+    return `${held} A run approved on a new request waits the same way.`;
   }
   return approval.state === "approved"
     ? `${held} The approval is kept until then and still expires when it would.`
