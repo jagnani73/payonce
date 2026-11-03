@@ -1056,10 +1056,11 @@ function idFromHash() {
   }
 }
 
-function setSelected(id) {
+// reveal scrolls the sidebar to the incident picked once the list shows it.
+function setSelected(id, reveal = true) {
   state.selectedId = id;
   state.selectedAt = Date.now();
-  state.revealSelected = id !== null;
+  state.revealSelected = reveal && id !== null;
   state.detailError = null;
   state.approveError = null;
   state.closeError = null;
@@ -1096,7 +1097,7 @@ function setSelected(id) {
 
 // Picking a view starts at its top, whether it was picked from the top bar, a
 // list, a board entry or a link, so nobody lands partway down the new view.
-function select(id) {
+function select(id, reveal = true) {
   if (id === state.selectedId) {
     return;
   }
@@ -1106,7 +1107,7 @@ function select(id) {
     state.board = null;
     state.boardError = null;
   }
-  setSelected(id);
+  setSelected(id, reveal);
   render();
   window.setTimeout(render, LOADING_DELAY_MS + 20);
   if (id === null && refreshing !== null) {
@@ -1209,7 +1210,8 @@ async function startIncident(event) {
     els.invoiceNumber.value = "";
     els.dueDate.value = "";
     state.fastUntil = Date.now() + EXPECT_WORK_MS;
-    select(created.invoiceId);
+    // The sidebar stays where it is, so the form stays on screen for the next start.
+    select(created.invoiceId, false);
   } catch (error) {
     state.createError = error.message;
   } finally {
