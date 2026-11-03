@@ -566,6 +566,12 @@ function stampText(date) {
   return isToday(date) ? timeFormat.format(date) : `${dayFormat.format(date)}, ${timeFormat.format(date)}`;
 }
 
+// A time to the minute, with its day when it is not today, so a time on another
+// day never reads as one still to come today.
+function minuteText(date) {
+  return isToday(date) ? minuteFormat.format(date) : `${dayFormat.format(date)}, ${minuteFormat.format(date)}`;
+}
+
 function timeNode(value) {
   const date = parseDate(value);
   return date === null
@@ -2127,7 +2133,7 @@ function buildApproval(invoiceId, approval, outage) {
                 h(
                   "time",
                   { datetime: validTo.toISOString(), title: dateTimeFormat.format(validTo) },
-                  minuteFormat.format(validTo),
+                  minuteText(validTo),
                 ),
               ],
         ]
@@ -2387,13 +2393,19 @@ function renderApproval(detail) {
 }
 
 // Said on a request or an approval while an outage is active on the rail the
-// payment would go out on.
+// payment would go out on. An expired request is told only what holds for it:
+// an approval of the next request waits for the outage too.
 function outageNote(approval, outage) {
   if (outage === null || (approval.state !== "requested" && approval.state !== "approved")) {
     return null;
   }
   const until = parseDate(approval.expiresAt);
-  const counts = until === null ? "" : ` and counts until ${minuteFormat.format(until)}`;
+  if (approval.expired === true || (until !== null && until.getTime() <= Date.now())) {
+    return caution(
+      `Outage ${outage.id} on ${outage.rail} is active, so a payment approved on the next request also waits until a person ends it.`,
+    );
+  }
+  const counts = until === null ? "" : ` and counts until ${minuteText(until)}`;
   return caution(
     approval.state === "approved"
       ? `Outage ${outage.id} on ${outage.rail} is active, so this approved payment waits until a person ends it. The approval is kept${counts}.`
@@ -2485,7 +2497,7 @@ function buildWhy(invoiceId, explainer, entry, limited, stale) {
   button.disabled = !on || entry.asking || limited;
   button.addEventListener("click", () => askWhy(invoiceId));
   const at = answer === null ? null : parseDate(answer.at);
-  const clock = at === null ? null : minuteFormat.format(at);
+  const clock = at === null ? null : minuteText(at);
   const when = clock === null ? "" : ` at ${clock}`;
   // Google may use what its free tier is sent; any other service is named by host.
   const sentTo =
@@ -5910,8 +5922,7 @@ function boardWhen(value) {
   if (date === null) {
     return null;
   }
-  const sameDay = date.toDateString() === new Date().toDateString();
-  return sameDay ? minuteFormat.format(date) : `${dayFormat.format(date)}, ${minuteFormat.format(date)}`;
+  return minuteText(date);
 }
 
 // How long since PayOnce took the invoice on, against when the server answered.
