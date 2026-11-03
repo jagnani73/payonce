@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { AirwallexClient, AirwallexError, AirwallexUnreachableError } from "./airwallex/client.js";
 import type { RunTotal } from "./approval.js";
@@ -376,6 +376,11 @@ async function main(): Promise<void> {
   // APPROVERS and the other settings, and run without a .env.
   loadEnvIfPresent();
   const [command, first, second, ...rest] = process.argv.slice(2);
+  // Opening a ledger that is not there would make an empty one.
+  if (!existsSync(LEDGER_PATH)) {
+    fail(`There is no ${LEDGER_PATH} here. Start an incident first, or start pnpm ui once.`);
+    return;
+  }
   const ledger: Ledger = new Ledger(LEDGER_PATH);
   if (command === "upload") {
     await upload(ledger, first, [second, ...rest].join(" ").trim());
