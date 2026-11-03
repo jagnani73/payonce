@@ -2096,7 +2096,8 @@ function buildApproval(invoiceId, approval, outage) {
   const evidence = terms.evidence ?? {};
   const requested = approval.state === "requested";
   const failure = failureText(evidence.failureCode);
-  const originalFacts = [humanize(evidence.originalState), failure?.toLowerCase() ?? null]
+  // Only the first letter is lowered, so PayOnce's own name keeps its capitals.
+  const originalFacts = [humanize(evidence.originalState), failure === null ? null : `${failure.charAt(0).toLowerCase()}${failure.slice(1)}`]
     .filter((part) => part !== null && part !== "")
     .join(", ");
   const hasReference =
