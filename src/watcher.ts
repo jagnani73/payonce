@@ -53,6 +53,11 @@ export class Watcher {
   private sweepRequested: boolean = false;
   private readonly releaseTriedAt: Map<number, number> = new Map<number, number>();
   private readonly failures: Map<string, RepeatedFailure> = new Map<string, RepeatedFailure>();
+  // The last check that failed as a whole, such as a sweep while Airwallex cannot
+  // be reached, and its message.
+  private checkFailure: (RepeatedFailure & { message: string }) | null = null;
+  // Whether the check under way has swept.
+  private swept: boolean = false;
   // When the last check that read every payment with the bank without an error
   // started. A state the ledger still shows is then at most that old, because a
   // change wakes the invoice. A check where any read failed leaves it as it was,
@@ -77,10 +82,11 @@ export class Watcher {
     this.stop();
     this.timer = setTimeout((): void => {
       this.check()
+        .then((): void => {
+          this.checkPassed();
+        })
         .catch((error: unknown): void => {
-          sayWarning(
-            `  watcher  check failed: ${error instanceof Error ? error.message : String(error)}`,
-          );
+          this.checkFailed(error instanceof Error ? error.message : String(error), Date.now());
         })
         .finally((): void => {
           if (this.timer !== null) {
@@ -124,6 +130,33 @@ export class Watcher {
     }
   }
 
+  // A check that fails as a whole is printed the same way: the first at once, then
+  // at most once a minute while the same message repeats, with how many checks
+  // failed with it meanwhile.
+  private checkFailed(message: string, now: number): void {
+    const seen: (RepeatedFailure & { message: string }) | null = this.checkFailure;
+    if (seen === null || seen.message !== message) {
+      sayWarning(`  watcher  check failed: ${message}`);
+      this.checkFailure = { message, printedAt: now, since: 0, seenAt: now };
+      return;
+    }
+    seen.since += 1;
+    seen.seenAt = now;
+    if (now - seen.printedAt >= REPEAT_PRINT_MS) {
+      sayWarning(`  watcher  ${seen.since} more ${seen.since === 1 ? "check" : "checks"} failed: ${message}`);
+      seen.printedAt = now;
+      seen.since = 0;
+    }
+  }
+
+  // A sweep runs on some checks only, so a check without one says nothing about a
+  // failure a sweep gave. Only a check that did everything forgets it.
+  private checkPassed(): void {
+    if (this.sweepEveryMs === null || this.swept) {
+      this.checkFailure = null;
+    }
+  }
+
   private failingNow(now: number): void {
     for (const [message, seen] of this.failures) {
       if (seen.seenAt < now) {
@@ -140,6 +173,7 @@ export class Watcher {
 
   async check(): Promise<void> {
     const now: number = Date.now();
+    this.swept = false;
     let readFailed: boolean = false;
     const due: ReadonlySet<string> = new Set<string>(this.engine.ledger.dueLooks(now));
     // Released rows that have not sent their first payment, in file order. Only
@@ -245,6 +279,7 @@ export class Watcher {
       this.sweepRequested = false;
       this.lastSweep = Date.now();
       await sweep(this.engine, this.agent);
+      this.swept = true;
     }
   }
 }
