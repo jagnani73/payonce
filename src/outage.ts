@@ -98,10 +98,10 @@ function main(): void {
       show(view);
     }
     say(
-      report.enders === null
-        ? "Any named person may end an outage, because no approver list is set"
-        : report.enders.length === 0
-          ? `Nobody can end an outage while ${policy.problem ?? "the approval settings cannot be read"}`
+      report.endRefused !== null
+        ? report.endRefused
+        : report.enders === null
+          ? "Any named person may end an outage, because no approver list is set"
           : `An outage is ended by a name in APPROVERS: ${report.enders.join(", ")}`,
     );
     return;

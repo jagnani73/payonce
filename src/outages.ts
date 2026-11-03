@@ -265,6 +265,15 @@ function runEndLine(outage: Outage, unlisted: boolean): string {
 // setting cannot be read (APPROVERS, TWO_APPROVERS_ABOVE or
 // APPROVAL_TTL_MINUTES), because then PayOnce cannot tell who may: endOutage
 // refuses with the reason, and a person fixes the setting first.
+// Why nobody can end an outage now, in PayOnce's words, or null when someone
+// can. endOutage refuses with it, and the page and pnpm outage show it in place
+// of the end form.
+export function endRefusal(policy: ApprovalPolicy): string | null {
+  return policy.unreadable
+    ? `Nobody can end an outage while ${policy.problem ?? "the approval settings cannot be read"}. Fix the setting and restart PayOnce, then end the outage`
+    : null;
+}
+
 export function outageEnders(policy: ApprovalPolicy): string[] | null {
   if (policy.unreadable) {
     return [];
@@ -367,12 +376,9 @@ export function endOutage(
   if (outage.state !== "active") {
     throw alreadyEnded(outage);
   }
-  if (policy.unreadable) {
-    throw new EndRefusedError(
-      "approver",
-      `Nobody can end an outage while ${policy.problem ?? "the approval settings cannot be read"}. Fix the setting and restart PayOnce, then end the outage`,
-      outage,
-    );
+  const refused: string | null = endRefusal(policy);
+  if (refused !== null) {
+    throw new EndRefusedError("approver", refused, outage);
   }
   const enders: string[] | null = outageEnders(policy);
   const ender: string | undefined =
@@ -553,6 +559,8 @@ export interface OutagesReport {
   rule: { failures: number; windowMinutes: number; codes: OutageCode[]; problem: string | null };
   // The names that may end an outage, or null when any named person may.
   enders: string[] | null;
+  // Why nobody can end one now (endRefusal), or null.
+  endRefused: string | null;
   // Oldest first.
   active: OutageView[];
   // The latest ended outages, newest first.
@@ -581,6 +589,7 @@ function reportOf(ledger: Ledger, policy: ApprovalPolicy, holdingOf: HoldingOf |
       problem: rule.problem,
     },
     enders: outageEnders(policy),
+    endRefused: endRefusal(policy),
     active: all
       .filter((outage: Outage): boolean => outage.state === "active")
       .reverse()

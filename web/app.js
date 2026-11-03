@@ -5937,7 +5937,7 @@ function buildBoardOutage(outage, enders) {
 function renderBoardOutages() {
   const outages = Array.isArray(state.board?.outages) ? state.board.outages : [];
   const enders = Array.isArray(state.outages?.enders) ? state.outages.enders : null;
-  if (changed("boardOutages", [outages, enders, state.selectedAt])) {
+  if (changed("boardOutages", [outages, enders, state.outages?.endRefused ?? null, state.selectedAt])) {
     const focus = focusedControl(els.boardOutages);
     outageRefs.board = new Map();
     els.boardOutages.replaceChildren(...outages.map((outage) => buildBoardOutage(outage, enders)));
@@ -6581,8 +6581,13 @@ function endEffect(view) {
 }
 
 // The form a person ends an outage with: a name from the approver list, or any
-// name when no list is set, and a note.
+// name when no list is set, and a note. While the approval settings cannot be
+// read nobody may end one, and PayOnce's reason is shown instead.
 function buildEndForm(view, enders, place) {
+  const refused = typeof state.outages?.endRefused === "string" ? state.outages.endRefused : null;
+  if (refused !== null) {
+    return h("p", { class: "hint" }, refused);
+  }
   const prefix = `${OUTAGE_PLACES[place].prefix}-${view.id}`;
   const draft = state.outageDrafts.get(view.id) ?? {};
   const remember = () => {
@@ -6709,7 +6714,7 @@ function renderOutages() {
           ...report.recent.filter((view) => recentlyEnded(view, now)),
         ];
   const enders = report === null || !Array.isArray(report.enders) ? null : report.enders;
-  if (changed("outages", [shown, enders])) {
+  if (changed("outages", [shown, enders, report?.endRefused ?? null])) {
     const focus = focusedControl(els.outages);
     outageRefs.card = new Map();
     els.outages.replaceChildren(
