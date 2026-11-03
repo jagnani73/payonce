@@ -119,6 +119,18 @@ export function routeValue(raw: unknown): string {
   return typeof raw === "string" ? raw.replace(/\s+/g, "").toUpperCase() : "";
 }
 
+// The scheme routeKeyOf builds keys with, as a prefix on every key. A stored key
+// with another prefix, or none, was built by another scheme and is not known
+// (knownRoute): no test ever matches it as a route. Change it whenever routeKeyOf
+// or NOT_ROUTING_FIELDS change, and the next open rebuilds the stored keys from
+// the bank details the ledger keeps and clears the rest (Ledger.rebuildRoutes).
+export const ROUTE_SCHEME: string = "r2";
+
+// A stored routeKey when this scheme built it, or null when it is not known.
+export function knownRoute(key: string | null | undefined): string | null {
+  return typeof key === "string" && key.startsWith(`${ROUTE_SCHEME}:`) ? key : null;
+}
+
 // The key of where money sent to these bank details goes: a hash of every field
 // but NOT_ROUTING_FIELDS, deny by default, in name order, each string read as
 // routeValue reads it. The tests that would otherwise stop a supplier being paid
@@ -126,7 +138,7 @@ export function routeValue(raw: unknown): string {
 // and verifiedBankChange). An account an approval or a decision pinned is still
 // compared by its full accountKey.
 export function routeKeyOf(details: TransferBankDetails | undefined): string {
-  return keyHash(
+  return `${ROUTE_SCHEME}:` + keyHash(
     JSON.stringify(
       Object.entries(details ?? {})
         .filter(([field]: [string, unknown]): boolean => !NOT_ROUTING_FIELDS.has(field))

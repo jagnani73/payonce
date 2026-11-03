@@ -25,6 +25,8 @@ import {
   failedStatus,
   FAILED_STATUS_LIST,
   keyHash,
+  knownRoute,
+  ROUTE_SCHEME,
   routeKeyOf,
   routeOfDetailsKey,
   type Debit,
@@ -545,9 +547,13 @@ export interface AccountRef {
   routeKey: string | null;
 }
 
-// True when details hold the account ref names, by where the money goes.
+// True when details hold the account ref names, by where the money goes. A ref
+// whose routeKey is not known (knownRoute) is matched only by its full
+// accountKey, every detail alike, so a key from another scheme never passes as
+// the same account: anything else counts as changed.
 export function holdsAccount(ref: AccountRef, details: TransferBankDetails): boolean {
-  return ref.routeKey !== null ? ref.routeKey === routeKeyOf(details) : ref.accountKey === keyHash(bankDetailsKey(details));
+  const route: string | null = knownRoute(ref.routeKey);
+  return route !== null ? route === routeKeyOf(details) : ref.accountKey === keyHash(bankDetailsKey(details));
 }
 
 // The latest checked payment PayOnce made to a beneficiary, with the account it
@@ -558,7 +564,7 @@ export interface LastPaid extends AccountRef {
 }
 
 // True when two sets of bank details, as bankDetailsKey writes them, go to the
-// same account.
+// same account. False when either cannot be read.
 function sameRoute(a: string, b: string): boolean {
   if (a === b) {
     return true;
@@ -2137,7 +2143,6 @@ export class Ledger {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       let accountKeyAdded: boolean = false;
-      let routeKeyAdded: boolean = false;
       for (const [table, columns] of Object.entries(ADDED_COLUMNS)) {
         const existing: string[] = (
           this.db.prepare(`PRAGMA table_info(${table})`).all() as unknown as ColumnRow[]
@@ -2154,9 +2159,6 @@ export class Ledger {
             }
             if (table === "attempts" && name === "account_key") {
               accountKeyAdded = true;
-            }
-            if (table === "attempts" && name === "route_key") {
-              routeKeyAdded = true;
             }
             // A pending attempt with no transfer from before tries were kept may
             // have been tried at any time, so it counts as tried now.
@@ -2179,9 +2181,7 @@ export class Ledger {
       if (accountKeyAdded) {
         this.backfillAccountKeys();
       }
-      if (routeKeyAdded) {
-        this.backfillRoutes();
-      }
+      this.rebuildRoutes();
       this.db.exec("COMMIT");
     } catch (error: unknown) {
       this.db.exec("ROLLBACK");
@@ -2262,27 +2262,43 @@ export class Ledger {
     );
   }
 
-  // An accountKey kept before routeKeys were gets one from the bank details a
-  // callback kept: the record it read before the change, or the record after it
-  // (applied_key), whichever has that accountKey. Attempts, where they went, run
-  // rows and payouts sent outside PayOnce alike. Any other keeps none and is
-  // compared by accountKey, as before. Only inside addColumns' transaction.
-  private backfillRoutes(): void {
+  // When the stored routeKeys were built by another scheme than ROUTE_SCHEME, or
+  // before there were any, every one is rebuilt: cleared to null, which reads as
+  // not known, then each accountKey that matches bank details a callback kept
+  // (the record before the change, or after it, applied_key) gets the routeKey of
+  // those details. Attempts, where they went, run rows, payouts sent outside
+  // PayOnce and approval requests alike. Any other stays null and is compared by
+  // its full accountKey only. meta.route_scheme says which scheme the stored
+  // keys are, so this runs once per change of scheme. Only inside addColumns'
+  // transaction, under the write lock that adds the columns.
+  private rebuildRoutes(): void {
+    const scheme: { value: string } | undefined = this.db
+      .prepare("SELECT value FROM meta WHERE key = 'route_scheme'")
+      .get() as unknown as { value: string } | undefined;
+    if (scheme?.value === ROUTE_SCHEME) {
+      return;
+    }
     const routes: Map<string, string> = this.callbackRoutes();
     const pairs: [string, string, string][] = [
       ["attempts", "account_key", "route_key"],
       ["attempts", "sent_key", "sent_route"],
       ["outside_payouts", "sent_key", "sent_route"],
       ["run_rows", "account_key", "route_key"],
+      ["approvals", "CASE WHEN json_valid(terms) THEN json_extract(terms, '$.accountKey') END", "route_key"],
     ];
     for (const [table, full, route] of pairs) {
-      const set: StatementSync = this.db.prepare(
-        `UPDATE ${table} SET ${route} = ? WHERE ${full} = ? AND ${route} IS NULL`,
-      );
+      this.db.exec(`UPDATE ${table} SET ${route} = NULL`);
+      const set: StatementSync = this.db.prepare(`UPDATE ${table} SET ${route} = ? WHERE ${full} = ?`);
       for (const [key, value] of routes) {
         set.run(value, key);
       }
     }
+    this.db
+      .prepare(
+        `INSERT INTO meta (key, value) VALUES ('route_scheme', ?)
+           ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+      )
+      .run(ROUTE_SCHEME);
   }
 
   // The accountKey and routeKey of every set of bank details a callback kept.
@@ -2325,7 +2341,10 @@ export class Ledger {
       )
       .all() as unknown as { full: string; route: string }[];
     for (const row of rows) {
-      routes.set(row.full, row.route);
+      const route: string | null = knownRoute(row.route);
+      if (route !== null) {
+        routes.set(row.full, route);
+      }
     }
     return routes;
   }
@@ -4756,7 +4775,8 @@ export class Ledger {
   }
 
   // Everyone who recorded an applied callback for the account these details go
-  // to, of this beneficiary. None of them may approve a payment to it.
+  // to, of this beneficiary. None of them may approve a payment to it. A callback
+  // whose details cannot be read bars its recorder too.
   bankChangeRecorders(beneficiaryId: string, detailsKey: string): string[] {
     return [
       ...new Set<string>(
@@ -4768,7 +4788,12 @@ export class Ledger {
             )
             .all(beneficiaryId) as unknown as { called_by: string; applied_key: string }[]
         )
-          .filter((row: { applied_key: string }): boolean => sameRoute(row.applied_key, detailsKey))
+          .filter(
+            (row: { applied_key: string }): boolean =>
+              sameRoute(row.applied_key, detailsKey) ||
+              routeOfDetailsKey(row.applied_key) === null ||
+              routeOfDetailsKey(detailsKey) === null,
+          )
           .map((row: { called_by: string }): string => row.called_by),
       ),
     ];

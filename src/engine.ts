@@ -65,6 +65,7 @@ import {
   feeOf,
   originalStateOf,
   resendCanFix,
+  knownRoute,
   routeKeyOf,
   routeOfDetailsKey,
   sameBankDetails,
@@ -1557,13 +1558,16 @@ function barredFrom(
   }
   // The routeKey of the account, given or as the ledger keeps it with a request,
   // so a callback for the same account bars its recorder even when a bank name
-  // changed since.
-  const route: string | undefined =
-    routeKey ?? (accountKey === undefined ? undefined : ledger.accountRoutes().get(accountKey));
+  // changed since. When the account's route, or the callback's, is not known, the
+  // recorder is barred: the bar never depends on a key PayOnce cannot check.
+  const route: string | null = knownRoute(
+    routeKey ?? (accountKey === undefined ? undefined : ledger.accountRoutes().get(accountKey)),
+  );
   for (const detailsKey of ledger.appliedKeys(obligation.beneficiaryId)) {
+    const applied: string | null = routeOfDetailsKey(detailsKey);
     if (
       accountKey === undefined ||
-      (keyHash(detailsKey) !== accountKey && (route === undefined || routeOfDetailsKey(detailsKey) !== route))
+      (keyHash(detailsKey) !== accountKey && route !== null && applied !== null && applied !== route)
     ) {
       continue;
     }

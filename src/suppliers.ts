@@ -1,6 +1,6 @@
 import type { TransferBankDetails } from "./airwallex/transfers.js";
 import { endingOf, keyHash } from "./approval.js";
-import { routeKeyOf, routeOfDetailsKey } from "./assess.js";
+import { knownRoute, routeKeyOf, routeOfDetailsKey } from "./assess.js";
 import { knownName } from "./approvers.js";
 import { CHANGED_BANK_DETAILS_REASON, LAST_PAID_CHANGED_REASON } from "./decide.js";
 import { templateLabel } from "./drafts.js";
@@ -981,7 +981,10 @@ function accountsOf(ledger: Ledger, facts: RecordFacts, owners: Owners): Account
   const lastPaid: Accounts["lastPaid"] =
     paidTo === undefined
       ? undefined
-      : { ...paidTo, accountKey: paidTo.routeKey ?? ledger.accountRoutes().get(paidTo.accountKey) ?? paidTo.accountKey };
+      : {
+          ...paidTo,
+          accountKey: knownRoute(paidTo.routeKey) ?? ledger.accountRoutes().get(paidTo.accountKey) ?? paidTo.accountKey,
+        };
   const unchecked = lastPaid === undefined ? ledger.lastPaidUnchecked(facts.id) : undefined;
   const storedSighting: Sighting | undefined = seen
     .filter(
