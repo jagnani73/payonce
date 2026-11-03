@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { cleanLine } from "../eml.js";
 import { redactKey } from "../redact.js";
 
@@ -128,11 +129,15 @@ export function describeAirwallex(client: AirwallexClient): string {
     : `Airwallex calls go to ${client.host}`;
 }
 
+// A .env that lacks the setting needs only that line. With no .env, the README's
+// setup lines say what goes in one.
 function requireEnv(name: string): string {
   const value: string | undefined = process.env[name];
   if (!value) {
     throw new Error(
-      `Missing environment variable ${name}. Make a .env file in this folder from the setup lines under Run it in the README`,
+      existsSync(".env")
+        ? `Missing environment variable ${name}. Add ${name} to .env`
+        : `Missing environment variable ${name}. Make a .env file in this folder from the setup lines under Run it in the README`,
     );
   }
   return value;
