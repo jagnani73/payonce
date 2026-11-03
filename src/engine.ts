@@ -126,7 +126,7 @@ import {
 } from "./ledger.js";
 import { formatMoney, readMinor, toMajor, toMinor } from "./money.js";
 import { holdLine, railFailureSeen, waitingLine } from "./outages.js";
-import { sendAttempt, syncTransfer, wasRejected } from "./payments.js";
+import { sendAttempt, syncTransfer, wasRejected, type Decide } from "./payments.js";
 import { oneLine, say, sayError } from "./printable.js";
 import { debitCurrency, floorFor, type ReservePolicy } from "./reserve.js";
 
@@ -410,12 +410,17 @@ export function linkOutsidePayout(
   exact: boolean = true,
 ): boolean {
   const state: PayoutState = originalStateOf(transfer);
-  const linked: boolean = engine.ledger.linkOutsidePayout(invoiceId, {
-    transferId: transfer.id,
-    reference: transfer.short_reference_id,
-    state,
-    ...payoutMoney(transfer),
-  });
+  // A closed invoice it may still pay is reopened in the transaction that ties it.
+  const linked: boolean = engine.ledger.linkOutsidePayout(
+    invoiceId,
+    {
+      transferId: transfer.id,
+      reference: transfer.short_reference_id,
+      state,
+      ...payoutMoney(transfer),
+    },
+    state === "failed" ? null : OUTSIDE_PAYOUT_REASON,
+  );
   if (!linked) {
     return false;
   }
@@ -427,10 +432,6 @@ export function linkOutsidePayout(
       ? `Payout ${transfer.short_reference_id} for this invoice was sent outside PayOnce: ${payoutSummary(transfer)}`
       : `Payout ${transfer.short_reference_id} was sent outside PayOnce with reference ${transfer.reference}, which matches this invoice's number apart from case, spacing, leading zeros or letters added at the end. It went to the same supplier for the same amount: ${payoutSummary(transfer)}`,
   );
-  const now: ObligationState | undefined = engine.ledger.obligation(invoiceId)?.state;
-  if ((now === "settled" || now === "rejected") && state !== "failed") {
-    engine.ledger.escalate(invoiceId, OUTSIDE_PAYOUT_REASON);
-  }
   return true;
 }
 
@@ -492,12 +493,14 @@ export function noteMismatchedTransfer(engine: Engine, transfer: Transfer): bool
   if (
     attempt.state !== "failed" ||
     unrecordedAttemptOf(engine.ledger, transfer) !== undefined ||
+    // The invoice goes to a person in the transaction that keeps the transfer.
     !engine.ledger.addMismatched(
       requestId,
       transfer.id,
       transfer.short_reference_id,
       transfer.status ?? null,
       debitOf(transfer),
+      MISMATCHED_TRANSFER_REASON,
     )
   ) {
     return false;
@@ -509,7 +512,6 @@ export function noteMismatchedTransfer(engine: Engine, transfer: Transfer): bool
     "warning",
     `${capitalise(attempt.kind)} payment PayOnce had marked failed has a transfer under its request id that does not match this invoice: Airwallex lists ${transfer.short_reference_id} ${transfer.status} under it with another reference, amount or currency. PayOnce did not record it as the ${attempt.kind}, sends nothing for this invoice while the bank has it, and a person checks it`,
   );
-  engine.ledger.escalateUnlessSettled(invoiceId, MISMATCHED_TRANSFER_REASON);
   return true;
 }
 
@@ -617,21 +619,41 @@ export async function recordLateTransfer(engine: Engine, transfer: Transfer): Pr
     return false;
   }
   const invoiceId: string = attempt.invoiceId;
-  const recorded: Transfer = await syncTransfer(engine.client, engine.ledger, transfer.id);
-  const live: boolean = attemptStateOf(recorded) !== "failed";
-  // It is checked against its approved quote, for a payment from another
-  // currency's wallet, and against the account it was decided or approved for, as
-  // when a look finds a transfer by request id. A failed one on a closed invoice
-  // moved nothing, so it does not reopen it.
   const before: Obligation | undefined = engine.ledger.obligation(invoiceId);
-  if (before !== undefined && (live || before.state === "open" || before.state === "escalated")) {
-    checkRate(engine, before, attempt, recorded);
-    checkAccount(engine, before, attempt, recorded);
+  const checks: TransferChecks | undefined =
+    before === undefined ? undefined : transferChecks(engine, before, attempt);
+  let twice: boolean = false;
+  let kept: boolean = false;
+  // What it decides is written with the record, before any line: the checks, and
+  // the escalation that reopens a closed invoice it may still pay. A line that
+  // could not be written then leaves nothing undone, and a step that stops before
+  // the record leaves the attempt with no transfer, for the next sweep.
+  const recorded: Transfer = await syncTransfer(engine.client, engine.ledger, transfer.id, (read: Transfer): void => {
+    const live: boolean = attemptStateOf(read) !== "failed";
+    // It is checked against its approved quote, for a payment from another
+    // currency's wallet, and against the account it was decided or approved for,
+    // as when a look finds a transfer by request id. A failed one on a closed
+    // invoice moved nothing, so it does not reopen it.
+    if (checks !== undefined && before !== undefined && (live || before.state === "open" || before.state === "escalated")) {
+      checks.decide(read);
+    }
+    twice = paidTwice(engine.ledger, invoiceId) !== undefined;
+    // Live at the bank, but the ledger keeps it failed: another payment holds the lock.
+    kept = live && engine.ledger.attemptOf(attempt.requestId, read.id)?.state === "failed";
+    const state: ObligationState | undefined = engine.ledger.obligation(invoiceId)?.state;
+    if (twice) {
+      engine.ledger.escalate(invoiceId, LATE_TRANSFER_REASON);
+    } else if (live && (state === "settled" || state === "rejected")) {
+      engine.ledger.escalate(
+        invoiceId,
+        `${attempt.kind} ${read.short_reference_id} was found in Airwallex after the invoice was closed`,
+      );
+    }
+    engine.ledger.lookNow(invoiceId);
+  });
+  if (checks !== undefined) {
+    noteChecks(engine, invoiceId, checks);
   }
-  const twice: boolean = paidTwice(engine.ledger, invoiceId) !== undefined;
-  // Live at the bank, but the ledger keeps it failed: another payment holds the lock.
-  const kept: boolean =
-    live && engine.ledger.attemptOf(attempt.requestId, recorded.id)?.state === "failed";
   const other: string = anyLive(engine.ledger.outsidePayouts(invoiceId))
     ? "A payout sent outside PayOnce for this invoice"
     : "Another payment PayOnce sent for this invoice";
@@ -641,15 +663,6 @@ export async function recordLateTransfer(engine: Engine, transfer: Transfer): Pr
     twice ? "warning" : "bank",
     `${capitalise(attempt.kind)} payment PayOnce had marked failed is a transfer after all: Airwallex now lists ${describe(recorded)} under its request id${twice ? `. ${other} has not failed either, so the supplier may have been paid twice` : ""}${kept ? `. PayOnce still lists the ${attempt.kind} as failed, because it keeps one live payment per invoice` : ""}`,
   );
-  const state: ObligationState | undefined = engine.ledger.obligation(invoiceId)?.state;
-  if (twice) {
-    engine.ledger.escalate(invoiceId, LATE_TRANSFER_REASON);
-  } else if (live && (state === "settled" || state === "rejected")) {
-    engine.ledger.escalate(
-      invoiceId,
-      `${attempt.kind} ${recorded.short_reference_id} was found in Airwallex after the invoice was closed`,
-    );
-  }
   return true;
 }
 
@@ -1208,18 +1221,11 @@ async function requireAccount(
 }
 
 // A payment from another currency's wallet must go out on the quote a person
-// approved. Checked wherever an attempt first becomes a transfer: when it is
-// sent, when a retry creates it, and when it is found by its request_id. The
-// money has moved by then, so a transfer at any other rate goes to a person, and
-// only a person closes the invoice.
-function checkRate(
-  engine: Engine,
-  obligation: Obligation,
-  attempt: Attempt,
-  transfer: Transfer,
-): void {
+// approved. The money has moved by then, so a transfer at any other rate goes to
+// a person, and only a person closes the invoice. Why it did not, or null.
+function rateProblem(engine: Engine, attempt: Attempt, transfer: Transfer): string | null {
   if (attempt.quoteId === null) {
-    return;
+    return null;
   }
   // The approval the attempt was opened on, so a request another process opened
   // since does not count.
@@ -1230,13 +1236,7 @@ function checkRate(
     approved?.quoteId === attempt.quoteId ? approved : undefined,
     transfer,
   );
-  if (problem === null) {
-    return;
-  }
-  const reason: string = `${attempt.kind} ${transfer.short_reference_id} ${problem}`;
-  engine.ledger.markRateMismatch(attempt.requestId, reason);
-  engine.ledger.escalate(obligation.invoiceId, reason);
-  note(engine.ledger, obligation.invoiceId, "warning", capitalise(reason));
+  return problem === null ? null : `${attempt.kind} ${transfer.short_reference_id} ${problem}`;
 }
 
 // A transfer is paid to the beneficiary record as it is when it is created, which
@@ -1244,22 +1244,57 @@ function checkRate(
 // other details than the attempt was decided or approved for is marked
 // misdirected, so it never counts as the account PayOnce last paid this supplier,
 // and goes to a person. So does one that shows no bank details, which nobody
-// could check, as checkRate treats a transfer with no conversion. Checked
-// wherever an attempt first gains a transfer: when it is sent, when a retry
-// creates it, when it is found by its request_id, and when a transfer is found
-// late under the request id of an attempt marked failed.
-function checkAccount(engine: Engine, obligation: Obligation, attempt: Attempt, transfer: Transfer): void {
+// could check, as a transfer with no conversion fails the rate check. Why, or
+// null when it went to the account it was meant for.
+function accountMismatch(attempt: Attempt, transfer: Transfer): string | null {
   const sentTo: TransferBankDetails | undefined = transfer.beneficiary?.bank_details;
   if (attempt.accountKey === null || (sentTo !== undefined && accountKeyOf(sentTo) === attempt.accountKey)) {
-    return;
+    return null;
   }
-  const reason: string =
-    sentTo === undefined
-      ? `${attempt.kind} ${transfer.short_reference_id} shows no bank details, so PayOnce cannot check they are the ones it was decided or approved for`
-      : `${attempt.kind} ${transfer.short_reference_id} went to bank details that are not the ones it was decided or approved for`;
-  engine.ledger.markMisdirected(attempt.requestId);
-  engine.ledger.escalate(obligation.invoiceId, reason);
-  note(engine.ledger, obligation.invoiceId, "warning", capitalise(reason));
+  return sentTo === undefined
+    ? `${attempt.kind} ${transfer.short_reference_id} shows no bank details, so PayOnce cannot check they are the ones it was decided or approved for`
+    : `${attempt.kind} ${transfer.short_reference_id} went to bank details that are not the ones it was decided or approved for`;
+}
+
+// The checks a transfer gets wherever its attempt first gains it: when it is
+// sent, when a retry creates it, when it is found by its request_id, and when it
+// is found late under the request id of an attempt marked failed. decide writes
+// what they find, the mismatch or misdirected mark and the escalation, in the
+// transaction that records the transfer (see Decide), so a step that stops after
+// the record, such as on a timeline line it could not write, never leaves a
+// transfer recorded and unchecked. warnings holds the lines for what decide
+// found, which noteChecks writes after the record.
+interface TransferChecks {
+  decide: Decide;
+  warnings: string[];
+}
+
+function transferChecks(engine: Engine, obligation: Obligation, attempt: Attempt): TransferChecks {
+  const warnings: string[] = [];
+  return {
+    warnings,
+    decide: (transfer: Transfer): void => {
+      warnings.length = 0;
+      const rate: string | null = rateProblem(engine, attempt, transfer);
+      if (rate !== null) {
+        engine.ledger.markRateMismatch(attempt.requestId, rate);
+        engine.ledger.escalate(obligation.invoiceId, rate);
+        warnings.push(capitalise(rate));
+      }
+      const account: string | null = accountMismatch(attempt, transfer);
+      if (account !== null) {
+        engine.ledger.markMisdirected(attempt.requestId);
+        engine.ledger.escalate(obligation.invoiceId, account);
+        warnings.push(capitalise(account));
+      }
+    },
+  };
+}
+
+function noteChecks(engine: Engine, invoiceId: string, checks: TransferChecks): void {
+  for (const warning of checks.warnings) {
+    note(engine.ledger, invoiceId, "warning", warning);
+  }
 }
 
 // Sends an attempt already written to the ledger, to the account it keeps.
@@ -1269,9 +1304,10 @@ async function send(
   attempt: Attempt,
 ): Promise<Transfer> {
   const kind: AttemptKind = attempt.kind;
+  const checks: TransferChecks = transferChecks(engine, obligation, attempt);
   let created: Transfer;
   try {
-    created = await sendAttempt(engine.client, engine.ledger, obligation, attempt);
+    created = await sendAttempt(engine.client, engine.ledger, obligation, attempt, "first", checks.decide);
   } catch (error: unknown) {
     throw new Error(
       wasRejected(error)
@@ -1281,8 +1317,9 @@ async function send(
     );
   }
 
-  // Noted as soon as the transfer exists, so a later failure cannot hide it. The
-  // fee is charged in the wallet the payment left.
+  // Noted as soon as the transfer exists, so a later failure cannot hide it, and
+  // after the checks recorded what they found with it. The fee is charged in the
+  // wallet the payment left.
   const fee: string =
     created.fee_amount > 0
       ? `, plus a ${formatMoney(toMinor(created.fee_amount), created.fee_currency ?? obligation.sourceCurrency)} transfer fee`
@@ -1293,8 +1330,7 @@ async function send(
     "payment",
     `${capitalise(kind)} ${created.short_reference_id} sent: ${money(obligation)} to ${obligation.supplier}${conversionText(created)}${fee}`,
   );
-  checkRate(engine, obligation, attempt, created);
-  checkAccount(engine, obligation, attempt, created);
+  noteChecks(engine, obligation.invoiceId, checks);
   const sentTo: TransferBankDetails | undefined = created.beneficiary?.bank_details;
   // When it usually arrives, counted from the day the transfer was created, which
   // is earlier than today for a pending attempt found by its request_id, against
@@ -3197,6 +3233,7 @@ async function retry(
   obligation: Obligation,
   attempt: Attempt,
   original: Transfer | null,
+  checks: TransferChecks,
 ): Promise<Transfer | null | undefined> {
   const approval: Approval | undefined = engine.ledger.approvalOf(attempt);
   const approved: ApprovalTerms | undefined =
@@ -3244,7 +3281,14 @@ async function retry(
     return undefined;
   }
   try {
-    return await sendAttempt(engine.client, engine.ledger, obligation, attempt, lapsed ? "lapsed" : "retry");
+    return await sendAttempt(
+      engine.client,
+      engine.ledger,
+      obligation,
+      attempt,
+      lapsed ? "lapsed" : "retry",
+      checks.decide,
+    );
   } catch (error: unknown) {
     // Nothing was sent only if the last try failed the attempt on a refusal.
     // Anything else, such as a failed listing, fails the look, which is retried.
@@ -3340,9 +3384,9 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
         ? await findTransferByRequestId(engine.client, attempt.requestId)
         : undefined;
     if (existing !== undefined) {
-      transfer = await syncTransfer(engine.client, engine.ledger, existing.id);
-      checkRate(engine, obligation, attempt, transfer);
-      checkAccount(engine, obligation, attempt, transfer);
+      const checks: TransferChecks = transferChecks(engine, obligation, attempt);
+      transfer = await syncTransfer(engine.client, engine.ledger, existing.id, checks.decide);
+      noteChecks(engine, invoiceId, checks);
       engine.bank?.sent(invoiceId, attempt.kind, transfer.id);
     } else if (attempt.transferId === null) {
       // A payout sent outside PayOnce since the attempt was opened, for example in
@@ -3383,12 +3427,13 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
         return Date.now();
       }
       const paying: Obligation = obligation;
+      const checks: TransferChecks = transferChecks(engine, obligation, attempt);
       let sent: Transfer | null | undefined;
       try {
         sent = await withCurrencyLock(
           engine.ledger,
           debitCurrency(paying),
-          (): Promise<Transfer | null | undefined> => retry(engine, paying, attempt, original),
+          (): Promise<Transfer | null | undefined> => retry(engine, paying, attempt, original, checks),
         );
       } catch (error: unknown) {
         if (!(error instanceof AccountChangedError)) {
@@ -3404,8 +3449,7 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
         continue;
       }
       transfer = sent;
-      checkRate(engine, obligation, attempt, transfer);
-      checkAccount(engine, obligation, attempt, transfer);
+      noteChecks(engine, invoiceId, checks);
       engine.bank?.sent(invoiceId, attempt.kind, transfer.id);
     } else {
       transfer = await syncTransfer(engine.client, engine.ledger, attempt.transferId);

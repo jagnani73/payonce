@@ -3362,8 +3362,8 @@ export class Ledger {
           `INSERT INTO obligations
              (invoice_id, supplier, supplier_domain, beneficiary_id, currency,
               amount_minor, transfer_method, invoice_floor_minor, origin,
-              payout_reference, started_by, supplier_phone, source_currency)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'outside', ?, ?, ?, ?)`,
+              payout_reference, started_by, supplier_phone, source_currency, look_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'outside', ?, ?, ?, ?, ?)`,
         )
         .run(
           input.invoiceId,
@@ -3378,6 +3378,9 @@ export class Ledger {
           input.startedBy,
           input.supplierPhone,
           sourceColumn(input),
+          // Due at once, so a watcher looks at it even if the step that found it
+          // stops before it wakes the invoice.
+          new Date().toISOString(),
         );
       this.db
         .prepare(
@@ -3427,29 +3430,57 @@ export class Ledger {
   }
 
   // Ties a payout made outside PayOnce to the invoice its reference names. False
-  // when it was tied already.
-  linkOutsidePayout(invoiceId: string, payout: OutsidePayout): boolean {
-    const result: { changes: number | bigint } = this.db
+  // when it was tied already. What the tie decides is written in the same
+  // transaction: a closed invoice is reopened with reopen when that is given, and
+  // an open or escalated one gets a look due at once, so a step that stops after
+  // the tie, as on a timeline line it could not write, leaves nothing undone.
+  linkOutsidePayout(invoiceId: string, payout: OutsidePayout, reopen: string | null = null): boolean {
+    return this.transaction((): boolean => {
+      const result: { changes: number | bigint } = this.db
+        .prepare(
+          `INSERT OR IGNORE INTO outside_payouts
+             (transfer_id, invoice_id, found_at, reference, state, amount_minor, currency,
+              fee_minor, fee_currency, sent_key, sent_ending)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          payout.transferId,
+          invoiceId,
+          new Date().toISOString(),
+          payout.reference,
+          payout.state,
+          payout.amountMinor,
+          payout.currency,
+          payout.feeMinor,
+          payout.feeCurrency,
+          payout.sentKey ?? null,
+          payout.sentEnding ?? null,
+        );
+      if (Number(result.changes) !== 1) {
+        return false;
+      }
+      if (reopen !== null) {
+        this.db
+          .prepare(
+            `UPDATE obligations SET state = 'escalated', escalation_reason = ?
+              WHERE invoice_id = ? AND state IN ('settled', 'rejected')`,
+          )
+          .run(reopen, invoiceId);
+      }
+      this.lookNow(invoiceId);
+      return true;
+    });
+  }
+
+  // Makes an open or escalated invoice's next look due now, so a watcher in any
+  // process looks at it, for a bank fact recorded outside its look.
+  lookNow(invoiceId: string): void {
+    this.db
       .prepare(
-        `INSERT OR IGNORE INTO outside_payouts
-           (transfer_id, invoice_id, found_at, reference, state, amount_minor, currency,
-            fee_minor, fee_currency, sent_key, sent_ending)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `UPDATE obligations SET look_at = ?
+          WHERE invoice_id = ? AND state IN ('open', 'escalated')`,
       )
-      .run(
-        payout.transferId,
-        invoiceId,
-        new Date().toISOString(),
-        payout.reference,
-        payout.state,
-        payout.amountMinor,
-        payout.currency,
-        payout.feeMinor,
-        payout.feeCurrency,
-        payout.sentKey ?? null,
-        payout.sentEnding ?? null,
-      );
-    return Number(result.changes) === 1;
+      .run(new Date().toISOString(), invoiceId);
   }
 
   outsidePayouts(invoiceId: string): OutsidePayout[] {
@@ -3892,45 +3923,66 @@ export class Ledger {
   // Ties a transfer Airwallex lists under the request id of an attempt marked
   // failed with none, which does not match its invoice, to that attempt, with what
   // it took from its wallet (debit). False when the attempt already has one, has
-  // a transfer, or is not failed.
+  // a transfer, or is not failed. In the same transaction the invoice goes to a
+  // person with reason unless it is settled, and gets a look due at once.
   addMismatched(
     requestId: string,
     transferId: string,
     reference: string,
     status: string | null,
-    debit: Debit | null = null,
+    debit: Debit | null,
+    reason: string,
   ): boolean {
-    const result: { changes: number | bigint } = this.db
-      .prepare(
-        `UPDATE attempts
-            SET mismatched_transfer_id = ?, mismatched_reference = ?, mismatched_status = ?,
-                mismatched_amount_minor = ?, mismatched_currency = ?
-          WHERE request_id = ? AND state = 'failed' AND transfer_id IS NULL
-            AND mismatched_transfer_id IS NULL`,
-      )
-      .run(transferId, reference, status, debit?.minor ?? null, debit?.currency ?? null, requestId);
-    return Number(result.changes) === 1;
+    return this.transaction((): boolean => {
+      const result: { changes: number | bigint } = this.db
+        .prepare(
+          `UPDATE attempts
+              SET mismatched_transfer_id = ?, mismatched_reference = ?, mismatched_status = ?,
+                  mismatched_amount_minor = ?, mismatched_currency = ?
+            WHERE request_id = ? AND state = 'failed' AND transfer_id IS NULL
+              AND mismatched_transfer_id IS NULL`,
+        )
+        .run(transferId, reference, status, debit?.minor ?? null, debit?.currency ?? null, requestId);
+      if (Number(result.changes) !== 1) {
+        return false;
+      }
+      const invoice: InvoiceRow | undefined = this.db
+        .prepare("SELECT invoice_id FROM attempts WHERE request_id = ?")
+        .get(requestId) as unknown as InvoiceRow | undefined;
+      if (invoice !== undefined) {
+        this.escalateUnlessSettled(invoice.invoice_id, reason);
+        this.lookNow(invoice.invoice_id);
+      }
+      return true;
+    });
   }
 
   // The status a look or the sweep last read for such a transfer, and what it
   // took from its wallet, which a null debit leaves as it is. True when the status
-  // changed.
+  // changed, and then, in the same transaction, the invoice gets a look due at
+  // once.
   setMismatchedStatus(transferId: string, status: string, debit: Debit | null = null): boolean {
-    this.db
-      .prepare(
-        `UPDATE attempts
-            SET mismatched_amount_minor = COALESCE(?, mismatched_amount_minor),
-                mismatched_currency = COALESCE(?, mismatched_currency)
-          WHERE mismatched_transfer_id = ?`,
-      )
-      .run(debit?.minor ?? null, debit?.currency ?? null, transferId);
-    const result: { changes: number | bigint } = this.db
-      .prepare(
-        `UPDATE attempts SET mismatched_status = ?
-          WHERE mismatched_transfer_id = ? AND mismatched_status IS NOT ?`,
-      )
-      .run(status, transferId, status);
-    return Number(result.changes) >= 1;
+    return this.transaction((): boolean => {
+      this.db
+        .prepare(
+          `UPDATE attempts
+              SET mismatched_amount_minor = COALESCE(?, mismatched_amount_minor),
+                  mismatched_currency = COALESCE(?, mismatched_currency)
+            WHERE mismatched_transfer_id = ?`,
+        )
+        .run(debit?.minor ?? null, debit?.currency ?? null, transferId);
+      const changed: InvoiceRow[] = this.db
+        .prepare(
+          `UPDATE attempts SET mismatched_status = ?
+            WHERE mismatched_transfer_id = ? AND mismatched_status IS NOT ?
+            RETURNING invoice_id`,
+        )
+        .all(status, transferId, status) as unknown as InvoiceRow[];
+      for (const row of changed) {
+        this.lookNow(row.invoice_id);
+      }
+      return changed.length >= 1;
+    });
   }
 
   // A person closed the invoice over these transfers found under its request ids

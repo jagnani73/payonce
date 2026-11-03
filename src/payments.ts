@@ -17,22 +17,32 @@ const MISSING_FEES_PER_READ: number = 5;
 // How long a transfer whose fee could not be recorded waits before it is read again.
 const MISSING_FEE_RETRY_MS: number = 10 * 60_000;
 
-function record(ledger: Ledger, transfer: Transfer): void {
+// What a transfer decides once it is recorded on its attempt, such as an account
+// or rate check and the escalation it makes. It runs in the transaction that
+// records the transfer and writes no timeline line, so the record and what it
+// decides land together or not at all, and a look that finds the attempt with no
+// transfer records it and decides again.
+export type Decide = (transfer: Transfer) => void;
+
+function record(ledger: Ledger, transfer: Transfer, decide: Decide | null = null): void {
   const fee: Fee | null = feeOf(transfer);
   const debit: Debit | null = debitOf(transfer);
-  ledger.record(
-    transfer.request_id,
-    transfer.id,
-    transfer.short_reference_id,
-    attemptStateOf(transfer),
-    transfer.failure?.code ?? null,
-    fee?.minor ?? null,
-    fee?.currency ?? null,
-    debit?.minor ?? null,
-    debit?.currency ?? null,
-    transfer.created_at ?? null,
-    transfer.status ?? null,
-  );
+  ledger.transaction((): void => {
+    ledger.record(
+      transfer.request_id,
+      transfer.id,
+      transfer.short_reference_id,
+      attemptStateOf(transfer),
+      transfer.failure?.code ?? null,
+      fee?.minor ?? null,
+      fee?.currency ?? null,
+      debit?.minor ?? null,
+      debit?.currency ?? null,
+      transfer.created_at ?? null,
+      transfer.status ?? null,
+    );
+    decide?.(transfer);
+  });
   // For the supplier view only, so a failure here never changes the payment step.
   try {
     const sent: SentTo = sentToOf(transfer.beneficiary?.bank_details);
@@ -81,6 +91,7 @@ export async function sendAttempt(
   obligation: Obligation,
   attempt: Attempt,
   tried: SendTry = "first",
+  decide: Decide | null = null,
 ): Promise<Transfer> {
   // Without a quote Airwallex converts at its own rate, which nobody approved.
   if (crossCurrency(obligation) && attempt.quoteId === null) {
@@ -124,7 +135,7 @@ export async function sendAttempt(
     }
     transfer = existing;
   }
-  record(ledger, transfer);
+  record(ledger, transfer, decide);
   return transfer;
 }
 
@@ -132,9 +143,10 @@ export async function syncTransfer(
   client: AirwallexClient,
   ledger: Ledger,
   transferId: string,
+  decide: Decide | null = null,
 ): Promise<Transfer> {
   const transfer: Transfer = await getTransfer(client, transferId);
-  record(ledger, transfer);
+  record(ledger, transfer, decide);
   return transfer;
 }
 
