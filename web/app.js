@@ -1898,6 +1898,23 @@ function neededOf(approval) {
   return Number.isInteger(approval.needed) && approval.needed > 1 ? approval.needed : 1;
 }
 
+// Everyone the server bars from a request, with why, so a barred person who is
+// not on the approver list, such as a run's uploader, is named on the card too.
+function barredRows(barred) {
+  return barred.length === 0
+    ? []
+    : [
+        h("dt", null, "Cannot approve"),
+        h(
+          "dd",
+          null,
+          barred.map((entry) =>
+            h("span", { class: "approval__signoff" }, whyText(entry.name), whyText(entry.why) === "" ? "" : ` (${whyText(entry.why)})`),
+          ),
+        ),
+      ];
+}
+
 function signoffsOf(approval) {
   return Array.isArray(approval.signoffs)
     ? approval.signoffs.filter((signoff) => typeof signoff?.approver === "string")
@@ -2308,6 +2325,7 @@ function buildApproveForm(invoiceId, approval, terms, error) {
   if (expiresAt !== null) {
     status.push(h("dt", null, "Expires"), h("dd", null, expiresAt));
   }
+  status.push(...barredRows(barred));
 
   const select = h(
     "select",
@@ -4286,6 +4304,7 @@ function buildRunApproveForm(runId, approval, error) {
   if (expiresAt !== null) {
     status.push(h("dt", null, "Expires"), h("dd", null, expiresAt));
   }
+  status.push(...barredRows(barred));
 
   const select = h(
     "select",
