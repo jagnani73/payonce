@@ -50,6 +50,10 @@ export interface BankChangeForm {
   phoneOnFile: string | null;
   fields: BankField[];
   blocked: string | null;
+  // When Airwallex created the payment a callback is compared with, as an ISO
+  // time, or null when it cannot be read. A call before it is refused, so the
+  // form's time starts no earlier, whatever the browser's clock says.
+  comparedSentAt: string | null;
 }
 
 // What the person who called the supplier records. details holds the new bank
@@ -188,10 +192,14 @@ function blockedReason(engine: Engine, obligation: Obligation): string | null {
 export async function bankChangeForm(engine: Engine, obligation: Obligation): Promise<BankChangeForm> {
   const blocked: string | null = blockedReason(engine, obligation);
   if (blocked !== null) {
-    return { phoneOnFile: obligation.supplierPhone, fields: [], blocked };
+    return { phoneOnFile: obligation.supplierPhone, fields: [], blocked, comparedSentAt: null };
   }
   const record: BeneficiaryRecord = await getBeneficiary(engine.client, obligation.beneficiaryId);
   const details: TransferBankDetails = record.beneficiary?.bank_details ?? {};
+  // The same read recordBankChange makes, so the form starts from the time it checks.
+  const compared: ComparedPayment | undefined = comparedPayment(engine, obligation);
+  const sentAtMs: number =
+    compared === undefined ? Number.NaN : Date.parse((await getTransfer(engine.client, compared.transferId)).created_at);
   return {
     phoneOnFile: obligation.supplierPhone,
     fields: Object.entries(EDITABLE_FIELDS)
@@ -202,6 +210,7 @@ export async function bankChangeForm(engine: Engine, obligation: Obligation): Pr
         current: shown(name, details[name]),
       })),
     blocked: null,
+    comparedSentAt: Number.isFinite(sentAtMs) ? new Date(sentAtMs).toISOString() : null,
   };
 }
 

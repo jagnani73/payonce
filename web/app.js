@@ -2997,16 +2997,20 @@ function readBankForm(data) {
     : [];
   const blocked =
     typeof data.blocked === "string" && data.blocked.trim() !== "" ? data.blocked.trim() : null;
-  return { fields, blocked };
+  return { fields, blocked, comparedSentAt: parseDate(data.comparedSentAt) };
 }
 
-function bankDraft(invoiceId) {
+// The form's time starts at the later of now and when Airwallex created the
+// payment the callback is compared with, so a browser clock behind Airwallex's
+// cannot make the default a time the server refuses.
+function bankDraft(invoiceId, comparedSentAt = null) {
   let draft = state.bankDrafts.get(invoiceId);
   if (draft === undefined) {
+    const now = Date.now();
     draft = {
       calledBy: "",
       numberCalled: "",
-      calledAt: localInputValue(new Date()),
+      calledAt: localInputValue(new Date(comparedSentAt === null ? now : Math.max(now, comparedSentAt.getTime()))),
       spokeTo: "",
       confirmed: "",
       details: {},
@@ -3079,7 +3083,7 @@ function buildBankChange(invoiceId, phone, open, load) {
       bankActions(cancelButton()),
     );
   } else {
-    children.push(buildBankForm(invoiceId, load.form.fields, refs));
+    children.push(buildBankForm(invoiceId, load.form, refs));
   }
   bankRefs = refs;
 
@@ -3095,8 +3099,9 @@ function buildBankChange(invoiceId, phone, open, load) {
   }
 }
 
-function buildBankForm(invoiceId, fields, refs) {
-  const draft = bankDraft(invoiceId);
+function buildBankForm(invoiceId, loaded, refs) {
+  const fields = loaded.fields;
+  const draft = bankDraft(invoiceId, loaded.comparedSentAt);
   const clearError = () => {
     if (state.bankError !== null) {
       state.bankError = null;
