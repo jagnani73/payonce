@@ -156,7 +156,8 @@ export class SandboxBank implements Bank {
 
   // Takes a new transfer to SENT. The simulator refuses a transition while the
   // transfer is still SCHEDULED, so it waits for Airwallex to move it on first.
-  async send(transferId: string): Promise<void> {
+  // reference, when the caller has it, names the transfer if a read fails.
+  async send(transferId: string, reference: string | null = null): Promise<void> {
     let current: Transfer;
     try {
       current = await waitForTransfer(
@@ -165,7 +166,7 @@ export class SandboxBank implements Bank {
         (transfer: Transfer): boolean => transfer.status !== "SCHEDULED",
       );
     } catch (error: unknown) {
-      throw sandboxError("read", null, error);
+      throw sandboxError("read", reference, error);
     }
     if (current.status === "PROCESSING") {
       await this.move(transferId, current.short_reference_id, "SENT");
@@ -175,11 +176,11 @@ export class SandboxBank implements Bank {
   // Pays the transfer, or fails it with the outcome as its failure type. A
   // transfer that has already settled is left as it is, and so is any transfer
   // when the outcome is STAYS_IN_FLIGHT.
-  async settle(transferId: string, outcome: string): Promise<void> {
+  async settle(transferId: string, outcome: string, reference: string | null = null): Promise<void> {
     if (outcome === STAYS_IN_FLIGHT) {
       return;
     }
-    const current: Transfer = await reading((): Promise<Transfer> => getTransfer(this.client, transferId));
+    const current: Transfer = await reading((): Promise<Transfer> => getTransfer(this.client, transferId), reference);
     if (SETTLED_STATUSES.has(current.status)) {
       return;
     }
@@ -235,8 +236,8 @@ export class SandboxBank implements Bank {
         }
         return;
       }
-      await this.send(transferId);
-      await this.settle(transferId, outcome);
+      await this.send(transferId, transfer.short_reference_id);
+      await this.settle(transferId, outcome, transfer.short_reference_id);
     }).catch((error: unknown): void => {
       this.onError(invoiceId, error);
     });

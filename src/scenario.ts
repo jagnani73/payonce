@@ -276,14 +276,14 @@ export async function runScenario(
     await agent.whenIdle(invoiceId);
     return;
   }
-  await bank.run(invoiceId, (): Promise<void> => bank.send(original.id));
+  await bank.run(invoiceId, (): Promise<void> => bank.send(original.id, original.short_reference_id));
   for (const email of thread) {
     deliver(engine.ledger, obligation, [email]);
     agent.wake(invoiceId);
     await agent.whenIdle(invoiceId);
   }
   await bank.run(invoiceId, (): Promise<void> =>
-    bank.settle(original.id, scenario.bankOutcome),
+    bank.settle(original.id, scenario.bankOutcome, original.short_reference_id),
   );
 
   if (!(await untilAtRest(engine.ledger, agent, bank, invoiceId))) {
