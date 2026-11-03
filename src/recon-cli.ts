@@ -4,7 +4,7 @@ import { NameError } from "./approvers.js";
 import { Ledger, LEDGER_PATH } from "./ledger.js";
 import { formatMoney } from "./money.js";
 import { printable, say, sayError } from "./printable.js";
-import { shownCurrency, type WalletSummary } from "./recon-match.js";
+import { isBreakKind, shownCurrency, type WalletSummary } from "./recon-match.js";
 import {
   breakView,
   explainBreaks,
@@ -85,13 +85,26 @@ function runLine(run: RunView): string {
   return `Run ${run.id} from ${from} at ${run.startedAt}, ${what}, ${run.reads} ${run.reads === 1 ? "read" : "reads"}, ${outcome}`;
 }
 
+// A break of a kind this PayOnce does not have, as a file edit or a newer
+// PayOnce could leave, gets fixed words instead of its stored facts.
+const UNKNOWN_KIND_LABEL: string = "A break of a kind PayOnce does not know";
+const UNKNOWN_KIND_TEXT: string = "PayOnce does not know this kind of break, so it shows none of its facts.";
+
+function labelOf(kind: string, label: string): string {
+  return isBreakKind(kind) ? label : UNKNOWN_KIND_LABEL;
+}
+
+function textOf(item: BreakView): string {
+  return isBreakKind(item.kind) ? item.text : UNKNOWN_KIND_TEXT;
+}
+
 function printBreak(item: BreakView, withAction: boolean): void {
   const where: string[] = [
     ...(item.invoiceId === null ? [] : [item.invoiceId]),
     `found ${item.openedAt ?? item.foundAt}`,
     ...(item.goneAt === null ? [] : ["no longer found, still waits for a person"]),
   ];
-  say(`    ${printable(`#${item.id}  ${item.text}`)}`);
+  say(`    ${printable(`#${item.id}  ${textOf(item)}`)}`);
   say(`          ${printable(where.join(", "))}`);
   if (withAction) {
     say(`          ${printable(item.action)}`);
@@ -142,7 +155,7 @@ function printReport(report: ReconReport, currency: string | null): void {
       `  The newest ${report.open.length} are listed here, and ${report.openCount - report.open.length} more are open${
         unlisted.length === 0
           ? ""
-          : `. Not listed yet: ${unlisted.map((entry: KindCount): string => `${entry.label} (${entry.count})`).join(", ")}`
+          : `. Not listed yet: ${unlisted.map((entry: KindCount): string => `${labelOf(entry.kind, entry.label)} (${entry.count})`).join(", ")}`
       }`,
     );
   }
@@ -150,7 +163,8 @@ function printReport(report: ReconReport, currency: string | null): void {
     const ofKind: BreakView[] = open.filter((item: BreakView): boolean => item.kind === kind);
     const counted: number =
       currency === null ? (report.byKind.find((entry: KindCount): boolean => entry.kind === kind)?.count ?? ofKind.length) : ofKind.length;
-    say(`  ${ofKind[0]?.label ?? kind}: ${counted}. ${ofKind[0]?.action ?? ""}`);
+    const action: string = isBreakKind(kind) ? (ofKind[0]?.action ?? "") : "";
+    say(`  ${labelOf(kind, ofKind[0]?.label ?? kind)}: ${counted}.${action === "" ? "" : ` ${action}`}`);
     for (const item of ofKind) {
       printBreak(item, false);
     }
@@ -181,7 +195,7 @@ function printReport(report: ReconReport, currency: string | null): void {
     say("Explained");
     for (const item of explained) {
       say(
-        `  ${printable(`#${item.id}  ${item.label}, by ${item.explainedBy ?? "a name PayOnce does not know"} at ${item.explainedAt ?? "a time not known"}: ${item.note ?? ""}`)}`,
+        `  ${printable(`#${item.id}  ${labelOf(item.kind, item.label)}, by ${item.explainedBy ?? "a name PayOnce does not know"} at ${item.explainedAt ?? "a time not known"}: ${item.note ?? ""}`)}`,
       );
     }
   }
@@ -315,7 +329,7 @@ function explain(args: string[]): void {
       say(
         view === undefined
           ? `#${id}  not open`
-          : printable(`#${id}  ${view.state}  facts ${view.fingerprint.slice(0, FACTS_SHOWN)}  ${view.text}`),
+          : printable(`#${id}  ${view.state}  facts ${view.fingerprint.slice(0, FACTS_SHOWN)}  ${textOf(view)}`),
       );
     }
     const open: BreakView[] = shown.filter((view: BreakView): boolean => view.state === "open");

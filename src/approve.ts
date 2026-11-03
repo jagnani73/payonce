@@ -12,6 +12,105 @@ function describeDuplicate(duplicate: DuplicateEvidence): string {
   return `${printable(duplicate.invoiceId)}, ${duplicate.state}${paid}`;
 }
 
+type Fields = Record<string, unknown>;
+
+function isFields(value: unknown): value is Fields {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isText(value: unknown): value is string {
+  return typeof value === "string";
+}
+
+function isTextOrNull(value: unknown): boolean {
+  return value === null || typeof value === "string";
+}
+
+function isMinor(value: unknown): boolean {
+  return typeof value === "number" && Number.isSafeInteger(value);
+}
+
+function isRate(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+// Counted one day at a time, so a stored count is kept to a few weeks.
+function isDays(value: unknown): boolean {
+  return value === null || (typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 60);
+}
+
+function readableFx(fx: unknown): boolean {
+  return (
+    isFields(fx) &&
+    isText(fx["quoteId"]) &&
+    isText(fx["currencyPair"]) &&
+    isRate(fx["clientRate"]) &&
+    isRate(fx["midRate"]) &&
+    isText(fx["sellCurrency"]) &&
+    isMinor(fx["sellAmountMinor"]) &&
+    isText(fx["validTo"]) &&
+    (fx["feeEstimateMinor"] === null || isMinor(fx["feeEstimateMinor"]))
+  );
+}
+
+function readableArrival(arrival: unknown): boolean {
+  return (
+    isFields(arrival) &&
+    isText(arrival["method"]) &&
+    isTextOrNull(arrival["country"]) &&
+    isTextOrNull(arrival["route"]) &&
+    isDays(arrival["minDays"]) &&
+    isDays(arrival["maxDays"]) &&
+    isText(arrival["from"]) &&
+    /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(arrival["from"]) &&
+    isTextOrNull(arrival["earliest"]) &&
+    isTextOrNull(arrival["latest"]) &&
+    isTextOrNull(arrival["dueDate"])
+  );
+}
+
+function readableDuplicate(duplicate: unknown): boolean {
+  return isFields(duplicate) && isText(duplicate["invoiceId"]) && isText(duplicate["state"]) && isTextOrNull(duplicate["paidBy"]);
+}
+
+function unreadableText(invoiceId: string, requestId: number | null): string {
+  return `${requestId === null ? "The approval request" : `Request ${requestId}`} for ${invoiceId} holds terms PayOnce cannot read, so there is nothing to show or approve`;
+}
+
+// Every field show prints, in the type it prints it as. Terms that do not parse
+// into their shape were changed outside PayOnce, so nothing is shown for them.
+function readableTerms(terms: unknown): terms is ApprovalTerms {
+  if (
+    !isFields(terms) ||
+    !isText(terms["invoiceId"]) ||
+    !isMinor(terms["amountMinor"]) ||
+    !isText(terms["currency"]) ||
+    !isText(terms["payTo"]) ||
+    (terms["fx"] !== undefined && !readableFx(terms["fx"])) ||
+    (terms["arrival"] !== undefined && !readableArrival(terms["arrival"]))
+  ) {
+    return false;
+  }
+  const evidence: unknown = terms["evidence"];
+  if (!isFields(evidence) || !isText(evidence["reason"])) {
+    return false;
+  }
+  if (terms["action"] === "replace") {
+    return (
+      isText(evidence["originalReference"]) &&
+      isText(evidence["originalState"]) &&
+      isTextOrNull(evidence["failureCode"]) &&
+      isText(evidence["emails"])
+    );
+  }
+  return (
+    terms["action"] === "pay" &&
+    Array.isArray(evidence["duplicates"]) &&
+    evidence["duplicates"].every(readableDuplicate) &&
+    (evidence["emails"] === undefined || isText(evidence["emails"]))
+  );
+}
+
 function show(pending: PendingApproval): void {
   const terms: ApprovalTerms = pending.terms;
   const approval: Approval = pending.approval;
@@ -86,9 +185,24 @@ function main(): void {
 
   const policy: ApprovalPolicy = policyFromEnv();
   const ledger: Ledger = new Ledger(LEDGER_PATH);
-  const pending: PendingApproval | undefined = pendingApproval(ledger, invoiceId);
+  let pending: PendingApproval | undefined;
+  try {
+    pending = pendingApproval(ledger, invoiceId);
+  } catch (error: unknown) {
+    if (!(error instanceof SyntaxError)) {
+      throw error;
+    }
+    say(unreadableText(invoiceId, ledger.latestApproval(invoiceId)?.id ?? null));
+    process.exitCode = 1;
+    return;
+  }
   if (pending === undefined) {
     say(`No approval is waiting for ${invoiceId}`);
+    process.exitCode = 1;
+    return;
+  }
+  if (!readableTerms(pending.terms as unknown)) {
+    say(unreadableText(invoiceId, pending.approval.id));
     process.exitCode = 1;
     return;
   }
