@@ -647,6 +647,7 @@ Quit Claude Desktop fully and start it again. It writes the server's stderr to `
 | `src/mcp-text.ts` | Marks the text PayOnce did not write in an MCP answer, and masks phone numbers |
 | `src/money.ts` | Major and minor units, and amounts as people read them, for two-decimal currencies |
 | `src/printable.ts` | Cleans every line PayOnce prints to a terminal, so a name or an error cannot move the cursor or write the clipboard |
+| `src/terms-shape.ts` | Checks stored approval terms, an invoice's or a pay run's, before `pnpm approve` or `pnpm payrun` prints them |
 | `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/audit.ts`, `src/cash.ts`, `src/board.ts`, `src/payrun.ts`, `src/outbox.ts`, `src/outage.ts`, `src/ask.ts`, `src/recon-cli.ts`, `src/metrics-cli.ts`, `src/supplier.ts`, `src/reset.ts`, `src/index.ts` | The commands |
 | `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, exchange rate quotes, balances and their cache for the cash panel, balance history, the webhook subscription and the simulation calls |
 | `web/` | The page: plain HTML, CSS and JavaScript with no build step |

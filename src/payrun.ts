@@ -23,6 +23,7 @@ import { printable, say, utcTime } from "./printable.js";
 import { readerFromEnv } from "./reader.js";
 import { describeFloors, reserveFromEnv } from "./reserve.js";
 import { parseRunFile, type FileProblem, type ParsedRunFile } from "./run-file.js";
+import { readableRunTerms } from "./terms-shape.js";
 import {
   approveRun,
   cancelRun,
@@ -203,6 +204,30 @@ function printApproval(ledger: Ledger, pending: PendingRunApproval): void {
   );
 }
 
+// The run's waiting request, or undefined when none waits. Null when its stored
+// terms are not JSON or not in their shape: they were changed outside PayOnce,
+// so the command says so and shows or approves nothing on them.
+function waitingRequest(ledger: Ledger, run: Run): PendingRunApproval | undefined | null {
+  const latest: RunApproval | undefined = ledger.latestRunApproval(run.id);
+  if (latest?.state === "requested" && ledger.run(run.id)?.state === "waiting") {
+    let terms: unknown;
+    try {
+      terms = JSON.parse(latest.terms) as unknown;
+    } catch {
+      return null;
+    }
+    if (!readableRunTerms(terms)) {
+      return null;
+    }
+  }
+  return pendingRunApproval(ledger, run.id);
+}
+
+function unreadableText(run: Run, ledger: Ledger): string {
+  const id: number | undefined = ledger.latestRunApproval(run.id)?.id;
+  return `${id === undefined ? "The approval request" : `Request ${id}`} for run ${run.id} holds terms PayOnce cannot read, so there is nothing to show or approve`;
+}
+
 function show(ledger: Ledger, run: Run): void {
   const rows: RunRow[] = ledger.runRows(run.id);
   const counts: RunCounts = runCounts(rows);
@@ -214,8 +239,10 @@ function show(ledger: Ledger, run: Run): void {
   );
   printRows(ledger, rows);
   printCash(JSON.parse(run.cash) as RunCash[]);
-  const pending: PendingRunApproval | undefined = pendingRunApproval(ledger, run.id);
-  if (pending !== undefined) {
+  const pending: PendingRunApproval | undefined | null = waitingRequest(ledger, run);
+  if (pending === null) {
+    fail(unreadableText(run, ledger));
+  } else if (pending !== undefined) {
     printApproval(ledger, pending);
   }
   const events: LedgerEvent[] = ledger.runEvents(run.id).slice(-EVENTS_SHOWN);
@@ -291,7 +318,11 @@ async function upload(ledger: Ledger, path: string | undefined, uploader: string
 // policy. The server releases the run.
 function approve(ledger: Ledger, run: Run, requestRaw: string | undefined, approver: string): void {
   const policy: ApprovalPolicy = policyFromEnv();
-  const pending: PendingRunApproval | undefined = pendingRunApproval(ledger, run.id);
+  const pending: PendingRunApproval | undefined | null = waitingRequest(ledger, run);
+  if (pending === null) {
+    fail(unreadableText(run, ledger));
+    return;
+  }
   if (pending === undefined) {
     fail(`No approval is waiting for run ${run.id}`);
     return;
