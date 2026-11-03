@@ -642,6 +642,9 @@ export interface FoundPayout {
   sentKey: string | null;
   sentRoute: string | null;
   sentEnding: string | null;
+  // The transfer's created_at as Airwallex wrote it, as record keeps it. A payout
+  // taken on already failed is never read again, so this is the only time it is.
+  bankCreatedAt: string | null;
 }
 
 // One approver's approval of a request, with the binding of the terms they saw.
@@ -3738,8 +3741,9 @@ export class Ledger {
         .prepare(
           `INSERT INTO attempts
              (request_id, invoice_id, kind, transfer_id, reference, state, failure_code,
-              fee_minor, fee_currency, amount_minor, currency, sent_key, sent_ending, sent_route)
-           VALUES (?, ?, 'original', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              fee_minor, fee_currency, amount_minor, currency, sent_key, sent_ending, sent_route,
+              bank_created_at)
+           VALUES (?, ?, 'original', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           found.requestId,
@@ -3755,6 +3759,7 @@ export class Ledger {
           found.sentKey,
           found.sentEnding,
           found.sentRoute,
+          found.bankCreatedAt,
         );
       this.appendEvent(input.invoiceId, "bank", line, null);
       this.db.exec("COMMIT");
