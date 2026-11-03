@@ -5,7 +5,7 @@ import {
   isExpired,
   liveAtBank,
   mismatchedLive,
-  objectOf,
+  storedObject,
   withBank,
   type Approval,
   type Attempt,
@@ -117,9 +117,11 @@ function lineAmount(ledger: Ledger, obligation: Obligation, attempt: Attempt | n
   }
   const approval: Approval | undefined =
     attempt === null ? ledger.latestApproval(obligation.invoiceId) : ledger.approvalOf(attempt);
-  // Terms or a kept quote that do not parse read as no quote, as before one was taken.
+  // Read strict, so committedMinor fails closed for the policy and the run checks.
+  // Only the panel, the board and other views (readingSoft) read terms or a kept
+  // quote that do not parse as no quote, as before one was taken.
   const fx: FxTerms | undefined =
-    approval === undefined ? undefined : objectOf<ApprovalTerms>(approval.terms)?.fx;
+    approval === undefined ? undefined : storedObject<ApprovalTerms>(approval.terms)?.fx;
   const open: boolean =
     approval !== undefined &&
     (approval.state === "requested" || approval.state === "approved") &&
@@ -128,7 +130,7 @@ function lineAmount(ledger: Ledger, obligation: Obligation, attempt: Attempt | n
     return { amountMinor: fx.sellAmountMinor, estimated: false, fromQuote: true };
   }
   const kept: string | undefined = ledger.lastQuote(obligation.invoiceId);
-  const lastQuote: LastQuote | null = kept === undefined ? null : objectOf<LastQuote>(kept);
+  const lastQuote: LastQuote | null = kept === undefined ? null : storedObject<LastQuote>(kept);
   const last: FxTerms | undefined = lastQuote === null ? fx : lastQuote.fx;
   return last === undefined
     ? { amountMinor: 0, estimated: true, fromQuote: false }

@@ -25,6 +25,7 @@ import { pendingApproval, pendingClose } from "./engine.js";
 import { boardGroups, outageHolding, type BoardGroupOf } from "./incident-board.js";
 import {
   isExpired,
+  readingSoft,
   type Approval,
   type Attempt,
   type Ledger,
@@ -165,7 +166,12 @@ function runAuditSummary(ledger: Ledger, runId: number): AuditSummary {
 // Each invoice's headline follows the incident list's rule: the board's fixed
 // reason for an invoice on the board, and otherwise its latest decision, close or
 // standing line (Ledger.headlines), never an error, an email or a message draft.
+// A view, so it reads stored JSON soft.
 export function incidentsView(ledger: Ledger, state: ObligationState | null, limit: number): unknown {
+  return readingSoft((): unknown => incidentsOf(ledger, state, limit));
+}
+
+function incidentsOf(ledger: Ledger, state: ObligationState | null, limit: number): unknown {
   const groups: Map<string, BoardGroupOf> = boardGroups(ledger);
   const headlines: Map<string, string> = ledger.headlines();
   const all: Obligation[] = ledger
@@ -407,15 +413,19 @@ export function supplierView(ledger: Ledger, word: string): unknown {
 
 // The cash panel on this ledger. Given what a running server holds, its balances
 // and floors are used, so the headroom is the one the page shows; otherwise the
-// floors come from RESERVE_FLOORS and there is no balance.
+// floors come from RESERVE_FLOORS and there is no balance. A view, so it reads
+// stored JSON soft.
 export function cashView(ledger: Ledger, cached: CachedBalances | null): CashReport {
-  return cashReport({
-    ledger,
-    reserve: cached?.reserve ?? reserveFromEnv(),
-    balances: cached?.balances ?? NO_BALANCES,
-    statesCheckedAt: cached?.statesCheckedAt ?? null,
-    payRunLines: payRunLines(ledger),
-  });
+  return readingSoft(
+    (): CashReport =>
+      cashReport({
+        ledger,
+        reserve: cached?.reserve ?? reserveFromEnv(),
+        balances: cached?.balances ?? NO_BALANCES,
+        statesCheckedAt: cached?.statesCheckedAt ?? null,
+        payRunLines: payRunLines(ledger),
+      }),
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

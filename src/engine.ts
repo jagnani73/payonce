@@ -103,9 +103,9 @@ import {
   lateBesideLive,
   liveAtBank,
   mismatchedLive,
-  objectOf,
   RailOutageError,
   signersOf,
+  storedObject,
   type Approval,
   type Attempt,
   type AttemptKind,
@@ -295,11 +295,13 @@ function sendersNotOnFile(obligation: Obligation, emails: SupplierEmail[]): stri
   return unverifiedSenders(emails, obligation.supplierDomain);
 }
 
-// The stored findings, or what stands for them before anything was read. Findings
-// that do not parse stand as not read, so the emails go to a person.
+// The stored findings, or what stands for them before anything was read. They are
+// read strict, so a look on findings that do not parse throws and pays nothing.
+// Only a view, such as the board's pendingClose, reads them soft (readingSoft), and
+// there findings that do not parse stand as not read.
 function storedFindings(ledger: Ledger, invoiceId: string, emails: SupplierEmail[]): { findings: StoredFindings; stored: boolean } {
   const stored: string | undefined = ledger.findings(invoiceId);
-  const findings: StoredFindings | null = stored === undefined ? null : objectOf<StoredFindings>(stored);
+  const findings: StoredFindings | null = stored === undefined ? null : storedObject<StoredFindings>(stored);
   if (findings !== null) {
     return { findings, stored: true };
   }

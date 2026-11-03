@@ -17,6 +17,7 @@ import {
 import { candidatesFor, invoiceIndex, type InvoiceIndex, type Match } from "./intake.js";
 import {
   liveAtBank,
+  readingSoft,
   type Ledger,
   type Obligation,
   type ObligationOrigin,
@@ -1986,7 +1987,12 @@ function entriesByInvoice(entries: BoardEntry[]): Map<string, BoardEntry> {
 // different currencies compared as plain numbers, as the board does), then by
 // name and key. The board's entries are built for the invoices that are not
 // closed and the waiting run's pay rows only, each as the whole board has it.
+// A view, so it reads stored JSON soft.
 export function supplierList(ledger: Ledger, now: number = Date.now()): SupplierList {
+  return readingSoft((): SupplierList => listOfRecords(ledger, now));
+}
+
+function listOfRecords(ledger: Ledger, now: number): SupplierList {
   return ledger.readSnapshot((): SupplierList => {
     const read: SupplierListRead = ledger.supplierListRead();
     const records: Map<string, RecordFacts> = recordsOf(read);
@@ -2018,11 +2024,15 @@ export function supplierList(ledger: Ledger, now: number = Date.now()): Supplier
 
 // One supplier record, or null when the key breaks the pattern or nothing in the
 // ledger names it. The board's entries are built for its own invoices and pay
-// rows only.
+// rows only. A view, so it reads stored JSON soft.
 export function supplierDetail(ledger: Ledger, key: string, now: number = Date.now()): SupplierDetail | null {
   if (!SUPPLIER_KEY_PATTERN.test(key)) {
     return null;
   }
+  return readingSoft((): SupplierDetail | null => detailOf(ledger, key, now));
+}
+
+function detailOf(ledger: Ledger, key: string, now: number): SupplierDetail | null {
   return ledger.readSnapshot((): SupplierDetail | null => {
     const read: SupplierRead = ledger.supplierRead(key);
     const facts: RecordFacts | undefined = recordsOf(read).get(key);

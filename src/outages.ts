@@ -6,6 +6,7 @@ import { deadlineMinutes } from "./deadlines.js";
 import { cleanLine } from "./eml.js";
 import { formatMoney } from "./money.js";
 import {
+  readingSoft,
   type Approval,
   type Attempt,
   type FailureSeenBy,
@@ -452,7 +453,12 @@ function invoiceState(ledger: Ledger, invoiceId: string): string | null {
   return ledger.obligation(invoiceId)?.state ?? null;
 }
 
+// A view, so it reads stored JSON soft.
 export function outageView(ledger: Ledger, outage: Outage, holding: OutageHolding | null = null): OutageView {
+  return readingSoft((): OutageView => viewOf(ledger, outage, holding));
+}
+
+function viewOf(ledger: Ledger, outage: Outage, holding: OutageHolding | null): OutageView {
   const counted: CountedPayout[] = outage.counted
     .map((transferId: string): RailFailure | undefined => ledger.railFailure(transferId))
     .filter((failure: RailFailure | undefined): failure is RailFailure => failure !== undefined)
@@ -533,12 +539,17 @@ export interface OutagesReport {
 }
 
 // GET /api/outages and pnpm outage. Ledger reads only, no Airwallex call. Given
-// holdingOf, an active outage lists what the board lists as held.
+// holdingOf, an active outage lists what the board lists as held. A view, so it
+// reads stored JSON soft.
 export function outagesReport(
   ledger: Ledger,
   policy: ApprovalPolicy,
   holdingOf: HoldingOf | null = null,
 ): OutagesReport {
+  return readingSoft((): OutagesReport => reportOf(ledger, policy, holdingOf));
+}
+
+function reportOf(ledger: Ledger, policy: ApprovalPolicy, holdingOf: HoldingOf | null): OutagesReport {
   const rule: OutageRule = outageRuleFromEnv();
   const all: Outage[] = ledger.outages();
   return {

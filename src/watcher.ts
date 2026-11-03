@@ -5,10 +5,12 @@ import type { Engine } from "./engine.js";
 import {
   isExpired,
   mismatchedLive,
+  readingSoft,
   withBank,
   type Approval,
   type Attempt,
   type AttemptState,
+  type Obligation,
   type OutsidePayout,
 } from "./ledger.js";
 import { sayWarning } from "./printable.js";
@@ -122,7 +124,10 @@ export class Watcher {
     const unsentIds: ReadonlySet<string> = new Set<string>(
       unsent.map((row: { invoiceId: string; runId: number }): string => row.invoiceId),
     );
-    for (const obligation of this.engine.ledger.obligations()) {
+    // Which invoices to wake is read soft, so a row a look cannot read does not stop
+    // the watcher for every other invoice: that invoice's look throws, sends
+    // nothing and is tried again a minute later.
+    for (const obligation of readingSoft((): Obligation[] => this.engine.ledger.obligations())) {
       const invoiceId: string = obligation.invoiceId;
       if (
         obligation.state === "settled" ||
@@ -151,7 +156,7 @@ export class Watcher {
       // the look comes when the bank pays or fails it. A payout sent outside
       // PayOnce is read in any state that is not final, so one a look stored as
       // unknown, such as one it read as OVERDUE, is read again.
-      const attempts: Attempt[] = this.engine.ledger.attempts(invoiceId);
+      const attempts: Attempt[] = readingSoft((): Attempt[] => this.engine.ledger.attempts(invoiceId));
       const inFlight: string[] = [
         ...attempts
           .filter(

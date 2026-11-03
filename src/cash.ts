@@ -8,7 +8,7 @@ import {
   type CashReport,
   type CurrencyCash,
 } from "./cash-position.js";
-import { Ledger, LEDGER_PATH } from "./ledger.js";
+import { Ledger, LEDGER_PATH, readingSoft } from "./ledger.js";
 import { formatMoney } from "./money.js";
 import { recordMissingFees } from "./payments.js";
 import { say } from "./printable.js";
@@ -165,13 +165,17 @@ async function main(): Promise<void> {
     }
   }
 
-  const report: CashReport = cashReport({
-    ledger,
-    reserve,
-    balances: state,
-    statesCheckedAt: null,
-    payRunLines: payRunLines(ledger),
-  });
+  // The panel is a view, so it reads stored JSON soft.
+  const report: CashReport = readingSoft(
+    (): CashReport =>
+      cashReport({
+        ledger,
+        reserve,
+        balances: state,
+        statesCheckedAt: null,
+        payRunLines: payRunLines(ledger),
+      }),
+  );
   say(describeFloors(reserve));
   if (state.error !== null) {
     say(`Airwallex could not be read: ${state.error.message}. PayOnce's own figures below are current.`);

@@ -20,7 +20,8 @@ import { heldBeforePaying, pendingClose, REPLACEMENT_DEADLINE_REASON } from "./e
 import { candidatesFor, invoiceIndex, type InvoiceIndex, type Match } from "./intake.js";
 import {
   isExpired,
-  objectOf,
+  readingSoft,
+  storedObject,
   withBank,
   type Approval,
   type Attempt,
@@ -376,7 +377,7 @@ function personSituation(
   if (kinds.has("awaiting-approval") && latest !== undefined) {
     // Terms that do not parse are told apart by the invoice: a held one's request pays it.
     const action: string =
-      objectOf<ApprovalTerms>(latest.terms)?.action ?? (heldBeforePaying(ledger, obligation) ? "pay" : "replace");
+      storedObject<ApprovalTerms>(latest.terms)?.action ?? (heldBeforePaying(ledger, obligation) ? "pay" : "replace");
     return action === "pay"
       ? situation("person", "approve-held", `Paying this held invoice waits for approval (${progress(latest)})`)
       : situation("person", "approve-replacement", `A replacement waits for approval (${progress(latest)})`);
@@ -762,13 +763,17 @@ interface Scope {
 
 // Every entry on the board, ranked, and how many invoices the ledger holds. With
 // a scope, only its entries, each as the whole board has it, and the number of
-// invoices in the scope.
+// invoices in the scope. The board is a view, so it reads stored JSON soft.
 function rankedBoard(
   ledger: Ledger,
   now: number,
   scope: Scope | null = null,
   indexOf: () => InvoiceIndex = (): InvoiceIndex => invoiceIndex(ledger),
 ): Board {
+  return readingSoft((): Board => boardOf(ledger, now, scope, indexOf));
+}
+
+function boardOf(ledger: Ledger, now: number, scope: Scope | null, indexOf: () => InvoiceIndex): Board {
   const run: Run | undefined = ledger.waitingRun();
   const byInvoice: Map<string, CashLine[]> = new Map<string, CashLine[]>();
   const byRow: Map<string, CashLine[]> = new Map<string, CashLine[]>();

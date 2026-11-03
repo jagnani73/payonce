@@ -157,12 +157,15 @@ import {
   Ledger,
   LEDGER_PATH,
   NothingToPayError,
+  readingSoft,
   SameFileError,
+  storedObject,
   WaitingRunError,
   withBank,
   type Alert,
   type Approval,
   type Attempt,
+  type AttemptKind,
   type Draft,
   type DraftMove,
   type Obligation,
@@ -484,32 +487,45 @@ async function readJson(
 // also goes back to paying a replacement it had not finished with, an original
 // paid on an approval after a hold, and a pay run row's original, which gets the
 // row's sandbox outcome. A released row that never sent is left to the watcher,
-// which wakes such rows one at a time.
+// which wakes such rows one at a time. What to pick up is read soft, so a row a
+// look cannot read does not stop the server: that look throws and sends nothing.
+// The wakes come after the read, so no look runs inside it.
 function pickUpInterrupted(): void {
-  for (const obligation of engine.ledger.obligations()) {
-    if (
-      obligation.state === "settled" ||
-      obligation.state === "rejected" ||
-      !isWatching(obligation.invoiceId)
-    ) {
+  const picked: { invoiceId: string; sent: { kind: AttemptKind; transferId: string }[] }[] = readingSoft(() =>
+    engine.ledger
+      .obligations()
+      .filter(
+        (obligation: Obligation): boolean =>
+          obligation.state !== "settled" && obligation.state !== "rejected" && isWatching(obligation.invoiceId),
+      )
+      .map((obligation: Obligation) => ({ invoiceId: obligation.invoiceId, sent: resumedBySandbox(obligation) })),
+  );
+  for (const { invoiceId, sent } of picked) {
+    for (const { kind, transferId } of sent) {
+      bank.sent(invoiceId, kind, transferId);
+    }
+    agent.wake(invoiceId);
+  }
+}
+
+// The payments in flight the sandbox bank goes back to paying.
+function resumedBySandbox(obligation: Obligation): { kind: AttemptKind; transferId: string }[] {
+  const sent: { kind: AttemptKind; transferId: string }[] = [];
+  for (const attempt of engine.ledger.attempts(obligation.invoiceId)) {
+    if (attempt.state !== "in_flight" || attempt.transferId === null) {
       continue;
     }
-    for (const attempt of engine.ledger.attempts(obligation.invoiceId)) {
-      if (attempt.state !== "in_flight" || attempt.transferId === null) {
-        continue;
-      }
-      // The approval this attempt was opened on, so a request opened since does
-      // not decide it.
-      const approval: Approval | undefined = engine.ledger.approvalOf(attempt);
-      const released: boolean =
-        obligation.runRowId !== null ||
-        (approval?.state === "used" && (JSON.parse(approval.terms) as ApprovalTerms).action === "pay");
-      if (attempt.kind === "replacement" || released) {
-        bank.sent(obligation.invoiceId, attempt.kind, attempt.transferId);
-      }
+    // The approval this attempt was opened on, so a request opened since does
+    // not decide it.
+    const approval: Approval | undefined = engine.ledger.approvalOf(attempt);
+    const released: boolean =
+      obligation.runRowId !== null ||
+      (approval?.state === "used" && storedObject<ApprovalTerms>(approval.terms)?.action === "pay");
+    if (attempt.kind === "replacement" || released) {
+      sent.push({ kind: attempt.kind, transferId: attempt.transferId });
     }
-    agent.wake(obligation.invoiceId);
   }
+  return sent;
 }
 
 // The events that can change a decision. The rest are only logged.
@@ -648,8 +664,12 @@ function watchedInvoices(): Set<string> {
 // The page polls this, so it reads the ledger a few times in all, never once per
 // invoice. The headline says how the incident stands: the board's reason for an
 // open invoice, and otherwise the latest decision, close or standing line, never
-// an error, an email or a message draft.
+// an error, an email or a message draft. A view, so it reads stored JSON soft.
 function listIncidents(): unknown {
+  return readingSoft(incidentList);
+}
+
+function incidentList(): unknown {
   const groups: Map<string, BoardGroupOf> = boardGroups(engine.ledger);
   const headlines: Map<string, string> = engine.ledger.headlines();
   const runs: Map<string, number> = engine.ledger.runIdsByInvoice();
@@ -999,11 +1019,18 @@ async function bankChangeByPerson(
 }
 
 // The cash panel: balances from the cache, read again when 30 seconds old, and the
-// ledger as it is now. It answers at once with whatever the cache holds.
-function cash(read: boolean = true): CashReport {
+// ledger as it is now. It answers at once with whatever the cache holds. The panel
+// is a view, so it reads stored JSON soft.
+function cashPanel(read: boolean): CashReport {
   if (read) {
     balances.refreshIfOld();
   }
+  return readingSoft(cash);
+}
+
+// The panel's report from the cache as it is. The alerts' cash check reads it
+// strict.
+function cash(): CashReport {
   return cashReport({
     ledger: engine.ledger,
     reserve: engine.reserve,
@@ -1084,7 +1111,7 @@ function alertCash(): AlertCash {
     balances.refreshIfOld(now);
   }
   if (state.readAt !== null) {
-    return cash(false);
+    return cash();
   }
   return balances.latest().refreshing ? "reading" : null;
 }
@@ -1401,7 +1428,12 @@ function runWatching(run: Run): boolean {
   return releasedInvoices(run).some(isWatching);
 }
 
+// A list the page polls, so it reads stored JSON soft, as the incident list does.
 function listRuns(): unknown {
+  return readingSoft(runList);
+}
+
+function runList(): unknown {
   return {
     runs: engine.ledger.runs().map((run: Run) => ({
       id: run.id,
@@ -1830,11 +1862,11 @@ async function route(
   ) {
     sendJson(response, 200, await endOutageByPerson(request, parts[2]));
   } else if (method === "GET" && pathname === "/api/cash") {
-    sendJson(response, 200, cash());
+    sendJson(response, 200, cashPanel(true));
   } else if (method === "GET" && pathname === "/api/cash/cached") {
     // The same panel from the cache as it is, never starting an Airwallex read,
     // for the read-only MCP server.
-    sendJson(response, 200, cash(false));
+    sendJson(response, 200, cashPanel(false));
   } else if (method === "GET" && pathname === "/api/board") {
     sendJson(response, 200, board(url.searchParams));
   } else if (method === "GET" && pathname === "/api/metrics") {
@@ -1847,9 +1879,12 @@ async function route(
     const [status, body] = await reconcileRoute(request, method, parts, url);
     sendJson(response, status, body);
   } else if (method === "GET" && pathname === "/api/inbox") {
-    sendJson(response, 200, {
-      uploads: engine.ledger.uploads(INBOX_OTHERS_SHOWN).map(uploadSummary),
-    });
+    // A list the page polls, so it reads stored JSON soft, as the incident list does.
+    sendJson(
+      response,
+      200,
+      readingSoft(() => ({ uploads: engine.ledger.uploads(INBOX_OTHERS_SHOWN).map(uploadSummary) })),
+    );
   } else if (method === "POST" && pathname === "/api/inbox") {
     sendJson(response, 201, await addUpload(request));
   } else if (parts[1] === "inbox" && parts[2] !== undefined) {

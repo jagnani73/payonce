@@ -696,13 +696,13 @@ function toUpload(row: UploadRow): Upload {
     sender: row.sender,
     senderName: row.sender_name,
     fromAsWritten: row.from_as_written,
-    replyTo: stringsOf(row.reply_to),
+    replyTo: storedStrings(row.reply_to),
     dateAsWritten: row.date_as_written,
     subject: row.subject,
     body: row.body,
     styleText: row.style_text,
-    attachments: listOf<EmailAttachment>(row.attachments),
-    notes: stringsOf(row.notes),
+    attachments: storedList<EmailAttachment>(row.attachments),
+    notes: storedStrings(row.notes),
     partial: row.partial === 1,
     state: row.state,
     invoiceId: row.invoice_id,
@@ -1235,7 +1235,7 @@ function toObligation(row: ObligationRow): Obligation {
     startedBy: row.started_by,
     supplierPhone: row.supplier_phone,
     payoutReference: row.payout_reference,
-    duplicateOf: row.duplicate_of === null ? [] : stringsOf(row.duplicate_of),
+    duplicateOf: row.duplicate_of === null ? [] : storedStrings(row.duplicate_of),
     rejectedBy: row.rejected_by,
     runRowId: row.run_row_id,
     dueDate: row.due_date ?? null,
@@ -1352,7 +1352,7 @@ function toAttempt(row: AttemptRow): Attempt {
     rateMismatch: row.rate_mismatch,
     bankCreatedAt: row.bank_created_at ?? null,
     bankStatus: row.bank_status ?? null,
-    arrival: row.arrival === null || row.arrival === undefined ? null : objectOf<ArrivalTerms>(row.arrival),
+    arrival: row.arrival === null || row.arrival === undefined ? null : storedObject<ArrivalTerms>(row.arrival),
     openedAt: row.opened_at ?? null,
     triedAt: row.tried_at ?? null,
     foundLateAt: row.found_late_at ?? null,
@@ -1630,7 +1630,7 @@ function toRun(row: RunRecord): Run {
     id: row.id,
     fileName: row.file_name,
     fileHash: row.file_hash,
-    columns: stringsOf(row.columns),
+    columns: storedStrings(row.columns),
     uploadedBy: row.uploaded_by,
     uploadedAt: row.uploaded_at,
     state: row.state,
@@ -1647,7 +1647,7 @@ function toRunRow(row: RunRowRecord): RunRow {
     id: row.id,
     runId: row.run_id,
     line: row.line,
-    cells: stringsOf(row.cells),
+    cells: storedStrings(row.cells),
     invoiceId: row.invoice_id,
     supplier: row.supplier,
     beneficiaryId: row.beneficiary_id,
@@ -1656,15 +1656,15 @@ function toRunRow(row: RunRowRecord): RunRow {
     transferMethod: row.transfer_method,
     sandboxOutcome: row.sandbox_outcome,
     action: row.action,
-    reasons: stringsOf(row.reasons),
-    heldFor: stringsOf(row.held_for),
+    reasons: storedStrings(row.reasons),
+    heldFor: storedStrings(row.held_for),
     newPayee: row.new_payee === 1,
     bankChangeId: row.bank_change_id,
     payee: row.payee,
     payTo: row.pay_to,
     accountKey: row.account_key,
     dueDate: row.due_date ?? null,
-    arrival: typeof row.arrival === "string" ? objectOf<ArrivalTerms>(row.arrival) : null,
+    arrival: typeof row.arrival === "string" ? storedObject<ArrivalTerms>(row.arrival) : null,
     state: row.state,
     note: row.note,
   };
@@ -1750,13 +1750,13 @@ function toOutage(row: OutageRow): Outage {
     id: row.id,
     currency: row.currency,
     method: row.method,
-    codes: stringsOf(row.codes),
+    codes: storedStrings(row.codes),
     state: row.state,
     declaredAt: row.declared_at,
     payees: row.payees,
     threshold: row.threshold,
     windowMinutes: row.window_minutes,
-    counted: stringsOf(row.counted),
+    counted: storedStrings(row.counted),
     endedAt: row.ended_at,
     endedBy: row.ended_by,
     endNote: row.end_note,
@@ -6258,9 +6258,30 @@ interface SupplierRunRowRecord {
   skip_reasons: number | null;
 }
 
-// Stored JSON read soft, for the rows the board, the outage views and the incident
-// list read for every invoice: a value another program spoiled reads as none
-// instead of failing the whole view. What PayOnce writes reads as it always did.
+// Stored JSON. Outside readingSoft a row mapper reads it with JSON.parse, so text
+// that does not parse throws: the engine, the policy, approvals, terms and
+// bindings fail closed on a row they cannot read, and a look that throws is tried
+// again a minute later and pays nothing. Inside readingSoft, which only views and
+// the lists of invoices to wake run, a value that does not parse, or is not the
+// shape PayOnce writes, reads as none, so one spoiled row cannot fail a whole
+// view. What PayOnce writes reads the same either way.
+let softReads: number = 0;
+
+// Runs a view's reads with stored JSON read soft. The reads must be synchronous,
+// so no step of the engine runs while they do.
+export function readingSoft<T>(read: () => T): T {
+  softReads += 1;
+  try {
+    const result: T = read();
+    if (result instanceof Promise) {
+      throw new Error("readingSoft takes synchronous reads only");
+    }
+    return result;
+  } finally {
+    softReads -= 1;
+  }
+}
+
 function parsedOf(json: string): unknown {
   try {
     return JSON.parse(json);
@@ -6270,19 +6291,30 @@ function parsedOf(json: string): unknown {
 }
 
 // A JSON list of strings as a column keeps it, or none when it is not one.
-export function stringsOf(json: string): string[] {
+function stringsOf(json: string): string[] {
   const parsed: unknown = parsedOf(json);
   return Array.isArray(parsed) ? parsed.filter((item: unknown): item is string => typeof item === "string") : [];
 }
 
-// A JSON list as a column keeps it, or none when it is not one.
-export function listOf<T>(json: string): T[] {
+// A stored list of strings.
+export function storedStrings(json: string): string[] {
+  return softReads === 0 ? (JSON.parse(json) as string[]) : stringsOf(json);
+}
+
+// A stored list.
+export function storedList<T>(json: string): T[] {
+  if (softReads === 0) {
+    return JSON.parse(json) as T[];
+  }
   const parsed: unknown = parsedOf(json);
   return Array.isArray(parsed) ? (parsed as T[]) : [];
 }
 
-// A JSON object as a column keeps it, or null when it is not one.
-export function objectOf<T>(json: string): T | null {
+// A stored object, or null.
+export function storedObject<T>(json: string): T | null {
+  if (softReads === 0) {
+    return JSON.parse(json) as T | null;
+  }
   const parsed: unknown = parsedOf(json);
   return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as T) : null;
 }
