@@ -294,7 +294,9 @@ function explain(args: string[]): void {
   const factsArg: string | undefined = args.find((arg: string): boolean => arg.startsWith("--facts="));
   const rest: string[] = args.filter((arg: string): boolean => !arg.startsWith("--facts="));
   const ids: number[] | null = rest[0] === undefined ? null : idsOf(rest[0]);
-  if (ids === null || rest.length === 2 || rest.length > 3) {
+  // The words after the name are the note, as pnpm close and pnpm outage end take it.
+  const note: string = rest.slice(2).join(" ").trim();
+  if (ids === null || (rest.length >= 2 && note === "")) {
     fail(USAGE);
     return;
   }
@@ -339,7 +341,7 @@ function explain(args: string[]): void {
     return;
   }
   try {
-    const done: BreakView[] = explainBreaks(ledger, items, rest[1] ?? "", rest[2] ?? "");
+    const done: BreakView[] = explainBreaks(ledger, items, rest[1] ?? "", note);
     for (const item of done) {
       say(printable(`#${item.id} explained by ${item.explainedBy ?? ""}: ${item.note ?? ""}`));
     }
