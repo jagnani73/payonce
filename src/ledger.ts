@@ -1042,6 +1042,12 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     // them. '' on an attempt already failed, or paid, when the column was added.
     failed_at: "TEXT",
     paid_at: "TEXT",
+    // When Airwallex refused to create the transfer, as an ISO time, written by
+    // failAttempt for a refusal, whether or not it gave a code. For the metrics
+    // only: nothing PayOnce decides reads it. Null on an attempt PayOnce marked
+    // failed because Airwallex listed no transfer for it, and on refusals from
+    // before the column.
+    refused_at: "TEXT",
   },
   rail_failures: {
     // When the transfer failed by Airwallex's updated_at, or when PayOnce first
@@ -1921,6 +1927,7 @@ export interface MetricsAttempt extends LiveTested {
   triedAt: string | null;
   failedAt: string | null;
   paidAt: string | null;
+  refusedAt: string | null;
 }
 
 export interface MetricsPayout {
@@ -2844,7 +2851,8 @@ export class Ledger {
                   a.approval_id IS NOT NULL AS approved,
                   a.bank_created_at AS bankCreatedAt, a.bank_status AS bankStatus, a.found_late_at AS foundLateAt,
                   a.mismatched_transfer_id AS mismatchedTransferId, a.mismatched_status AS mismatchedStatus,
-                  a.opened_at AS openedAt, a.tried_at AS triedAt, a.failed_at AS failedAt, a.paid_at AS paidAt
+                  a.opened_at AS openedAt, a.tried_at AS triedAt, a.failed_at AS failedAt, a.paid_at AS paidAt,
+                  a.refused_at AS refusedAt
              FROM attempts a LEFT JOIN obligations o ON o.invoice_id = a.invoice_id ORDER BY a.rowid`,
         )
         .all() as unknown as MetricsAttemptRow[]
@@ -3640,17 +3648,17 @@ export class Ledger {
       .run(new Date(at).toISOString(), requestId);
   }
 
-  // For an attempt that never became a transfer: Airwallex refused to create it,
-  // or lists none under its request id long after it was opened. It releases the
-  // lock. One a look has since found a transfer for is kept. True when it changed
-  // the attempt.
-  failAttempt(requestId: string, failureCode: string | null): boolean {
+  // For an attempt that never became a transfer: Airwallex refused to create it
+  // (refused, with or without a code), or lists none under its request id long
+  // after it was opened. It releases the lock. One a look has since found a
+  // transfer for is kept. True when it changed the attempt.
+  failAttempt(requestId: string, failureCode: string | null, refused: boolean): boolean {
     const result: { changes: number | bigint } = this.db
       .prepare(
-        `UPDATE attempts SET state = 'failed', failure_code = ?
+        `UPDATE attempts SET state = 'failed', failure_code = ?, refused_at = ?
           WHERE request_id = ? AND state = 'pending' AND transfer_id IS NULL`,
       )
-      .run(failureCode, requestId);
+      .run(failureCode, refused ? new Date().toISOString() : null, requestId);
     return Number(result.changes) === 1;
   }
 

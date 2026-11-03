@@ -118,7 +118,7 @@ export async function sendAttempt(
         !duplicate &&
         (tried === "lapsed" ? quoteRefused : tried === "first" || attempt.quoteId === null)
       ) {
-        ledger.failAttempt(attempt.requestId, error.code ?? null);
+        ledger.failAttempt(attempt.requestId, error.code ?? null, true);
       }
       throw error;
     }

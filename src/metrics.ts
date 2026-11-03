@@ -687,7 +687,9 @@ function failuresOf(read: MetricsRead, index: Indexed, window: Window): Failures
       stage = "bank";
       anchor = attempt.bankCreatedAt;
     } else if (attempt.state === "failed") {
-      stage = attempt.failureCode !== null ? "refused" : "never-created";
+      // A refusal with no code is still a refusal. One from before refused_at
+      // shows only by its code.
+      stage = attempt.failureCode !== null || attempt.refusedAt !== null ? "refused" : "never-created";
       anchor = attempt.triedAt ?? attempt.openedAt;
     } else {
       continue;

@@ -1725,7 +1725,7 @@ async function failNeverSent(
         }
         return (
           (await findTransferByRequestId(engine.client, attempt.requestId)) === undefined &&
-          engine.ledger.failAttempt(attempt.requestId, null)
+          engine.ledger.failAttempt(attempt.requestId, null, false)
         );
       },
     );
