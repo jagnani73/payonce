@@ -627,8 +627,15 @@ async function subscribeWithRetry(url: string): Promise<string> {
 // subscription at it. If any step fails, the watcher keeps checking payments
 // often enough that nothing waits long.
 async function connectWebhooks(): Promise<void> {
-  if (process.env["WEBHOOKS"] === "off") {
-    say("Webhooks are off. Payments in flight are checked every 3 seconds");
+  // On or off in any case, and unset or empty is on. Any other value, such as
+  // on|off copied from .env.example, is off, so no tunnel opens that nobody asked for.
+  const setting: string = (process.env["WEBHOOKS"]?.trim() || "on").toLowerCase();
+  if (setting !== "on") {
+    say(
+      setting === "off"
+        ? "Webhooks are off. Payments in flight are checked every 3 seconds"
+        : "Webhooks are off: WEBHOOKS must be on or off, and it is neither. Payments in flight are checked every 3 seconds",
+    );
     return;
   }
   try {
