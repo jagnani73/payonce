@@ -1,4 +1,5 @@
 import { cleanLine } from "../eml.js";
+import { redactKey } from "../model-reader.js";
 
 const DEFAULT_BASE_URL: string = "https://api.sandbox.airwallex.com";
 // The sandbox API hosts Airwallex documents: api.sandbox.airwallex.com in its API
@@ -30,33 +31,56 @@ interface ErrorBody {
   source?: string;
 }
 
+// What a request sent that Airwallex could echo back: the client id, the API key
+// and the bearer token, each with the label it is cut to.
+interface Secret {
+  value: string;
+  label: string;
+}
+
+// Text with every secret cut out, in every form redactKey cuts, before and after
+// it is cleaned to one line, since cleaning can join two parts of one.
+function withoutSecrets(text: string, secrets: readonly Secret[], cap: number): string {
+  const cut = (line: string): string =>
+    secrets.reduce((done: string, secret: Secret): string => redactKey(done, secret.value, secret.label), line);
+  return cut(cleanLine(cut(text), cap));
+}
+
 // Airwallex answered with an error status. The message reaches the timeline, the
 // page and the terminal, so Airwallex's words are cut to one cleaned line, and a
 // code is kept only when it looks like one. A gateway's HTML page then becomes a
-// short line instead of a long one in the hash chain.
+// short line instead of a long one in the hash chain. An answer can echo the
+// client id, the API key or the token, so each is cut out of every part kept, and
+// a code that held one is dropped.
 export class AirwallexError extends Error {
   readonly status: number;
   readonly code: string | undefined;
   readonly source: string | undefined;
 
-  constructor(request: string, status: number, body: ErrorBody, fallback: string) {
+  constructor(request: string, status: number, body: ErrorBody, fallback: string, secrets: readonly Secret[]) {
     const code: string | undefined =
-      typeof body.code === "string" && ERROR_CODE.test(body.code) ? body.code : undefined;
-    const said: string = cleanLine(typeof body.message === "string" ? body.message : fallback, MAX_ERROR_TEXT);
+      typeof body.code === "string" &&
+      ERROR_CODE.test(body.code) &&
+      withoutSecrets(body.code, secrets, MAX_ERROR_TEXT) === body.code
+        ? body.code
+        : undefined;
+    const said: string = withoutSecrets(typeof body.message === "string" ? body.message : fallback, secrets, MAX_ERROR_TEXT);
     super(`${request} failed with ${status}${code === undefined ? "" : ` ${code}`}: ${said}`);
     this.name = "AirwallexError";
     this.status = status;
     this.code = code;
-    this.source = typeof body.source === "string" ? cleanLine(body.source, MAX_ERROR_TEXT) : undefined;
+    this.source = typeof body.source === "string" ? withoutSecrets(body.source, secrets, MAX_ERROR_TEXT) : undefined;
   }
 }
 
-// No answer came back, so whether Airwallex acted on the request is unknown.
+// No answer came back, so whether Airwallex acted on the request is unknown. The
+// cause is not kept, because a refused header value names the value, so only its
+// message is, with the secrets cut out.
 export class AirwallexUnreachableError extends Error {
-  constructor(request: string, cause: unknown) {
+  constructor(request: string, cause: unknown, secrets: readonly Secret[]) {
     const inner: unknown = cause instanceof Error ? (cause.cause ?? cause) : cause;
-    const detail: string = inner instanceof Error ? inner.message : String(inner);
-    super(`${request} did not complete: ${detail}`, { cause });
+    const detail: string = withoutSecrets(inner instanceof Error ? inner.message : String(inner), secrets, MAX_ERROR_TEXT);
+    super(`${request} did not complete: ${detail}`);
     this.name = "AirwallexUnreachableError";
   }
 }
@@ -73,6 +97,7 @@ async function send<T>(
   request: string,
   url: string,
   init: RequestInit,
+  secrets: readonly Secret[],
 ): Promise<T> {
   let response: Response;
   let text: string;
@@ -86,11 +111,11 @@ async function send<T>(
     });
     text = await response.text();
   } catch (error: unknown) {
-    throw new AirwallexUnreachableError(request, error);
+    throw new AirwallexUnreachableError(request, error, secrets);
   }
 
   if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400)) {
-    throw new AirwallexError(request, response.status, {}, REDIRECT_TEXT);
+    throw new AirwallexError(request, response.status, {}, REDIRECT_TEXT, secrets);
   }
   if (!response.ok) {
     let body: ErrorBody = {};
@@ -104,6 +129,7 @@ async function send<T>(
       response.status,
       body,
       text || response.statusText,
+      secrets,
     );
   }
   return (text ? JSON.parse(text) : {}) as T;
@@ -161,6 +187,7 @@ export class AirwallexClient {
         method: "POST",
         headers: { "x-client-id": this.clientId, "x-api-key": this.apiKey },
       },
+      this.secrets(this.token),
     );
     this.token = login.token;
     this.tokenExpiresAtMs = new Date(login.expires_at).getTime();
@@ -171,14 +198,29 @@ export class AirwallexClient {
     const token: string = await this.bearer();
     // The query string can carry ids, so only the path goes into error messages.
     const request: string = `${method} ${path.split("?")[0] ?? path}`;
-    return send<T>(request, `${this.baseUrl}${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
+    return send<T>(
+      request,
+      `${this.baseUrl}${path}`,
+      {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
+      this.secrets(token),
+    );
+  }
+
+  // The token goes first, then the key, then the client id, so a shorter secret
+  // found inside a longer one cannot leave part of the longer one behind.
+  private secrets(token: string | null): Secret[] {
+    return [
+      ...(token === null ? [] : [{ value: token, label: "[token]" }]),
+      { value: this.apiKey, label: "[key]" },
+      { value: this.clientId, label: "[client id]" },
+    ];
   }
 
   get<T>(path: string): Promise<T> {

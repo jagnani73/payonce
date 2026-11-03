@@ -86,15 +86,16 @@ function keyForms(key: string): string[] {
 
 // Text with the key cut out, for any error that could carry it, since some
 // services echo the key back. Every form of the key goes, and so does any run of
-// KEY_RUN or more characters that is part of one, such as a key cut short.
-export function redactKey(text: string, key: string): string {
+// KEY_RUN or more characters that is part of one, such as a key cut short. Each
+// cut becomes the label.
+export function redactKey(text: string, key: string, label: string = "[key]"): string {
   if (key === "") {
     return text;
   }
   const forms: string[] = keyForms(key);
   let cut: string = text;
   for (const form of forms) {
-    cut = cut.replaceAll(form, "[key]");
+    cut = cut.replaceAll(form, label);
   }
   const runs: Set<string> = new Set<string>();
   for (const form of forms) {
@@ -114,7 +115,7 @@ export function redactKey(text: string, key: string): string {
       while (covered[at] === 1) {
         at += 1;
       }
-      result += "[key]";
+      result += label;
     } else {
       result += cut[at] ?? "";
       at += 1;
