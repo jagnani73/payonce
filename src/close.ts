@@ -86,8 +86,15 @@ function main(): void {
     say(`  emails    ${review.emails}`);
   }
   for (const payout of review.namesOnly) {
-    // The bank's short reference, printed only in its own form.
-    say(`  names it  ${namingText({ ...payout, reference: shownReference(payout.reference) })}`);
+    // The bank's short reference, printed only in its own form, and the currency
+    // Airwallex gave without control characters.
+    say(
+      `  names it  ${namingText({
+        ...payout,
+        reference: shownReference(payout.reference),
+        currency: payout.currency === null ? null : printable(payout.currency),
+      })}`,
+    );
   }
   if (review.covered.length > 0) {
     say("  covers    transfers listed under its request ids that do not match it:");
