@@ -3473,7 +3473,7 @@ function renderIncidentMain() {
   renderReview(detail);
   renderBankChange(detail);
   renderApproval(detail);
-  placeApproval();
+  placeApproval(detail);
   renderOutbox(detail);
   renderPayments(detail);
   renderEmails(detail);
@@ -3481,11 +3481,15 @@ function renderIncidentMain() {
   els.detail.hidden = false;
 }
 
-// While the approval card is shown it comes first, so the close card cannot push
-// it below the first screen. Only the approval card moves, so a field someone is
-// typing in on another card keeps its focus.
-function placeApproval() {
-  const after = els.approval.hidden ? els.bankChange : els.why;
+// While the latest request is requested or approved, an expired one included
+// since the next look opens a new one, the approval card comes first, so the
+// close card cannot push it below the first screen. A void or used request's card
+// follows the bank-change card, where it sits in the page. Only the approval card
+// moves, so a field someone is typing in on another card keeps its focus.
+function placeApproval(detail) {
+  const latest = detail.approval?.state ?? null;
+  const open = !els.approval.hidden && (latest === "requested" || latest === "approved");
+  const after = open ? els.why : els.bankChange;
   if (after.nextElementSibling !== els.approval) {
     after.after(els.approval);
   }
