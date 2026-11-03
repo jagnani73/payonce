@@ -40,7 +40,7 @@ function short(hash: string | null): string {
 function printLedger(report: LedgerReport): void {
   say(`Ledger: ${describeLedger(report)}`);
   say(`  head     ${short(report.stored)}`);
-  if (!report.intact) {
+  if (report.stored !== report.computed) {
     say(`  lines    give ${short(report.computed)}`);
   }
 }
@@ -48,7 +48,7 @@ function printLedger(report: LedgerReport): void {
 function printRunLedger(report: RunLedgerReport): void {
   say(`Pay runs: ${describeRunLedger(report)}`);
   say(`  head     ${short(report.stored)}`);
-  if (!report.intact) {
+  if (report.stored !== report.computed) {
     say(`  lines    give ${short(report.computed)}`);
   }
 }

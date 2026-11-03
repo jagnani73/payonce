@@ -71,7 +71,11 @@ export interface AuditAlertFacts {
   // For recon, line is null when the lines from the start were removed.
   first: string | null;
   line: number | null;
-  runningHash: "matches" | "missing" | "does not match";
+  // "started again" once the running hash went missing and PayOnce started it
+  // again, whatever it reads now.
+  runningHash: "matches" | "missing" | "does not match" | "started again";
+  // How many invoices, runs or opened breaks have no line at all.
+  withoutLine: number;
 }
 
 export interface CashAlertFacts {
@@ -393,6 +397,12 @@ function runMessage(facts: RunAlertFacts, base: string): AlertMessage {
   };
 }
 
+// Shown only when something has no line, so other audit alerts read as before.
+function withoutLineField(facts: AuditAlertFacts, what: string): AlertField[] {
+  const count: number = Number.isSafeInteger(facts.withoutLine) ? facts.withoutLine : 0;
+  return count === 0 ? [] : [field("With no line at all", ours(`${count} ${count === 1 ? what.replace(/s$/, "") : what}`))];
+}
+
 function reconAuditMessage(facts: AuditAlertFacts, base: string): AlertMessage {
   const line: string =
     facts.broken === 0
@@ -403,7 +413,11 @@ function reconAuditMessage(facts: AuditAlertFacts, base: string): AlertMessage {
   return {
     title: "PayOnce's reconciliation record no longer verifies",
     line: [ours("Check it with pnpm run audit before trusting what reconciliation found or what people explained")],
-    fields: [field("Reconciliation record", ours(line)), field("Running hash", ours(facts.runningHash))],
+    fields: [
+      field("Reconciliation record", ours(line)),
+      field("Running hash", ours(facts.runningHash)),
+      ...withoutLineField(facts, "breaks"),
+    ],
     link: `${base}/#recon`,
     linkText: "Open reconciliation in PayOnce",
     urgent: true,
@@ -427,6 +441,7 @@ function auditMessage(facts: AuditAlertFacts, base: string): AlertMessage {
     fields: [
       field(what, ours(facts.broken === 0 ? "no breaks" : `${facts.broken} broken${first}`)),
       field("Running hash", ours(facts.runningHash)),
+      ...withoutLineField(facts, facts.scope === "invoices" ? "invoices" : "pay runs"),
     ],
     link: `${base}/`,
     linkText: "Open PayOnce",

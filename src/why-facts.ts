@@ -1220,6 +1220,9 @@ const LINE_RULES: readonly LineRule[] = [
   rule([APPROVAL], `Opened from pay run (${N}), row (${N}) \\([\\s\\S]*`, (match: RegExpExecArray): string =>
     `Opened from pay run ${match[1] ?? ""}, row ${match[2] ?? ""}, released on the run's approved request`,
   ),
+  rule([PAYMENT], "Incident opened(?: by ([\\s\\S]+))?", (match: RegExpExecArray, builder: FactsBuilder): string =>
+    match[1] === undefined ? "Incident opened" : `Incident opened by ${builder.aliases.person(match[1])}`,
+  ),
 
   // Closing.
   rule(

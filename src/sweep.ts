@@ -103,11 +103,6 @@ function adopt(engine: Engine, transfer: Transfer, state: FoundState): string | 
       // bank details cannot stop the payout being taken on.
       ...sentToOf(transfer.beneficiary?.bank_details),
     },
-  );
-  note(
-    engine.ledger,
-    invoiceId,
-    "bank",
     `Found payout ${transfer.short_reference_id}, sent outside PayOnce: ${payoutSummary(transfer)}`,
   );
   return invoiceId;

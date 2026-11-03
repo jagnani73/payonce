@@ -4,12 +4,15 @@ import {
   eventHash,
   GENESIS,
   nextLedgerHead,
+  restartOf,
+  restartRecord,
   runEventHash,
   storable,
   type AuditSnapshot,
   type ChainedEvent,
   type ChainedRunEvent,
   type EventFields,
+  type HeadRestart,
   type LedgerReport,
   type RunAuditSnapshot,
   type RunEventFields,
@@ -915,10 +918,13 @@ function toChainedEvent(row: EventRow): ChainedEvent {
 const LEDGER_HEAD_KEY: string = "events_head";
 const CHAIN_STARTED_KEY: string = "chain_started_at";
 const BACKFILLED_THROUGH_KEY: string = "chain_backfilled_through";
+// The first time the running hash was found missing and started again.
+const LEDGER_RESTARTED_KEY: string = "events_head_restarted";
 // The same for pay run timelines, which are chained apart from invoice timelines.
 const RUN_HEAD_KEY: string = "run_events_head";
 const RUN_CHAIN_STARTED_KEY: string = "run_chain_started_at";
 const RUN_BACKFILLED_THROUGH_KEY: string = "run_chain_backfilled_through";
+const RUN_RESTARTED_KEY: string = "run_events_head_restarted";
 
 // A waiter for a currency lock that has not asked again for this long has gone,
 // for example because its process stopped, and loses its place. It asks every
@@ -2187,6 +2193,7 @@ export class Ledger {
       this.metaValue(CHAIN_STARTED_KEY) !== null ||
       this.metaValue(BACKFILLED_THROUGH_KEY) !== null ||
       this.metaValue(LEDGER_HEAD_KEY) !== null ||
+      this.metaValue(LEDGER_RESTARTED_KEY) !== null ||
       (hashColumn &&
         this.db.prepare("SELECT 1 FROM events WHERE hash IS NOT NULL LIMIT 1").get() !==
           undefined)
@@ -2242,6 +2249,7 @@ export class Ledger {
       this.metaValue(RUN_CHAIN_STARTED_KEY) !== null ||
       this.metaValue(RUN_BACKFILLED_THROUGH_KEY) !== null ||
       this.metaValue(RUN_HEAD_KEY) !== null ||
+      this.metaValue(RUN_RESTARTED_KEY) !== null ||
       (hashColumn &&
         this.db.prepare("SELECT 1 FROM run_events WHERE hash IS NOT NULL LIMIT 1").get() !==
           undefined)
@@ -2629,29 +2637,42 @@ export class Ledger {
     });
   }
 
+  // Writes the invoice and its first timeline line in one transaction, so every
+  // invoice has a line from the moment it exists, and an audit that finds one
+  // with none knows its lines were removed.
   openObligation(input: NewObligation): Obligation {
-    this.db
-      .prepare(
-        `INSERT OR IGNORE INTO obligations
-           (invoice_id, supplier, supplier_domain, beneficiary_id, currency,
-            amount_minor, transfer_method, invoice_floor_minor, started_by,
-            supplier_phone, source_currency, due_date)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        input.invoiceId,
-        input.supplier,
-        input.supplierDomain,
-        input.beneficiaryId,
-        input.currency,
-        input.amountMinor,
-        input.transferMethod,
-        input.invoiceFloorMinor,
-        input.startedBy,
-        input.supplierPhone,
-        sourceColumn(input),
-        input.dueDate ?? null,
-      );
+    this.transaction((): void => {
+      const opened: { changes: number | bigint } = this.db
+        .prepare(
+          `INSERT OR IGNORE INTO obligations
+             (invoice_id, supplier, supplier_domain, beneficiary_id, currency,
+              amount_minor, transfer_method, invoice_floor_minor, started_by,
+              supplier_phone, source_currency, due_date)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          input.invoiceId,
+          input.supplier,
+          input.supplierDomain,
+          input.beneficiaryId,
+          input.currency,
+          input.amountMinor,
+          input.transferMethod,
+          input.invoiceFloorMinor,
+          input.startedBy,
+          input.supplierPhone,
+          sourceColumn(input),
+          input.dueDate ?? null,
+        );
+      if (Number(opened.changes) === 1) {
+        this.appendEvent(
+          input.invoiceId,
+          "payment",
+          input.startedBy === null ? "Incident opened" : `Incident opened by ${input.startedBy}`,
+          null,
+        );
+      }
+    });
     const row: ObligationRow = this.db
       .prepare("SELECT * FROM obligations WHERE invoice_id = ?")
       .get(input.invoiceId) as unknown as ObligationRow;
@@ -2750,23 +2771,34 @@ export class Ledger {
       topic: topic === null ? null : storable(topic),
     };
     const hash: string = eventHash(prevHash, line);
-    this.db
+    const inserted: { lastInsertRowid: number | bigint } = this.db
       .prepare(
         `INSERT INTO events (invoice_id, at, kind, message, topic, prev_hash, hash)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(line.invoiceId, line.at, line.kind, line.message, line.topic, prevHash, hash);
-    // A missing running hash starts again from the genesis, and the audit then
-    // reports it as not matching.
+    this.chainHead(LEDGER_HEAD_KEY, LEDGER_RESTARTED_KEY, hash, line.at, Number(inserted.lastInsertRowid), invoice);
+  }
+
+  // Adds a line's hash to a running hash. Every chain sets its running hash when
+  // it starts, so a missing one was removed. The line is still written, because a
+  // payment step must never fail for want of a hash: the running hash starts
+  // again from the genesis, and the first restart is kept in meta, with the time
+  // and the line, so every audit reports it from then on. The caller holds the
+  // write transaction.
+  private chainHead(headKey: string, restartKey: string, hash: string, at: string, id: number, of: string): void {
+    const head: string | null = this.metaValue(headKey);
+    if (head === null) {
+      this.db
+        .prepare("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)")
+        .run(restartKey, restartRecord(at, id, of));
+    }
     this.db
       .prepare(
         `INSERT INTO meta (key, value) VALUES (?, ?)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
       )
-      .run(
-        LEDGER_HEAD_KEY,
-        nextLedgerHead(this.metaValue(LEDGER_HEAD_KEY) ?? GENESIS, hash),
-      );
+      .run(headKey, nextLedgerHead(head ?? GENESIS, hash));
   }
 
   // Runs fn in one deferred read transaction, so every read in it sees the ledger
@@ -2937,6 +2969,8 @@ export class Ledger {
         ledgerHead: this.metaValue(LEDGER_HEAD_KEY),
         chainStartedAt: this.metaValue(CHAIN_STARTED_KEY),
         backfilledThrough: Number(this.metaValue(BACKFILLED_THROUGH_KEY) ?? 0),
+        restarted: restartOf(this.metaValue(LEDGER_RESTARTED_KEY)),
+        unlined: this.unlinedInvoices(),
       };
       this.db.exec("COMMIT");
       return snapshot;
@@ -2952,6 +2986,37 @@ export class Ledger {
         "SELECT id, at, kind, message, topic FROM events WHERE invoice_id = ? ORDER BY id",
       )
       .all(invoiceId) as unknown as LedgerEvent[];
+  }
+
+  // Every invoice with no timeline line, in the order written. Each invoice gets
+  // one in the transaction that writes it, so one with none lost its lines.
+  unlinedInvoices(): string[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT invoice_id FROM obligations o
+            WHERE NOT EXISTS (SELECT 1 FROM events e WHERE e.invoice_id = o.invoice_id)
+            ORDER BY rowid`,
+        )
+        .all() as unknown as { invoice_id: string }[]
+    ).map((row: { invoice_id: string }): string => row.invoice_id);
+  }
+
+  // Every run with no run line. A run's upload line follows the transaction that
+  // writes the run, with nothing awaited between them.
+  unlinedRuns(): number[] {
+    if (!this.hasRunTable()) {
+      return [];
+    }
+    return (
+      this.db
+        .prepare(
+          `SELECT id FROM runs r
+            WHERE NOT EXISTS (SELECT 1 FROM run_events e WHERE e.run_id = r.id)
+            ORDER BY id`,
+        )
+        .all() as unknown as { id: number }[]
+    ).map((row: { id: number }): number => row.id);
   }
 
   // The invoice's first timeline line, without reading the rest.
@@ -3080,13 +3145,17 @@ export class Ledger {
         fullAt: from.fullAt,
       };
       const stored: string | null = this.metaValue(LEDGER_HEAD_KEY);
+      const restarted: HeadRestart | null = restartOf(this.metaValue(LEDGER_RESTARTED_KEY));
+      const unlined: string[] = this.unlinedInvoices();
       this.db.exec("COMMIT");
       return {
         lines: this.headProgress.lines,
         invoices: from.invoices.size,
         stored,
         computed,
-        intact: stored === computed,
+        restarted,
+        unlined,
+        intact: stored === computed && restarted === null && unlined.length === 0,
       };
     } catch (error: unknown) {
       this.db.exec("ROLLBACK");
@@ -3276,10 +3345,13 @@ export class Ledger {
   // any other.
   // payoutReference is the payout's own reference when the invoice number had to
   // be something else, so a later payout with that reference is still tied to it.
+  // line is the invoice's first timeline line, written in the same transaction,
+  // so the invoice is never in the ledger without one.
   adoptPayout(
     input: NewObligation,
     payoutReference: string | null,
     found: FoundPayout,
+    line: string,
   ): void {
     this.db.exec("BEGIN IMMEDIATE");
     try {
@@ -3328,6 +3400,7 @@ export class Ledger {
           found.sentKey,
           found.sentEnding,
         );
+      this.appendEvent(input.invoiceId, "bank", line, null);
       this.db.exec("COMMIT");
     } catch (error: unknown) {
       this.db.exec("ROLLBACK");
@@ -5281,18 +5354,13 @@ export class Ledger {
       topic: topic === null ? null : storable(topic),
     };
     const hash: string = runEventHash(prevHash, line);
-    this.db
+    const inserted: { lastInsertRowid: number | bigint } = this.db
       .prepare(
         `INSERT INTO run_events (run_id, at, kind, message, topic, prev_hash, hash)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(line.runId, line.at, line.kind, line.message, line.topic, prevHash, hash);
-    this.db
-      .prepare(
-        `INSERT INTO meta (key, value) VALUES (?, ?)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-      )
-      .run(RUN_HEAD_KEY, nextLedgerHead(this.metaValue(RUN_HEAD_KEY) ?? GENESIS, hash));
+    this.chainHead(RUN_HEAD_KEY, RUN_RESTARTED_KEY, hash, line.at, Number(inserted.lastInsertRowid), `run ${runId}`);
   }
 
   // A run's timeline is a hash chain of its own, with a running hash over every
@@ -5324,6 +5392,8 @@ export class Ledger {
         ledgerHead: this.metaValue(RUN_HEAD_KEY),
         chainStartedAt: this.metaValue(RUN_CHAIN_STARTED_KEY),
         backfilledThrough: Number(this.metaValue(RUN_BACKFILLED_THROUGH_KEY) ?? 0),
+        restarted: restartOf(this.metaValue(RUN_RESTARTED_KEY)),
+        unlined: this.unlinedRuns(),
       };
       this.db.exec("COMMIT");
       return snapshot;

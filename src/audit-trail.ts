@@ -46,6 +46,40 @@ export interface ChainedRunEvent extends RunEventFields {
   hash: string | null;
 }
 
+// When a running hash was found missing and started again from the genesis, as
+// the ledger records it in meta, and the line it started again at: its id and
+// the invoice, run or break it is on. A field the record does not give is null.
+// The chain has no key, so a running hash removed with every line could
+// otherwise start again unseen.
+export interface HeadRestart {
+  at: string | null;
+  id: number | null;
+  of: string | null;
+}
+
+export function restartOf(value: string | null): HeadRestart | null {
+  if (value === null) {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(value);
+    const record: Record<string, unknown> =
+      typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
+    const id: unknown = record["id"];
+    return {
+      at: typeof record["at"] === "string" ? record["at"] : null,
+      id: typeof id === "number" && Number.isSafeInteger(id) ? id : null,
+      of: typeof record["of"] === "string" ? record["of"] : null,
+    };
+  } catch {
+    return { at: null, id: null, of: null };
+  }
+}
+
+export function restartRecord(at: string, id: number, of: string): string {
+  return JSON.stringify({ at, id, of });
+}
+
 // What the ledger holds for an audit, read in one transaction.
 export interface AuditSnapshot {
   // One invoice's lines, or every line in the ledger, in id order.
@@ -60,6 +94,11 @@ export interface AuditSnapshot {
   // hashed then. Zero when the ledger had no lines.
   chainStartedAt: string | null;
   backfilledThrough: number;
+  // The first time the running hash was found missing and started again.
+  restarted: HeadRestart | null;
+  // Every invoice in the ledger with no timeline line, in the order they were
+  // written. PayOnce writes a line with every invoice it opens.
+  unlined: string[];
 }
 
 // The same for pay run timelines, which have a running hash of their own.
@@ -70,6 +109,9 @@ export interface RunAuditSnapshot {
   ledgerHead: string | null;
   chainStartedAt: string | null;
   backfilledThrough: number;
+  restarted: HeadRestart | null;
+  // Every run with no line. PayOnce writes one when a run is uploaded.
+  unlined: number[];
 }
 
 // Where an invoice's chain breaks. line counts from 1 along its timeline.
@@ -100,6 +142,8 @@ export interface LedgerReport {
   invoices: number;
   stored: string | null;
   computed: string;
+  restarted: HeadRestart | null;
+  unlined: string[];
   intact: boolean;
 }
 
@@ -108,6 +152,8 @@ export interface RunLedgerReport {
   runs: number;
   stored: string | null;
   computed: string;
+  restarted: HeadRestart | null;
+  unlined: number[];
   intact: boolean;
 }
 
@@ -185,6 +231,10 @@ export interface ReconAuditSnapshot {
   // When the chain's first line was written, kept apart from the lines. Null
   // until the chain has a line.
   chainStartedAt: string | null;
+  restarted: HeadRestart | null;
+  // Every break that has opened and has no line. A break gets its first line
+  // when it opens.
+  unlined: number[];
 }
 
 export interface ReconChainReport {
@@ -195,6 +245,8 @@ export interface ReconChainReport {
   lostStart: "empty" | "cut" | null;
   stored: string | null;
   computed: string;
+  restarted: HeadRestart | null;
+  unlined: number[];
   intact: boolean;
 }
 
@@ -317,7 +369,10 @@ function runningHash(hashes: (string | null)[]): string {
 }
 
 // The running hash catches what an invoice's own chain cannot: its last lines, or
-// all of them, removed.
+// all of them, removed. A running hash that went missing and started again, and
+// an invoice with no line at all, are reported from then on, because removing
+// every line and the running hash together would otherwise leave a chain that
+// verifies.
 export function ledgerReport(snapshot: AuditSnapshot): LedgerReport {
   const computed: string = runningHash(snapshot.hashes);
   return {
@@ -325,7 +380,9 @@ export function ledgerReport(snapshot: AuditSnapshot): LedgerReport {
     invoices: snapshot.invoices,
     stored: snapshot.ledgerHead,
     computed,
-    intact: snapshot.ledgerHead === computed,
+    restarted: snapshot.restarted,
+    unlined: snapshot.unlined,
+    intact: snapshot.ledgerHead === computed && snapshot.restarted === null && snapshot.unlined.length === 0,
   };
 }
 
@@ -336,18 +393,78 @@ export function runLedgerReport(snapshot: RunAuditSnapshot): RunLedgerReport {
     runs: snapshot.runs,
     stored: snapshot.ledgerHead,
     computed,
-    intact: snapshot.ledgerHead === computed,
+    restarted: snapshot.restarted,
+    unlined: snapshot.unlined,
+    intact: snapshot.ledgerHead === computed && snapshot.restarted === null && snapshot.unlined.length === 0,
   };
+}
+
+const LISTED: number = 5;
+
+// Up to LISTED ids, then how many more.
+function someOf(ids: readonly (string | number)[]): string {
+  const shown: string = ids.slice(0, LISTED).join(", ");
+  return ids.length > LISTED ? `${shown} and ${ids.length - LISTED} more` : shown;
+}
+
+// When and where a running hash started again, in PayOnce's words.
+export function restartText(restart: HeadRestart, what: string): string {
+  const when: string =
+    restart.at === null || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(restart.at)
+      ? "at a time PayOnce cannot read"
+      : `on ${restart.at.slice(0, 16).replace("T", " ")} UTC`;
+  const of: string = restart.of !== null && /^[A-Za-z0-9 ._-]{1,40}$/.test(restart.of) ? ` (${restart.of})` : "";
+  const where: string = restart.id === null ? "" : ` at line ${restart.id}${of}`;
+  return `the running hash of ${what} went missing and PayOnce started it again ${when}${where}, so lines removed before then cannot be ruled out`;
+}
+
+// What a running hash check found, one sentence each.
+function headProblems(
+  report: { stored: string | null; computed: string; restarted: HeadRestart | null },
+  what: string,
+  mismatch: string,
+): string[] {
+  const problems: string[] = [];
+  if (report.stored === null) {
+    problems.push(`the running hash of ${what} is missing from the ledger, so lines removed from it cannot be ruled out`);
+  } else if (report.stored !== report.computed) {
+    problems.push(mismatch);
+  }
+  if (report.restarted !== null) {
+    problems.push(restartText(report.restarted, what));
+  }
+  return problems;
+}
+
+// One invoice, run or break, or several, with no line, though each gets one
+// when it is written.
+function lostLines(ids: readonly (string | number)[], one: string, many: string, rule: string): string {
+  return ids.length === 1
+    ? `${one} ${ids[0] ?? ""} has no line, though ${rule}, so its lines were removed`
+    : `${ids.length} ${many} have no line (${someOf(ids)}), though ${rule}, so their lines were removed`;
+}
+
+function sentences(problems: string[]): string {
+  return problems
+    .map((problem: string, index: number): string =>
+      index === 0 ? problem : `${problem.charAt(0).toUpperCase()}${problem.slice(1)}`,
+    )
+    .join(". ");
 }
 
 export function describeLedger(report: LedgerReport): string {
   if (report.intact) {
     return `${report.lines} ${report.lines === 1 ? "line" : "lines"} across ${report.invoices} ${report.invoices === 1 ? "invoice" : "invoices"}, and the running hash matches`;
   }
-  if (report.stored === null) {
-    return "the running hash is missing from the ledger, so lines removed from it cannot be ruled out";
+  const problems: string[] = headProblems(
+    report,
+    "invoice lines",
+    "the running hash does not match the lines, so lines were removed, reordered or rewritten somewhere in the ledger. A timeline with no breaks can still have lost its last lines, and this check cannot say which",
+  );
+  if (report.unlined.length > 0) {
+    problems.push(lostLines(report.unlined, "invoice", "invoices", "PayOnce writes one when it opens an invoice"));
   }
-  return "the running hash does not match the lines, so lines were removed, reordered or rewritten somewhere in the ledger. A timeline with no breaks can still have lost its last lines, and this check cannot say which";
+  return sentences(problems);
 }
 
 // The chain line by line and the running hash, which catches the last lines
@@ -364,7 +481,14 @@ export function reconChainReport(snapshot: ReconAuditSnapshot): ReconChainReport
     lostStart,
     stored: snapshot.ledgerHead,
     computed,
-    intact: breaks.length === 0 && lostStart === null && snapshot.ledgerHead === computed,
+    restarted: snapshot.restarted,
+    unlined: snapshot.unlined,
+    intact:
+      breaks.length === 0 &&
+      lostStart === null &&
+      snapshot.ledgerHead === computed &&
+      snapshot.restarted === null &&
+      snapshot.unlined.length === 0,
   };
 }
 
@@ -380,23 +504,30 @@ export function reconChainProblem(report: ReconChainReport): string | null {
   if (report.lostStart === "cut") {
     return "line 1 is not the line the reconciliation record started with, so the lines before it were removed";
   }
-  if (report.stored === null) {
-    return "the running hash of reconciliation lines is missing from the ledger, so lines removed from it cannot be ruled out";
+  const problems: string[] = headProblems(
+    report,
+    "reconciliation lines",
+    "the running hash of reconciliation lines does not match them, so lines were removed, reordered or rewritten",
+  );
+  if (report.unlined.length > 0) {
+    problems.push(lostLines(report.unlined, "break", "breaks", "every break gets one when it opens"));
   }
-  if (report.stored !== report.computed) {
-    return "the running hash of reconciliation lines does not match them, so lines were removed, reordered or rewritten";
-  }
-  return null;
+  return problems.length === 0 ? null : sentences(problems);
 }
 
 export function describeRunLedger(report: RunLedgerReport): string {
   if (report.intact) {
     return `${report.lines} ${report.lines === 1 ? "line" : "lines"} across ${report.runs} pay ${report.runs === 1 ? "run" : "runs"}, and their running hash matches`;
   }
-  if (report.stored === null) {
-    return "the running hash of pay run lines is missing from the ledger, so run lines removed from it cannot be ruled out";
+  const problems: string[] = headProblems(
+    report,
+    "pay run lines",
+    "the running hash of pay run lines does not match them, so run lines were removed, reordered or rewritten somewhere in the ledger. A run timeline with no breaks can still have lost its last lines, and this check cannot say which",
+  );
+  if (report.unlined.length > 0) {
+    problems.push(lostLines(report.unlined, "pay run", "pay runs", "PayOnce writes one when a run is uploaded"));
   }
-  return "the running hash of pay run lines does not match them, so run lines were removed, reordered or rewritten somewhere in the ledger. A run timeline with no breaks can still have lost its last lines, and this check cannot say which";
+  return sentences(problems);
 }
 
 // The first break, as one sentence, with a count of any others.

@@ -25,6 +25,7 @@ import {
   type AuditSnapshot,
   type ChainBreak,
   type ChainReport,
+  type HeadRestart,
   type LedgerReport,
   type ReconChainReport,
   type RunAuditSnapshot,
@@ -388,8 +389,18 @@ function runCondition(ledger: Ledger, run: Run): FoundCondition | null {
   return condition(`run:${run.id}`, { binding: approval.binding, needed: approval.needed }, facts);
 }
 
-function runningHash(report: LedgerReport | RunLedgerReport): AuditAlertFacts["runningHash"] {
-  return report.intact ? "matches" : report.stored === null ? "missing" : "does not match";
+function runningHash(report: {
+  stored: string | null;
+  computed: string;
+  restarted: HeadRestart | null;
+}): AuditAlertFacts["runningHash"] {
+  return report.restarted !== null
+    ? "started again"
+    : report.stored === null
+      ? "missing"
+      : report.stored === report.computed
+        ? "matches"
+        : "does not match";
 }
 
 // Every invoice and pay run timeline, and both running hashes. This reads every
@@ -400,8 +411,9 @@ function auditConditions(ledger: Ledger): FoundCondition[] {
   const brokenInvoices: ChainReport[] = chainReports(invoices.events).filter(
     (report: ChainReport): boolean => report.breaks.length > 0,
   );
-  const invoiceHash: AuditAlertFacts["runningHash"] = runningHash(ledgerReport(invoices));
-  if (brokenInvoices.length > 0 || invoiceHash !== "matches") {
+  const invoiceReport: LedgerReport = ledgerReport(invoices);
+  const invoiceHash: AuditAlertFacts["runningHash"] = runningHash(invoiceReport);
+  if (brokenInvoices.length > 0 || !invoiceReport.intact) {
     const first: ChainBreak | undefined = brokenInvoices[0]?.breaks[0];
     const facts: AuditAlertFacts = {
       kind: "audit",
@@ -410,16 +422,18 @@ function auditConditions(ledger: Ledger): FoundCondition[] {
       first: brokenInvoices[0]?.invoiceId ?? null,
       line: first?.line ?? null,
       runningHash: invoiceHash,
+      withoutLine: invoiceReport.unlined.length,
     };
     const ids: string[] = brokenInvoices.map((report: ChainReport): string => report.invoiceId).sort();
-    found.push(condition("audit:invoices", { ids, hash: invoiceHash }, facts));
+    found.push(condition("audit:invoices", { ids, hash: invoiceHash, unlined: invoiceReport.unlined }, facts));
   }
   const runs: RunAuditSnapshot = ledger.runAuditSnapshot(null);
   const brokenRuns: RunChainReport[] = runChainReports(runs.events).filter(
     (report: RunChainReport): boolean => report.breaks.length > 0,
   );
-  const runHash: AuditAlertFacts["runningHash"] = runningHash(runLedgerReport(runs));
-  if (brokenRuns.length > 0 || runHash !== "matches") {
+  const runReport: RunLedgerReport = runLedgerReport(runs);
+  const runHash: AuditAlertFacts["runningHash"] = runningHash(runReport);
+  if (brokenRuns.length > 0 || !runReport.intact) {
     const first: ChainBreak | undefined = brokenRuns[0]?.breaks[0];
     const facts: AuditAlertFacts = {
       kind: "audit",
@@ -428,18 +442,18 @@ function auditConditions(ledger: Ledger): FoundCondition[] {
       first: brokenRuns[0] === undefined ? null : String(brokenRuns[0].runId),
       line: first?.line ?? null,
       runningHash: runHash,
+      withoutLine: runReport.unlined.length,
     };
     const ids: number[] = brokenRuns
       .map((report: RunChainReport): number => report.runId)
       .sort((a: number, b: number): number => a - b);
-    found.push(condition("audit:runs", { ids, hash: runHash }, facts));
+    found.push(condition("audit:runs", { ids, hash: runHash, unlined: runReport.unlined }, facts));
   }
   // Reconciliation's record is one chain, so there is no first timeline to name.
   if (ledger.recon().hasTables()) {
     const recon: ReconChainReport = reconChainReport(ledger.recon().auditSnapshot());
     if (!recon.intact) {
-      const reconHash: AuditAlertFacts["runningHash"] =
-        recon.stored === null ? "missing" : recon.stored === recon.computed ? "matches" : "does not match";
+      const reconHash: AuditAlertFacts["runningHash"] = runningHash(recon);
       const facts: AuditAlertFacts = {
         kind: "audit",
         scope: "recon",
@@ -447,9 +461,12 @@ function auditConditions(ledger: Ledger): FoundCondition[] {
         first: null,
         line: recon.breaks[0]?.line ?? null,
         runningHash: reconHash,
+        withoutLine: recon.unlined.length,
       };
       const lines: number[] = recon.breaks.map((item: ChainBreak): number => item.line);
-      found.push(condition("audit:recon", { lines, lostStart: recon.lostStart, hash: reconHash }, facts));
+      found.push(
+        condition("audit:recon", { lines, lostStart: recon.lostStart, hash: reconHash, unlined: recon.unlined }, facts),
+      );
     }
   }
   return found;
