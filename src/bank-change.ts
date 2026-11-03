@@ -3,6 +3,7 @@ import {
   updateBankDetails,
   type BeneficiaryRecord,
 } from "./airwallex/beneficiaries.js";
+import { AirwallexError, AirwallexUnreachableError } from "./airwallex/client.js";
 import { getTransfer, type Transfer, type TransferBankDetails } from "./airwallex/transfers.js";
 import { personName } from "./approvers.js";
 import { bankDetailsKey, NOT_ROUTING_FIELDS, routeValue } from "./assess.js";
@@ -196,10 +197,20 @@ export async function bankChangeForm(engine: Engine, obligation: Obligation): Pr
   }
   const record: BeneficiaryRecord = await getBeneficiary(engine.client, obligation.beneficiaryId);
   const details: TransferBankDetails = record.beneficiary?.bank_details ?? {};
-  // The same read recordBankChange makes, so the form starts from the time it checks.
+  // The same read recordBankChange makes, so the form starts from the time it
+  // checks. A read that fails leaves the form to start from now: recording the
+  // callback reads the transfer again and checks the time.
   const compared: ComparedPayment | undefined = comparedPayment(engine, obligation);
-  const sentAtMs: number =
-    compared === undefined ? Number.NaN : Date.parse((await getTransfer(engine.client, compared.transferId)).created_at);
+  let sentAtMs: number = Number.NaN;
+  if (compared !== undefined) {
+    try {
+      sentAtMs = Date.parse((await getTransfer(engine.client, compared.transferId)).created_at);
+    } catch (error: unknown) {
+      if (!(error instanceof AirwallexError || error instanceof AirwallexUnreachableError)) {
+        throw error;
+      }
+    }
+  }
   return {
     phoneOnFile: obligation.supplierPhone,
     fields: Object.entries(EDITABLE_FIELDS)
