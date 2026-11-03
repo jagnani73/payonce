@@ -2781,7 +2781,9 @@ export class Ledger {
   // Everything the metrics read, one query per table, with only the columns they
   // use: no names, notes, references, terms, facts or email text, and of the
   // timeline only each invoice's first line's time and its latest closed line's.
-  // It only reads, so it runs inside readSnapshot.
+  // It only reads, so it runs inside readSnapshot. Stored JSON is read only inside
+  // CASE WHEN json_valid(...), because SQLite evaluates both sides of an AND and a
+  // JSON function throws on text that is not JSON.
   metricsRead(): MetricsRead {
     const obligations: MetricsObligation[] = (
       this.db
@@ -2789,7 +2791,8 @@ export class Ledger {
           `SELECT o.invoice_id AS invoiceId, o.currency, COALESCE(o.source_currency, o.currency) AS wallet,
                   o.amount_minor AS amountMinor, o.state, o.origin, o.run_row_id IS NOT NULL AS fromRun,
                   o.transfer_method AS transferMethod, o.escalation_reason AS escalationReason,
-                  COALESCE(json_valid(o.duplicate_of) AND json_array_length(o.duplicate_of) > 0, 0) AS heldDuplicate,
+                  CASE WHEN json_valid(o.duplicate_of) THEN json_array_length(o.duplicate_of) > 0 ELSE 0 END
+                    AS heldDuplicate,
                   o.escalated_at AS escalatedAt,
                   (SELECT at FROM events WHERE events.invoice_id = o.invoice_id ORDER BY id LIMIT 1) AS startedAt,
                   CASE WHEN o.state IN ('settled', 'rejected') THEN
