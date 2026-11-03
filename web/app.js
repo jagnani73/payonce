@@ -149,6 +149,7 @@ const els = {
   emails: byId("emails"),
   findings: byId("findings"),
   outages: byId("outages"),
+  cash: byId("cash"),
   cashFresh: byId("cash-fresh"),
   cashProblem: byId("cash-problem"),
   cashCurrencies: byId("cash-currencies"),
@@ -1074,10 +1075,13 @@ function setSelected(id) {
   }
 }
 
+// Picking a view starts at its top, whether it was picked from the top bar, a
+// list, a board entry or a link, so nobody lands partway down the new view.
 function select(id) {
   if (id === state.selectedId) {
     return;
   }
+  window.scrollTo(0, 0);
   if (id === null) {
     // The board is not loaded while it is off screen, so the one held is old.
     state.board = null;
@@ -1186,7 +1190,6 @@ async function startIncident(event) {
     els.invoiceNumber.value = "";
     els.dueDate.value = "";
     state.fastUntil = Date.now() + EXPECT_WORK_MS;
-    window.scrollTo(0, 0);
     select(created.invoiceId);
   } catch (error) {
     state.createError = error.message;
@@ -1218,9 +1221,6 @@ function createIncidentNode(invoiceId) {
     h("span", { class: "incident__busy", hidden: true }, h("span", { class: "pulse" }), "Working"),
   );
   button.addEventListener("click", () => {
-    if (invoiceId !== state.selectedId) {
-      window.scrollTo(0, 0);
-    }
     select(invoiceId);
   });
   return h("li", { dataset: { id: invoiceId } }, button);
@@ -3749,7 +3749,6 @@ async function submitRunFile(event) {
     }
     els.runFile.value = "";
     state.fastUntil = Date.now() + EXPECT_WORK_MS;
-    window.scrollTo(0, 0);
     select(`run/${created.runId}`);
   } catch (error) {
     const data = error.data ?? null;
@@ -3780,9 +3779,6 @@ function createRunNode(key) {
     h("span", { class: "incident__busy", hidden: true }, h("span", { class: "pulse" }), "Working"),
   );
   button.addEventListener("click", () => {
-    if (key !== state.selectedId) {
-      window.scrollTo(0, 0);
-    }
     select(key);
   });
   return h("li", { dataset: { id: key } }, button);
@@ -4655,7 +4651,6 @@ async function submitEmail(event) {
     }
     els.emailFile.value = "";
     els.emailPaste.value = "";
-    window.scrollTo(0, 0);
     select(`inbox/${created.id}`);
   } catch (error) {
     state.addError = { message: error.message, id: Number.isInteger(error.data?.id) ? error.data.id : null };
@@ -5188,9 +5183,6 @@ function largestRisk(atRisk) {
 function createSupplierNode(key) {
   const button = h("button", { class: "incident supplier-row", type: "button" });
   button.addEventListener("click", () => {
-    if (key !== state.selectedId) {
-      window.scrollTo(0, 0);
-    }
     select(key);
   });
   return h("li", { dataset: { id: key } }, button);
@@ -7756,6 +7748,28 @@ function render() {
   renderCash();
   renderMain();
   renderOutages();
+  placePanels();
+}
+
+// Below this width the sidebar follows the main view (styles.css).
+const NARROW = window.matchMedia("(max-width: 900px)");
+
+// An incident, a pay run or an email comes before the outages card and the cash
+// panel, as a supplier record does, so its header is on the first screen. On a
+// narrow screen every view does, so a phone opens on what was picked. The nodes
+// move only when the order has to change.
+function placePanels() {
+  const after =
+    NARROW.matches || !els.detail.hidden || !els.runDetail.hidden || !els.inboxDetail.hidden;
+  const main = els.cash.parentElement;
+  if (after) {
+    if (main.lastElementChild !== els.cash || els.cash.previousElementSibling !== els.outages) {
+      main.append(els.outages, els.cash);
+    }
+  } else if (els.cash.nextElementSibling !== els.connection || els.outages.nextElementSibling !== els.cash) {
+    main.insertBefore(els.outages, els.connection);
+    main.insertBefore(els.cash, els.connection);
+  }
 }
 
 // ---------- start ----------
@@ -7799,6 +7813,7 @@ els.runFile.addEventListener("change", () => {
   }
 });
 
+// A top-bar button scrolls to the top of its view even when it is already open.
 els.boardButton.addEventListener("click", () => {
   window.scrollTo(0, 0);
   select(null);
@@ -7837,6 +7852,7 @@ for (const [name, select] of [
 window.addEventListener("hashchange", () => {
   select(idFromHash());
 });
+NARROW.addEventListener("change", placePanels);
 
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {

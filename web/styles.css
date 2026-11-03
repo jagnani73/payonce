@@ -2454,12 +2454,15 @@ input[type="file"] {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  /* The view picked comes first and the forms and lists after it, so a phone
+     opens on the board, an incident or a report, not on the new incident form. */
   .sidebar {
+    order: 1;
     position: static;
     height: auto;
     max-height: none;
     border-right: 0;
-    border-bottom: 1px solid var(--line);
+    border-top: 1px solid var(--line);
   }
 
   .incident-list {
