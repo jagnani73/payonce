@@ -519,6 +519,21 @@ export interface Attempt {
   routeKey: string | null;
 }
 
+// An invoice as the money committed to payments is worked out from it.
+export type CashObligation = Pick<
+  Obligation,
+  "invoiceId" | "state" | "currency" | "sourceCurrency" | "amountMinor" | "transferMethod" | "origin" | "runRowId"
+>;
+
+// An attempt as the cash lines read it: everything but its arrival estimate.
+export type CashAttempt = Omit<Attempt, "arrival">;
+
+// An invoice as the scans over every invoice compare it.
+export type ScannedObligation = Pick<
+  Obligation,
+  "invoiceId" | "supplier" | "supplierDomain" | "beneficiaryId" | "currency" | "amountMinor" | "state" | "payoutReference"
+>;
+
 // An account a payment is decided or approved for, or that a stored payment was
 // checked against: its accountKey and, when known, its routeKey. Two accounts
 // are the same when their routeKeys match, or, with either routeKey not known,
@@ -1354,7 +1369,7 @@ export function mismatchedLive(attempt: LiveTested): boolean {
 
 // A payment of the attempt's own live at the bank that the bank has not paid yet:
 // one being sent, one in flight, or one in a status PayOnce does not know.
-export function withBank(attempt: Attempt): boolean {
+export function withBank(attempt: LiveTested): boolean {
   return ownLive(attempt) && attempt.state !== "paid" && attempt.bankStatus !== "PAID";
 }
 
@@ -1394,7 +1409,7 @@ export function lateBesideLive(attempts: Attempt[], payouts: OutsidePayout[]): A
 
 // True when the invoice is paid from another currency's wallet, so each payment
 // converts on a quote a person approved.
-export function crossCurrency(obligation: Obligation): boolean {
+export function crossCurrency(obligation: Pick<Obligation, "sourceCurrency" | "currency">): boolean {
   return obligation.sourceCurrency !== obligation.currency;
 }
 
@@ -3483,6 +3498,74 @@ export class Ledger {
     return rows.map(toAttempt);
   }
 
+  // What money committed to payments is worked out from: every invoice that is
+  // not closed, and its attempts, with only the columns committedMinor reads. A
+  // stored list or object it does not read, such as another invoice's
+  // duplicate_of or an attempt's arrival, is never parsed, so one that does not
+  // parse stops only its own invoice's looks and not every payment.
+  committedRead(): { obligations: CashObligation[]; attempts: Map<string, CashAttempt[]> } {
+    const obligations: CashObligation[] = (
+      this.db
+        .prepare(
+          `SELECT invoice_id, state, currency, source_currency, amount_minor, transfer_method, origin, run_row_id
+             FROM obligations WHERE state IN ('open', 'escalated') ORDER BY rowid DESC`,
+        )
+        .all() as unknown as ObligationRow[]
+    ).map(
+      (row: ObligationRow): CashObligation => ({
+        invoiceId: row.invoice_id,
+        state: row.state,
+        currency: row.currency,
+        sourceCurrency: row.source_currency ?? row.currency,
+        amountMinor: row.amount_minor,
+        transferMethod: row.transfer_method,
+        origin: row.origin,
+        runRowId: row.run_row_id,
+      }),
+    );
+    const attempts: Map<string, CashAttempt[]> = new Map<string, CashAttempt[]>();
+    const rows: AttemptRow[] = this.db
+      .prepare(
+        `SELECT attempts.* FROM attempts JOIN obligations ON obligations.invoice_id = attempts.invoice_id
+          WHERE obligations.state IN ('open', 'escalated') ORDER BY attempts.rowid`,
+      )
+      .all() as unknown as AttemptRow[];
+    for (const row of rows) {
+      const { arrival: _arrival, ...attempt }: Attempt = toAttempt({ ...row, arrival: null });
+      const list: CashAttempt[] = attempts.get(attempt.invoiceId) ?? [];
+      list.push(attempt);
+      attempts.set(attempt.invoiceId, list);
+    }
+    return { obligations, attempts };
+  }
+
+  // Every invoice as the scans that compare one with all the others read it:
+  // likelyDuplicates, sameNumberForSupplier, a pay run's checks and the callback's
+  // check for another payment starting. Only the columns they test, so a stored
+  // list on another invoice that does not parse cannot stop a payment.
+  scannedObligations(): ScannedObligation[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT invoice_id, supplier, supplier_domain, beneficiary_id, currency, amount_minor, state,
+                  payout_reference
+             FROM obligations ORDER BY rowid DESC`,
+        )
+        .all() as unknown as ObligationRow[]
+    ).map(
+      (row: ObligationRow): ScannedObligation => ({
+        invoiceId: row.invoice_id,
+        supplier: row.supplier,
+        supplierDomain: row.supplier_domain,
+        beneficiaryId: row.beneficiary_id,
+        currency: row.currency,
+        amountMinor: row.amount_minor,
+        state: row.state,
+        payoutReference: row.payout_reference,
+      }),
+    );
+  }
+
   // The attempt a transfer belongs to. The request_id is PayOnce's own, so it
   // finds the attempt even before the transfer id has been recorded.
   attemptOf(requestId: string, transferId: string): Attempt | undefined {
@@ -4483,7 +4566,7 @@ export class Ledger {
 
   // The approval an attempt was opened on. An attempt no approval released, or one
   // from before the column, has the latest.
-  approvalOf(attempt: Attempt): Approval | undefined {
+  approvalOf(attempt: Pick<Attempt, "approvalId" | "invoiceId">): Approval | undefined {
     return attempt.approvalId === null
       ? this.latestApproval(attempt.invoiceId)
       : this.approval(attempt.approvalId);

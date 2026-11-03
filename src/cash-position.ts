@@ -9,6 +9,8 @@ import {
   withBank,
   type Approval,
   type Attempt,
+  type CashAttempt,
+  type CashObligation,
   type Ledger,
   type LiveTested,
   type Obligation,
@@ -105,7 +107,7 @@ interface LineAmount {
 // and otherwise about the invoice's last quote, which may be on no request, as
 // when nobody on the list can approve it. Before any quote it is 0, estimated.
 // attempt is null for a payment not opened yet.
-function lineAmount(ledger: Ledger, obligation: Obligation, attempt: Attempt | null, now: number): LineAmount {
+function lineAmount(ledger: Ledger, obligation: CashObligation, attempt: CashAttempt | null, now: number): LineAmount {
   if (attempt !== null && attempt.amountMinor !== null) {
     return { amountMinor: attempt.amountMinor, estimated: false, fromQuote: false };
   }
@@ -140,7 +142,7 @@ function lineAmount(ledger: Ledger, obligation: Obligation, attempt: Attempt | n
 // The fee a payment not sent yet should cost: the invoice's latest fee recorded in
 // the wallet the payment leaves, else the latest the ledger recorded in that
 // currency by the same transfer method, else 0 and not known.
-function feeEstimate(ledger: Ledger, obligation: Obligation, attempts: Attempt[]): FeeEstimate {
+function feeEstimate(ledger: Ledger, obligation: CashObligation, attempts: CashAttempt[]): FeeEstimate {
   for (const attempt of [...attempts].reverse()) {
     if (attempt.feeMinor !== null && attempt.feeCurrency === debitCurrency(obligation)) {
       return { feeMinor: attempt.feeMinor, feeKnown: true };
@@ -154,13 +156,13 @@ function feeEstimate(ledger: Ledger, obligation: Obligation, attempts: Attempt[]
 // a person can still release a payment for it: one held before paying, or one
 // whose payments all failed.
 function couldStillPay(
-  obligation: Obligation,
-  attempts: Attempt[],
+  obligation: CashObligation,
+  attempts: CashAttempt[],
   payouts: OutsidePayout[],
 ): boolean {
   return (
     obligation.state === "escalated" &&
-    attempts.every((attempt: Attempt): boolean => !liveAtBank(attempt)) &&
+    attempts.every((attempt: CashAttempt): boolean => !liveAtBank(attempt)) &&
     payouts.every((payout: OutsidePayout): boolean => payout.state === "failed")
   );
 }
@@ -244,18 +246,7 @@ export function cashLines(
 
     for (const attempt of attempts) {
       if (attempt.state === "pending" && attempt.transferId === null) {
-        const amount: LineAmount = lineAmount(ledger, obligation, attempt, now);
-        lines.push({
-          kind: "sending",
-          invoiceId,
-          currency: wallet,
-          amountMinor: amount.amountMinor,
-          ...feeEstimate(ledger, obligation, attempts),
-          reference: null,
-          estimated: amount.estimated,
-          fromQuote: amount.fromQuote,
-          runId: null,
-        });
+        lines.push(sendingLine(ledger, obligation, attempt, attempts, now));
       } else if (withBank(attempt)) {
         // A found invoice's original is a payout someone sent outside PayOnce. The
         // money is booked where the transfer took it, which for a payout paid from
@@ -346,25 +337,77 @@ export function cashLines(
       });
     }
     if (couldStillPay(obligation, attempts, payouts)) {
-      const approval: Approval | undefined = ledger.latestApproval(invoiceId);
-      const open: boolean = approval !== undefined && !isExpired(approval, now);
-      const amount: LineAmount = lineAmount(ledger, obligation, null, now);
-      lines.push({
-        kind:
-          open && approval?.state === "approved"
-            ? "approved"
-            : open && approval?.state === "requested"
-              ? "awaiting-approval"
-              : "awaiting-person",
-        invoiceId,
-        currency: wallet,
-        amountMinor: amount.amountMinor,
-        ...feeEstimate(ledger, obligation, attempts),
-        reference: null,
-        estimated: amount.estimated,
-        fromQuote: amount.fromQuote,
-        runId: null,
-      });
+      lines.push(personLine(ledger, obligation, attempts, now));
+    }
+  }
+  return lines;
+}
+
+// A payment being sent with no transfer yet.
+function sendingLine(
+  ledger: Ledger,
+  obligation: CashObligation,
+  attempt: CashAttempt,
+  attempts: CashAttempt[],
+  now: number,
+): CashLine {
+  const amount: LineAmount = lineAmount(ledger, obligation, attempt, now);
+  return {
+    kind: "sending",
+    invoiceId: obligation.invoiceId,
+    currency: debitCurrency(obligation),
+    amountMinor: amount.amountMinor,
+    ...feeEstimate(ledger, obligation, attempts),
+    reference: null,
+    estimated: amount.estimated,
+    fromQuote: amount.fromQuote,
+    runId: null,
+  };
+}
+
+// The payment an escalated invoice with nothing live could still make, by where
+// its latest request stands: approved, waiting for approval, or waiting on a
+// person.
+function personLine(ledger: Ledger, obligation: CashObligation, attempts: CashAttempt[], now: number): CashLine {
+  const approval: Approval | undefined = ledger.latestApproval(obligation.invoiceId);
+  const open: boolean = approval !== undefined && !isExpired(approval, now);
+  const amount: LineAmount = lineAmount(ledger, obligation, null, now);
+  return {
+    kind:
+      open && approval?.state === "approved"
+        ? "approved"
+        : open && approval?.state === "requested"
+          ? "awaiting-approval"
+          : "awaiting-person",
+    invoiceId: obligation.invoiceId,
+    currency: debitCurrency(obligation),
+    amountMinor: amount.amountMinor,
+    ...feeEstimate(ledger, obligation, attempts),
+    reference: null,
+    estimated: amount.estimated,
+    fromQuote: amount.fromQuote,
+    runId: null,
+  };
+}
+
+// The sending and approved lines of every invoice that is not closed, from the
+// narrow read committedMinor makes (Ledger.committedRead): what cashLines gives of
+// those kinds, without reading anything they do not need.
+function committedLines(ledger: Ledger, now: number): CashLine[] {
+  const read: { obligations: CashObligation[]; attempts: Map<string, CashAttempt[]> } = ledger.committedRead();
+  const lines: CashLine[] = [];
+  for (const obligation of read.obligations) {
+    const attempts: CashAttempt[] = read.attempts.get(obligation.invoiceId) ?? [];
+    for (const attempt of attempts) {
+      if (attempt.state === "pending" && attempt.transferId === null) {
+        lines.push(sendingLine(ledger, obligation, attempt, attempts, now));
+      }
+    }
+    if (couldStillPay(obligation, attempts, ledger.outsidePayouts(obligation.invoiceId))) {
+      const line: CashLine = personLine(ledger, obligation, attempts, now);
+      if (line.kind === "approved") {
+        lines.push(line);
+      }
     }
   }
   return lines;
@@ -467,7 +510,8 @@ export function committedByInvoice(
   except: CommittedExcept,
 ): Map<string, number> {
   const byInvoice: Map<string, number> = new Map<string, number>();
-  for (const line of [...cashLines(ledger), ...payRunLines(ledger)]) {
+  const now: number = Date.now();
+  for (const line of [...committedLines(ledger, now), ...payRunLines(ledger, now)]) {
     if (
       FIRM_KINDS.has(line.kind) &&
       line.currency === currency &&

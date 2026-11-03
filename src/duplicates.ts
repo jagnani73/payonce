@@ -1,5 +1,5 @@
 import type { Transfer } from "./airwallex/transfers.js";
-import type { Ledger, Obligation } from "./ledger.js";
+import type { Ledger, Obligation, ScannedObligation } from "./ledger.js";
 import { toMinor } from "./money.js";
 
 // A supplier billing again often adds a letter or a short word after the number,
@@ -48,13 +48,13 @@ export function sameNumberExactly(a: string, b: string): boolean {
 
 // The numbers an invoice is known by: its invoice number and, for a payout found
 // outside PayOnce, the reference it was sent with.
-export function numbersOf(obligation: Obligation): string[] {
+export function numbersOf(obligation: Pick<Obligation, "invoiceId" | "payoutReference">): string[] {
   return [obligation.invoiceId, obligation.payoutReference].filter(
     (reference: string | null): reference is string => reference !== null,
   );
 }
 
-function knownAs(obligation: Obligation, reference: string): boolean {
+function knownAs(obligation: Pick<Obligation, "invoiceId" | "payoutReference">, reference: string): boolean {
   return numbersOf(obligation).some((number: string): boolean => sameInvoiceNumber(number, reference));
 }
 
@@ -105,11 +105,11 @@ export function sameBillAndNumber(
 // supplier, by beneficiary or by name, the same amount and currency, and an
 // invoice number sameInvoiceNumber matches. An invoice closed without paying as a
 // duplicate is left out, since the one it duplicated is listed already.
-export function likelyDuplicates(ledger: Ledger, obligation: Obligation): Obligation[] {
+export function likelyDuplicates(ledger: Ledger, obligation: ScannedObligation): ScannedObligation[] {
   return ledger
-    .obligations()
+    .scannedObligations()
     .filter(
-      (other: Obligation): boolean =>
+      (other: ScannedObligation): boolean =>
         other.invoiceId !== obligation.invoiceId &&
         other.state !== "rejected" &&
         sameBill(other, obligation) &&
@@ -123,11 +123,11 @@ export function likelyDuplicates(ledger: Ledger, obligation: Obligation): Obliga
 // currency, oldest first. PayOnce pays an invoice number once, so a payment for
 // such an invoice waits for a person. Rejected invoices are left out, as in
 // likelyDuplicates.
-export function sameNumberForSupplier(ledger: Ledger, obligation: Obligation): Obligation[] {
+export function sameNumberForSupplier(ledger: Ledger, obligation: ScannedObligation): ScannedObligation[] {
   return ledger
-    .obligations()
+    .scannedObligations()
     .filter(
-      (other: Obligation): boolean =>
+      (other: ScannedObligation): boolean =>
         other.invoiceId !== obligation.invoiceId &&
         other.state !== "rejected" &&
         (other.beneficiaryId === obligation.beneficiaryId ||

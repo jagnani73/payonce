@@ -126,6 +126,7 @@ import {
   type PayoutMoney,
   type PayoutState,
   type RunRow,
+  type ScannedObligation,
   type Signoff,
 } from "./ledger.js";
 import { formatMoney, readMinor, toMajor, toMinor } from "./money.js";
@@ -1178,7 +1179,7 @@ async function assess(
 // PayOnce or by a payout sent outside it. Null when there is none.
 function paidDuplicate(ledger: Ledger, obligation: Obligation): string | null {
   return (
-    likelyDuplicates(ledger, obligation).find((other: Obligation): boolean =>
+    likelyDuplicates(ledger, obligation).find((other: ScannedObligation): boolean =>
       isPaid(ledger, other.invoiceId),
     )?.invoiceId ?? null
   );
@@ -2412,7 +2413,7 @@ async function continueEscalated(
 // under the lease with what it was when the terms were taken.
 function duplicatesOnFile(ledger: Ledger, held: Obligation): string {
   const found: string[] = likelyDuplicates(ledger, held).map(
-    (other: Obligation): string => other.invoiceId,
+    (other: ScannedObligation): string => other.invoiceId,
   );
   return JSON.stringify(
     [...new Set([...held.duplicateOf, ...found])].map((invoiceId: string): unknown[] => [
@@ -2575,10 +2576,10 @@ function heldForOthers(
   obligation: Obligation,
 ): Extract<FirstPayment, { kind: "held" }> | undefined {
   const duplicates: string[] = likelyDuplicates(ledger, obligation).map(
-    (other: Obligation): string => other.invoiceId,
+    (other: ScannedObligation): string => other.invoiceId,
   );
   const sameNumber: string[] = sameNumberForSupplier(ledger, obligation)
-    .map((other: Obligation): string => other.invoiceId)
+    .map((other: ScannedObligation): string => other.invoiceId)
     .filter((other: string): boolean => !duplicates.includes(other));
   const duplicateOf: string[] = [...duplicates, ...sameNumber];
   if (duplicateOf.length === 0 && !anyLive(ledger.outsidePayouts(obligation.invoiceId))) {
@@ -2858,7 +2859,7 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
   // The invoices it was held for, and any that match it now: one started after
   // it, or one that came first while this one was held for another reason.
   const added: string[] = likelyDuplicates(engine.ledger, obligation)
-    .map((other: Obligation): string => other.invoiceId)
+    .map((other: ScannedObligation): string => other.invoiceId)
     .filter((other: string): boolean => !obligation.duplicateOf.includes(other));
   const held: Obligation = {
     ...obligation,
@@ -3010,7 +3011,7 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
       (): boolean =>
         duplicatesOnFile(engine.ledger, held) === onFile &&
         engine.ledger.emailCount(invoiceId) === emails.length &&
-        likelyDuplicates(engine.ledger, held).every((other: Obligation): boolean =>
+        likelyDuplicates(engine.ledger, held).every((other: ScannedObligation): boolean =>
           held.duplicateOf.includes(other.invoiceId),
         ),
       route,

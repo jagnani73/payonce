@@ -21,7 +21,7 @@ const CURRENCY_PATTERN: RegExp = /^[A-Z]{3}$/;
 
 // The wallet a payment's money leaves: the invoice's own currency, or the one it
 // is paid from across currencies.
-export function debitCurrency(obligation: Obligation): string {
+export function debitCurrency(obligation: Pick<Obligation, "sourceCurrency">): string {
   return obligation.sourceCurrency;
 }
 

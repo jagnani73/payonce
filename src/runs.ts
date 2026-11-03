@@ -47,6 +47,7 @@ import {
   type Ledger,
   type LedgerEvent,
   type Obligation,
+  type ScannedObligation,
   type Outage,
   type ReleasedRun,
   type ReleaseRow,
@@ -235,10 +236,10 @@ function checkRow(
   if (invoiceId !== null) {
     const same: Obligation | undefined =
       ledger.obligation(invoiceId) ?? ledger.obligationForReference(invoiceId);
-    const alike: Obligation | undefined = ledger
-      .obligations()
+    const alike: ScannedObligation | undefined = ledger
+      .scannedObligations()
       .find(
-        (other: Obligation): boolean =>
+        (other: ScannedObligation): boolean =>
           sameNumberExactly(other.invoiceId, invoiceId) &&
           (other.beneficiaryId === row.beneficiaryId ||
             (payeeName !== null && sameSupplier(other.supplier, payeeName))),
@@ -350,7 +351,7 @@ function checkRow(
     heldFor:
       pays && method !== null
         ? likelyDuplicates(ledger, asObligation(row, name, method)).map(
-            (other: Obligation): string => other.invoiceId,
+            (other: ScannedObligation): string => other.invoiceId,
           )
         : [],
     newPayee: pays && newPayee,
@@ -557,7 +558,7 @@ export interface DomainCheck {
 }
 
 export function domainChecks(ledger: Ledger, terms: RunTerms): DomainCheck[] {
-  const obligations: Obligation[] = ledger.obligations();
+  const obligations: ScannedObligation[] = ledger.scannedObligations();
   // Every domain the run gives each beneficiary.
   const given: Map<string, Set<string>> = new Map<string, Set<string>>();
   for (const row of terms.rows) {
@@ -572,14 +573,14 @@ export function domainChecks(ledger: Ledger, terms: RunTerms): DomainCheck[] {
     if (domain === undefined) {
       return [];
     }
-    const theirs: Obligation[] = obligations.filter(
-      (obligation: Obligation): boolean => obligation.beneficiaryId === row.beneficiaryId,
+    const theirs: ScannedObligation[] = obligations.filter(
+      (obligation: ScannedObligation): boolean => obligation.beneficiaryId === row.beneficiaryId,
     );
     // Newest first, so this is the latest invoice with a domain.
     const onFile: string | null =
-      theirs.find((obligation: Obligation): boolean => obligation.supplierDomain !== "")?.supplierDomain ?? null;
+      theirs.find((obligation: ScannedObligation): boolean => obligation.supplierDomain !== "")?.supplierDomain ?? null;
     const inRun: string[] = [...(given.get(row.beneficiaryId) ?? [])].filter((other: string): boolean => other !== domain);
-    const paidBefore: boolean = theirs.some((obligation: Obligation): boolean => ledger.paidOnce(obligation.invoiceId));
+    const paidBefore: boolean = theirs.some((obligation: ScannedObligation): boolean => ledger.paidOnce(obligation.invoiceId));
     const caution: boolean = inRun.length > 0 || (onFile !== null && onFile !== domain) || (onFile === null && paidBefore);
     return [{ line: row.line, invoiceId: row.invoiceId, domain, onFile, inRun, paidBefore, caution }];
   });

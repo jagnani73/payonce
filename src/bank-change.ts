@@ -7,7 +7,14 @@ import { getTransfer, type Transfer, type TransferBankDetails } from "./airwalle
 import { personName } from "./approvers.js";
 import { bankDetailsKey } from "./assess.js";
 import { note, type Engine } from "./engine.js";
-import { liveAtBank, type Attempt, type Obligation, type OutsidePayout, type PayRunRow } from "./ledger.js";
+import {
+  liveAtBank,
+  type Attempt,
+  type Obligation,
+  type OutsidePayout,
+  type PayRunRow,
+  type ScannedObligation,
+} from "./ledger.js";
 import { wasRejected } from "./payments.js";
 
 // The bank details a person may change after a callback, with the label the page
@@ -130,8 +137,8 @@ function comparedPayment(engine: Engine, obligation: Obligation): ComparedPaymen
 // the account that payment goes to outside its turn.
 function anotherPaymentStarting(engine: Engine, obligation: Obligation): boolean {
   return (
-    engine.ledger.obligations().some(
-      (other: Obligation): boolean =>
+    engine.ledger.scannedObligations().some(
+      (other: ScannedObligation): boolean =>
         other.invoiceId !== obligation.invoiceId &&
         other.beneficiaryId === obligation.beneficiaryId &&
         other.state !== "settled" &&
