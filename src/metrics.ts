@@ -771,16 +771,21 @@ function closeHow(obligation: MetricsObligation, attempts: MetricsAttempt[]): Cl
 }
 
 // The first time an original of the invoice was recorded failed, null when none
-// failed, and "" when one failed but no time is on file for it.
+// failed, and "" when one failed but no time is on file for it. An original
+// found late was marked failed by PayOnce, not by the bank, so it counts only
+// once the bank has failed its transfer too, and then with no time on file.
 function firstFailure(attempts: MetricsAttempt[]): string | null {
   const failed: MetricsAttempt[] = attempts.filter(
     (attempt: MetricsAttempt): boolean =>
-      attempt.kind === "original" && (attempt.state === "failed" || attempt.failedAt !== null),
+      attempt.kind === "original" &&
+      (attempt.state === "failed" || attempt.failedAt !== null) &&
+      (attempt.foundLateAt === null || outcomeOf(attempt) === "failed"),
   );
   if (failed.length === 0) {
     return null;
   }
   const times: number[] = failed
+    .filter((attempt: MetricsAttempt): boolean => attempt.foundLateAt === null)
     .map((attempt: MetricsAttempt): number => msOf(attempt.failedAt))
     .filter((ms: number): boolean => !Number.isNaN(ms));
   return times.length === 0 ? "" : (isoOf(Math.min(...times)) ?? "");
