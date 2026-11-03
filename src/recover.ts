@@ -10,7 +10,7 @@ import { describeOutageRule, outageRuleFromEnv } from "./outages.js";
 import { printableJson, say } from "./printable.js";
 import { readerFromEnv } from "./reader.js";
 import { describeFloors, reserveFromEnv } from "./reserve.js";
-import { SandboxBank } from "./sandbox-bank.js";
+import { SandboxBank, SandboxBankError } from "./sandbox-bank.js";
 import {
   DEFAULT_EMAILS,
   DEFAULT_SCENARIO,
@@ -20,6 +20,7 @@ import {
   untilAtRest,
 } from "./scenario.js";
 import { Watcher } from "./watcher.js";
+import { SANDBOX_BANK_STOPPED } from "./words.js";
 
 const DEFAULT_OUTCOME: string = "CHANNEL_TIMEOUT";
 // The CLI has no webhook receiver, so it checks the bank often.
@@ -106,6 +107,8 @@ async function main(): Promise<void> {
   } catch (error: unknown) {
     if (error instanceof AirwallexError || error instanceof AirwallexUnreachableError) {
       stopped(ledger, invoiceId, bankOutcome, error);
+    } else if (error instanceof SandboxBankError) {
+      sandboxStopped(ledger, invoiceId, bankOutcome, error);
     } else {
       noteError(ledger, invoiceId, error);
     }
@@ -140,6 +143,18 @@ function stopped(
     `${what}, so PayOnce stopped. ${invoiceId} is in the ledger, and pnpm recover ${bankOutcome} ${invoiceId} or pnpm ui looks at it again.`,
   );
   note(ledger, invoiceId, "error", error.message);
+}
+
+// The scripted run's sandbox bank could not move the transfer it sent, as when
+// the simulator answers 500. The run stops here and the watcher with it, so the
+// line says so instead of the server's ending, and the terminal says how to look
+// at the invoice again.
+function sandboxStopped(ledger: Ledger, invoiceId: string, bankOutcome: string, error: SandboxBankError): void {
+  say(
+    `${error.what}, so PayOnce stopped. ${invoiceId} is in the ledger, and pnpm recover ${bankOutcome} ${invoiceId} or pnpm ui looks at it again.`,
+  );
+  say(`  ${error.detail}`);
+  note(ledger, invoiceId, error.kind, `${error.what}. ${SANDBOX_BANK_STOPPED}`);
 }
 
 await main();
