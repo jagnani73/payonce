@@ -1,5 +1,5 @@
 import type { Transfer, TransferBankDetails } from "./airwallex/transfers.js";
-import { ACCOUNT_FIELDS, routeKeyOf, routeValue } from "./assess.js";
+import { keyHash } from "./approval.js";
 import { NameError, personName, sameName, type ApprovalPolicy, type Approver } from "./approvers.js";
 import { originalStateOf } from "./assess.js";
 import { deadlineMinutes } from "./deadlines.js";
@@ -41,6 +41,20 @@ const MAX_NOTE_LENGTH: number = 200;
 const MINUTE_MS: number = 60_000;
 const ENDED_SHOWN: number = 20;
 
+// The fields that say which account a payment reaches. A payee is the account,
+// so two beneficiary records for one account are one payee, and a bank name
+// Airwallex rewrote does not make another. Kept apart from the routeKey, which
+// compares accounts for approvals and holds, so outage counts do not move when
+// that key does.
+const PAYEE_FIELDS: readonly string[] = [
+  "bank_country_code",
+  "account_currency",
+  "account_number",
+  "account_routing_value1",
+  "iban",
+  "swift_code",
+];
+const ACCOUNT_FIELDS: readonly string[] = ["account_number", "account_routing_value1", "iban", "swift_code"];
 
 export interface OutageRule extends OutageCount {
   // Why a setting was not used, or null when both were read.
@@ -95,15 +109,18 @@ function clock(iso: string | null): string {
   return iso === null ? "" : `${iso.slice(11, 16)} UTC`;
 }
 
-// The account a payout went to, as one key: its routeKey, so two beneficiary
-// records for one account are one payee and a bank name Airwallex rewrote does
-// not make another. Its beneficiary when the payout carries no account fields.
+// The account a payout went to, as one key, or its beneficiary when the payout
+// carries no account fields.
 export function payeeOf(transfer: Transfer): string {
   const details: TransferBankDetails = transfer.beneficiary?.bank_details ?? {};
-  if (ACCOUNT_FIELDS.every((field: string): boolean => routeValue(details[field]) === "")) {
+  const value = (field: string): string => {
+    const raw: unknown = details[field];
+    return typeof raw === "string" ? raw.replace(/\s+/g, "").toUpperCase() : "";
+  };
+  if (ACCOUNT_FIELDS.every((field: string): boolean => value(field) === "")) {
     return `beneficiary:${transfer.beneficiary_id ?? transfer.id}`;
   }
-  return routeKeyOf(details);
+  return keyHash(JSON.stringify(PAYEE_FIELDS.map((field: string): string[] => [field, value(field)])));
 }
 
 function declaredLine(outage: Outage, counted: RailFailure[]): string {

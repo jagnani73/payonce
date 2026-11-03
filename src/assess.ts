@@ -109,10 +109,6 @@ export function keyHash(detailsKey: string): string {
 // cannot route money, said here.
 export const NOT_ROUTING_FIELDS: ReadonlySet<string> = new Set<string>(["bank_name"]);
 
-// The fields that name the account itself. A payout with none of them is told
-// apart by its beneficiary in payeeOf.
-export const ACCOUNT_FIELDS: readonly string[] = ["account_number", "account_routing_value1", "iban", "swift_code"];
-
 // A field as the route compares it: Airwallex may change case or spacing when it
 // stores a value.
 export function routeValue(raw: unknown): string {
