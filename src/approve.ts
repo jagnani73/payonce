@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { describeRate, markupOf, type ApprovalTerms, type DuplicateEvidence } from "./approval.js";
 import { arrivalAdvice, type ArrivalAdvice } from "./arrival.js";
 import { describePolicy, policyFromEnv, type ApprovalPolicy } from "./approvers.js";
@@ -7,6 +8,7 @@ import { Ledger, LEDGER_PATH, signersOf, type Approval, type Obligation, type Ou
 import { formatMoney } from "./money.js";
 import { railOf } from "./outages.js";
 import { printable, say, shownFailureCode, shownReference, utcTime } from "./printable.js";
+import { notAnInvoiceText } from "./runs.js";
 import { readableTerms } from "./terms-shape.js";
 
 function describeDuplicate(duplicate: DuplicateEvidence): string {
@@ -92,6 +94,12 @@ function main(): void {
     return;
   }
 
+  // Opening a ledger that is not there would make an empty one.
+  if (!existsSync(LEDGER_PATH)) {
+    say(`There is no ${LEDGER_PATH} here. Start an incident first.`);
+    process.exitCode = 1;
+    return;
+  }
   const policy: ApprovalPolicy = policyFromEnv();
   const ledger: Ledger = new Ledger(LEDGER_PATH);
   let obligation: Obligation | undefined;
@@ -108,7 +116,7 @@ function main(): void {
     return;
   }
   if (obligation === undefined) {
-    say(`${invoiceId} is not in the ledger`);
+    say(notAnInvoiceText(ledger, invoiceId));
     process.exitCode = 1;
     return;
   }

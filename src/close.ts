@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import {
   closeIncident,
   coveredText,
@@ -10,6 +11,7 @@ import {
 import { personName } from "./approvers.js";
 import { Ledger, LEDGER_PATH } from "./ledger.js";
 import { printable, say, shownReference } from "./printable.js";
+import { notAnInvoiceText } from "./runs.js";
 
 const COVERS_FLAG: string = "--covers=";
 // Airwallex's transfer ids are UUIDs. Anything else is not printed.
@@ -51,9 +53,15 @@ function main(): void {
     return;
   }
 
+  // Opening a ledger that is not there would make an empty one.
+  if (!existsSync(LEDGER_PATH)) {
+    say(`There is no ${LEDGER_PATH} here. Start an incident first.`);
+    process.exitCode = 1;
+    return;
+  }
   const ledger: Ledger = new Ledger(LEDGER_PATH);
   if (ledger.obligation(invoiceId) === undefined) {
-    say(`${invoiceId} is not in the ledger`);
+    say(notAnInvoiceText(ledger, invoiceId));
     process.exitCode = 1;
     return;
   }

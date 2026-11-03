@@ -59,7 +59,7 @@ import {
 } from "./ledger.js";
 import { formatMoney } from "./money.js";
 import { runHoldLine, runWaitingLine } from "./outages.js";
-import { oneLine, say, sayError } from "./printable.js";
+import { oneLine, printable, say, sayError } from "./printable.js";
 import { currencyFloor, type CurrencyFloor, type FloorSource } from "./reserve.js";
 import { rowFromCells, type RunFile, type RunFileRow } from "./run-file.js";
 
@@ -67,6 +67,16 @@ import { rowFromCells, type RunFile, type RunFileRow } from "./run-file.js";
 // it never names an invoice.
 export function runKey(runId: number): string {
   return `run:${runId}`;
+}
+
+// What the CLI says for an invoice number the ledger has no invoice for: that it
+// is a pay row of the run waiting for approval, which is no invoice until the run
+// is released, or that it is not in the ledger.
+export function notAnInvoiceText(ledger: Ledger, invoiceId: string): string {
+  const row: RunRow | undefined = ledger.waitingRunRow(invoiceId);
+  return row === undefined
+    ? `${printable(invoiceId)} is not in the ledger`
+    : `${printable(invoiceId)} is row ${row.line} of pay run ${row.runId}, which is waiting for approval, so it is not an invoice until the run is released. See the run with pnpm payrun show ${row.runId}`;
 }
 
 // The cash check of one currency's pay rows, as the last check found it.
