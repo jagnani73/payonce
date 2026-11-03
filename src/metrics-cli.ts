@@ -12,6 +12,7 @@ import {
   type PaymentKind,
   type Period,
   type Spread,
+  type WalletMoney,
 } from "./metrics.js";
 import { formatMoney } from "./money.js";
 import { printableJson, say, sayError } from "./printable.js";
@@ -87,6 +88,19 @@ function durationText(seconds: number | null): string {
   return hours % 24 === 0 ? `${days} d` : `${days} d ${hours % 24} h`;
 }
 
+// What payments took, wallet by wallet and never added across currencies, and how
+// many of them have no amount on file.
+function moneyText(rows: WalletMoney[], notKnown: number): string {
+  const parts: string[] = rows.map(
+    (row: WalletMoney): string =>
+      `${formatMoney(row.amountMinor, row.currency)} in ${plural(row.payments, "payment", "payments")}`,
+  );
+  if (notKnown > 0) {
+    parts.push(`${plural(notKnown, "payment", "payments")} with no amount on file`);
+  }
+  return parts.length === 0 ? "money in a currency PayOnce cannot read" : parts.join(", ");
+}
+
 function spreadText(spread: Spread): string {
   const missing: string = spread.notOnFile === 0 ? "" : `, ${spread.notOnFile} not on file`;
   if (spread.n === 0) {
@@ -123,12 +137,16 @@ function payments(report: MetricsReport): void {
       `  Paid the first time, ${row.currency}: ${row.paid} of the ${row.ended} first payments the bank has paid or failed${row.percent === null ? "" : ` (${row.percent}%)`}`,
     );
   }
-  if (table.paidMoreThanOnce.length === 0) {
-    line("  Paid more than once, since the ledger started: none");
-  }
-  for (const row of table.paidMoreThanOnce) {
+  const twice = table.paidMoreThanOnce;
+  line(
+    twice.invoices === 0
+      ? "  Paid more than once, since the ledger started: none"
+      : `  Paid more than once, since the ledger started: ${plural(twice.invoices, "invoice", "invoices")}. The payments after the first took ${moneyText(twice.extra, twice.notKnown)}`,
+  );
+  const kept = table.mismatchedPaid;
+  if (kept.transfers > 0) {
     line(
-      `  Paid more than once, since the ledger started, ${row.currency}: ${row.invoices} ${row.invoices === 1 ? "invoice" : "invoices"}, ${formatMoney(row.extraMinor, row.currency)} more than they were owed`,
+      `  Paid transfers that did not match their invoice, since the ledger started: ${plural(kept.transfers, "transfer", "transfers")} on ${plural(kept.invoices, "invoice", "invoices")}, which took ${moneyText(kept.paid, kept.notKnown)}. They are not counted as a second payment`,
     );
   }
   for (const row of table.bankTimeToPay) {

@@ -7224,6 +7224,22 @@ function spreadCells(spread) {
   ];
 }
 
+function countWords(count, one, many) {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+// What payments took, wallet by wallet and never added across currencies, and
+// how many of them have no amount on file.
+function walletMoneyWords(rows, notKnown) {
+  const parts = rows.map(
+    (row) => `${formatMoney(row.amountMinor, row.currency)} in ${countWords(row.payments, "payment", "payments")}`,
+  );
+  if (notKnown > 0) {
+    parts.push(`${countWords(notKnown, "payment", "payments")} with no amount on file`);
+  }
+  return parts.length === 0 ? "money in a currency PayOnce cannot read" : parts.join(", ");
+}
+
 function percentWords(part, whole, percent) {
   return percent === null ? `${part} of ${whole}` : `${part} of ${whole} (${percent}%)`;
 }
@@ -7289,15 +7305,16 @@ function paymentsCard(table) {
       : `Paid the first time: ${table.firstTime
           .map((row) => `${row.currency} ${percentWords(row.paid, row.ended, row.percent)}`)
           .join("; ")}. This counts the first payments the bank has paid or failed.`;
+  const paidTwice = table.paidMoreThanOnce;
   const twice =
-    table.paidMoreThanOnce.length === 0
+    paidTwice.invoices === 0
       ? "Paid more than once, since the ledger started: none."
-      : `Paid more than once, since the ledger started: ${table.paidMoreThanOnce
-          .map(
-            (row) =>
-              `${row.currency} ${row.invoices} ${row.invoices === 1 ? "invoice" : "invoices"}, ${formatMoney(row.extraMinor, row.currency)} more than owed`,
-          )
-          .join("; ")}.`;
+      : `Paid more than once, since the ledger started: ${countWords(paidTwice.invoices, "invoice", "invoices")}. The payments after the first took ${walletMoneyWords(paidTwice.extra, paidTwice.notKnown)}.`;
+  const kept = table.mismatchedPaid;
+  const mismatched =
+    kept.transfers === 0
+      ? null
+      : `Paid transfers that did not match their invoice, since the ledger started: ${countWords(kept.transfers, "transfer", "transfers")} on ${countWords(kept.invoices, "invoice", "invoices")}, which took ${walletMoneyWords(kept.paid, kept.notKnown)}. They are not counted as a second payment.`;
   const bankTime = table.bankTimeToPay
     .map((row) => spreadNote(`${row.currency} ${row.method}`, row))
     .filter((row) => row !== null);
@@ -7320,7 +7337,8 @@ function paymentsCard(table) {
       "No payments sent in this period.",
     ),
     h("p", null, firstTime),
-    h("p", { class: table.paidMoreThanOnce.length === 0 ? null : "form-error" }, twice),
+    h("p", { class: paidTwice.invoices === 0 ? null : "form-error" }, twice),
+    mismatched !== null && h("p", null, mismatched),
     bankTime.length > 0 &&
       metricsTable(
         "Bank time to pay: from PayOnce's last call to create the transfer to when it recorded it paid",

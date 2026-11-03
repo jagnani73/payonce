@@ -94,10 +94,31 @@ export interface FirstTimeRow {
   percent: number | null;
 }
 
-export interface PaidTwiceRow {
+// Money by the wallet it left, and how many payments it was.
+export interface WalletMoney {
   currency: string;
+  payments: number;
+  amountMinor: number;
+}
+
+// Invoices with two or more payments paid at the bank, PayOnce's own and payouts
+// sent outside it. extra is what each paid payment after the first took: PayOnce's
+// in the order it opened them, then payouts in the order they were tied. notKnown
+// counts extra payments whose amount the ledger does not hold.
+export interface PaidTwice {
   invoices: number;
-  extraMinor: number;
+  extra: WalletMoney[];
+  notKnown: number;
+}
+
+// Paid transfers kept beside an attempt because they do not carry its invoice's
+// number, amount and currency. They are counted apart, never as a second payment
+// of the invoice.
+export interface MismatchedPaid {
+  invoices: number;
+  transfers: number;
+  paid: WalletMoney[];
+  notKnown: number;
 }
 
 export interface BankTimeRow extends Spread {
@@ -108,7 +129,8 @@ export interface BankTimeRow extends Spread {
 export interface PaymentsTable {
   rows: PaymentRow[];
   firstTime: FirstTimeRow[];
-  paidMoreThanOnce: PaidTwiceRow[];
+  paidMoreThanOnce: PaidTwice;
+  mismatchedPaid: MismatchedPaid;
   bankTimeToPay: BankTimeRow[];
   notOnFile: number;
   unreadable: number;
@@ -394,6 +416,31 @@ function sentOutside(obligation: MetricsObligation, attempt: MetricsAttempt): bo
   return obligation.origin === "outside" && attempt.kind === "original";
 }
 
+// What a payment took from the wallet it left, before the fee.
+interface Took {
+  currency: string;
+  amountMinor: number;
+}
+
+function tookOf(currency: string | null, amountMinor: number | null): Took | null {
+  return currency !== null && amountMinor !== null && Number.isSafeInteger(amountMinor) ? { currency, amountMinor } : null;
+}
+
+// What a paid attempt took: as debitOf stored it, else for PayOnce's own payment
+// the invoice's amount from the invoice's own wallet, which it sent exactly, or
+// the sell amount of its quote from another currency's wallet. A payout someone
+// sent outside PayOnce and found as the invoice's original has no amount PayOnce
+// set, so with none stored it is not known.
+function attemptTook(obligation: MetricsObligation, attempt: MetricsAttempt): Took | null {
+  const stored: Took | null = tookOf(attempt.currency, attempt.amountMinor);
+  if (stored !== null || sentOutside(obligation, attempt)) {
+    return stored;
+  }
+  return obligation.wallet === obligation.currency
+    ? tookOf(obligation.currency, obligation.amountMinor)
+    : tookOf(obligation.wallet, attempt.quoteAmountMinor);
+}
+
 function failureCodeOf(code: string | null): string {
   if (code === null) {
     return "none";
@@ -525,30 +572,60 @@ function paymentsOf(read: MetricsRead, index: Indexed, window: Window): Payments
     }
   }
   // Since the ledger started, whatever the period: it should read nothing.
-  const twice: Map<string, PaidTwiceRow> = new Map();
+  const twice: PaidTwice = { invoices: 0, extra: [], notKnown: 0 };
+  const extra: Map<string, WalletMoney> = new Map();
+  const mismatched: MismatchedPaid = { invoices: 0, transfers: 0, paid: [], notKnown: 0 };
+  const mismatchedMoney: Map<string, WalletMoney> = new Map();
+  const unreadableInvoices: Set<string> = new Set();
+  // Adds one payment to its wallet, or counts it not known, or, for a currency
+  // that cannot be read, leaves it out of the money.
+  const add = (money: Map<string, WalletMoney>, took: Took | null, invoiceId: string): boolean => {
+    if (took === null) {
+      return false;
+    }
+    if (!CURRENCY.test(took.currency)) {
+      unreadableInvoices.add(invoiceId);
+      return true;
+    }
+    const row: WalletMoney = rowFor(money, took.currency, () => ({ currency: took.currency, payments: 0, amountMinor: 0 }));
+    row.payments += 1;
+    row.amountMinor += took.amountMinor;
+    return true;
+  };
   for (const obligation of read.obligations) {
     const attempts: MetricsAttempt[] = index.attempts.get(obligation.invoiceId) ?? [];
-    const paid: number =
-      attempts.filter((attempt: MetricsAttempt): boolean => attempt.state === "paid" || attempt.bankStatus === "PAID")
-        .length +
-      attempts.filter((attempt: MetricsAttempt): boolean => attempt.mismatchedStatus === "PAID").length +
-      (index.payouts.get(obligation.invoiceId) ?? []).filter((payout: MetricsPayout): boolean => payout.state === "paid")
-        .length;
-    if (paid < 2) {
-      continue;
+    const paid: (Took | null)[] = [
+      ...attempts
+        .filter((attempt: MetricsAttempt): boolean => attempt.state === "paid" || attempt.bankStatus === "PAID")
+        .map((attempt: MetricsAttempt): Took | null => attemptTook(obligation, attempt)),
+      ...(index.payouts.get(obligation.invoiceId) ?? [])
+        .filter((payout: MetricsPayout): boolean => payout.state === "paid")
+        .map((payout: MetricsPayout): Took | null => tookOf(payout.currency, payout.amountMinor)),
+    ];
+    if (paid.length >= 2) {
+      twice.invoices += 1;
+      for (const took of paid.slice(1)) {
+        twice.notKnown += add(extra, took, obligation.invoiceId) ? 0 : 1;
+      }
     }
-    if (!CURRENCY.test(obligation.currency)) {
-      unreadable += 1;
-      continue;
+    const kept: MetricsAttempt[] = attempts.filter(
+      (attempt: MetricsAttempt): boolean => attempt.mismatchedTransferId !== null && attempt.mismatchedStatus === "PAID",
+    );
+    if (kept.length > 0) {
+      mismatched.invoices += 1;
+      mismatched.transfers += kept.length;
+      for (const attempt of kept) {
+        mismatched.notKnown += add(
+          mismatchedMoney,
+          tookOf(attempt.mismatchedCurrency, attempt.mismatchedAmountMinor),
+          obligation.invoiceId,
+        )
+          ? 0
+          : 1;
+      }
     }
-    const row: PaidTwiceRow = rowFor(twice, obligation.currency, () => ({
-      currency: obligation.currency,
-      invoices: 0,
-      extraMinor: 0,
-    }));
-    row.invoices += 1;
-    row.extraMinor += obligation.amountMinor * (paid - 1);
   }
+  unreadable += unreadableInvoices.size;
   return {
     rows: [...rows.values()].sort(
       (a: PaymentRow, b: PaymentRow): number =>
@@ -557,7 +634,8 @@ function paymentsOf(read: MetricsRead, index: Indexed, window: Window): Payments
     firstTime: byCurrency(firstTime.values()).map(
       (row: FirstTimeRow): FirstTimeRow => ({ ...row, percent: percentOf(row.paid, row.ended) }),
     ),
-    paidMoreThanOnce: byCurrency(twice.values()),
+    paidMoreThanOnce: { ...twice, extra: byCurrency(extra.values()) },
+    mismatchedPaid: { ...mismatched, paid: byCurrency(mismatchedMoney.values()) },
     bankTimeToPay: [...bankTime.values()]
       .sort(
         (a: { currency: string; method: Method }, b: { currency: string; method: Method }): number =>
