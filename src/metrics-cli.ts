@@ -262,7 +262,7 @@ function duplicates(report: MetricsReport): void {
   }
   for (const row of table.rows) {
     line(
-      `  ${row.currency}: ${row.held} held. ${row.stopped} closed without paying (${formatMoney(row.stoppedMinor, row.currency)} not paid twice), ${row.paid} paid on approval, ${row.stillHeld} still held`,
+      `  ${row.currency}: ${row.held} held. ${row.stopped} closed without paying (${formatMoney(row.stoppedMinor, row.currency)} not paid twice), ${row.paid} paid on approval, ${row.released} approved and paying now, ${row.stillHeld} still held`,
     );
   }
   notOnFile(table.notOnFile, table.unreadable);

@@ -7495,13 +7495,14 @@ function duplicatesCard(table) {
     "Duplicates held",
     metricsTable(
       "Invoices held as a likely second bill, by the first line on their timeline",
-      ["Currency", "Held", "Closed without paying", "Not paid twice", "Paid on approval", "Still held"],
+      ["Currency", "Held", "Closed without paying", "Not paid twice", "Paid on approval", "Approved, paying now", "Still held"],
       table.rows.map((row) => [
         row.currency,
         row.held,
         row.stopped,
         formatMoney(row.stoppedMinor, row.currency),
         row.paid,
+        row.released,
         row.stillHeld,
       ]),
       "No invoices held as a likely duplicate in this period.",

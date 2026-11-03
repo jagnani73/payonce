@@ -247,12 +247,16 @@ export interface FeesTable {
   unreadable: number;
 }
 
+// Each held invoice by its state now: stopped is closed without paying, paid is
+// settled, released is open again because a person approved paying it and its
+// payment is under way, and stillHeld waits on a person.
 export interface DuplicateRow {
   currency: string;
   held: number;
   stopped: number;
   stoppedMinor: number;
   paid: number;
+  released: number;
   stillHeld: number;
 }
 
@@ -1026,6 +1030,7 @@ function duplicatesOf(read: MetricsRead, window: Window): DuplicatesTable {
       stopped: 0,
       stoppedMinor: 0,
       paid: 0,
+      released: 0,
       stillHeld: 0,
     }));
     row.held += 1;
@@ -1034,6 +1039,8 @@ function duplicatesOf(read: MetricsRead, window: Window): DuplicatesTable {
       row.stoppedMinor += obligation.amountMinor;
     } else if (obligation.state === "settled") {
       row.paid += 1;
+    } else if (obligation.state === "open") {
+      row.released += 1;
     } else {
       row.stillHeld += 1;
     }
