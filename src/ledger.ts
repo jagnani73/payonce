@@ -4834,6 +4834,9 @@ export class Ledger {
   // the waiting run count, since no invoice holds them yet. The accounts asked to
   // approve leave out except's own approvals, which its detail has read already,
   // so no terms JSON is parsed twice. The list builds the same from its own read.
+  // Terms are read only inside CASE WHEN json_valid(...), as metricsRead reads
+  // them, because SQLite promises no order for the two sides of an AND and a JSON
+  // function throws on text that is not JSON.
   supplierLinks(except: string): SupplierLinks {
     const all = <T>(sql: string, ...params: string[]): T[] => this.db.prepare(sql).all(...params) as unknown as T[];
     // newest is the newest invoice with the name, and 0 for a waiting run's row.
@@ -4868,7 +4871,7 @@ export class Ledger {
        SELECT obligations.beneficiary_id, json_extract(approvals.terms, '$.accountKey') FROM approvals
          JOIN obligations ON obligations.invoice_id = approvals.invoice_id
         WHERE obligations.beneficiary_id <> ?
-          AND json_valid(approvals.terms) AND json_type(approvals.terms, '$.accountKey') = 'text'
+          AND CASE WHEN json_valid(approvals.terms) THEN json_type(approvals.terms, '$.accountKey') = 'text' ELSE 0 END
         UNION
        SELECT beneficiary_id, account_key FROM run_rows
         WHERE action = 'pay' AND account_key IS NOT NULL AND beneficiary_id IS NOT NULL`,
