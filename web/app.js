@@ -2942,10 +2942,11 @@ function restoreFocus(focus) {
   }
 }
 
-// The value a datetime-local input takes, in local time to the minute.
+// The value a datetime-local input takes, in local time to the second. The server refuses a call
+// before the payment it is compared with was sent, so a value cut to the minute could be refused.
 function localInputValue(date) {
   const pad = (value) => String(value).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
 // "Account name" reads as "account name" in a sentence, "SWIFT code" stays as it is.
@@ -3123,7 +3124,7 @@ function buildBankForm(invoiceId, fields, refs) {
     { class: "bank-form", novalidate: true },
     callField("calledBy", "callback-by", "Your name", { autocomplete: "name", maxlength: "80" }),
     callField("numberCalled", "callback-number", "Number you called", { type: "tel", maxlength: "40" }),
-    callField("calledAt", "callback-at", "When you called", { type: "datetime-local" }),
+    callField("calledAt", "callback-at", "When you called", { type: "datetime-local", step: "1" }),
     callField("spokeTo", "callback-spoke-to", "Who you spoke to", { maxlength: "80" }),
     callField("confirmed", "callback-confirmed", "What they confirmed", { maxlength: "200" }),
     h("p", { class: "bank-form__title" }, "New bank details"),
