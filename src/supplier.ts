@@ -209,7 +209,13 @@ function paymentLine(payment: PaymentView): string {
       ? []
       : [`transfer ${shownReference(payment.mismatchedReference)} under its request id does not match the invoice${payment.mismatchedStatus === null ? "" : ` (${printable(payment.mismatchedStatus)})`}`]),
   ];
-  return `${INDENT}${payment.kind} ${payment.reference === null ? "(no reference)" : shownReference(payment.reference)}  ${printable(payment.state)}${payment.bankStatus === null ? "" : `, bank status ${printable(payment.bankStatus)}`}${failure}, ${amount(payment.amountMinor, payment.currency)}, ${payment.account === null ? "account not on file" : `to ${payment.account}`} (${CHECK_WORDS[payment.check]}), ${payment.kind === "outside" ? "found" : "sent"} ${utc(payment.sentAt)}${extra.length === 0 ? "" : `, ${extra.join(", ")}`}`;
+  // A payment with no transfer went nowhere and was never sent, so it has no
+  // account or send time to give.
+  const where: string =
+    payment.check === "not-sent"
+      ? `${payment.amountMinor === null ? "" : `${amount(payment.amountMinor, payment.currency)}, `}${CHECK_WORDS[payment.check]}`
+      : `${amount(payment.amountMinor, payment.currency)}, ${payment.account === null ? "account not on file" : `to ${payment.account}`} (${CHECK_WORDS[payment.check]}), ${payment.kind === "outside" ? "found" : "sent"} at ${utc(payment.sentAt)}`;
+  return `${INDENT}${payment.kind} ${payment.reference === null ? "(no reference)" : shownReference(payment.reference)}  ${printable(payment.state)}${payment.bankStatus === null ? "" : `, bank status ${printable(payment.bankStatus)}`}${failure}, ${where}${extra.length === 0 ? "" : `, ${extra.join(", ")}`}`;
 }
 
 function invoiceLines(invoice: InvoiceView): string[] {
@@ -367,7 +373,7 @@ function printDetail(detail: SupplierDetail): void {
     "Messages",
     detail.drafts.map(
       (draft: SupplierDetail["drafts"][number]): string =>
-        `  Draft ${draft.id} on ${printable(draft.invoiceId)}: ${draft.label ?? "a template PayOnce does not have"} for the ${draft.audience ?? "unknown audience"}, ${draft.state}, created by ${printable(draft.createdBy)} at ${utc(draft.createdAt)}${draft.sentBy === null ? "" : `, marked sent by ${printable(draft.sentBy)}`}${draft.dismissedBy === null ? "" : `, dismissed by ${printable(draft.dismissedBy)}`}`,
+        `  Draft ${draft.id} on ${printable(draft.invoiceId)}: ${draft.label ?? "a template PayOnce does not have"} for the ${draft.audience ?? "unknown audience"}, ${draft.state}, created by ${printable(draft.createdBy)} at ${utc(draft.createdAt)}${draft.copiedBy === null ? "" : `, copied by ${printable(draft.copiedBy)}`}${draft.sentBy === null ? "" : `, marked sent by ${printable(draft.sentBy)}`}${draft.dismissedBy === null ? "" : `, dismissed by ${printable(draft.dismissedBy)}`}`,
     ),
   );
   say("");
