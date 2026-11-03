@@ -233,14 +233,15 @@ export async function untilAtRest(
 // An invoice PayOnce holds before paying stops there and waits for a person. If
 // they release it, the bank gives its original the scenario's outcome, and no
 // supplier emails arrive. Run again on a held invoice, it has the agent look, so
-// an approval given meanwhile is used.
+// an approval given meanwhile is used. False when the invoice is still not at
+// rest when the time runs out.
 export async function runScenario(
   engine: Engine,
   agent: Dispatcher,
   bank: SandboxBank,
   obligation: Obligation,
   scenario: Scenario,
-): Promise<void> {
+): Promise<boolean> {
   const invoiceId: string = obligation.invoiceId;
   const thread: SupplierEmail[] = loadEmails(scenario.emailsName, invoiceId);
 
@@ -248,8 +249,7 @@ export async function runScenario(
     bank.expectOriginal(invoiceId, scenario.bankOutcome);
     agent.wake(invoiceId);
     await agent.whenIdle(invoiceId);
-    await untilAtRest(engine.ledger, agent, bank, invoiceId);
-    return;
+    return untilAtRest(engine.ledger, agent, bank, invoiceId);
   }
   let original: Transfer | null;
   try {
@@ -266,7 +266,7 @@ export async function runScenario(
     // supplier emails arrive for it.
     if (error instanceof RailOutageError) {
       waitOnOutage(engine, invoiceId, error);
-      return;
+      return true;
     }
     throw error;
   }
@@ -274,7 +274,7 @@ export async function runScenario(
     bank.expectOriginal(invoiceId, scenario.bankOutcome);
     agent.wake(invoiceId);
     await agent.whenIdle(invoiceId);
-    return;
+    return true;
   }
   await bank.run(invoiceId, (): Promise<void> => bank.send(original.id, original.short_reference_id));
   for (const email of thread) {
@@ -287,7 +287,7 @@ export async function runScenario(
   );
 
   if (!(await untilAtRest(engine.ledger, agent, bank, invoiceId))) {
-    return;
+    return false;
   }
   const replaced: boolean = engine.ledger
     .attempts(invoiceId)
@@ -295,4 +295,5 @@ export async function runScenario(
   if (replaced && engine.ledger.obligation(invoiceId)?.state === "settled") {
     await agent.run(invoiceId, (): PayAgainResult => payAgain(engine.ledger, invoiceId));
   }
+  return true;
 }

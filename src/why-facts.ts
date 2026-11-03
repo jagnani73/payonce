@@ -73,7 +73,7 @@ import {
 import { formatMoney } from "./money.js";
 import { RAIL_FAILURE_CODES } from "./outages.js";
 import { currencyFloor, debitCurrency, floorFor, type ReservePolicy } from "./reserve.js";
-import { SANDBOX_BANK_AFTER, SANDBOX_BANK_STOPPED, TRY_WORDS_SOURCE } from "./words.js";
+import { SANDBOX_BANK_AFTER, SANDBOX_BANK_RECOVER, SANDBOX_BANK_STOPPED, TRY_WORDS_SOURCE } from "./words.js";
 
 // The facts a model is given to explain one invoice. Every value is PayOnce's own
 // words, a closed-pattern value such as a bank reference, a status or an amount,
@@ -358,9 +358,10 @@ const MODEL_PATTERN: RegExp = /^[A-Za-z0-9._:/-]{1,80}$/;
 const MODEL_TRY: RegExp = new RegExp(`^(\\S+) (${TRY_WORDS_SOURCE})$`);
 const SIMULATED: string = "SENT|PAID|FAILED";
 const SANDBOX_TRANSFER: string = `transfer ${REF}|the transfer`;
-// How the sandbox bank's lines end: the server's ending, pnpm recover's, and the
-// ending older code gave a transfer that converts.
-const SANDBOX_END: string = `(${[SANDBOX_BANK_AFTER, SANDBOX_BANK_STOPPED].map(escapeRegExp).join("|")})`;
+// How the sandbox bank's lines end: the server's ending, pnpm recover's two, and
+// the ending older code gave a transfer that converts.
+const SANDBOX_ENDS: readonly string[] = [SANDBOX_BANK_AFTER, SANDBOX_BANK_STOPPED, SANDBOX_BANK_RECOVER];
+const SANDBOX_END: string = `(${SANDBOX_ENDS.map(escapeRegExp).join("|")})`;
 const OLD_CONVERTS_END: string = "If the bank has neither paid nor failed it by its deadline, a person hears about it";
 const SANDBOX_ANSWER: string = ": it answered ([0-9]{3})(?: ([A-Za-z0-9_]{1,40}))?|: it did not answer";
 
@@ -980,7 +981,7 @@ function sandboxTransfer(named: string | undefined): string {
 
 // The fixed ending a sandbox bank line had.
 function sandboxEnd(ending: string | undefined): string {
-  return ending === SANDBOX_BANK_STOPPED ? SANDBOX_BANK_STOPPED : SANDBOX_BANK_AFTER;
+  return SANDBOX_ENDS.find((end: string): boolean => end === ending) ?? SANDBOX_BANK_AFTER;
 }
 
 // What the simulator answered, as the sandbox bank's line gives it, with the code

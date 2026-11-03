@@ -22,11 +22,14 @@ export const SANDBOX_OUTCOMES: string[] = [
 ];
 
 // How a sandbox bank line ends: in the server, which keeps reading the transfer,
-// and in pnpm recover, which stops when its script fails.
+// in pnpm recover when its script fails and it stops, and in pnpm recover for a
+// payment the bank hook was told about, which it reads while it runs.
 export const SANDBOX_BANK_AFTER: string =
   "PayOnce keeps reading the transfer from Airwallex as usual, and if the bank has neither paid nor failed it by its deadline, a person hears about it";
 export const SANDBOX_BANK_STOPPED: string =
   "PayOnce stopped here, and pnpm recover or pnpm ui reads the transfer again";
+export const SANDBOX_BANK_RECOVER: string =
+  "PayOnce reads the transfer while pnpm recover runs, and pnpm recover or pnpm ui reads it again after that";
 
 // Why one model gave no answer PayOnce could use.
 export type ModelFailure =

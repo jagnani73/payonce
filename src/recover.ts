@@ -6,6 +6,7 @@ import { note, noteError, type Engine } from "./engine.js";
 import { loadEnvIfPresent } from "./env-file.js";
 import { describeQuotes } from "./fx.js";
 import { Ledger, LEDGER_PATH, type Obligation, type RunRow } from "./ledger.js";
+import { LineError } from "./line-error.js";
 import { describeOutageRule, outageRuleFromEnv } from "./outages.js";
 import { printableJson, say } from "./printable.js";
 import { readerFromEnv } from "./reader.js";
@@ -20,7 +21,7 @@ import {
   untilAtRest,
 } from "./scenario.js";
 import { Watcher } from "./watcher.js";
-import { SANDBOX_BANK_STOPPED } from "./words.js";
+import { SANDBOX_BANK_RECOVER, SANDBOX_BANK_STOPPED } from "./words.js";
 
 const DEFAULT_OUTCOME: string = "CHANNEL_TIMEOUT";
 // The CLI has no webhook receiver, so it checks the bank often.
@@ -40,9 +41,16 @@ async function main(): Promise<void> {
     return;
   }
   const ledger: Ledger = new Ledger(LEDGER_PATH);
+  // The sandbox bank's own failures say what this command does about them, which
+  // is to read the transfer while it runs.
   const bank: SandboxBank = new SandboxBank(
     client,
-    (invoiceId: string, error: unknown): void => noteError(ledger, invoiceId, error),
+    (invoiceId: string, error: unknown): void =>
+      noteError(
+        ledger,
+        invoiceId,
+        error instanceof SandboxBankError ? new LineError(`${error.what}. ${SANDBOX_BANK_RECOVER}`, error.kind, error.detail) : error,
+      ),
     (invoiceId: string): string | null => ledger.runRowOf(invoiceId)?.sandboxOutcome ?? null,
   );
   const engine: Engine = {
@@ -88,6 +96,7 @@ async function main(): Promise<void> {
   }
 
   watcher.start();
+  let rested: boolean = true;
   try {
     const existing: Obligation | undefined = ledger.obligation(invoiceId);
     if (
@@ -96,13 +105,21 @@ async function main(): Promise<void> {
     ) {
       say(`${invoiceId} is already in the ledger`);
       agent.wake(invoiceId);
-      await untilAtRest(ledger, agent, bank, invoiceId);
+      rested = await untilAtRest(ledger, agent, bank, invoiceId);
     } else {
       // An obligation with no payment yet is a run that stopped before paying, or
       // one PayOnce held before paying. A new one is announced once it is stored.
       const obligation: Obligation = existing ?? (await openScenario(engine, invoiceId, scenarioId, startedBy));
       say(`${existing === undefined ? "New incident" : "Starting"} ${invoiceId}`);
-      await runScenario(engine, agent, bank, obligation, { bankOutcome, emailsName });
+      rested = await runScenario(engine, agent, bank, obligation, { bankOutcome, emailsName });
+    }
+    // A payment still with the bank when the wait ran out, as when the sandbox bank
+    // could not move it.
+    if (!rested) {
+      say(
+        `${invoiceId} was still not at rest when PayOnce stopped waiting, so PayOnce stopped. ${invoiceId} is in the ledger, and pnpm recover ${bankOutcome} ${invoiceId} or pnpm ui looks at it again.`,
+      );
+      process.exitCode = 1;
     }
   } catch (error: unknown) {
     if (error instanceof AirwallexError || error instanceof AirwallexUnreachableError) {
