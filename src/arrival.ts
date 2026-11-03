@@ -325,7 +325,12 @@ export function sentArrivalText(payment: string, arrival: ArrivalTerms): string 
   const due: string = arrival.dueDate ?? "";
   if (arrival.route === null || arrival.minDays === null || arrival.maxDays === null) {
     const unknown: string = `${payment} has no arrival estimate, because PayOnce has no figures for ${methodText(arrival)}`;
-    return arrival.dueDate === null ? unknown : `${unknown}. Due ${due}`;
+    if (arrival.dueDate === null) {
+      return unknown;
+    }
+    return arrivalRisk(arrival) === "passed"
+      ? `${unknown}. The due date, ${due}, has already passed`
+      : `${unknown}. Due ${due}`;
   }
   const window: string =
     arrival.earliest === arrival.latest
@@ -351,7 +356,8 @@ export function sentArrivalText(payment: string, arrival: ArrivalTerms): string 
 export function replacementArrivalText(arrival: ArrivalTerms): string {
   const due: string = arrival.dueDate ?? "";
   if (arrival.route === null || arrival.minDays === null || arrival.maxDays === null) {
-    return `PayOnce has no arrival estimate for a replacement by ${methodText(arrival)}. Due ${due}`;
+    const unknown: string = `PayOnce has no arrival estimate for a replacement by ${methodText(arrival)}`;
+    return arrivalRisk(arrival) === "passed" ? `${unknown}. The due date, ${due}, has passed` : `${unknown}. Due ${due}`;
   }
   const sent: string = `A replacement sent on ${arrival.from} usually arrives by ${arrival.latest ?? ""} (${arrival.route}, ${daysText(arrival.minDays, arrival.maxDays)})`;
   switch (arrivalRisk(arrival)) {

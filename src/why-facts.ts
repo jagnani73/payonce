@@ -1119,7 +1119,7 @@ const LINE_RULES: readonly LineRule[] = [
   ),
   keep(
     [PAYMENT, WARNING],
-    `(?:${KIND_CAP}) ${REF} (?:usually arrives (?:on ${DATE}|between ${DATE} and ${DATE})\\. (?:${ROUTE}) takes (?:${DAYS})(?:\\. Due ${DATE}, so it should arrive in time|\\. Due ${DATE}, so it may arrive late|\\. Due ${DATE}, so even at its fastest it arrives late|\\. The due date, ${DATE}, has already passed)?\\. ${escapeRegExp(HOLIDAYS_NOTE)}|has no arrival estimate, because PayOnce has no figures for (?:${METHOD})(?: to [A-Z]{2})?(?:\\. Due ${DATE})?)`,
+    `(?:${KIND_CAP}) ${REF} (?:usually arrives (?:on ${DATE}|between ${DATE} and ${DATE})\\. (?:${ROUTE}) takes (?:${DAYS})(?:\\. Due ${DATE}, so it should arrive in time|\\. Due ${DATE}, so it may arrive late|\\. Due ${DATE}, so even at its fastest it arrives late|\\. The due date, ${DATE}, has already passed)?\\. ${escapeRegExp(HOLIDAYS_NOTE)}|has no arrival estimate, because PayOnce has no figures for (?:${METHOD})(?: to [A-Z]{2})?(?:\\. Due ${DATE}|\\. The due date, ${DATE}, has already passed)?)`,
   ),
   rule([PAYMENT, WARNING], `(${KIND_CAP}) (${REF}) (?:usually arrives|has no arrival estimate)[\\s\\S]*`, (match: RegExpExecArray): string =>
     `${match[1] ?? ""} ${match[2] ?? ""}: PayOnce recorded when it usually arrives`,
