@@ -52,6 +52,19 @@ const SENT_ATTEMPT: string = `SELECT 1 FROM attempts WHERE invoice_id = ?
 // in flight, paid or in a status PayOnce does not know.
 const LIVE_OUTSIDE_PAYOUT: string = `SELECT 1 FROM outside_payouts WHERE invoice_id = ?
   AND state <> 'failed'`;
+// A payout sent outside PayOnce that pays the invoice bound as the parameter, as
+// payoutPays tests one in code: it took the invoice's amount in its currency, and
+// went to the invoice's beneficiary or to an account PayOnce decided for that
+// beneficiary, by a known routeKey. Over an outside_payouts row p.
+const PAYS_INVOICE: string = `p.amount_minor = o.amount_minor AND p.currency = o.currency
+  AND (p.beneficiary_id = o.beneficiary_id
+    OR p.sent_route IN (SELECT a.route_key FROM attempts a JOIN obligations b ON b.invoice_id = a.invoice_id
+                         WHERE b.beneficiary_id = o.beneficiary_id AND a.route_key LIKE '${ROUTE_SCHEME}:%'))`;
+// A payout sent outside PayOnce that keeps an invoice from being closed without
+// paying: one in flight or in a status PayOnce does not know, or one paid that
+// pays the invoice. A paid one that only names the invoice does not.
+const BLOCKING_OUTSIDE_PAYOUT: string = `SELECT 1 FROM outside_payouts p JOIN obligations o ON o.invoice_id = p.invoice_id
+  WHERE p.invoice_id = ? AND p.state <> 'failed' AND (p.state <> 'paid' OR (${PAYS_INVOICE}))`;
 const FAILED_IN_SQL: string = FAILED_STATUS_LIST.map((status: string): string => `'${status}'`).join(", ");
 // A payment for the invoice bound as the parameter that the bank has live, the
 // test liveAtBank makes in code: an attempt that is not failed, a transfer the
@@ -595,11 +608,13 @@ export interface PayoutMoney {
   feeMinor: number | null;
   feeCurrency: string | null;
   // The accountKey and routeKey of the bank details the transfer went to and
-  // their last four characters, for the supplier view only. Nothing PayOnce
-  // decides reads them.
+  // their last four characters. Only the routeKey decides anything: whether a
+  // paid payout pays its invoice (payoutPays).
   sentKey?: string | null;
   sentRoute?: string | null;
   sentEnding?: string | null;
+  // The beneficiary record the transfer was sent to, as Airwallex gave it.
+  beneficiaryId?: string | null;
 }
 
 // A payout sent outside PayOnce whose reference names an invoice in the ledger.
@@ -1012,6 +1027,9 @@ interface OutsideRow {
   currency: string | null;
   fee_minor: number | null;
   fee_currency: string | null;
+  sent_route?: string | null;
+  sent_ending?: string | null;
+  beneficiary_id?: string | null;
 }
 
 interface TransferRow {
@@ -1183,10 +1201,15 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     fee_minor: "INTEGER",
     fee_currency: "TEXT",
     fee_tried_at: "TEXT",
-    // As on attempts, for the supplier view only.
+    // As on attempts. sent_route also says whether a paid payout pays its
+    // invoice (payoutPays).
     sent_key: "TEXT",
     sent_ending: "TEXT",
     sent_route: "TEXT",
+    // The beneficiary record the payout was sent to, as Airwallex gave it. Null on
+    // payouts tied before it was kept and not read since, which count as paying
+    // their invoice only by sent_route.
+    beneficiary_id: "TEXT",
   },
 };
 
@@ -1473,7 +1496,31 @@ function toOutsidePayout(row: OutsideRow): OutsidePayout {
     currency: row.currency,
     feeMinor: row.fee_minor,
     feeCurrency: row.fee_currency,
+    sentRoute: row.sent_route ?? null,
+    sentEnding: row.sent_ending ?? null,
+    beneficiaryId: row.beneficiary_id ?? null,
   };
+}
+
+// True when a payout sent outside PayOnce, tied to this invoice, pays it: it took
+// the invoice's amount in the invoice's currency (what debitOf read), and went to
+// the invoice's beneficiary, or to an account PayOnce decided for that
+// beneficiary by a known routeKey (routes). Only such a payout counts as paying
+// the invoice: paidOutside, a person's close as paid outside, the close card's
+// kind, the alert's close need and the board's group. One that only names the
+// invoice still holds PayOnce's own payments while it is not failed, and a person
+// may close the invoice without paying. PAYS_INVOICE is the same test in SQL.
+export function payoutPays(
+  obligation: Pick<Obligation, "amountMinor" | "currency" | "beneficiaryId">,
+  payout: OutsidePayout,
+  routes: ReadonlySet<string>,
+): boolean {
+  const route: string | null = knownRoute(payout.sentRoute);
+  return (
+    payout.amountMinor === obligation.amountMinor &&
+    payout.currency === obligation.currency &&
+    (payout.beneficiaryId === obligation.beneficiaryId || (route !== null && routes.has(route)))
+  );
 }
 
 function toApproval(row: ApprovalRow, signoffs: Signoff[]): Approval {
@@ -3700,8 +3747,8 @@ export class Ledger {
         .prepare(
           `INSERT OR IGNORE INTO outside_payouts
              (transfer_id, invoice_id, found_at, reference, state, amount_minor, currency,
-              fee_minor, fee_currency, sent_key, sent_ending, sent_route)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              fee_minor, fee_currency, sent_key, sent_ending, sent_route, beneficiary_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           payout.transferId,
@@ -3716,6 +3763,7 @@ export class Ledger {
           payout.sentKey ?? null,
           payout.sentEnding ?? null,
           payout.sentRoute ?? null,
+          payout.beneficiaryId ?? null,
         );
       if (Number(result.changes) !== 1) {
         return false;
@@ -3748,11 +3796,47 @@ export class Ledger {
     return (
       this.db
         .prepare(
-          `SELECT transfer_id, reference, state, amount_minor, currency, fee_minor, fee_currency
+          `SELECT transfer_id, reference, state, amount_minor, currency, fee_minor, fee_currency,
+                  sent_route, sent_ending, beneficiary_id
              FROM outside_payouts WHERE invoice_id = ? ORDER BY rowid`,
         )
         .all(invoiceId) as unknown as OutsideRow[]
     ).map(toOutsidePayout);
+  }
+
+  // The routeKeys PayOnce decided payments to this beneficiary for, as attempts
+  // keep them. Only keys of the current scheme.
+  routesOf(beneficiaryId: string): Set<string> {
+    return new Set<string>(
+      (
+        this.db
+          .prepare(
+            `SELECT DISTINCT attempts.route_key FROM attempts
+               JOIN obligations ON obligations.invoice_id = attempts.invoice_id
+              WHERE obligations.beneficiary_id = ? AND attempts.route_key IS NOT NULL`,
+          )
+          .all(beneficiaryId) as unknown as { route_key: string }[]
+      )
+        .map((row: { route_key: string }): string | null => knownRoute(row.route_key))
+        .filter((route: string | null): route is string => route !== null),
+    );
+  }
+
+  // The payouts tied to this invoice that pay it (payoutPays), and the paid ones
+  // that only name it.
+  payingPayouts(invoiceId: string): { pays: OutsidePayout[]; namesOnly: OutsidePayout[] } {
+    const obligation: Obligation | undefined = this.obligation(invoiceId);
+    const payouts: OutsidePayout[] = this.outsidePayouts(invoiceId);
+    if (obligation === undefined) {
+      return { pays: [], namesOnly: payouts.filter((payout: OutsidePayout): boolean => payout.state === "paid") };
+    }
+    const routes: Set<string> = this.routesOf(obligation.beneficiaryId);
+    return {
+      pays: payouts.filter((payout: OutsidePayout): boolean => payoutPays(obligation, payout, routes)),
+      namesOnly: payouts.filter(
+        (payout: OutsidePayout): boolean => payout.state === "paid" && !payoutPays(obligation, payout, routes),
+      ),
+    };
   }
 
   // A value that could not be read keeps the one already on file.
@@ -3764,7 +3848,7 @@ export class Ledger {
                 currency = COALESCE(?, currency), fee_minor = COALESCE(?, fee_minor),
                 fee_currency = COALESCE(?, fee_currency),
                 sent_key = COALESCE(?, sent_key), sent_ending = COALESCE(?, sent_ending),
-                sent_route = COALESCE(?, sent_route)
+                sent_route = COALESCE(?, sent_route), beneficiary_id = COALESCE(?, beneficiary_id)
           WHERE transfer_id = ?`,
       )
       .run(
@@ -3776,6 +3860,7 @@ export class Ledger {
         money.sentKey ?? null,
         money.sentEnding ?? null,
         money.sentRoute ?? null,
+        money.beneficiaryId ?? null,
         transferId,
       );
   }
@@ -4137,8 +4222,8 @@ export class Ledger {
   // Closes an escalated invoice without paying it, recording who did. False when
   // it is no longer escalated, for example because its payment was released in
   // the meantime, or when a payment for it is live at the bank: PayOnce's, a
-  // transfer under one of its request ids, or a payout sent outside PayOnce, in
-  // flight or paid. covered lists the transfers under its request ids that do not
+  // transfer under one of its request ids, or a payout sent outside PayOnce in
+  // flight, or paid and paying it (BLOCKING_OUTSIDE_PAYOUT). covered lists the transfers under its request ids that do not
   // match it which the person's close covered, and they are cleared in the same
   // transaction, as any open request is voided.
   reject(invoiceId: string, rejectedBy: string, covered: string[] = []): boolean {
@@ -4147,7 +4232,7 @@ export class Ledger {
         .prepare(
           `UPDATE obligations SET state = 'rejected', rejected_by = ?
             WHERE invoice_id = ? AND state = 'escalated'
-              AND NOT EXISTS (${LIVE_OUTSIDE_PAYOUT}) AND NOT EXISTS (${LIVE_ATTEMPT})`,
+              AND NOT EXISTS (${BLOCKING_OUTSIDE_PAYOUT}) AND NOT EXISTS (${LIVE_ATTEMPT})`,
         )
         .run(rejectedBy, invoiceId, invoiceId, invoiceId);
       if (Number(result.changes) !== 1) {
@@ -4172,7 +4257,7 @@ export class Ledger {
         .prepare(
           `UPDATE obligations SET state = 'rejected'
             WHERE invoice_id = ? AND state = 'escalated' AND rejected_by IS NOT NULL
-              AND NOT EXISTS (${LIVE_ATTEMPT}) AND NOT EXISTS (${LIVE_OUTSIDE_PAYOUT})
+              AND NOT EXISTS (${LIVE_ATTEMPT}) AND NOT EXISTS (${BLOCKING_OUTSIDE_PAYOUT})
               AND (? = 1 OR NOT EXISTS (${UNCLEARED_MISMATCH}))`,
         )
         .run(invoiceId, invoiceId, invoiceId, byPerson ? 1 : 0, invoiceId);
@@ -4854,14 +4939,13 @@ export class Ledger {
 
   // True when every payment PayOnce sent has failed at the bank, nothing for the
   // invoice is still with the bank, and the bank reports a payout sent outside
-  // PayOnce as paid. A transfer under one of its request ids that does not match
-  // it and is paid as well does not stop it.
+  // PayOnce paid that pays the invoice (payoutPays): one that only names it does
+  // not. A transfer under one of its request ids that does not match it and is
+  // paid as well does not stop it.
   paidOutside(invoiceId: string): boolean {
     return (
       this.attempts(invoiceId).every(nothingWithBank) &&
-      this.outsidePayouts(invoiceId).some(
-        (payout: OutsidePayout): boolean => payout.state === "paid",
-      )
+      this.payingPayouts(invoiceId).pays.some((payout: OutsidePayout): boolean => payout.state === "paid")
     );
   }
 

@@ -397,6 +397,7 @@ function payoutMoney(transfer: Transfer): PayoutMoney {
     currency: debit?.currency ?? null,
     feeMinor: fee?.minor ?? null,
     feeCurrency: fee?.currency ?? null,
+    beneficiaryId: transfer.beneficiary_id ?? null,
     // Where it went, for the supplier view only. sentToOf never throws, so odd
     // bank details cannot stop the payout being tied or the check before a payment.
     ...sentToOf(transfer.beneficiary?.bank_details),
@@ -1746,6 +1747,19 @@ function paidOutsideCause(engine: Engine, invoiceId: string, paidBy: OutsidePayo
   return {
     payment: `payout ${paidBy.reference} sent outside PayOnce has paid this invoice`,
     then: "a person can close the invoice",
+    reason: OUTSIDE_PAYOUT_REASON,
+    hold: (): NextLook => holdForOutsidePayout(engine, invoiceId),
+    afterFail: (): NextLook => holdForOutsidePayout(engine, invoiceId),
+  };
+}
+
+// A paid payout that names the invoice but does not pay it (payoutPays): another
+// amount, currency or account. Nothing more is sent beside it, and a person
+// decides.
+function namesOnlyCause(engine: Engine, invoiceId: string, namedBy: OutsidePayout): NeverSentCause {
+  return {
+    payment: `payout ${namedBy.reference} sent outside PayOnce names this invoice and is paid, but does not match its amount, currency or account`,
+    then: "a person checks it, and can close the invoice without paying",
     reason: OUTSIDE_PAYOUT_REASON,
     hold: (): NextLook => holdForOutsidePayout(engine, invoiceId),
     afterFail: (): NextLook => holdForOutsidePayout(engine, invoiceId),
@@ -3470,11 +3484,20 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
       if (twice !== undefined) {
         return failNeverSent(engine, obligation, attempt, lateTransferCause(engine, invoiceId, twice));
       }
-      const paidBy: OutsidePayout | undefined = outside.find(
+      // A paid one that only names the invoice is held for in the same way, so
+      // PayOnce sends nothing beside it, and once the attempt is marked failed a
+      // person decides: it may be this invoice paid from another wallet, or not
+      // this invoice's payment at all.
+      const tied: { pays: OutsidePayout[]; namesOnly: OutsidePayout[] } = engine.ledger.payingPayouts(invoiceId);
+      const paidBy: OutsidePayout | undefined = tied.pays.find(
         (payout: OutsidePayout): boolean => payout.state === "paid",
       );
       if (paidBy !== undefined) {
         return failNeverSent(engine, obligation, attempt, paidOutsideCause(engine, invoiceId, paidBy));
+      }
+      const namedBy: OutsidePayout | undefined = tied.namesOnly[0];
+      if (namedBy !== undefined) {
+        return failNeverSent(engine, obligation, attempt, namesOnlyCause(engine, invoiceId, namedBy));
       }
       if (anyLive(outside)) {
         return holdRetryForOutsidePayout(engine, invoiceId, attempt);
@@ -3703,6 +3726,38 @@ export interface CloseReview {
   reason: string;
   emails: string | null;
   covered: CoveredTransfer[];
+  // Paid payouts sent outside PayOnce that name this invoice but do not pay it
+  // (payoutPays): what the card shows of each, so a person sees they do not.
+  namesOnly: NamingPayout[];
+}
+
+// A payout that names an invoice without paying it, as the close card shows it:
+// the bank's short reference, what it took and the last four characters of the
+// account it went to. Never the payee's name.
+export interface NamingPayout {
+  reference: string;
+  amountMinor: number | null;
+  currency: string | null;
+  ending: string | null;
+}
+
+function namingPayout(payout: OutsidePayout): NamingPayout {
+  return {
+    reference: payout.reference,
+    amountMinor: payout.amountMinor,
+    currency: payout.currency,
+    ending: payout.sentEnding ?? null,
+  };
+}
+
+// How the close card and pnpm close name a payout that names the invoice but does
+// not pay it.
+export function namingText(payout: NamingPayout): string {
+  const amount: string =
+    payout.amountMinor === null || payout.currency === null
+      ? "an amount PayOnce did not read"
+      : formatMoney(payout.amountMinor, payout.currency);
+  return `${payout.reference}, ${amount}, to ${payout.ending === null ? "an account PayOnce did not read" : `the account ending ${payout.ending}`}, paid`;
 }
 
 // A transfer under the request id of one of the invoice's attempts (kind) that
@@ -3754,6 +3809,8 @@ export function pendingClose(
       ? null
       : emailEvidence(storedFindings(ledger, invoiceId, onFile).findings.summary, onFile, obligation.supplierDomain);
   const covered: CoveredTransfer[] = coveredByClose(ledger, invoiceId);
+  const paying: { pays: OutsidePayout[]; namesOnly: OutsidePayout[] } = ledger.payingPayouts(invoiceId);
+  const namesOnly: NamingPayout[] = paying.namesOnly.map(namingPayout);
   if (ledger.paidOnce(invoiceId)) {
     const paid: Attempt | undefined = ledger
       .attempts(invoiceId)
@@ -3761,15 +3818,15 @@ export function pendingClose(
     // A payment at a rate nobody approved is why it was not closed by itself.
     return paid === undefined
       ? undefined
-      : { kind: paid.kind, reference: paid.reference, reason: paid.rateMismatch ?? reason, emails, covered };
+      : { kind: paid.kind, reference: paid.reference, reason: paid.rateMismatch ?? reason, emails, covered, namesOnly };
   }
   if (ledger.paidOutside(invoiceId)) {
-    const paid: OutsidePayout | undefined = ledger
-      .outsidePayouts(invoiceId)
-      .find((payout: OutsidePayout): boolean => payout.state === "paid");
+    const paid: OutsidePayout | undefined = paying.pays.find(
+      (payout: OutsidePayout): boolean => payout.state === "paid",
+    );
     return paid === undefined
       ? undefined
-      : { kind: "outside", reference: paid.reference, reason, emails, covered };
+      : { kind: "outside", reference: paid.reference, reason, emails, covered, namesOnly };
   }
   // Paid by a transfer under one of its request ids that does not match it: a
   // person checks it and closes the invoice.
@@ -3777,10 +3834,17 @@ export function pendingClose(
     const paid: Attempt | undefined = ledger
       .attempts(invoiceId)
       .find((attempt: Attempt): boolean => attempt.mismatchedStatus === "PAID");
-    return { kind: "mismatched", reference: paid?.mismatchedReference ?? null, reason, emails, covered };
+    return { kind: "mismatched", reference: paid?.mismatchedReference ?? null, reason, emails, covered, namesOnly };
   }
-  // Not while anything for it may be paying it.
-  if (anyLive(ledger.outsidePayouts(invoiceId)) || ledger.attempts(invoiceId).some(liveAtBank)) {
+  // Not while anything for it may be paying it: a paid payout that only names it
+  // does not.
+  const naming: ReadonlySet<string> = new Set<string>(
+    paying.namesOnly.map((payout: OutsidePayout): string => payout.transferId),
+  );
+  const others: OutsidePayout[] = ledger
+    .outsidePayouts(invoiceId)
+    .filter((payout: OutsidePayout): boolean => !naming.has(payout.transferId));
+  if (anyLive(others) || ledger.attempts(invoiceId).some(liveAtBank)) {
     return undefined;
   }
   // Nothing for it is with the bank or paid, so a person may close it without
@@ -3790,8 +3854,8 @@ export function pendingClose(
   return obligation.rejectedBy === null &&
     heldBeforePaying(ledger, obligation) &&
     obligation.duplicateOf.length > 0
-    ? { kind: "duplicate", reference: listOf(obligation.duplicateOf), reason, emails, covered }
-    : { kind: "unpaid", reference: null, reason, emails, covered };
+    ? { kind: "duplicate", reference: listOf(obligation.duplicateOf), reason, emails, covered, namesOnly }
+    : { kind: "unpaid", reference: null, reason, emails, covered, namesOnly };
 }
 
 // Records a person closing such an invoice. It moves no money, so it is not bound

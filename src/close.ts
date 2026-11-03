@@ -1,5 +1,6 @@
 import {
   closeIncident,
+  namingText,
   pendingClose,
   type CloseReview,
   type CoveredTransfer,
@@ -68,7 +69,11 @@ function main(): void {
     // Invoice numbers, as one line.
     say(`${invoiceId} is held before paying, as a likely second bill for ${printable(review.reference ?? "")}`);
   } else if (review.kind === "unpaid") {
-    say(`${invoiceId} is waiting on a person and nothing for it is paid`);
+    say(
+      review.namesOnly.length > 0
+        ? `${invoiceId} is waiting on a person. A payout that names it is paid, but it does not match its amount, currency or account, so PayOnce does not count it as paying the invoice`
+        : `${invoiceId} is waiting on a person and nothing for it is paid`,
+    );
   } else {
     say(`${invoiceId} is paid and waiting on a person`);
     say(`  ${review.kind.padEnd(9)} ${review.reference === null ? "no reference" : shownReference(review.reference)} paid`);
@@ -76,6 +81,10 @@ function main(): void {
   say(`  because   ${review.reason}`);
   if (review.emails !== null) {
     say(`  emails    ${review.emails}`);
+  }
+  for (const payout of review.namesOnly) {
+    // The bank's short reference, printed only in its own form.
+    say(`  names it  ${namingText({ ...payout, reference: shownReference(payout.reference) })}, and does not match this invoice`);
   }
   if (review.covered.length > 0) {
     say("  covers    transfers listed under its request ids that do not match it:");

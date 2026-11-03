@@ -2640,6 +2640,8 @@ function buildReview(invoiceId, review, emailSummary) {
   const duplicate = review.kind === "duplicate";
   // A held invoice, a likely second bill or any other with nothing live at the bank closes unpaid.
   const unpaid = duplicate || review.kind === "unpaid";
+  // Paid payouts sent outside PayOnce that name this invoice but do not pay it.
+  const namesOnly = Array.isArray(review.namesOnly) ? review.namesOnly : [];
   const label = unpaid ? "Close without paying" : "Close incident";
   const paidPayment =
     review.kind === "replacement"
@@ -2728,9 +2730,11 @@ function buildReview(invoiceId, review, emailSummary) {
       { class: "approval__lead" },
       duplicate
         ? `This invoice looks like a second bill for ${review.reference}. If it is, close it without paying. If it is not, PayOnce pays it once it is approved.`
-        : unpaid
-          ? "Nothing for this invoice is with the bank or paid. If it should not be paid, close it without paying."
-          : `The bank reports the ${paidPayment} as paid, so PayOnce will not send another. Check with the supplier, then close the incident.`,
+        : unpaid && namesOnly.length > 0
+          ? "A payout sent outside PayOnce names this invoice and is paid, but it does not match the invoice's amount, currency or account, so PayOnce does not count it as paying the invoice. Check it with the supplier. If the invoice should not be paid, close it without paying. Otherwise leave it waiting."
+          : unpaid
+            ? "Nothing for this invoice is with the bank or paid. If it should not be paid, close it without paying."
+            : `The bank reports the ${paidPayment} as paid, so PayOnce will not send another. Check with the supplier, then close the incident.`,
     ),
     h(
       "dl",
@@ -2763,10 +2767,30 @@ function buildReview(invoiceId, review, emailSummary) {
         h("dt", null, "This close covers"),
         h("dd", null, review.covered.map(coveredNode)),
       ],
+      namesOnly.length > 0 && [
+        h("dt", null, "Names this invoice but does not match it"),
+        h("dd", null, namesOnly.map(namingNode)),
+      ],
     ),
     form,
   );
   els.review.hidden = false;
+}
+
+// A paid payout sent outside PayOnce that names the invoice but does not pay it:
+// its reference, what it took and the last four characters of the account.
+function namingNode(payout) {
+  const amount =
+    Number.isFinite(payout.amountMinor) && typeof payout.currency === "string"
+      ? formatMoney(payout.amountMinor, payout.currency)
+      : "Amount not read";
+  const ending = typeof payout.ending === "string" ? `account ending ${payout.ending}` : "account not read";
+  return h(
+    "span",
+    { class: "terms__covered" },
+    h("span", { class: "mono" }, shownReference(payout.reference)),
+    h("span", { class: "terms__sub" }, `${amount}, ${ending}, paid`),
+  );
 }
 
 // A transfer listed under one of the invoice's request ids that does not match
