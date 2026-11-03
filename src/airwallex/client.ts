@@ -131,7 +131,9 @@ export function describeAirwallex(client: AirwallexClient): string {
 function requireEnv(name: string): string {
   const value: string | undefined = process.env[name];
   if (!value) {
-    throw new Error(`Missing environment variable ${name}`);
+    throw new Error(
+      `Missing environment variable ${name}. Make a .env file in this folder from the setup lines under Run it in the README`,
+    );
   }
   return value;
 }
