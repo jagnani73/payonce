@@ -2415,9 +2415,12 @@ input[type="file"] {
 }
 
 /* At phone width the top bar's buttons wrap onto another line instead of
-   widening the page. The sidebar is not sticky at this width. */
+   widening the page. The bar is then about 130px tall, so it scrolls away with
+   the page instead of staying on screen. The sidebar is not sticky at this
+   width either. */
 @media (max-width: 560px) {
   .topbar {
+    position: static;
     flex-wrap: wrap;
     row-gap: 8px;
     height: auto;
