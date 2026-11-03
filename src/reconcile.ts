@@ -13,6 +13,7 @@ import {
   breakText,
   clearReason,
   clearsByItself,
+  isBreakKind,
   KIND_ACTIONS,
   KIND_LABELS,
   match,
@@ -664,12 +665,19 @@ function referenceOf(item: ReconBreak): string | null {
   }
 }
 
+// A break of a kind this PayOnce does not have, as a file edit or a newer PayOnce
+// could leave, gets fixed words instead of its stored facts, as pnpm reconcile
+// show prints it.
+const UNKNOWN_KIND_LABEL: string = "A break of a kind PayOnce does not know";
+const UNKNOWN_KIND_TEXT: string = "PayOnce does not know this kind of break, so it shows none of its facts.";
+
 export function breakView(item: ReconBreak): BreakView {
+  const known: boolean = isBreakKind(item.kind);
   return {
     id: item.id,
     kind: item.kind,
-    label: KIND_LABELS[item.kind] ?? "Break",
-    text: breakText(item.kind, item.facts),
+    label: known ? (KIND_LABELS[item.kind] ?? UNKNOWN_KIND_LABEL) : UNKNOWN_KIND_LABEL,
+    text: known ? breakText(item.kind, item.facts) : UNKNOWN_KIND_TEXT,
     action: KIND_ACTIONS[item.kind] ?? "",
     clearsByItself: clearsByItself(item.kind),
     currency: shownCurrency(item.currency),
@@ -722,7 +730,7 @@ export function reconAudit(store: ReconStore, now: number = Date.now()): { lines
 export function kindCounts(totals: KindTotal[]): KindCount[] {
   return totals.map((total: KindTotal): KindCount => ({
     kind: total.kind,
-    label: KIND_LABELS[total.kind] ?? "Break",
+    label: isBreakKind(total.kind) ? (KIND_LABELS[total.kind] ?? UNKNOWN_KIND_LABEL) : UNKNOWN_KIND_LABEL,
     count: total.count,
   }));
 }
