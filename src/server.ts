@@ -130,6 +130,7 @@ import {
   outagesReport,
   outageView,
   type EndedOutage,
+  type OutageView,
 } from "./outages.js";
 import { recordMissingFees } from "./payments.js";
 import { oneLine, printableError, say, sayError, sayWarning } from "./printable.js";
@@ -1474,6 +1475,16 @@ function invoiceSummary(invoiceId: string): unknown {
   };
 }
 
+function runOutage(terms: RunTerms): OutageView | null {
+  for (const row of terms.rows) {
+    const outage: Outage | undefined = engine.ledger.activeOutage(row.currency, row.transferMethod);
+    if (outage !== undefined) {
+      return outageView(engine.ledger, outage);
+    }
+  }
+  return null;
+}
+
 function runDetail(raw: string): unknown {
   const run: Run = requireRun(raw);
   const rows: RunRow[] = engine.ledger.runRows(run.id);
@@ -1544,6 +1555,9 @@ function runDetail(raw: string): unknown {
               text: domainText(check),
             })),
           },
+    // A waiting run is released whole, so an active outage on any of its pay rows'
+    // rails holds all of it, as the board says. The first one found, or null.
+    outage: run.state === "waiting" && terms !== null ? runOutage(terms) : null,
     events: engine.ledger.runEvents(run.id),
     audit: runAuditSummary(run.id),
     busy: runBusy(run),

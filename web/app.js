@@ -2148,7 +2148,7 @@ function buildApproval(invoiceId, approval, outage) {
       badge(expired ? EXPIRED_REQUEST : APPROVAL_STATES[approval.state], approval.state, false),
     ),
     h("p", { class: "approval__lead" }, approvalLead(approval)),
-    ...[outageNote(approval, outage)].filter((note) => note !== null),
+    ...[outageNote(approval, outage), sameAccountNote(terms, evidence, held)].filter((note) => note !== null),
     h(
       "dl",
       { class: "terms" },
@@ -2390,6 +2390,22 @@ function renderApproval(detail) {
     }
   }
   syncApprovalControls();
+}
+
+// A replacement for an original the bank failed for a reason a resend cannot fix,
+// such as a closed account, goes to the same account unless a callback verified
+// new details, so it may fail the same way.
+const RESENDABLE_CODES = ["91401", "91402"];
+
+function sameAccountNote(terms, evidence, held) {
+  const code = evidence.failureCode;
+  const verified = evidence.bankChange !== null && evidence.bankChange !== undefined;
+  if (held || terms.action !== "replace" || verified || typeof code !== "string") {
+    return null;
+  }
+  return RESENDABLE_CODES.includes(code)
+    ? null
+    : caution("This replacement goes to the account the original failed on. Check the account with the supplier before approving it.");
 }
 
 // Said on a request or an approval while an outage is active on the rail the
@@ -4247,12 +4263,25 @@ function buildRunApproveForm(runId, approval, error) {
   return { form, select, button, locked };
 }
 
+// A waiting run is released whole, so an outage on any of its pay rows' rails
+// holds all of it, as the board says.
+function runOutageNote(runId, approval, expired, outage) {
+  const held = `Outage ${outage.id} on ${outage.rail} is active, so pay run ${runId} is released only once a person ends it.`;
+  if (expired || (approval.state !== "requested" && approval.state !== "approved")) {
+    return `${held} That holds for a new request too.`;
+  }
+  return approval.state === "approved"
+    ? `${held} The approval is kept until then and still expires when it would.`
+    : `${held} An approval given now waits until then and still expires when it would.`;
+}
+
 function renderRunApproval(run) {
   const info = run.run;
   const approval = run.approval ?? null;
   const policy = state.options === null ? null : [state.options.approvers, state.options.approvalProblem];
   const waitingLine = runWaitingLine(run);
-  if (!changed("runApproval", [info.id, info.state, run.status, approval, policy, waitingLine])) {
+  const outage = run.outage ?? null;
+  if (!changed("runApproval", [info.id, info.state, run.status, approval, policy, waitingLine, outage?.id ?? null])) {
     syncRunApproval();
     return;
   }
@@ -4280,6 +4309,9 @@ function renderRunApproval(run) {
   } else {
     const terms = approval.terms ?? {};
     children.push(h("p", { class: "approval__lead" }, expired ? "This request expired before enough people approved it. Check the run again to open a new one." : runApprovalLead(approval, terms)));
+    if (outage !== null && waiting) {
+      children.push(caution(runOutageNote(info.id, approval, expired, outage)));
+    }
     const totals = Array.isArray(terms.totals) ? terms.totals : [];
     children.push(
       h(
