@@ -109,9 +109,13 @@ export function airwallexAdvice(error: AirwallexError | AirwallexUnreachableErro
   if (error.request === LOGIN_REQUEST && (error.status === 401 || error.status === 403)) {
     return "Airwallex refused the API key. Check AWX_CLIENT_ID and AWX_API_KEY in .env, then start PayOnce again.";
   }
-  // Past the login the key works, so Airwallex refused it this one call, as for a
-  // scoped key without the permission the call needs.
-  if (error.status === 401 || error.status === 403) {
+  // Past the login, a 401 is most likely the key or its token refused for this
+  // call, as when the token ran out, and a 403 a scoped key without the
+  // permission the call needs.
+  if (error.status === 401) {
+    return "Airwallex refused the API key or its token for this call. Start PayOnce again, and if it keeps happening, check AWX_CLIENT_ID and AWX_API_KEY in .env.";
+  }
+  if (error.status === 403) {
     return "Airwallex refused the API key for this call. Check the key's permissions in the Airwallex web app.";
   }
   return error.status >= 500 || error.status === 429 ? "Try again in a minute." : "";
@@ -223,7 +227,9 @@ export class AirwallexClient {
       throw new Error(baseUrlProblem(baseUrl, url.hostname));
     }
     this.host = url.hostname;
-    this.baseUrl = baseUrl.replace(/\/+$/, "");
+    // The parsed origin, never the text, so an empty ? or #, a backslash or a tab
+    // the parser drops cannot put every call on another path.
+    this.baseUrl = url.origin;
     this.clientId = clientId;
     this.apiKey = apiKey;
   }
