@@ -22,7 +22,7 @@ import {
   type OutageSubjectHeld,
   type RailFailure,
 } from "./ledger.js";
-import { say, sayWarning } from "./printable.js";
+import { say, sayWarning, shownFailureCode } from "./printable.js";
 
 // The failure codes that say the rail failed, not the payee's account. Each has
 // PayOnce's own label. Account codes (account closed, invalid account,
@@ -93,9 +93,12 @@ export function railOf(outage: { currency: string; method: string }): string {
 }
 
 // "91402 (channel timeout) and 91401 (system error)", or, for an outage whose
-// stored codes could not be read, "a rail-level code" as the alert says.
+// stored codes could not be read, "a rail-level code" as the alert says. A stored
+// code in any form Airwallex does not give reads in PayOnce's words.
 export function codesText(codes: string[]): string {
-  const named: string[] = codes.map((code: string): string => `${code} (${RAIL_FAILURE_CODES[code] ?? "rail failure"})`);
+  const named: string[] = codes.map(
+    (code: string): string => `${shownFailureCode(code)} (${RAIL_FAILURE_CODES[code] ?? "rail failure"})`,
+  );
   return named.length <= 1 ? (named[0] ?? "a rail-level code") : `${named.slice(0, -1).join(", ")} and ${named.at(-1)}`;
 }
 
@@ -446,7 +449,10 @@ export interface OutageView {
 }
 
 function codesOf(codes: string[]): OutageCode[] {
-  return codes.map((code: string): OutageCode => ({ code, label: RAIL_FAILURE_CODES[code] ?? "rail failure" }));
+  return codes.map((code: string): OutageCode => ({
+    code: shownFailureCode(code),
+    label: RAIL_FAILURE_CODES[code] ?? "rail failure",
+  }));
 }
 
 function invoiceState(ledger: Ledger, invoiceId: string): string | null {
