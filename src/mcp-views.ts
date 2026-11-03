@@ -197,12 +197,14 @@ function incidentsOf(ledger: Ledger, state: ObligationState | null, limit: numbe
 }
 
 // The terms as the approvers saw them, with the number a callback dialled cut to
-// its last four digits. The binding covers the stored terms, so this copy cannot
-// be used to work it out.
+// its last four digits, in a replacement's terms and a held payment's alike. The
+// binding covers the stored terms, so this copy cannot be used to work it out.
 function shownTerms(terms: ApprovalTerms): unknown {
-  const bankChange: BankChangeEvidence | null | undefined =
-    terms.action === "replace" ? terms.evidence.bankChange : null;
-  if (terms.action !== "replace" || bankChange === null || bankChange === undefined) {
+  // Stored terms are read as they are, so terms with no evidence show as stored.
+  const bankChange: BankChangeEvidence | null | undefined = (
+    terms.evidence as ApprovalTerms["evidence"] | undefined
+  )?.bankChange;
+  if (bankChange === null || bankChange === undefined) {
     return terms;
   }
   const { numberCalled, ...rest }: BankChangeEvidence = bankChange;
