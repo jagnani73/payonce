@@ -337,11 +337,11 @@ const state = {
   reconExplainError: null,
   reconDrafts: new Map(),
   reconMovements: new Map(),
-  // The metrics as /api/metrics last returned them, when, and the period picked,
-  // which is kept in memory only.
+  // The metrics as /api/metrics last returned them, the period and time last
+  // asked for, and the period picked, which is kept in memory only.
   metrics: null,
   metricsError: null,
-  metricsAt: 0,
+  metricsAsked: null,
   metricsPeriod: "7d",
 };
 
@@ -7168,29 +7168,36 @@ function showOnlyView(shown) {
   }
 }
 
+// Asked once when the view opens or the period changes, then every 30 seconds,
+// whether the last answer came back or failed. An answer or an error for a period
+// the person has left is dropped.
 async function loadMetrics() {
   const period = state.metricsPeriod;
-  const due =
-    state.metrics === null ||
-    state.metrics.period !== period ||
-    state.metricsAt < state.selectedAt ||
-    Date.now() - state.metricsAt >= METRICS_EVERY_MS;
-  if (!due) {
+  const asked = state.metricsAsked;
+  if (
+    asked !== null &&
+    asked.period === period &&
+    asked.at >= state.selectedAt &&
+    Date.now() - asked.at < METRICS_EVERY_MS
+  ) {
     return;
   }
+  state.metricsAsked = { period, at: Date.now() };
   try {
     const report = await api(`/api/metrics?period=${encodeURIComponent(period)}`);
+    if (state.metricsPeriod !== period) {
+      return;
+    }
     if (report === null || typeof report !== "object" || report.period !== period || !Array.isArray(report.payments?.rows)) {
       throw new Error("The server sent metrics this page could not read.");
     }
-    if (state.metricsPeriod === period) {
-      state.metrics = report;
-      state.metricsError = null;
-    }
+    state.metrics = report;
+    state.metricsError = null;
   } catch (error) {
-    state.metricsError = error.message;
+    if (state.metricsPeriod === period) {
+      state.metricsError = error.message;
+    }
   }
-  state.metricsAt = Date.now();
 }
 
 function durationWords(seconds) {
@@ -7793,6 +7800,8 @@ for (const button of els.metricsPeriods) {
   button.addEventListener("click", () => {
     if (state.metricsPeriod !== button.dataset.period) {
       state.metricsPeriod = button.dataset.period;
+      // An error belongs to the period it came from.
+      state.metricsError = null;
       render();
       refresh();
     }
