@@ -26,7 +26,16 @@ const CHECK_EVERY_MS: number = 2_000;
 
 async function main(): Promise<void> {
   const bankOutcome: string = process.argv[2] ?? DEFAULT_OUTCOME;
-  const client: AirwallexClient = AirwallexClient.fromEnv();
+  // A credential missing from .env, or an address that is not the sandbox, in
+  // PayOnce's words and with no stack trace. Nothing is stored or sent.
+  let client: AirwallexClient;
+  try {
+    client = AirwallexClient.fromEnv();
+  } catch (error: unknown) {
+    say(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+    return;
+  }
   const ledger: Ledger = new Ledger(LEDGER_PATH);
   const bank: SandboxBank = new SandboxBank(
     client,

@@ -284,7 +284,15 @@ async function upload(ledger: Ledger, path: string | undefined, uploader: string
     fail(`PayOnce cannot read this file:\n${problemsText(parsed.problems)}`);
     return;
   }
-  const engine: Engine = engineFrom(ledger);
+  // A credential missing from .env, or an address that is not the sandbox, in
+  // PayOnce's words and with no stack trace. Nothing is stored.
+  let engine: Engine;
+  try {
+    engine = engineFrom(ledger);
+  } catch (error: unknown) {
+    fail(error instanceof Error ? error.message : String(error));
+    return;
+  }
   say(describePolicy(engine.approvals));
   say(describeFloors(engine.reserve));
   try {

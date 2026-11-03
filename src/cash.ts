@@ -144,7 +144,16 @@ function printCurrency(currency: CurrencyCash, report: CashReport): void {
 // nothing but fees. Exits 1 when Airwallex could not be read, the floors are
 // unreadable, or any headroom is below 0.
 async function main(): Promise<void> {
-  const client: AirwallexClient = AirwallexClient.fromEnv();
+  // A credential missing from .env, or an address that is not the sandbox, in
+  // PayOnce's words and with no stack trace.
+  let client: AirwallexClient;
+  try {
+    client = AirwallexClient.fromEnv();
+  } catch (error: unknown) {
+    say(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+    return;
+  }
   const ledger: Ledger = new Ledger(LEDGER_PATH);
   const reserve: ReservePolicy = reserveFromEnv();
   const state: BalanceState = {
