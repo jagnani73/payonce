@@ -7276,11 +7276,16 @@ function metricsTable(caption, head, rows, empty) {
 }
 
 // What a table left out: rows a time it needs is missing for, and rows whose
-// currency PayOnce cannot read.
-function metricsNote(notOnFile, unreadable = 0) {
+// currency PayOnce cannot read. For payments and incidents the server counts
+// invoices, each once however many figures it was left out of.
+function metricsNote(notOnFile, unreadable = 0, invoices = false) {
+  const what = (count) => (invoices ? countWords(count, "invoice", "invoices") : String(count));
   const parts = [
-    notOnFile > 0 && `${notOnFile} left out because a time they need is not on file.`,
-    unreadable > 0 && `${unreadable} left out of the money because their currency cannot be read.`,
+    notOnFile > 0 &&
+      (invoices
+        ? `${what(notOnFile)} left out of some figures because a time they need is not on file.`
+        : `${notOnFile} left out because a time they need is not on file.`),
+    unreadable > 0 && `${what(unreadable)} left out of the money because their currency cannot be read.`,
   ].filter((part) => part !== false);
   return parts.length === 0 ? null : h("p", { class: "hint" }, parts.join(" "));
 }
@@ -7318,7 +7323,6 @@ function paymentsCard(table) {
   const bankTime = table.bankTimeToPay
     .map((row) => spreadNote(`${row.currency} ${row.method}`, row))
     .filter((row) => row !== null);
-  const bankMissing = table.bankTimeToPay.reduce((sum, row) => sum + row.notOnFile, 0);
   return metricsCard(
     "payments",
     "Payments sent",
@@ -7346,7 +7350,7 @@ function paymentsCard(table) {
         bankTime,
         "",
       ),
-    metricsNote(table.notOnFile + bankMissing, table.unreadable),
+    metricsNote(table.leftOut, table.unreadable, true),
   );
 }
 
@@ -7390,10 +7394,6 @@ function incidentsCard(table) {
     ),
     spreadNote("With a person, from when it first went to one", table.withPerson),
   ].filter((row) => row !== null);
-  const timesMissing = [...table.timeToClose, ...table.afterFailure, table.withPerson].reduce(
-    (sum, spread) => sum + spread.notOnFile,
-    0,
-  );
   return metricsCard(
     "incidents",
     "Incidents",
@@ -7429,7 +7429,7 @@ function incidentsCard(table) {
       { class: "hint" },
       "An invoice counts as needing a person when PayOnce sent it to one, even if the bank then settled it before anyone acted.",
     ),
-    metricsNote(table.notOnFile + timesMissing, table.unreadable),
+    metricsNote(table.leftOut, table.unreadable, true),
   );
 }
 

@@ -111,12 +111,19 @@ function spreadText(spread: Spread): string {
 }
 
 
-function notOnFile(count: number, unreadable: number = 0): void {
+// For payments and incidents the counts are invoices, each counted once however
+// many figures it was left out of.
+function notOnFile(count: number, unreadable: number = 0, invoices: boolean = false): void {
+  const what = (n: number): string => (invoices ? plural(n, "invoice", "invoices") : String(n));
   if (count > 0) {
-    line(`  Not on file: ${count}, left out because a time they need is not in the ledger`);
+    line(
+      invoices
+        ? `  Not on file: ${what(count)}, left out of some figures because a time they need is not in the ledger`
+        : `  Not on file: ${count}, left out because a time they need is not in the ledger`,
+    );
   }
   if (unreadable > 0) {
-    line(`  Unreadable currency: ${unreadable}, left out of the money`);
+    line(`  Unreadable currency: ${what(unreadable)}, left out of the money`);
   }
 }
 
@@ -152,7 +159,7 @@ function payments(report: MetricsReport): void {
   for (const row of table.bankTimeToPay) {
     line(`  Bank time to pay, ${row.currency} ${row.method}: ${spreadText(row)}`);
   }
-  notOnFile(table.notOnFile, table.unreadable);
+  notOnFile(table.leftOut, table.unreadable, true);
 }
 
 function failures(report: MetricsReport): void {
@@ -212,7 +219,7 @@ function incidents(report: MetricsReport): void {
   for (const row of table.reasons) {
     line(`  Reason on file when closed, ${row.label}: ${row.paid} paid, ${row.notPaid} not paid`);
   }
-  notOnFile(table.notOnFile, table.unreadable);
+  notOnFile(table.leftOut, table.unreadable, true);
 }
 
 function approvalLine(row: ApprovalRow): void {

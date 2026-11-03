@@ -132,7 +132,12 @@ export interface PaymentsTable {
   paidMoreThanOnce: PaidTwice;
   mismatchedPaid: MismatchedPaid;
   bankTimeToPay: BankTimeRow[];
+  // Payments whose transfer has no readable creation time.
   notOnFile: number;
+  // Invoices a time is missing for, each counted once, whether that left a payment
+  // out of the rows or out of the bank time to pay.
+  leftOut: number;
+  // Invoices left out of the money because a currency cannot be read.
   unreadable: number;
 }
 
@@ -201,7 +206,11 @@ export interface IncidentsTable {
   withPerson: Spread;
   // The reason on file when a person's invoice closed.
   reasons: ReasonRow[];
+  // Closed invoices with no readable close time.
   notOnFile: number;
+  // Closed invoices a time is missing for, each counted once, whether that left
+  // them out of the closed rows or out of one or more durations.
+  leftOut: number;
   unreadable: number;
 }
 
@@ -513,7 +522,8 @@ function paymentsOf(read: MetricsRead, index: Indexed, window: Window): Payments
   const firstTime: Map<string, FirstTimeRow> = new Map();
   const bankTime: Map<string, { currency: string; method: Method; durations: Durations }> = new Map();
   let notOnFile: number = 0;
-  let unreadable: number = 0;
+  const leftOut: Set<string> = new Set();
+  const unreadableInvoices: Set<string> = new Set();
   for (const attempt of read.attempts) {
     const obligation: MetricsObligation | undefined = index.obligations.get(attempt.invoiceId);
     if (obligation === undefined || attempt.transferId === null || sentOutside(obligation, attempt)) {
@@ -525,11 +535,12 @@ function paymentsOf(read: MetricsRead, index: Indexed, window: Window): Payments
     }
     if (at === "unknown") {
       notOnFile += 1;
+      leftOut.add(attempt.invoiceId);
       continue;
     }
     const currency: string = obligation.currency;
     if (!CURRENCY.test(currency)) {
-      unreadable += 1;
+      unreadableInvoices.add(attempt.invoiceId);
       continue;
     }
     const what: PaymentKind =
@@ -557,8 +568,12 @@ function paymentsOf(read: MetricsRead, index: Indexed, window: Window): Payments
       row.paid += 1;
       row.paidMinor += obligation.amountMinor;
       const method: Method = methodOf(obligation.transferMethod);
+      const took: number | null = seconds(attempt.triedAt, attempt.paidAt);
+      if (took === null) {
+        leftOut.add(attempt.invoiceId);
+      }
       rowFor(bankTime, `${currency}|${method}`, () => ({ currency, method, durations: new Durations() })).durations.add(
-        seconds(attempt.triedAt, attempt.paidAt),
+        took,
       );
     } else if (outcome === "failed") {
       row.failed += 1;
@@ -576,7 +591,6 @@ function paymentsOf(read: MetricsRead, index: Indexed, window: Window): Payments
   const extra: Map<string, WalletMoney> = new Map();
   const mismatched: MismatchedPaid = { invoices: 0, transfers: 0, paid: [], notKnown: 0 };
   const mismatchedMoney: Map<string, WalletMoney> = new Map();
-  const unreadableInvoices: Set<string> = new Set();
   // Adds one payment to its wallet, or counts it not known, or, for a currency
   // that cannot be read, leaves it out of the money.
   const add = (money: Map<string, WalletMoney>, took: Took | null, invoiceId: string): boolean => {
@@ -625,7 +639,6 @@ function paymentsOf(read: MetricsRead, index: Indexed, window: Window): Payments
       }
     }
   }
-  unreadable += unreadableInvoices.size;
   return {
     rows: [...rows.values()].sort(
       (a: PaymentRow, b: PaymentRow): number =>
@@ -649,7 +662,8 @@ function paymentsOf(read: MetricsRead, index: Indexed, window: Window): Payments
         }),
       ),
     notOnFile,
-    unreadable,
+    leftOut: leftOut.size,
+    unreadable: unreadableInvoices.size,
   };
 }
 
@@ -776,6 +790,7 @@ function incidentsOf(read: MetricsRead, index: Indexed, window: Window): Inciden
   const withPerson: Durations = new Durations();
   const reasons: Map<ReasonCode, ReasonRow> = new Map();
   let notOnFile: number = 0;
+  let leftOut: number = 0;
   let unreadable: number = 0;
   for (const obligation of read.obligations) {
     const begun: Where = where(obligation.startedAt, window);
@@ -799,8 +814,15 @@ function incidentsOf(read: MetricsRead, index: Indexed, window: Window): Inciden
     }
     if (ended === "unknown") {
       notOnFile += 1;
+      leftOut += 1;
       continue;
     }
+    // One invoice can lack the times of several durations, and counts once.
+    let missing: boolean = false;
+    const measure = (durations: Durations | undefined, value: number | null): void => {
+      missing ||= value === null;
+      durations?.add(value);
+    };
     const attempts: MetricsAttempt[] = index.attempts.get(obligation.invoiceId) ?? [];
     const how: CloseHow = closeHow(obligation, attempts);
     const group: CloseGroup = GROUP_OF[how];
@@ -820,13 +842,13 @@ function incidentsOf(read: MetricsRead, index: Indexed, window: Window): Inciden
     } else {
       unreadable += 1;
     }
-    toClose.get(group)?.add(seconds(obligation.startedAt, obligation.closedAt));
+    measure(toClose.get(group), seconds(obligation.startedAt, obligation.closedAt));
     const failure: string | null = firstFailure(attempts);
     if (failure !== null) {
-      afterFailure.get(group)?.add(seconds(failure === "" ? null : failure, obligation.closedAt));
+      measure(afterFailure.get(group), seconds(failure === "" ? null : failure, obligation.closedAt));
     }
     if (group === "with-a-person") {
-      withPerson.add(seconds(obligation.escalatedAt, obligation.closedAt));
+      measure(withPerson, seconds(obligation.escalatedAt, obligation.closedAt));
       const code: ReasonCode = reasonCode(obligation.escalationReason);
       const reason: ReasonRow = rowFor(reasons, code, () => ({ code, label: REASON_LABELS[code], paid: 0, notPaid: 0 }));
       if (how === "person-paid") {
@@ -835,6 +857,7 @@ function incidentsOf(read: MetricsRead, index: Indexed, window: Window): Inciden
         reason.notPaid += 1;
       }
     }
+    leftOut += missing ? 1 : 0;
   }
   const spreads = (durations: Map<CloseGroup, Durations>): GroupSpread[] =>
     CLOSE_GROUPS.map((group: CloseGroup): GroupSpread => ({
@@ -854,6 +877,7 @@ function incidentsOf(read: MetricsRead, index: Indexed, window: Window): Inciden
       (row: ReasonRow | undefined): row is ReasonRow => row !== undefined,
     ),
     notOnFile,
+    leftOut,
     unreadable,
   };
 }
