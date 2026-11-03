@@ -278,19 +278,19 @@ export class ModelReader implements EmailReader {
     return content;
   }
 
-  // Returns the first model's answers, with the model that gave them.
+  // Returns the first model's answers, with the model that gave them. What fails
+  // goes to the console and, when every model fails, to the timeline, so the key
+  // is cut out of every error first, whatever part of an answer it came back in.
   private async ask(prompt: string): Promise<{ answers: Answers; model: string }> {
-    let failure: unknown = new Error("No model is set up");
+    let failure: Error = new Error("No model is set up");
     for (const model of this.models) {
       const started: number = Date.now();
       try {
         return { answers: toAnswers(await this.complete(model, prompt)), model };
       } catch (error: unknown) {
-        failure = error;
+        failure = new Error(redactKey(error instanceof Error ? error.message : String(error), this.apiKey));
         // Kept off the timeline unless every model fails, but worth seeing.
-        sayWarning(
-          `  reader   ${model} gave no answer after ${Date.now() - started} ms: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        sayWarning(`  reader   ${model} gave no answer after ${Date.now() - started} ms: ${failure.message}`);
         if (keyRefused(error)) {
           break;
         }
