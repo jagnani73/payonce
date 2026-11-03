@@ -1541,8 +1541,10 @@ function paidByOf(attempts: SupplierPayment[], payouts: SupplierPayoutView[], la
       arrivesBy: latestDayOf(paid.arrival),
     };
   }
+  // Only a payout that pays the invoice (payoutPays) paid it. One that only names
+  // it, or that no look could check yet, is still listed among its payments.
   const outside: SupplierPayoutView | undefined = payouts
-    .filter((payout: SupplierPayoutView): boolean => payout.state === "paid")
+    .filter((payout: SupplierPayoutView): boolean => payout.pays)
     .at(-1);
   if (outside === undefined) {
     return null;

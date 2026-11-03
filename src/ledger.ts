@@ -5214,17 +5214,15 @@ export class Ledger {
         .prepare(
           `SELECT ${SUPPLIER_PAYOUT_COLUMNS}, outside_payouts.transfer_id, outside_payouts.reference,
                   outside_payouts.amount_minor, outside_payouts.currency, outside_payouts.fee_minor,
-                  outside_payouts.fee_currency
+                  outside_payouts.fee_currency, outside_payouts.pays
              FROM outside_payouts JOIN obligations ON obligations.invoice_id = outside_payouts.invoice_id
             WHERE obligations.beneficiary_id = ? ORDER BY outside_payouts.rowid`,
         )
         .all(beneficiaryId) as unknown as (SupplierPayoutRow & OutsideRow)[]
-    ).map(
-      (row: SupplierPayoutRow & OutsideRow): SupplierPayoutView => ({
-        ...toOutsidePayout(row),
-        ...toSupplierPayout(row),
-      }),
-    );
+    ).map((row: SupplierPayoutRow & OutsideRow): SupplierPayoutView => {
+      const payout: OutsidePayout = toOutsidePayout(row);
+      return { ...payout, ...toSupplierPayout(row), pays: payoutPays(payout) };
+    });
     const drafts: SupplierDraft[] = (
       this.db
         .prepare(
@@ -6998,6 +6996,9 @@ export interface SupplierPayoutView extends SupplierPayout {
   currency: string | null;
   feeMinor: number | null;
   feeCurrency: string | null;
+  // True when it is paid and the last look found that it pays its invoice
+  // (payoutPays). Only then is it what paid the invoice.
+  pays: boolean;
 }
 
 // An approval request with the account its terms name, never the terms.
