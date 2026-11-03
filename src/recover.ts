@@ -117,7 +117,7 @@ async function main(): Promise<void> {
     // could not move it.
     if (!rested) {
       say(
-        `${invoiceId} was still not at rest when PayOnce stopped waiting, so PayOnce stopped. ${invoiceId} is in the ledger, and pnpm recover ${bankOutcome} ${invoiceId} or pnpm ui looks at it again.`,
+        `${invoiceId} was still not at rest when the wait ran out, so PayOnce stopped. ${invoiceId} is in the ledger, and pnpm recover ${bankOutcome} ${invoiceId} or pnpm ui looks at it again.`,
       );
       process.exitCode = 1;
     }
