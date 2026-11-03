@@ -21,6 +21,9 @@ export interface ApprovalPolicy {
   expiresAfterMs: number;
   // Why APPROVERS could not be read. Every approval is refused while it is set.
   problem: string | null;
+  // True when a setting could not be read, so problem says which, and false
+  // when the approver list is only unset. Nobody ends an outage while it is true.
+  unreadable: boolean;
 }
 
 // An approval completed just before its request expired still has this long to
@@ -166,6 +169,7 @@ export function policyFromEnv(env: NodeJS.ProcessEnv = process.env): ApprovalPol
     twoApproversAboveMinor: toMinor(DEFAULT_TWO_APPROVERS_ABOVE),
     expiresAfterMs: DEFAULT_APPROVAL_TTL_MINUTES * MINUTE_MS,
     problem: null,
+    unreadable: false,
   };
   try {
     policy.twoApproversAboveMinor = toMinor(
@@ -181,6 +185,7 @@ export function policyFromEnv(env: NodeJS.ProcessEnv = process.env): ApprovalPol
   } catch (error: unknown) {
     policy.approvers = [];
     policy.problem = `the approval settings could not be read: ${error instanceof Error ? error.message : String(error)}`;
+    policy.unreadable = true;
   }
   return policy;
 }

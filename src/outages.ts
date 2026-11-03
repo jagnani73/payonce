@@ -243,9 +243,15 @@ function runEndLine(outage: Outage, unlisted: boolean): string {
 }
 
 // Who may end an outage: the names in APPROVERS, since ending one lets payments
-// go out on the rail again. Null when the list is unset or cannot be read, and
-// then any named person may, so an outage can always be ended.
+// go out on the rail again. Null when no approver list is set, and then any
+// named person may, so an outage can always be ended. Nobody while any approval
+// setting cannot be read (APPROVERS, TWO_APPROVERS_ABOVE or
+// APPROVAL_TTL_MINUTES), because then PayOnce cannot tell who may: endOutage
+// refuses with the reason, and a person fixes the setting first.
 export function outageEnders(policy: ApprovalPolicy): string[] | null {
+  if (policy.unreadable) {
+    return [];
+  }
   return policy.problem === null && policy.approvers.length > 0
     ? policy.approvers.map((approver: Approver): string => approver.name)
     : null;
@@ -343,6 +349,13 @@ export function endOutage(
   }
   if (outage.state !== "active") {
     throw alreadyEnded(outage);
+  }
+  if (policy.unreadable) {
+    throw new EndRefusedError(
+      "approver",
+      `Nobody can end an outage while ${policy.problem ?? "the approval settings cannot be read"}. Fix the setting and restart PayOnce, then end the outage`,
+      outage,
+    );
   }
   const enders: string[] | null = outageEnders(policy);
   const ender: string | undefined =
