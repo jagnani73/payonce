@@ -1377,6 +1377,7 @@ input:read-only {
 .caution__title {
   font-size: 14px;
   font-weight: 700;
+  overflow-wrap: anywhere;
 }
 
 .caution__detail {
