@@ -73,7 +73,7 @@ import {
 import { formatMoney } from "./money.js";
 import { RAIL_FAILURE_CODES } from "./outages.js";
 import { currencyFloor, debitCurrency, floorFor, type ReservePolicy } from "./reserve.js";
-import { SANDBOX_BANK_AFTER, TRY_WORDS_SOURCE } from "./words.js";
+import { SANDBOX_BANK_AFTER, SANDBOX_BANK_STOPPED, TRY_WORDS_SOURCE } from "./words.js";
 
 // The facts a model is given to explain one invoice. Every value is PayOnce's own
 // words, a closed-pattern value such as a bank reference, a status or an amount,
@@ -358,6 +358,10 @@ const MODEL_PATTERN: RegExp = /^[A-Za-z0-9._:/-]{1,80}$/;
 const MODEL_TRY: RegExp = new RegExp(`^(\\S+) (${TRY_WORDS_SOURCE})$`);
 const SIMULATED: string = "SENT|PAID|FAILED";
 const SANDBOX_TRANSFER: string = `transfer ${REF}|the transfer`;
+// How the sandbox bank's lines end: the server's ending, pnpm recover's, and the
+// ending older code gave a transfer that converts.
+const SANDBOX_END: string = `(${[SANDBOX_BANK_AFTER, SANDBOX_BANK_STOPPED].map(escapeRegExp).join("|")})`;
+const OLD_CONVERTS_END: string = "If the bank has neither paid nor failed it by its deadline, a person hears about it";
 const SANDBOX_ANSWER: string = ": it answered ([0-9]{3})(?: ([A-Za-z0-9_]{1,40}))?|: it did not answer";
 
 function escapeRegExp(text: string): string {
@@ -969,6 +973,16 @@ const HOLD_ENDINGS: string = [
   .map(escapeRegExp)
   .join("|");
 
+// A transfer as the sandbox bank's line names it, from the captured slot.
+function sandboxTransfer(named: string | undefined): string {
+  return named === undefined || named === "the transfer" ? "the transfer" : named;
+}
+
+// The fixed ending a sandbox bank line had.
+function sandboxEnd(ending: string | undefined): string {
+  return ending === SANDBOX_BANK_STOPPED ? SANDBOX_BANK_STOPPED : SANDBOX_BANK_AFTER;
+}
+
 // What the simulator answered, as the sandbox bank's line gives it, with the code
 // only when PayOnce passes that code on.
 function sandboxAnswer(answer: string | undefined, status: string | undefined, code: string | undefined): string {
@@ -1316,38 +1330,40 @@ const LINE_RULES: readonly LineRule[] = [
     },
   ),
 
-  // Errors PayOnce writes in its own words, each given in fixed words that hold
-  // only a currency, a kind of payment, an outage's number and rail or an alias.
-  // Any other error line is a stand-in.
-  rule([ERROR], "Supplier emails could not be read: [\\s\\S]*", (): string =>
-    "The email reader could not read a supplier email, so the thread counts as unread",
-  ),
-  // The sandbox bank, whose simulator stands in for the bank. A code passes only
-  // when PayOnce passes that code on.
+  // The sandbox bank's lines, which are bank lines, and the same lines as error
+  // lines, as older code wrote them, with Airwallex's raw simulator errors. Each is
+  // rebuilt from its bank reference, the status asked for, the answer's HTTP
+  // status and a code PayOnce passes on, and its fixed ending.
   rule(
-    [ERROR],
-    `The sandbox's simulator, which stands in for the bank, did not move (${SANDBOX_TRANSFER}) to (${SIMULATED}) this time(${SANDBOX_ANSWER})?\\. ${escapeRegExp(SANDBOX_BANK_AFTER)}`,
+    [BANK, ERROR],
+    `The sandbox's simulator, which stands in for the bank, did not move (${SANDBOX_TRANSFER}) to (${SIMULATED}) this time(${SANDBOX_ANSWER})?\\. ${SANDBOX_END}`,
     (match: RegExpExecArray): string =>
-      `The sandbox's simulator, which stands in for the bank, did not move ${match[1] ?? "the transfer"} to ${match[2] ?? ""} this time${sandboxAnswer(match[3], match[4], match[5])}. ${SANDBOX_BANK_AFTER}`,
+      `The sandbox's simulator, which stands in for the bank, did not move ${sandboxTransfer(match[1])} to ${match[2] ?? ""} this time${sandboxAnswer(match[3], match[4], match[5])}. ${sandboxEnd(match[6])}`,
   ),
   rule(
-    [ERROR],
-    `The sandbox bank could not read (${SANDBOX_TRANSFER}) from Airwallex this time(${SANDBOX_ANSWER})?, so the simulator, which stands in for the bank, did not move it\\. ${escapeRegExp(SANDBOX_BANK_AFTER)}`,
+    [BANK, ERROR],
+    `The sandbox bank could not read (${SANDBOX_TRANSFER}) from Airwallex this time(${SANDBOX_ANSWER})?, so the simulator, which stands in for the bank, did not move it\\. ${SANDBOX_END}`,
     (match: RegExpExecArray): string =>
-      `The sandbox bank could not read ${match[1] ?? "the transfer"} from Airwallex this time${sandboxAnswer(match[2], match[3], match[4])}, so the simulator, which stands in for the bank, did not move it. ${SANDBOX_BANK_AFTER}`,
+      `The sandbox bank could not read ${sandboxTransfer(match[1])} from Airwallex this time${sandboxAnswer(match[2], match[3], match[4])}, so the simulator, which stands in for the bank, did not move it. ${sandboxEnd(match[5])}`,
   ),
-  keep(
+  rule(
+    [BANK, ERROR],
+    `(?:Transfer (${REF})|The transfer) stayed SCHEDULED in Airwallex for longer than the sandbox bank waits, so the simulator, which stands in for the bank, did not move it this time\\. ${SANDBOX_END}`,
+    (match: RegExpExecArray): string =>
+      `${match[1] === undefined ? "The transfer" : `Transfer ${match[1]}`} stayed SCHEDULED in Airwallex for longer than the sandbox bank waits, so the simulator, which stands in for the bank, did not move it this time. ${sandboxEnd(match[2])}`,
+  ),
+  rule(
+    [BANK, ERROR],
+    `The sandbox's simulator, which stands in for the bank, does not move a transfer that converts currency, so nothing here pays or fails (${REF}|it), and it stays in PROCESSING\\. (?:${SANDBOX_END}|(${escapeRegExp(OLD_CONVERTS_END)}))`,
+    (match: RegExpExecArray): string =>
+      `The sandbox's simulator, which stands in for the bank, does not move a transfer that converts currency, so nothing here pays or fails ${match[1] ?? "it"}, and it stays in PROCESSING. ${match[3] === undefined ? sandboxEnd(match[2]) : OLD_CONVERTS_END}`,
+  ),
+  rule(
     [ERROR],
-    `(?:Transfer ${REF}|The transfer) stayed SCHEDULED in Airwallex for longer than the sandbox bank waits, so the simulator, which stands in for the bank, did not move it this time\\. ${escapeRegExp(SANDBOX_BANK_AFTER)}`,
+    `The sandbox simulator does not move a transfer that converts currency, so nothing here pays or fails (${REF}), and it stays in PROCESSING`,
+    (match: RegExpExecArray): string =>
+      `The sandbox simulator does not move a transfer that converts currency, so nothing here pays or fails ${match[1] ?? ""}, and it stays in PROCESSING`,
   ),
-  // A transfer that converts, which the simulator never moves, as this code and
-  // older code word it.
-  keep(
-    [ERROR],
-    `The sandbox's simulator, which stands in for the bank, does not move a transfer that converts currency, so nothing here pays or fails (?:${REF}|it), and it stays in PROCESSING\\. If the bank has neither paid nor failed it by its deadline, a person hears about it`,
-  ),
-  keep([ERROR], `The sandbox simulator does not move a transfer that converts currency, so nothing here pays or fails ${REF}, and it stays in PROCESSING`),
-  // How older code wrote a simulator refusal: Airwallex's error as it came.
   rule(
     [ERROR],
     `POST /api/v1/simulation/transfers/${UUID}/transition (?:failed with ([0-9]{3})(?: ([A-Za-z0-9_.-]{1,64}))?|did not complete): [\\s\\S]*`,
@@ -1355,6 +1371,13 @@ const LINE_RULES: readonly LineRule[] = [
       `The sandbox's simulator, which stands in for the bank, did not move a transfer this time${
         match[1] === undefined ? ": it did not answer" : sandboxAnswer(":", match[1], match[2])
       }`,
+  ),
+
+  // Errors PayOnce writes in its own words, each given in fixed words that hold
+  // only a currency, a kind of payment, an outage's number and rail or an alias.
+  // Any other error line is a stand-in.
+  rule([ERROR], "Supplier emails could not be read: [\\s\\S]*", (): string =>
+    "The email reader could not read a supplier email, so the thread counts as unread",
   ),
   rule([ERROR], `Other (${CUR}) payments held the (?:${CUR}) lock for the ${N} seconds PayOnce waits for its turn, so it sent nothing\\. It tries again in a minute`, (match: RegExpExecArray): string =>
     `Other ${match[1] ?? ""} payments held the ${match[1] ?? ""} lock for as long as PayOnce waits for its turn, so it sent nothing. It tries again in a minute`,

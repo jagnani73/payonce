@@ -127,6 +127,18 @@ export async function findTransferByRequestId(
   );
 }
 
+// The transfer did not reach the state a wait asked for in time. Airwallex
+// answered every read, so this is not an Airwallex error.
+export class TransferWaitError extends Error {
+  readonly transferId: string;
+
+  constructor(transferId: string, lastStatus: string) {
+    super(`Transfer ${transferId} did not reach the expected state, last status ${lastStatus}`);
+    this.name = "TransferWaitError";
+    this.transferId = transferId;
+  }
+}
+
 export async function waitForTransfer(
   client: AirwallexClient,
   id: string,
@@ -139,9 +151,7 @@ export async function waitForTransfer(
       return transfer;
     }
     if (Date.now() > deadline) {
-      throw new Error(
-        `Transfer ${id} did not reach the expected state, last status ${transfer.status}`,
-      );
+      throw new TransferWaitError(id, transfer.status);
     }
     await new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
   }

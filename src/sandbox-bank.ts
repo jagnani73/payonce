@@ -1,9 +1,10 @@
 import { AirwallexError, AirwallexUnreachableError, type AirwallexClient } from "./airwallex/client.js";
 import { isAmbiguous, simulateTransfer, type SimulatedStatus } from "./airwallex/simulation.js";
-import { getTransfer, waitForTransfer, type Transfer } from "./airwallex/transfers.js";
+import { getTransfer, TransferWaitError, waitForTransfer, type Transfer } from "./airwallex/transfers.js";
 import { isOverdue } from "./deadlines.js";
 import type { Bank } from "./engine.js";
 import type { AttemptKind } from "./ledger.js";
+import { LineError } from "./line-error.js";
 import { PAID_OUTCOME, SANDBOX_BANK_AFTER, STAYS_IN_FLIGHT } from "./words.js";
 
 const SETTLED_STATUSES: ReadonlySet<string> = new Set<string>([
@@ -20,20 +21,21 @@ const READ_RETRY_MS: number = 1_500;
 const REFERENCE: RegExp = /^[A-Z0-9-]{1,30}$/;
 const ERROR_CODE: RegExp = /^[A-Za-z0-9_]{1,40}$/;
 
-// What the sandbox bank was doing when a call failed: reading the transfer,
-// waiting for Airwallex to move it past SCHEDULED, or asking the simulator to move
-// it to a status.
-type BankStep = "read" | "wait" | SimulatedStatus;
+// What the sandbox bank was doing: reading the transfer, waiting for Airwallex to
+// move it past SCHEDULED, asking the simulator to move it to a status, or leaving
+// alone a transfer that converts, which the simulator never moves.
+type BankStep = "read" | "wait" | "converts" | SimulatedStatus;
 
 // The sandbox bank could not play its part this time. In the sandbox the
 // simulator stands in for the bank, so a refusal of its own is not PayOnce
-// failing, and the payment is followed as any other. The message is PayOnce's
-// words for the timeline, with the answer's status and code only in the forms
-// they take. detail is the error as it came, for the console.
-export class SandboxBankError extends Error {
-  readonly detail: string;
+// failing, and the payment is followed as any other. what is PayOnce's words for
+// it, with the answer's status and code only in the forms they take, and the
+// message adds how the server follows the transfer. It is a bank line on the
+// timeline, and detail is the error as it came, for the console.
+export class SandboxBankError extends LineError {
+  readonly what: string;
 
-  constructor(step: BankStep, reference: string | null, error: unknown) {
+  constructor(step: BankStep, reference: string | null, error: AirwallexError | AirwallexUnreachableError | TransferWaitError | null) {
     const named: string = reference !== null && REFERENCE.test(reference) ? `transfer ${reference}` : "the transfer";
     const answered: string =
       error instanceof AirwallexError
@@ -46,19 +48,33 @@ export class SandboxBankError extends Error {
         ? `The sandbox bank could not read ${named} from Airwallex this time${answered}, so the simulator, which stands in for the bank, did not move it`
         : step === "wait"
           ? `${named.charAt(0).toUpperCase()}${named.slice(1)} stayed SCHEDULED in Airwallex for longer than the sandbox bank waits, so the simulator, which stands in for the bank, did not move it this time`
-          : `The sandbox's simulator, which stands in for the bank, did not move ${named} to ${step} this time${answered}`;
-    super(`${what}. ${SANDBOX_BANK_AFTER}`);
+          : step === "converts"
+            ? `The sandbox's simulator, which stands in for the bank, does not move a transfer that converts currency, so nothing here pays or fails ${reference !== null && REFERENCE.test(reference) ? reference : "it"}, and it stays in PROCESSING`
+            : `The sandbox's simulator, which stands in for the bank, did not move ${named} to ${step} this time${answered}`;
+    super(`${what}. ${SANDBOX_BANK_AFTER}`, "bank", error === null ? what : error.message);
     this.name = "SandboxBankError";
-    this.detail = error instanceof Error ? error.message : String(error);
+    this.what = what;
   }
 }
 
-// A read the sandbox bank makes, with its failure in PayOnce's words.
+// An error from a call the sandbox bank made, in PayOnce's words when it is
+// Airwallex's or the wait's, and unchanged otherwise, so a fault in the code keeps
+// its own message and stack trace.
+function sandboxError(step: BankStep, reference: string | null, error: unknown): unknown {
+  if (error instanceof TransferWaitError) {
+    return new SandboxBankError("wait", reference, error);
+  }
+  return error instanceof AirwallexError || error instanceof AirwallexUnreachableError
+    ? new SandboxBankError(step, reference, error)
+    : error;
+}
+
+// A read the sandbox bank makes, with an Airwallex failure in PayOnce's words.
 async function reading<T>(read: () => Promise<T>): Promise<T> {
   try {
     return await read();
   } catch (error: unknown) {
-    throw new SandboxBankError("read", null, error);
+    throw sandboxError("read", null, error);
   }
 }
 
@@ -133,7 +149,7 @@ export class SandboxBank implements Bank {
     try {
       await simulateTransfer(this.client, transferId, to, failureType);
     } catch (error: unknown) {
-      throw new SandboxBankError(to, reference, error);
+      throw sandboxError(to, reference, error);
     }
   }
 
@@ -148,8 +164,7 @@ export class SandboxBank implements Bank {
         (transfer: Transfer): boolean => transfer.status !== "SCHEDULED",
       );
     } catch (error: unknown) {
-      const read: boolean = error instanceof AirwallexError || error instanceof AirwallexUnreachableError;
-      throw new SandboxBankError(read ? "read" : "wait", null, error);
+      throw sandboxError("read", null, error);
     }
     if (current.status === "PROCESSING") {
       await this.move(transferId, current.short_reference_id, "SENT");
@@ -215,9 +230,7 @@ export class SandboxBank implements Bank {
         // Past its deadline the agent has said so already.
         if (!this.converting.has(transferId) && !isOverdue(transfer)) {
           this.converting.add(transferId);
-          throw new Error(
-            `The sandbox's simulator, which stands in for the bank, does not move a transfer that converts currency, so nothing here pays or fails ${REFERENCE.test(transfer.short_reference_id) ? transfer.short_reference_id : "it"}, and it stays in PROCESSING. If the bank has neither paid nor failed it by its deadline, a person hears about it`,
-          );
+          throw new SandboxBankError("converts", transfer.short_reference_id, null);
         }
         return;
       }
