@@ -7235,16 +7235,29 @@ function countWords(count, one, many) {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-// What payments took, wallet by wallet and never added across currencies, and
-// how many of them have no amount on file.
-function walletMoneyWords(rows, notKnown) {
-  const parts = rows.map(
-    (row) => `${formatMoney(row.amountMinor, row.currency)} in ${countWords(row.payments, "payment", "payments")}`,
-  );
-  if (notKnown > 0) {
-    parts.push(`${countWords(notKnown, "payment", "payments")} with no amount on file`);
+function listWords(items) {
+  return items.length <= 1 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
+}
+
+// What some payments took, wallet by wallet and never added across currencies,
+// then how many have no amount on file. noun is [one, many], such as
+// ["extra payment", "extra payments"].
+function tookWords(subject, noun, rows, notKnown) {
+  const unit = noun[0].split(" ").at(-1);
+  const units = noun[1].split(" ").at(-1);
+  const sentences = [];
+  if (rows.length > 0) {
+    sentences.push(
+      `${subject} took ${listWords(rows.map((row) => `${formatMoney(row.amountMinor, row.currency)} in ${countWords(row.payments, unit, units)}`))}.`,
+    );
   }
-  return parts.length === 0 ? "money in a currency PayOnce cannot read" : parts.join(", ");
+  if (notKnown > 0) {
+    sentences.push(`${countWords(notKnown, noun[0], noun[1])} ${notKnown === 1 ? "has" : "have"} no amount on file.`);
+  }
+  if (sentences.length === 0) {
+    sentences.push(`${subject} ${subject === "It" ? "is" : "are"} in a currency PayOnce cannot read.`);
+  }
+  return sentences.join(" ");
 }
 
 function percentWords(part, whole, percent) {
@@ -7292,7 +7305,8 @@ function metricsNote(notOnFile, unreadable = 0, invoices = false) {
       (invoices
         ? `${what(notOnFile)} left out of some figures because a time they need is not on file.`
         : `${notOnFile} left out because a time they need is not on file.`),
-    unreadable > 0 && `${what(unreadable)} left out of the money because their currency cannot be read.`,
+    unreadable > 0 &&
+      `${what(unreadable)} left out of the money because ${unreadable === 1 ? "its" : "their"} currency cannot be read.`,
   ].filter((part) => part !== false);
   return parts.length === 0 ? null : h("p", { class: "hint" }, parts.join(" "));
 }
@@ -7321,12 +7335,12 @@ function paymentsCard(table) {
   const twice =
     paidTwice.invoices === 0
       ? "Paid more than once, since the ledger started: none."
-      : `Paid more than once, since the ledger started: ${countWords(paidTwice.invoices, "invoice", "invoices")}. The payments after the first took ${walletMoneyWords(paidTwice.extra, paidTwice.notKnown)}.`;
+      : `Paid more than once, since the ledger started: ${countWords(paidTwice.invoices, "invoice", "invoices")}. ${tookWords("The extra payments", ["extra payment", "extra payments"], paidTwice.extra, paidTwice.notKnown)}`;
   const kept = table.mismatchedPaid;
   const mismatched =
     kept.transfers === 0
       ? null
-      : `Paid transfers that did not match their invoice, since the ledger started: ${countWords(kept.transfers, "transfer", "transfers")} on ${countWords(kept.invoices, "invoice", "invoices")}, which took ${walletMoneyWords(kept.paid, kept.notKnown)}. They are not counted as a second payment.`;
+      : `Paid transfers that did not match their invoice, since the ledger started: ${countWords(kept.transfers, "transfer", "transfers")} on ${countWords(kept.invoices, "invoice", "invoices")}. ${tookWords(kept.transfers === 1 ? "It" : "They", ["transfer", "transfers"], kept.paid, kept.notKnown)} PayOnce does not count these as a second payment.`;
   const bankTime = table.bankTimeToPay
     .map((row) => spreadNote(`${row.currency} ${row.method}`, row))
     .filter((row) => row !== null);

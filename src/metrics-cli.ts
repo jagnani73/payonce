@@ -88,17 +88,29 @@ function durationText(seconds: number | null): string {
   return hours % 24 === 0 ? `${days} d` : `${days} d ${hours % 24} h`;
 }
 
-// What payments took, wallet by wallet and never added across currencies, and how
-// many of them have no amount on file.
-function moneyText(rows: WalletMoney[], notKnown: number): string {
-  const parts: string[] = rows.map(
-    (row: WalletMoney): string =>
-      `${formatMoney(row.amountMinor, row.currency)} in ${plural(row.payments, "payment", "payments")}`,
-  );
-  if (notKnown > 0) {
-    parts.push(`${plural(notKnown, "payment", "payments")} with no amount on file`);
+function listText(items: string[]): string {
+  return items.length <= 1 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
+}
+
+// What some payments took, wallet by wallet and never added across currencies,
+// then how many have no amount on file, as the page writes it. noun is one and
+// many, such as "extra payment" and "extra payments".
+function tookText(subject: string, one: string, many: string, rows: WalletMoney[], notKnown: number): string {
+  const unit: string = one.split(" ").at(-1) ?? one;
+  const units: string = many.split(" ").at(-1) ?? many;
+  const sentences: string[] = [];
+  if (rows.length > 0) {
+    sentences.push(
+      `${subject} took ${listText(rows.map((row: WalletMoney): string => `${formatMoney(row.amountMinor, row.currency)} in ${plural(row.payments, unit, units)}`))}.`,
+    );
   }
-  return parts.length === 0 ? "money in a currency PayOnce cannot read" : parts.join(", ");
+  if (notKnown > 0) {
+    sentences.push(`${plural(notKnown, one, many)} ${notKnown === 1 ? "has" : "have"} no amount on file.`);
+  }
+  if (sentences.length === 0) {
+    sentences.push(`${subject} ${subject === "It" ? "is" : "are"} in a currency PayOnce cannot read.`);
+  }
+  return sentences.join(" ");
 }
 
 function spreadText(spread: Spread): string {
@@ -148,12 +160,12 @@ function payments(report: MetricsReport): void {
   line(
     twice.invoices === 0
       ? "  Paid more than once, since the ledger started: none"
-      : `  Paid more than once, since the ledger started: ${plural(twice.invoices, "invoice", "invoices")}. The payments after the first took ${moneyText(twice.extra, twice.notKnown)}`,
+      : `  Paid more than once, since the ledger started: ${plural(twice.invoices, "invoice", "invoices")}. ${tookText("The extra payments", "extra payment", "extra payments", twice.extra, twice.notKnown).replace(/.$/, "")}`,
   );
   const kept = table.mismatchedPaid;
   if (kept.transfers > 0) {
     line(
-      `  Paid transfers that did not match their invoice, since the ledger started: ${plural(kept.transfers, "transfer", "transfers")} on ${plural(kept.invoices, "invoice", "invoices")}, which took ${moneyText(kept.paid, kept.notKnown)}. They are not counted as a second payment`,
+      `  Paid transfers that did not match their invoice, since the ledger started: ${plural(kept.transfers, "transfer", "transfers")} on ${plural(kept.invoices, "invoice", "invoices")}. ${tookText(kept.transfers === 1 ? "It" : "They", "transfer", "transfers", kept.paid, kept.notKnown)} PayOnce does not count these as a second payment`,
     );
   }
   for (const row of table.bankTimeToPay) {
