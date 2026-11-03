@@ -298,6 +298,17 @@ function approve(ledger: Ledger, run: Run, requestRaw: string | undefined, appro
   }
   printApproval(ledger, pending);
   say(describePolicy(policy));
+  // An expired request can no longer be approved, and a run's request is not
+  // renewed by itself, so the next step is a check.
+  if (pending.expired) {
+    say(
+      `This request has expired, and a pay run's request does not renew by itself. pnpm payrun check ${run.id} runs every check again and opens a new request`,
+    );
+    if (approver !== "") {
+      process.exitCode = 1;
+    }
+    return;
+  }
   if (requestRaw === undefined || approver === "") {
     say(`To approve these terms: pnpm payrun approve ${run.id} ${pending.approval.id} <NAME>`);
     return;
