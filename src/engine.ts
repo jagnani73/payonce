@@ -135,6 +135,7 @@ import { ModelReadError, triesText } from "./model-reader.js";
 import { formatMoney, readMinor, toMajor, toMinor } from "./money.js";
 import { holdLine, railFailureSeen, waitingLine } from "./outages.js";
 import { sendAttempt, syncTransfer, wasRejected, type Decide } from "./payments.js";
+import { SandboxBankError } from "./sandbox-bank.js";
 import { oneLine, say, sayError, sayWarning, shownReference } from "./printable.js";
 import { debitCurrency, floorFor, type ReservePolicy } from "./reserve.js";
 
@@ -289,13 +290,16 @@ export function note(
 
 // Puts a failure on the incident's timeline. It must not throw, because it runs
 // from error handlers. An Airwallex error says all there is in its message and
-// repeats on every look while Airwallex is down, so it prints as one line; any
-// other error prints with its stack trace.
+// repeats on every look while Airwallex is down, so it prints as one line, and so
+// does the error behind a sandbox bank failure, whose timeline line is PayOnce's
+// words; any other error prints with its stack trace.
 export function noteError(ledger: Ledger, invoiceId: string, error: unknown): void {
   sayError(
     error instanceof AirwallexError || error instanceof AirwallexUnreachableError
       ? `  error    ${invoiceId}: ${messageOf(error)}`
-      : error,
+      : error instanceof SandboxBankError
+        ? `  bank     ${invoiceId}: sandbox bank: ${error.detail}`
+        : error,
   );
   try {
     note(ledger, invoiceId, "error", messageOf(error));
