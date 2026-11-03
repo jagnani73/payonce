@@ -91,14 +91,21 @@ function main(): void {
 
   const policy: ApprovalPolicy = policyFromEnv();
   const ledger: Ledger = new Ledger(LEDGER_PATH);
+  let obligation: Obligation | undefined;
   let pending: PendingApproval | undefined;
   try {
-    pending = pendingApproval(ledger, invoiceId);
+    obligation = ledger.obligation(invoiceId);
+    pending = obligation === undefined ? undefined : pendingApproval(ledger, invoiceId);
   } catch (error: unknown) {
     if (!(error instanceof SyntaxError)) {
       throw error;
     }
     say(unreadableText(invoiceId, ledger.latestApproval(invoiceId)?.id ?? null));
+    process.exitCode = 1;
+    return;
+  }
+  if (obligation === undefined) {
+    say(`${invoiceId} is not in the ledger`);
     process.exitCode = 1;
     return;
   }
@@ -114,9 +121,7 @@ function main(): void {
   }
 
   show(pending);
-  const obligation: Obligation | undefined = ledger.obligation(invoiceId);
-  const outage: Outage | undefined =
-    obligation === undefined ? undefined : ledger.activeOutage(obligation.currency, obligation.transferMethod);
+  const outage: Outage | undefined = ledger.activeOutage(obligation.currency, obligation.transferMethod);
   if (outage !== undefined) {
     say(
       `  outage   Outage ${outage.id} on ${railOf(outage)} is active. An approval given now is kept until a person ends it and still expires when it would`,

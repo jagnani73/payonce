@@ -52,6 +52,11 @@ function main(): void {
   }
 
   const ledger: Ledger = new Ledger(LEDGER_PATH);
+  if (ledger.obligation(invoiceId) === undefined) {
+    say(`${invoiceId} is not in the ledger`);
+    process.exitCode = 1;
+    return;
+  }
   const review: CloseReview | undefined = pendingClose(ledger, invoiceId);
   if (review === undefined) {
     say(`${invoiceId} is not waiting on a person to close it`);
