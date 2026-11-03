@@ -642,8 +642,8 @@ export interface FoundPayout {
   sentKey: string | null;
   sentRoute: string | null;
   sentEnding: string | null;
-  // The transfer's created_at as Airwallex wrote it, as record keeps it. A payout
-  // taken on already failed is never read again, so this is the only time it is.
+  // The transfer's created_at as Airwallex wrote it, as record keeps it, so the
+  // original has it from take-on, before any look reads the transfer.
   bankCreatedAt: string | null;
 }
 

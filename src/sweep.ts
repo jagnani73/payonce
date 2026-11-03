@@ -103,7 +103,7 @@ function adopt(engine: Engine, transfer: Transfer, state: FoundState): string | 
       // Where it went, for the supplier view only. sentToOf never throws, so odd
       // bank details cannot stop the payout being taken on.
       ...sentToOf(transfer.beneficiary?.bank_details),
-      // As record keeps it from a look, which a failed payout never gets.
+      // As record keeps it, so it is on file before the first look reads it.
       bankCreatedAt: transfer.created_at ?? null,
     },
     line,
