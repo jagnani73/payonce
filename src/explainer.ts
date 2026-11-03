@@ -4,9 +4,13 @@ import {
   DEFAULT_BASE_URL,
   DEFAULT_MODELS,
   keyRefused,
+  ModelAnswerError,
   ModelError,
   redactKey,
   REQUEST_TIMEOUT_MS,
+  triesText,
+  tryOf,
+  type ModelTry,
 } from "./model-reader.js";
 import { printable, sayWarning } from "./printable.js";
 import { readerSettingsFromEnv, type ReaderSettings } from "./reader.js";
@@ -37,11 +41,11 @@ const ANSWER_SCHEMA: Record<string, unknown> = {
 export const MAX_EXPLANATION_CHARS: number = 1_000;
 export const MAX_NOT_IN_FACTS_CHARS: number = 300;
 // The answer's cap in tokens: the two caps above come to about 330 tokens of
-// JSON, and a model that counts its low-effort reasoning against the cap, as
-// Gemini does, needs room for that as well. Anything past the character caps is
-// cut anyway.
-export const MAX_TOKENS: number = 1_000;
-const MAX_ERROR_LENGTH: number = 200;
+// JSON, and a model that counts its reasoning against the cap, as Gemini does,
+// needs room for that as well. Gemini's endpoint gives low effort a reasoning
+// budget of about 1,024 tokens, and at 1,000 in all gemini-3.1-flash-lite ran out
+// before it answered. Anything past the character caps is cut anyway.
+export const MAX_TOKENS: number = 4_000;
 
 // The page's limits, per server process. The CLI has none.
 export const ASKS_PER_MINUTE: number = 2;
@@ -70,14 +74,17 @@ export interface ModelAnswer {
   ms: number;
 }
 
-// Every model failed. limited is true when each one answered 429.
+// Every model failed. The message says what each one did, in PayOnce's words.
+// limited is true when each one answered 429.
 export class ExplainError extends Error {
   readonly limited: boolean;
+  readonly tries: ModelTry[];
 
-  constructor(message: string, limited: boolean) {
-    super(message);
+  constructor(tries: ModelTry[], limited: boolean) {
+    super(`No model gave an explanation: ${triesText(tries)}`);
     this.name = "ExplainError";
     this.limited = limited;
+    this.tries = tries;
   }
 }
 
@@ -95,10 +102,10 @@ function toAnswer(content: string): { explanation: string; notInFacts: string } 
   try {
     parsed = JSON.parse(content);
   } catch {
-    throw new Error("The model's answer was not JSON");
+    throw new ModelAnswerError("unusable", "The model's answer was not JSON");
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error("The model's answer was not an object");
+    throw new ModelAnswerError("unusable", "The model's answer was not an object");
   }
   const fields: Record<string, unknown> = parsed as Record<string, unknown>;
   const explanation: unknown = fields["explanation"];
@@ -108,10 +115,10 @@ function toAnswer(content: string): { explanation: string; notInFacts: string } 
     typeof notInFacts !== "string" ||
     Object.keys(fields).some((key: string): boolean => key !== "explanation" && key !== "notInFacts")
   ) {
-    throw new Error("The model's answer did not have exactly the explanation and notInFacts");
+    throw new ModelAnswerError("unusable", "The model's answer did not have exactly the explanation and notInFacts");
   }
   if (explanation.trim() === "") {
-    throw new Error("The model's explanation was empty");
+    throw new ModelAnswerError("unusable", "The model's explanation was empty");
   }
   return { explanation, notInFacts };
 }
@@ -188,20 +195,23 @@ export class Explainer {
     try {
       choice = (JSON.parse(text) as ChatResponse).choices?.[0];
     } catch {
-      throw new Error("The model service's answer was not JSON");
+      throw new ModelAnswerError("unusable", "The model service's answer was not JSON");
     }
     const content: string | null | undefined = choice?.message?.content;
     if (choice?.finish_reason !== "stop" || typeof content !== "string") {
-      throw new Error(`The model gave no complete answer (${choice?.finish_reason ?? "no finish reason"})`);
+      throw choice?.finish_reason === "length"
+        ? new ModelAnswerError("cut", "The model stopped on its token budget before the answer was complete")
+        : new ModelAnswerError("incomplete", "The model gave no complete answer");
     }
     return content;
   }
 
   // The first model's answer. Each model gets one request. A refused key stops at
-  // once, because another model will not take it either.
+  // once, because another model will not take it either. What the service said
+  // goes to the console only, with the key cut out.
   async explain(facts: WhyFacts): Promise<ModelAnswer> {
     const prompt: string = promptOf(facts);
-    let failure: string = "No model is set up";
+    const tries: ModelTry[] = [];
     let limited: boolean = true;
     for (const model of this.models) {
       const started: number = Date.now();
@@ -215,18 +225,16 @@ export class Explainer {
           ms: Date.now() - started,
         };
       } catch (error: unknown) {
-        failure = this.redact(error instanceof Error ? error.message : String(error));
+        tries.push(tryOf(model, error));
+        const detail: string = this.redact(error instanceof Error ? error.message : String(error));
         limited = limited && error instanceof ModelError && error.status === 429;
-        sayWarning(`  why      ${model} gave no answer after ${Date.now() - started} ms: ${printable(failure)}`);
+        sayWarning(`  why      ${model} gave no answer after ${Date.now() - started} ms: ${printable(detail)}`);
         if (keyRefused(error)) {
           break;
         }
       }
     }
-    throw new ExplainError(
-      `No model gave an explanation: ${failure.replace(/\s+/g, " ").trim().slice(0, MAX_ERROR_LENGTH)}`,
-      limited,
-    );
+    throw new ExplainError(tries, limited && tries.length > 0);
   }
 }
 

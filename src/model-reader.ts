@@ -61,6 +61,124 @@ export class ModelError extends Error {
   }
 }
 
+// The service answered, but with nothing PayOnce could use: cut is an answer the
+// model stopped on its token budget, incomplete one it stopped for another reason
+// or with no finish reason, and unusable one that is not what was asked for.
+export class ModelAnswerError extends Error {
+  readonly failure: "cut" | "incomplete" | "unusable";
+
+  constructor(failure: "cut" | "incomplete" | "unusable", message: string) {
+    super(message);
+    this.name = "ModelAnswerError";
+    this.failure = failure;
+  }
+}
+
+// Why one model gave no answer PayOnce could use. Nothing the service wrote is
+// kept, so what a try says can go on the page, the timeline and the terminal.
+export type ModelFailure =
+  | "busy"
+  | "limited"
+  | "key"
+  | "refused"
+  | "service"
+  | "timeout"
+  | "cut"
+  | "incomplete"
+  | "unusable"
+  | "unreachable"
+  | "failed";
+
+export interface ModelTry {
+  model: string;
+  failure: ModelFailure;
+  // The status the service answered with, for the failures that have one.
+  status: number | null;
+}
+
+const TRY_WORDS: Record<ModelFailure, string> = {
+  busy: "was busy",
+  limited: "was over its request limit",
+  key: "refused the key",
+  refused: "refused the request",
+  service: "had an error on its side",
+  timeout: `timed out after ${REQUEST_TIMEOUT_MS / 1000} s`,
+  cut: "cut its answer short",
+  incomplete: "stopped before its answer was complete",
+  unusable: "gave an answer PayOnce could not use",
+  unreachable: "could not be reached",
+  failed: "gave no answer",
+};
+const WITH_STATUS: ReadonlySet<ModelFailure> = new Set<ModelFailure>(["busy", "limited", "key", "refused", "service"]);
+
+function finishFailure(reason: string | null | undefined): ModelAnswerError {
+  return reason === "length"
+    ? new ModelAnswerError("cut", "The model stopped on its token budget before the answer was complete")
+    : new ModelAnswerError("incomplete", "The model gave no complete answer");
+}
+
+// What a model's failure was, from the error its request ended with.
+export function tryOf(model: string, error: unknown): ModelTry {
+  if (error instanceof ModelError) {
+    const status: number = error.status;
+    const failure: ModelFailure =
+      status === 401 || status === 403
+        ? "key"
+        : status === 429
+          ? "limited"
+          : status === 503
+            ? "busy"
+            : status >= 500
+              ? "service"
+              : "refused";
+    return { model, failure, status };
+  }
+  if (error instanceof ModelAnswerError) {
+    return { model, failure: error.failure, status: null };
+  }
+  const name: string = error instanceof Error ? error.name : "";
+  if (name === "TimeoutError" || name === "AbortError") {
+    return { model, failure: "timeout", status: null };
+  }
+  // How fetch reports a connection that failed or broke off.
+  if (error instanceof TypeError && (error.message === "fetch failed" || error.message === "terminated")) {
+    return { model, failure: "unreachable", status: null };
+  }
+  return { model, failure: "failed", status: null };
+}
+
+// One try in PayOnce's words, such as "gemini-3.5-flash was busy (503)".
+export function tryText(attempt: ModelTry): string {
+  const status: string = attempt.status !== null && WITH_STATUS.has(attempt.failure) ? ` (${attempt.status})` : "";
+  return `${attempt.model} ${TRY_WORDS[attempt.failure]}${status}`;
+}
+
+// Every try in order, such as "gemini-3.5-flash was busy (503), then
+// gemini-3.1-flash-lite timed out after 8 s".
+export function triesText(tries: readonly ModelTry[]): string {
+  return tries.length === 0 ? "no model is set up" : tries.map(tryText).join(", then ");
+}
+
+// What tryText writes after the model's name, as a regular expression source, so
+// why-facts.ts can pass a line that holds tries without a copy of the words.
+export const TRY_WORDS_SOURCE: string = (Object.entries(TRY_WORDS) as [ModelFailure, string][])
+  .map(([failure, words]: [ModelFailure, string]): string =>
+    `${words.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}${WITH_STATUS.has(failure) ? " \\([0-9]{3}\\)" : ""}`,
+  )
+  .join("|");
+
+// Every model gave no answer PayOnce could use. The message holds PayOnce's words
+// only, so it can go on the timeline.
+export class ModelReadError extends Error {
+  readonly tries: ModelTry[];
+
+  constructor(tries: ModelTry[]) {
+    super(`The email reader could not read the email: ${triesText(tries)}`);
+    this.name = "ModelReadError";
+    this.tries = tries;
+  }
+}
+
 // A run this long that is part of the key, in any form below, counts as the key.
 const KEY_RUN: number = 20;
 
@@ -194,10 +312,10 @@ function toAnswers(content: string): Answers {
   try {
     parsed = JSON.parse(content);
   } catch {
-    throw new Error("The model's answer was not JSON");
+    throw new ModelAnswerError("unusable", "The model's answer was not JSON");
   }
   if (typeof parsed !== "object" || parsed === null) {
-    throw new Error("The model's answer was not an object");
+    throw new ModelAnswerError("unusable", "The model's answer was not an object");
   }
   const fields: Record<string, unknown> = parsed as Record<string, unknown>;
   const claimsNonReceipt: unknown = fields["claimsNonReceipt"];
@@ -208,7 +326,7 @@ function toAnswers(content: string): Answers {
     typeof asksForNewBankDetails !== "boolean" ||
     typeof asksNotToPay !== "boolean"
   ) {
-    throw new Error("The model's answer did not have the three findings");
+    throw new ModelAnswerError("unusable", "The model's answer did not have the three findings");
   }
   return { claimsNonReceipt, asksForNewBankDetails, asksNotToPay };
 }
@@ -268,35 +386,39 @@ export class ModelReader implements EmailReader {
       // Some services echo the key back in an error.
       throw new ModelError(response.status, redactKey(text, this.apiKey));
     }
-    const choice: ChatChoice | undefined = (JSON.parse(text) as ChatResponse).choices?.[0];
+    let choice: ChatChoice | undefined;
+    try {
+      choice = (JSON.parse(text) as ChatResponse).choices?.[0];
+    } catch {
+      throw new ModelAnswerError("unusable", "The model service's answer was not JSON");
+    }
     const content: string | null | undefined = choice?.message?.content;
     if (choice?.finish_reason !== "stop" || typeof content !== "string") {
-      throw new Error(
-        `The model gave no complete answer (${choice?.finish_reason ?? "no finish reason"})`,
-      );
+      throw finishFailure(choice?.finish_reason);
     }
     return content;
   }
 
-  // Returns the first model's answers, with the model that gave them. What fails
-  // goes to the console and, when every model fails, to the timeline, so the key
-  // is cut out of every error first, whatever part of an answer it came back in.
+  // Returns the first model's answers, with the model that gave them. What the
+  // service said goes to the console only, with the key cut out, whatever part of
+  // an answer it came back in. When every model fails, the error holds what each
+  // model did in PayOnce's words, which is what the timeline gets.
   private async ask(prompt: string): Promise<{ answers: Answers; model: string }> {
-    let failure: Error = new Error("No model is set up");
+    const tries: ModelTry[] = [];
     for (const model of this.models) {
       const started: number = Date.now();
       try {
         return { answers: toAnswers(await this.complete(model, prompt)), model };
       } catch (error: unknown) {
-        failure = new Error(redactKey(error instanceof Error ? error.message : String(error), this.apiKey));
-        // Kept off the timeline unless every model fails, but worth seeing.
-        sayWarning(`  reader   ${model} gave no answer after ${Date.now() - started} ms: ${failure.message}`);
+        tries.push(tryOf(model, error));
+        const detail: string = redactKey(error instanceof Error ? error.message : String(error), this.apiKey);
+        sayWarning(`  reader   ${model} gave no answer after ${Date.now() - started} ms: ${detail}`);
         if (keyRefused(error)) {
           break;
         }
       }
     }
-    throw failure;
+    throw new ModelReadError(tries);
   }
 
   async read(emails: SupplierEmail[]): Promise<EmailFindings> {

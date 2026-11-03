@@ -70,6 +70,7 @@ import {
   type OutsidePayout,
   type RunRow,
 } from "./ledger.js";
+import { TRY_WORDS_SOURCE } from "./model-reader.js";
 import { formatMoney } from "./money.js";
 import { RAIL_FAILURE_CODES } from "./outages.js";
 import { currencyFloor, debitCurrency, floorFor, type ReservePolicy } from "./reserve.js";
@@ -352,6 +353,9 @@ const BARRED_WHY: ReadonlySet<string> = new Set<string>([
   "recorded the callback for the new bank details",
 ]);
 const CHANGED_FIELD: string = "payment|amount|currency|beneficiary|exchange rate|arrival estimate|evidence";
+// A model's name as the reader and the explainer write it, from READER_MODEL.
+const MODEL_PATTERN: RegExp = /^[A-Za-z0-9._:/-]{1,80}$/;
+const MODEL_TRY: RegExp = new RegExp(`^(\\S+) (${TRY_WORDS_SOURCE})$`);
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -1279,6 +1283,24 @@ const LINE_RULES: readonly LineRule[] = [
   ),
   keep([WARNING], "Upload [0-9]{1,9} has the same Message-ID as upload [0-9]{1,9}, which says something different"),
 
+  // A reader failure: what each model did in PayOnce's words, with a model named
+  // only when PayOnce is set up with it.
+  rule(
+    [EMAIL],
+    "The email reader could not read a supplier email(?:: ([\\s\\S]+?))?\\. PayOnce reads it again on its next look(, in about a minute| at this invoice)",
+    (match: RegExpExecArray, builder: FactsBuilder): string => {
+      const tries: (string | null)[] =
+        match[1] === undefined
+          ? []
+          : match[1].split(", then ").map((part: string): string | null => {
+              const tried: RegExpExecArray | null = MODEL_TRY.exec(part);
+              return tried === null ? null : `${builder.model(tried[1] ?? "")} ${tried[2] ?? ""}`;
+            });
+      const said: string = tries.length === 0 || tries.includes(null) ? "" : `: ${tries.join(", then ")}`;
+      return `The email reader could not read a supplier email${said}. PayOnce reads it again on its next look${match[2] ?? ""}`;
+    },
+  ),
+
   // Errors PayOnce writes in its own words, each given in fixed words that hold
   // only a currency, a kind of payment, an outage's number and rail or an alias.
   // Any other error line is a stand-in.
@@ -1366,8 +1388,14 @@ class FactsBuilder {
     ledger: Ledger,
     private readonly obligation: Obligation,
     known: string[],
+    private readonly readers: readonly string[],
   ) {
     this.aliases = new Aliases(ledger, obligation.invoiceId, known);
+  }
+
+  // A model as a line names it: only one PayOnce is set up with, as for readBy.
+  model(name: string): string {
+    return this.readers.includes(name) && MODEL_PATTERN.test(name) ? name : "a model";
   }
 
   // A reason in PayOnce's words with its slots aliased, or UNPASSED_REASON.
@@ -1705,7 +1733,7 @@ export function whyFacts(
       ...(obligation.startedBy === null ? [] : [obligation.startedBy]),
       ...(obligation.rejectedBy === null ? [] : [obligation.rejectedBy]),
     ];
-    const builder: FactsBuilder = new FactsBuilder(ledger, obligation, known);
+    const builder: FactsBuilder = new FactsBuilder(ledger, obligation, known, settings.readers);
     const aliases: Aliases = builder.aliases;
     const events: LedgerEvent[] = ledger.events(invoiceId);
     // == null: a ledger no newer code has opened has no run_row_id column at all.

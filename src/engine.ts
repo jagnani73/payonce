@@ -131,10 +131,11 @@ import {
   type ScannedObligation,
   type Signoff,
 } from "./ledger.js";
+import { ModelReadError, triesText } from "./model-reader.js";
 import { formatMoney, readMinor, toMajor, toMinor } from "./money.js";
 import { holdLine, railFailureSeen, waitingLine } from "./outages.js";
 import { sendAttempt, syncTransfer, wasRejected, type Decide } from "./payments.js";
-import { oneLine, say, sayError, shownReference } from "./printable.js";
+import { oneLine, say, sayError, sayWarning, shownReference } from "./printable.js";
 import { debitCurrency, floorFor, type ReservePolicy } from "./reserve.js";
 
 // What the reader found. unverifiedSenders is kept for display; the policy works
@@ -825,8 +826,9 @@ export function deliver(
 // ever add caution: each read is ORed with what earlier reads found, so a later
 // email cannot clear a finding. If the reader fails, the thread is marked unread
 // so the policy escalates, and the count stays at the emails read so far, so the
-// next look reads from the one that failed.
-async function readNewEmails(engine: Engine, obligation: Obligation): Promise<void> {
+// next look reads from the one that failed. held is true for an invoice held
+// before paying, whose next look after a failure comes a minute later.
+async function readNewEmails(engine: Engine, obligation: Obligation, held: boolean): Promise<void> {
   const invoiceId: string = obligation.invoiceId;
   const thread: SupplierEmail[] = engine.ledger.emails(invoiceId);
   const stored: string | undefined = engine.ledger.findings(invoiceId);
@@ -863,12 +865,10 @@ async function readNewEmails(engine: Engine, obligation: Obligation): Promise<vo
       emailsRead += 1;
     } catch (error: unknown) {
       unread = true;
-      note(
-        engine.ledger,
-        invoiceId,
-        "error",
-        `Supplier emails could not be read: ${messageOf(error)}`,
-      );
+      note(engine.ledger, invoiceId, "email", readFailureLine(error, held));
+      if (!(error instanceof ModelReadError)) {
+        sayWarning(`  reader   ${invoiceId}: ${messageOf(error)}`);
+      }
       break;
     }
   }
@@ -898,6 +898,13 @@ async function readNewEmails(engine: Engine, obligation: Obligation): Promise<vo
     "email",
     count === 0 ? soFar : said === findings.summary ? `Read ${which}: ${said}` : `Read ${which}: ${said}. ${soFar}`,
   );
+}
+
+// A reader failure in PayOnce's words: what each model did, and never what the
+// service wrote, which the reader printed to the console with the key cut out.
+function readFailureLine(error: unknown, held: boolean): string {
+  const tries: string = error instanceof ModelReadError ? `: ${triesText(error.tries)}` : "";
+  return `The email reader could not read a supplier email${tries}. PayOnce reads it again on its next look${held ? ", in about a minute" : " at this invoice"}`;
 }
 
 // The floor as the cost line names it.
@@ -2908,7 +2915,7 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
   // A held invoice reads its emails like any other, and its terms carry what
   // they say. Until every email is read, nothing is offered for approval, and
   // the look comes again a minute later.
-  await readNewEmails(engine, obligation);
+  await readNewEmails(engine, obligation, true);
   const emails: SupplierEmail[] = engine.ledger.emails(invoiceId);
   const { findings, stored }: { findings: StoredFindings; stored: boolean } = storedFindings(
     engine.ledger,
@@ -3669,7 +3676,7 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
     return heldBeforePaying(engine.ledger, obligation) ? continueHeld(engine, obligation) : null;
   }
   const outside: OutsidePayout[] = await syncOutsidePayouts(engine, invoiceId);
-  await readNewEmails(engine, obligation);
+  await readNewEmails(engine, obligation, false);
   // Closed already, by the policy or by a person, so nothing is decided or sent,
   // whatever its payments show now. A payment found late that may still pay it
   // reopened it when it was recorded.
