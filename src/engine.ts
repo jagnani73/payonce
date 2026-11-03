@@ -4,7 +4,7 @@ import {
   getBankDetails,
   type BeneficiaryRecord,
 } from "./airwallex/beneficiaries.js";
-import type { AirwallexClient } from "./airwallex/client.js";
+import { AirwallexError, AirwallexUnreachableError, type AirwallexClient } from "./airwallex/client.js";
 import { createQuote, type Quote } from "./airwallex/fx.js";
 import {
   findTransferByRequestId,
@@ -280,9 +280,15 @@ export function note(
 }
 
 // Puts a failure on the incident's timeline. It must not throw, because it runs
-// from error handlers.
+// from error handlers. An Airwallex error says all there is in its message and
+// repeats on every look while Airwallex is down, so it prints as one line; any
+// other error prints with its stack trace.
 export function noteError(ledger: Ledger, invoiceId: string, error: unknown): void {
-  sayError(error);
+  sayError(
+    error instanceof AirwallexError || error instanceof AirwallexUnreachableError
+      ? `  error    ${invoiceId}: ${messageOf(error)}`
+      : error,
+  );
   try {
     note(ledger, invoiceId, "error", messageOf(error));
   } catch (inner: unknown) {

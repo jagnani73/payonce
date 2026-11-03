@@ -20,6 +20,16 @@ import { sweep } from "./sweep.js";
 // A release that failed, for example because Airwallex could not be read, is
 // tried again this much later, not on every check.
 const RETRY_RELEASE_MS: number = 60_000;
+// A read failure that keeps repeating is printed again at most this often.
+const REPEAT_PRINT_MS: number = 60_000;
+
+interface RepeatedFailure {
+  printedAt: number;
+  // Reads that failed with it since it was last printed.
+  since: number;
+  // The check that last saw it.
+  seenAt: number;
+}
 
 // The fallback for webhooks. It checks every payment the ledger still shows in
 // flight, PayOnce's own and those for its invoices sent outside it, and wakes the
@@ -42,6 +52,7 @@ export class Watcher {
   private lastSweep: number = 0;
   private sweepRequested: boolean = false;
   private readonly releaseTriedAt: Map<number, number> = new Map<number, number>();
+  private readonly failures: Map<string, RepeatedFailure> = new Map<string, RepeatedFailure>();
   // When the last check that read every payment with the bank without an error
   // started. A state the ledger still shows is then at most that old, because a
   // change wakes the invoice. A check where any read failed leaves it as it was,
@@ -90,6 +101,34 @@ export class Watcher {
     this.intervalMs = intervalMs;
     if (this.timer !== null) {
       this.start();
+    }
+  }
+
+  // While Airwallex cannot be read, every transfer fails on every check, every
+  // few seconds. A failure's message is printed the first time, then at most once
+  // a minute while it repeats, with how many reads failed with it meanwhile. One
+  // that stops repeating is forgotten, so it prints again if it comes back.
+  private readFailed(transferId: string, message: string, now: number): void {
+    const seen: RepeatedFailure | undefined = this.failures.get(message);
+    if (seen === undefined) {
+      sayWarning(`  watcher  ${transferId}: ${message}`);
+      this.failures.set(message, { printedAt: now, since: 0, seenAt: now });
+      return;
+    }
+    seen.since += 1;
+    seen.seenAt = now;
+    if (now - seen.printedAt >= REPEAT_PRINT_MS) {
+      sayWarning(`  watcher  ${seen.since} more ${seen.since === 1 ? "read" : "reads"} failed: ${message}`);
+      seen.printedAt = now;
+      seen.since = 0;
+    }
+  }
+
+  private failingNow(now: number): void {
+    for (const [message, seen] of this.failures) {
+      if (seen.seenAt < now) {
+        this.failures.delete(message);
+      }
     }
   }
 
@@ -182,15 +221,14 @@ export class Watcher {
           }
         } catch (error: unknown) {
           readFailed = true;
-          sayWarning(
-            `  watcher  ${transferId}: ${error instanceof Error ? error.message : String(error)}`,
-          );
+          this.readFailed(transferId, error instanceof Error ? error.message : String(error), now);
         }
       }
     }
     if (!readFailed) {
       this.lastCheckedAt = now;
     }
+    this.failingNow(now);
     if (this.release !== null) {
       for (const runId of this.engine.ledger.approvedRuns()) {
         const tried: number = this.releaseTriedAt.get(runId) ?? Number.NEGATIVE_INFINITY;
