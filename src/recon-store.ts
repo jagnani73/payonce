@@ -1130,6 +1130,15 @@ export class ReconStore {
     );
   }
 
+  // The latest check against Airwallex that finished, whatever came of it. An
+  // offline match after it reads nothing, so it never stands in for it.
+  latestLive(): ReconRun | undefined {
+    const row: RunRow | undefined = this.db
+      .prepare("SELECT * FROM recon_runs WHERE mode = 'live' AND outcome IS NOT NULL ORDER BY id DESC LIMIT 1")
+      .get() as unknown as RunRow | undefined;
+    return row === undefined ? undefined : toRun(row);
+  }
+
   lastCommitted(): ReconRun | undefined {
     const row: RunRow | undefined = this.db
       .prepare("SELECT * FROM recon_runs WHERE outcome = 'committed' ORDER BY id DESC LIMIT 1")

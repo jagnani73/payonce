@@ -735,6 +735,14 @@ export function kindCounts(totals: KindTotal[]): KindCount[] {
   }));
 }
 
+// The latest check against Airwallex that finished, from the ledger alone, or null
+// when none has. pnpm reconcile show judges a failure by it, so an offline match
+// recorded after a failed check does not hide that Airwallex was not read.
+export function latestLiveRun(ledger: Ledger): RunView | null {
+  const run: ReconRun | undefined = ledger.recon().latestLive();
+  return run === undefined ? null : runView(run);
+}
+
 // The report from the ledger alone: the last run, each wallet, what waits on a
 // person, what waits on time and what people explained.
 export function reconReport(ledger: Ledger, runner: ReconRunner | null = null): ReconReport {

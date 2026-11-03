@@ -11,6 +11,7 @@ import {
   explainBreaks,
   ExplainInputError,
   explainItems,
+  latestLiveRun,
   reconcileOffline,
   reconcileOnce,
   reconReport,
@@ -102,7 +103,9 @@ function printBreak(item: BreakView, withAction: boolean): void {
   }
 }
 
-function printReport(report: ReconReport, currency: string | null): void {
+// failedLive is a failed check against Airwallex that an offline match recorded
+// after it, which show names as well.
+function printReport(report: ReconReport, currency: string | null, failedLive: RunView | null = null): void {
   say(`Reconciliation of each wallet since ${report.startedAt}, when the ledger started`);
   if (report.lastRun === null) {
     say("No run is recorded yet. Run pnpm reconcile to read Airwallex");
@@ -111,6 +114,9 @@ function printReport(report: ReconReport, currency: string | null): void {
   }
   if (report.lastProblem !== null) {
     say(`Latest: ${runLine(report.lastProblem)}`);
+  }
+  if (failedLive !== null && failedLive.id !== report.lastProblem?.id) {
+    say(`Latest check against Airwallex: ${runLine(failedLive)}`);
   }
   const wallets: WalletSummary[] = report.wallets.filter(
     (wallet: WalletSummary): boolean => currency === null || wallet.currency === currency,
@@ -269,7 +275,9 @@ function runOffline(): void {
 }
 
 // Ledger only, read-only, so showing the report never creates or upgrades a file.
-// It exits by the check's rule, on the stored report and the latest run on file.
+// It exits by the check's rule, on the stored report and the latest run on file,
+// and a failed check against Airwallex counts even when an offline match came
+// after it, since that match read nothing.
 function show(raw: string | undefined): void {
   loadEnvIfPresent();
   const currency: string | null = raw === undefined ? null : raw.trim().toUpperCase();
@@ -287,8 +295,10 @@ function show(raw: string | undefined): void {
     return;
   }
   const report: ReconReport = reconReport(ledger);
-  printReport(report, currency);
-  process.exitCode = exitFor(report, report.lastProblem?.outcome ?? null);
+  const live: RunView | null = latestLiveRun(ledger);
+  const failedLive: RunView | null = live?.outcome === "failed" ? live : null;
+  printReport(report, currency, failedLive);
+  process.exitCode = exitFor(report, failedLive !== null ? "failed" : (report.lastProblem?.outcome ?? null));
 }
 
 function idsOf(raw: string): number[] | null {
