@@ -5291,7 +5291,15 @@ function countText(count, one, many) {
   return `${count} ${count === 1 ? one : many}`;
 }
 
+// A time in a sentence, with the zone named as on the rest of the view: "at 17:31
+// GMT+5:30" today, and "on Oct 28, 21:33 GMT+5:30" on another day.
 function whenNode(value) {
+  const time = zonedTime(value);
+  return time === null ? "at a time not on file" : [isToday(parseDate(value)) ? "at " : "on ", time];
+}
+
+// The same with no word before it, after "Since".
+function sinceNode(value) {
   return zonedTime(value) ?? "a time not on file";
 }
 
@@ -5420,7 +5428,7 @@ function supplierHeader(detail) {
         stored === null
           ? "PayOnce has not stored what this record holds. It reads the record again before every payment."
           : [
-              "PayOnce last stored what this record held on ",
+              "PayOnce last stored what this record held ",
               whenNode(stored.at),
               stored.invoiceId !== null
                 ? [" (", invoiceLink(stored.invoiceId), ")"]
@@ -5447,7 +5455,7 @@ function cautionNode(caution) {
     icon(info ? "other" : "warning"),
     h("p", { class: "caution__title" }, caution.text),
     links.length > 0 && h("p", { class: "supplier-caution__links" }, joinedNodes(links)),
-    caution.since !== null && h("p", { class: "supplier-caution__links" }, "Since ", whenNode(caution.since)),
+    caution.since !== null && h("p", { class: "supplier-caution__links" }, "Since ", sinceNode(caution.since)),
   );
 }
 
@@ -5490,7 +5498,7 @@ function accountNode(account) {
       h(
         "p",
         null,
-        `Callback ${verified.callbackId} from ${whyText(verified.calledBy)} on `,
+        `Callback ${verified.callbackId} from ${whyText(verified.calledBy)} `,
         whenNode(verified.calledAt),
         " (",
         invoiceLink(verified.invoiceId),
@@ -5512,7 +5520,8 @@ const OLD_DETAILS = "(details from before PayOnce kept them)";
 function paymentNode(payment) {
   const amountKnown = typeof payment.amountMinor === "number";
   const timeKnown = parseDate(payment.sentAt) !== null;
-  const old = !amountKnown || payment.account === null || !timeKnown;
+  // A payment with no transfer was never sent, so it has no account or send time.
+  const old = payment.check !== "not-sent" && (!amountKnown || payment.account === null || !timeKnown);
   const parts = [
     payment.bankStatus !== null ? payment.bankStatus : null,
     payment.failureCode !== null ? `${payment.failureCode} (${payment.failureWords ?? "a code PayOnce has no words for"})` : null,
@@ -5637,7 +5646,7 @@ function bankChangeNode(change) {
     h(
       "p",
       null,
-      `By ${whyText(change.calledBy)} to the number ending ${change.numberCalledLast4 ?? "not on file"}, on `,
+      `By ${whyText(change.calledBy)} to the number ending ${change.numberCalledLast4 ?? "not on file"} `,
       whenNode(change.calledAt),
       " (",
       invoiceLink(change.invoiceId),
@@ -5760,7 +5769,7 @@ function supplierOutages(detail) {
           "p",
           { class: "supplier-caution__links" },
           "Since ",
-          whenNode(outage.declaredAt),
+          sinceNode(outage.declaredAt),
           ". It holds ",
           joinedNodes(outage.invoices.map(invoiceLink)),
           ". ",
