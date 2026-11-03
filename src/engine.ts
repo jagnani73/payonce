@@ -1388,6 +1388,11 @@ function close(engine: Engine, invoiceId: string, from: ObligationState): boolea
 // Null when it waits for news or for a person.
 type NextLook = number | null;
 
+// What an invoice paid by a payment that went to other bank details than it was
+// decided or approved for waits on.
+const MISDIRECTED_WAITING_LINE: string =
+  "Waiting on a person to check the bank details a payment went to and close the incident. PayOnce will not send another payment";
+
 // What a look does when the ledger refused its close. A payment that went out at a
 // rate nobody approved waits for a person, and so does an invoice the ledger no
 // longer shows as paid once. By itself PayOnce never closes an invoice beside a
@@ -1398,6 +1403,18 @@ type NextLook = number | null;
 // that may pay it a second time, or changed the invoice, since this look read it,
 // and the next look, at once, decides as the ledger now stands.
 function closeRefused(engine: Engine, invoiceId: string): NextLook {
+  // A payment that went to other bank details than it was meant for is checked by
+  // a person, as one at a rate nobody approved is. checkAccount escalated it.
+  if (engine.ledger.attempts(invoiceId).some((attempt: Attempt): boolean => attempt.misdirected && liveAtBank(attempt))) {
+    note(
+      engine.ledger,
+      invoiceId,
+      "approval",
+      MISDIRECTED_WAITING_LINE,
+      "waiting",
+    );
+    return null;
+  }
   if (
     engine.ledger
       .attempts(invoiceId)

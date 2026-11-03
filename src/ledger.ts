@@ -512,11 +512,13 @@ export interface Attempt {
   // found payout's, and on one from before it was kept that no approval or pay
   // run row named.
   accountKey: string | null;
-  // The routeKey of those details: where the money goes. Its transfer and every
-  // retry are checked against it, so a change to a field that does not say where
-  // money goes is not another account. Null on attempts from before it was kept
-  // that nothing on file gave it for, which are checked by accountKey instead.
+  // The routeKey of those details: where the money goes. Null on attempts from
+  // before it was kept that nothing on file gave it for, which are compared by
+  // accountKey instead.
   routeKey: string | null;
+  // True when its transfer went to other details than accountKey, or showed none
+  // (checkAccount). Only a person closes an invoice paid by one.
+  misdirected: boolean;
 }
 
 // An invoice as the money committed to payments is worked out from it.
@@ -1273,6 +1275,7 @@ interface AttemptRow {
   mismatched_currency: string | null;
   account_key: string | null;
   route_key: string | null;
+  misdirected: number;
 }
 
 export class DuplicatePaymentError extends Error {
@@ -1451,6 +1454,7 @@ function toAttempt(row: AttemptRow): Attempt {
     mismatchedCurrency: row.mismatched_currency ?? null,
     accountKey: row.account_key ?? null,
     routeKey: row.route_key ?? null,
+    misdirected: row.misdirected === 1,
   };
 }
 
@@ -3457,6 +3461,7 @@ export class Ledger {
       mismatchedCurrency: null,
       accountKey: key,
       routeKey: key === null ? null : route,
+      misdirected: false,
     };
   }
 
@@ -4837,8 +4842,9 @@ export class Ledger {
 
   // Settles only when the invoice has been paid once by PayOnce or, when a
   // person closes it, by a payout sent outside PayOnce or a transfer under one of
-  // its request ids that does not match it. A payment that went out
-  // at a rate nobody approved leaves the invoice for a person to close, unless it
+  // its request ids that does not match it. A payment that went out at a rate
+  // nobody approved, or to other bank details than it was decided or approved
+  // for (misdirected), leaves the invoice for a person to close, unless it
   // failed. So does a transfer found late that may have paid it a second time
   // (lateBesideLive, the test paidTwice makes), and by itself PayOnce never closes
   // one while a payout sent outside PayOnce is live or a mismatched transfer no
@@ -4866,7 +4872,7 @@ export class Ledger {
       if (
         !byPerson &&
         (attempts.some(
-          (attempt: Attempt): boolean => attempt.rateMismatch !== null && liveAtBank(attempt),
+          (attempt: Attempt): boolean => (attempt.rateMismatch !== null || attempt.misdirected) && liveAtBank(attempt),
         ) ||
           lateBesideLive(attempts, this.outsidePayouts(invoiceId)) !== undefined)
       ) {

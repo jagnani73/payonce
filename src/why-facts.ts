@@ -871,6 +871,7 @@ const FIXED_LINES: ReadonlyMap<string, readonly Source[]> = new Map<string, read
       "Waiting on a person. A payout sent outside PayOnce may also pay this invoice, which PayOnce has paid once. Check it with the supplier and close the incident. PayOnce will not send a second payment",
       "Waiting on a person to check with the supplier and close the incident. PayOnce will not send a second payment",
       "Waiting on a person to check the exchange rate a payment went out at and close the incident. PayOnce will not send another payment",
+      "Waiting on a person to check the bank details a payment went to and close the incident. PayOnce will not send another payment",
       "Waiting on a person. The bank details on file are not the ones the original went to, and no phone number is on file to verify them by calling the supplier back",
       "Waiting on a person. Supplier emails are on file that PayOnce could not read yet, so it asks nobody to approve paying this invoice. It tries reading them again in a minute",
       "Waiting on a person. A supplier email arrived while PayOnce read the others, so it asks nobody to approve paying this invoice until it has read that one too",
