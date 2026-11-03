@@ -623,7 +623,19 @@ export function match(input: MatchInput): MatchResult {
     const credits: Movement[] = main.filter((movement: Movement): boolean => (movement.amountMinor ?? 0) > 0);
     const failed: boolean = transfer.status !== null && FAILED.has(transfer.status);
     const wallet: string = transfer.debitCurrency ?? debits[0]?.currency ?? "";
-    if (heldTransfers.has(transfer.transferId) || heldWallets.has(wallet) || heldWallets.has("")) {
+    // A transfer from a wallet in a currency without two decimals, or into one,
+    // which a refund may come back in, is not reconciled, as that wallet's
+    // movements are not: its movements were set aside above, so no break about it
+    // could ever clear. Its wallet reads as not reconciled.
+    const notReconciled = (currency: string | null): boolean =>
+      currency !== null && currency !== "" && !twoDecimal(currency);
+    if (
+      heldTransfers.has(transfer.transferId) ||
+      heldWallets.has(wallet) ||
+      heldWallets.has("") ||
+      notReconciled(wallet) ||
+      notReconciled(transfer.transferCurrency)
+    ) {
       for (const kind of TRANSFER_KINDS) {
         unchecked.add(`${kind}:${transfer.transferId}`);
       }
