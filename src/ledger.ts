@@ -621,9 +621,9 @@ export interface OutsidePayout extends PayoutMoney {
   // The bank's short reference.
   reference: string;
   state: PayoutState;
-  // Whether it pays its invoice, as the last look found (payoutVerdict): null
-  // until a look has checked it, and when PayOnce could not tell. checked is
-  // false until this code has read the payout from Airwallex.
+  // Whether it pays its invoice, as the last look found (payoutVerdict): false
+  // when it does not or PayOnce could not tell, null until a look has judged it.
+  // checked is false until this code has read the payout from Airwallex.
   pays?: boolean | null;
   checked?: boolean;
 }
@@ -1227,8 +1227,8 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     // before it was kept, which the next look reads once, a paid one included.
     checked_at: "TEXT",
     // 1 when the last look found the payout pays its invoice, 0 when it found it
-    // does not, and null until a look has checked it or when it could not tell,
-    // which counts as not paying.
+    // does not or could not tell, and null until a look has judged it, which
+    // counts as not paying too.
     pays: "INTEGER",
   },
 };
@@ -3900,10 +3900,13 @@ export class Ledger {
       );
   }
 
-  // Keeps whether a payout sent outside PayOnce pays its invoice, as a look found
-  // it (payoutVerdict). Writes only a change.
-  setPayoutVerdict(transferId: string, pays: boolean | null): void {
-    const value: number | null = pays === null ? null : pays ? 1 : 0;
+  // Keeps whether a payout sent outside PayOnce pays its invoice, as a look just
+  // worked it out (payoutVerdict), in one conditional statement, so the stored
+  // verdict always ends as this one whatever another process wrote meanwhile.
+  // Every test that lets a payout count as paying reads it from the row when it
+  // decides (payoutPays, BLOCKING_OUTSIDE_PAYOUT).
+  setPayoutVerdict(transferId: string, pays: boolean): void {
+    const value: number = pays ? 1 : 0;
     this.db
       .prepare("UPDATE outside_payouts SET pays = ? WHERE transfer_id = ? AND pays IS NOT ?")
       .run(value, transferId, value);

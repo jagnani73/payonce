@@ -763,8 +763,11 @@ async function judgePayouts(engine: Engine, invoiceId: string): Promise<void> {
     await findBeneficiary(engine.client, obligation.beneficiaryId)
   )?.beneficiary?.bank_details;
   const route: string | null = payingRoute(engine.ledger, obligation, record);
+  // Always written, never decided from the row read above: another process may
+  // have changed the stored verdict since, and it must end as the one just
+  // worked out. One PayOnce could not work out is written as not paying.
   for (const payout of paid) {
-    engine.ledger.setPayoutVerdict(payout.transferId, payoutVerdict(obligation, payout, route));
+    engine.ledger.setPayoutVerdict(payout.transferId, payoutVerdict(obligation, payout, route) === true);
   }
 }
 
@@ -1812,10 +1815,11 @@ function paidOutsideCause(engine: Engine, invoiceId: string, paidBy: OutsidePayo
 // A paid payout that names the invoice but does not pay it (payoutPays): another
 // amount, currency or account, or one PayOnce could not check. Nothing more is
 // sent beside it, and a person decides.
-function namesOnlyCause(engine: Engine, invoiceId: string, namedBy: OutsidePayout): NeverSentCause {
+function namesOnlyCause(engine: Engine, obligation: Obligation, namedBy: OutsidePayout): NeverSentCause {
+  const invoiceId: string = obligation.invoiceId;
   return {
     payment:
-      namedBy.pays === false
+      payoutVerdict(obligation, namedBy, null) !== null
         ? `payout ${namedBy.reference} sent outside PayOnce names this invoice and is paid, but does not match its amount, currency or account`
         : `payout ${namedBy.reference} sent outside PayOnce names this invoice and is paid, but PayOnce could not check its amount, currency or account`,
     then: "a person checks it, and can close the invoice without paying",
@@ -3556,7 +3560,7 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
       }
       const namedBy: OutsidePayout | undefined = tied.namesOnly[0];
       if (namedBy !== undefined) {
-        return failNeverSent(engine, obligation, attempt, namesOnlyCause(engine, invoiceId, namedBy));
+        return failNeverSent(engine, obligation, attempt, namesOnlyCause(engine, obligation, namedBy));
       }
       if (anyLive(outside)) {
         return holdRetryForOutsidePayout(engine, invoiceId, attempt);
@@ -3803,13 +3807,15 @@ export interface NamingPayout {
   checked: boolean;
 }
 
-function namingPayout(payout: OutsidePayout): NamingPayout {
+// checked is whether PayOnce could tell from what it read that the payout does
+// not pay the invoice (payoutVerdict gives a verdict whatever the account).
+function namingPayout(obligation: Obligation, payout: OutsidePayout): NamingPayout {
   return {
     reference: payout.reference,
     amountMinor: payout.deliveredMinor ?? null,
     currency: payout.deliveredCurrency ?? null,
     ending: payout.sentEnding ?? null,
-    checked: payout.pays === false,
+    checked: payoutVerdict(obligation, payout, null) !== null,
   };
 }
 
@@ -3873,7 +3879,9 @@ export function pendingClose(
       : emailEvidence(storedFindings(ledger, invoiceId, onFile).findings.summary, onFile, obligation.supplierDomain);
   const covered: CoveredTransfer[] = coveredByClose(ledger, invoiceId);
   const paying: { pays: OutsidePayout[]; namesOnly: OutsidePayout[] } = ledger.payingPayouts(invoiceId);
-  const namesOnly: NamingPayout[] = paying.namesOnly.map(namingPayout);
+  const namesOnly: NamingPayout[] = paying.namesOnly.map(
+    (payout: OutsidePayout): NamingPayout => namingPayout(obligation, payout),
+  );
   if (ledger.paidOnce(invoiceId)) {
     const paid: Attempt | undefined = ledger
       .attempts(invoiceId)
