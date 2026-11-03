@@ -3491,14 +3491,17 @@ function draftWarnings(draft) {
   return warnings;
 }
 
+// Every step the draft went through, in order: a copy stays named once it is
+// marked sent or dismissed.
 function draftWho(draft) {
+  const drafted = `Drafted by ${whyText(draft.createdBy)}${draft.copiedBy ? `, copied by ${whyText(draft.copiedBy)}` : ""}.`;
   if (draft.state === "sent") {
-    return `Drafted by ${whyText(draft.createdBy)}. Marked sent by ${whyText(draft.sentBy)}.`;
+    return `${drafted} Marked sent by ${whyText(draft.sentBy)}.`;
   }
   if (draft.state === "dismissed") {
-    return `Drafted by ${whyText(draft.createdBy)}. Dismissed by ${whyText(draft.dismissedBy)}${whyText(draft.dismissNote) ? `: ${whyText(draft.dismissNote)}` : ""}.`;
+    return `${drafted} Dismissed by ${whyText(draft.dismissedBy)}${whyText(draft.dismissNote) ? `: ${whyText(draft.dismissNote)}` : ""}.`;
   }
-  return `Drafted by ${whyText(draft.createdBy)}${draft.copiedBy ? `, copied by ${whyText(draft.copiedBy)}` : ""}.`;
+  return drafted;
 }
 
 function buildDraft(invoiceId, draft) {
