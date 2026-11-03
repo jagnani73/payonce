@@ -291,7 +291,16 @@ class HttpError extends Error {
   }
 }
 
-const client: AirwallexClient = AirwallexClient.fromEnv();
+// A credential missing from .env, or an address that is not the sandbox, stops
+// the server in PayOnce's words and with no stack trace, before anything opens.
+const client: AirwallexClient = ((): AirwallexClient => {
+  try {
+    return AirwallexClient.fromEnv();
+  } catch (error: unknown) {
+    say(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+})();
 const ledger: Ledger = new Ledger(LEDGER_PATH);
 // A pay run row's original gets the row's sandbox outcome, kept in the ledger.
 const bank: SandboxBank = new SandboxBank(
