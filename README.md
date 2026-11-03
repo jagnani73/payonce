@@ -425,12 +425,13 @@ You need Node 24 (PayOnce uses its built-in `node:sqlite`) and pnpm 12. If you d
 
 ```bash
 pnpm install
+pnpm typecheck
 pnpm dev
 ```
 
-`pnpm dev` needs no credentials. It reads the sample supplier emails in `fixtures/emails/` and prints the findings and the decision for seven incidents.
+`pnpm typecheck` runs the TypeScript compiler as a check and writes no files. `pnpm dev` needs no credentials. It reads the sample supplier emails in `fixtures/emails/` and prints the findings and the decision for seven incidents.
 
-`pnpm ui` and the commands that send or read payments talk to the Airwallex sandbox. They, and `pnpm approve`, need a `.env` file in the project folder. Create one with your sandbox Client ID and API key and a list of approvers:
+`pnpm ui` and the commands that send or read payments talk to the Airwallex sandbox. They need a `.env` file in the project folder, and so does `pnpm approve` to record an approval. Without it, a command that needs a credential stops and names the missing setting. Create one with your sandbox Client ID and API key and a list of approvers:
 
 ```bash
 AWX_CLIENT_ID=your-client-id
@@ -442,7 +443,7 @@ WEBHOOKS=off
 
 Without `APPROVERS` nobody can approve, so every approval is refused. Without `RESERVE_FLOORS` no currency has a floor, and every failed payment goes to a person instead of being replaced. Set `WEBHOOKS=off` for the sandbox. Airwallex records webhook events there but never delivers them (see [Webhooks](#webhooks)), and while webhooks are on, the status check that finds every change runs every 15 seconds instead of every 3. Leave the line out to open the tunnel, for an Airwallex account that delivers webhooks.
 
-`.env.example` lists every setting with its default. Read it as a reference rather than copying it as it is. `NAME!` is a required secret: write it as `NAME=value`. `NAME=value` shows the default. A line such as `ALERT_FORMAT=slack|discord  # default: slack` lists the values a setting takes and which one is the default, so write just one of them. A name with no value is unset by default, and its comment says what unset means: most such settings are off until you set them, but leaving `WEBHOOKS` and `WEBHOOK_URL` unset opens a cloudflared tunnel. Put only the lines you change in `.env`. PayOnce talks only to the sandbox: `AWX_BASE_URL` must be `https://api.sandbox.airwallex.com`, the default, or `https://api-demo.airwallex.com`, and any other address stops it at start-up. The one exception is `https://sandbox.invalid`, a name that never resolves, for running the page with no Airwallex at all: every Airwallex call then fails as if Airwallex were down.
+`.env.example` lists every setting with its default. Read it as a reference rather than copying it as it is. `NAME!` is a required secret: write it as `NAME=value`. `NAME=value` shows the default. A line such as `ALERT_FORMAT=slack|discord  # default: slack` lists the values a setting takes and which one is the default, so write just one of them. A name with no value is unset by default, and its comment says what unset means: most such settings are off until you set them, but leaving `WEBHOOK_URL` unset, with `WEBHOOKS` at its default, opens a cloudflared tunnel. Put only the lines you change in `.env`. PayOnce talks only to the sandbox: `AWX_BASE_URL` must be `https://api.sandbox.airwallex.com`, the default, or `https://api-demo.airwallex.com`, and any other address stops it at start-up. The one exception is `https://sandbox.invalid`, a name that never resolves, for running the page with no Airwallex at all: every Airwallex call then fails as if Airwallex were down. When `pnpm ui` starts, it names the host its calls go to, and for this host it says no call reaches Airwallex.
 
 For a model to read the emails, create a Gemini API key in Google AI Studio and set it as `READER_API_KEY`. The free tier needs no billing account. Google may use free-tier content to improve its products. The "Supplier email" card says so next to the upload: keep confidential mail out, or leave the key unset and let the keyword placeholder read it. `READER_MODEL` takes a comma-separated list of models to try in order.
 
@@ -492,7 +493,7 @@ pnpm reset
 
 `pnpm ask` asks the model why PayOnce did what it did on one invoice (see [Ask this incident why](#ask-this-incident-why)). With `facts` it prints the facts and the system message exactly as they would be sent, then the legend of labels, which stays on this machine, and asks nothing. It opens the ledger read-only and never calls Airwallex, so it refuses a ledger an older PayOnce wrote: open that ledger once with `pnpm ui` or `pnpm board` first. It strips control and format characters from names and invoice numbers after it swaps the labels back, as `pnpm board` does.
 
-`pnpm reconcile` runs one check against Airwallex and prints the report: each wallet, the breaks that need a person, what is waiting and the last explanations. `offline` matches what the ledger holds again with no Airwallex call, `show` prints the last report from the ledger alone without creating or upgrading a file, and `explain` lists breaks with their facts or explains them. The check, `offline` and `show` exit 1 when the check failed, a wallet does not add up or any break is open, so a script can check the result.
+`pnpm reconcile` runs one check against Airwallex and prints the report: each wallet, the breaks that need a person, what is waiting and the last explanations. `offline` matches what the ledger holds again with no Airwallex call, `show` prints the last report from the ledger alone without creating or upgrading a file, and `explain` lists breaks with their facts or explains them. The check, `offline` and `show` exit 1 when the check failed (for `show`, the latest check on file), a wallet does not add up or any break is open, so a script can check the result.
 
 `pnpm outage` lists the active outages and the last few ended, with the payouts each counted and what it held. `pnpm outage end` ends one, as the button on the page does. It writes only the ledger, and the server's watcher picks up what the outage held on its next check.
 
@@ -500,7 +501,7 @@ pnpm reset
 
 `pnpm outbox` lists an invoice's drafts and the messages that fit now. The templates are `payment-sent`, `replacement-sent`, `checking`, `callback-notice`, `bank-trace` and `refund-trace`. It reads and writes only the ledger, and runs without a `.env`. When there is one, it takes the bank deadlines from it.
 
-`pnpm payrun upload` and `check` read Airwallex, GETs only. `show`, `approve` and `cancel` read only the ledger. `approve` without a name shows the terms and the request number, like `pnpm approve`.
+`pnpm payrun upload` and `check` read Airwallex, GETs only. `show`, `approve` and `cancel` read only the ledger, and run without a `.env`. `approve` without a name shows the terms and the request number, like `pnpm approve`.
 
 | Argument | Values | Default |
 | --- | --- | --- |
@@ -558,7 +559,7 @@ Answers are PayOnce's own JSON, in the JSON API's shapes. Text PayOnce did not w
 
 The server uses the official TypeScript SDK, `@modelcontextprotocol/server` 2.3.1 with `zod` 4.6.7. Both are pinned exactly, and only `src/mcp.ts` imports them. It serves both protocol eras: clients that open with the `initialize` handshake (2025-11-25 and earlier) and clients on the 2026-07-28 revision, which has no handshake.
 
-Run `pnpm install` first. `pnpm mcp` starts the server by hand. The client settings below start `node` directly instead, which runs one process with no shell around it.
+Run `pnpm install` first, then `pnpm board` or `pnpm ui` once so that the ledger exists. The server never creates one, and until there is one every tool answers that there is no ledger. `pnpm mcp` starts the server by hand. The client settings below start `node` directly instead, which runs one process with no shell around it.
 
 ### Claude Code
 
