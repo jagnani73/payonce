@@ -208,9 +208,9 @@ function printReport(report: ReconReport, currency: string | null): void {
 }
 
 // 1 when the run failed, a wallet does not add up, or a break waits on a person,
-// so a script can check it, as pnpm cash does.
-function exitFor(report: ReconReport, outcome: RunOutcome | null): number {
-  if (outcome !== null && outcome.outcome === "failed") {
+// so a script can check it, as pnpm cash does. show passes the latest run on file.
+function exitFor(report: ReconReport, outcome: string | null): number {
+  if (outcome === "failed") {
     return 1;
   }
   const bad: boolean = report.wallets.some(
@@ -260,7 +260,7 @@ async function runLive(): Promise<void> {
   say("");
   const report: ReconReport = reconReport(ledger);
   printReport(report, null);
-  process.exitCode = exitFor(report, outcome);
+  process.exitCode = exitFor(report, outcome.outcome);
 }
 
 function runOffline(): void {
@@ -274,10 +274,11 @@ function runOffline(): void {
   say("");
   const report: ReconReport = reconReport(ledger);
   printReport(report, null);
-  process.exitCode = exitFor(report, outcome);
+  process.exitCode = exitFor(report, outcome.outcome);
 }
 
 // Ledger only, read-only, so showing the report never creates or upgrades a file.
+// It exits by the check's rule, on the stored report and the latest run on file.
 function show(raw: string | undefined): void {
   loadEnv();
   const currency: string | null = raw === undefined ? null : raw.trim().toUpperCase();
@@ -296,7 +297,7 @@ function show(raw: string | undefined): void {
   }
   const report: ReconReport = reconReport(ledger);
   printReport(report, currency);
-  process.exitCode = exitFor(report, null);
+  process.exitCode = exitFor(report, report.lastProblem?.outcome ?? null);
 }
 
 function idsOf(raw: string): number[] | null {
