@@ -188,43 +188,67 @@ function answer(read: (ledger: Ledger) => unknown): CallToolResult {
 }
 
 // The balances PayOnce's server holds, from GET /api/cash/cached on this machine,
-// which answers from its cache and never reads Airwallex. Null when no server
-// answers, an older one answers 404, or the answer is not a cash panel.
-async function serverBalances(): Promise<CachedBalances | null> {
+// which answers from its cache and never reads Airwallex. With none, why says
+// which of the three it was: no server answers, the server has no such route (an
+// older PayOnce answers 404), or the answer is not a cash panel. Each is
+// PayOnce's own sentence with the port, never the server's words.
+type ServerBalances = { cached: CachedBalances; why: null } | { cached: null; why: string };
+
+async function serverBalances(): Promise<ServerBalances> {
+  let response: Response;
   try {
-    const response: Response = await fetch(`http://127.0.0.1:${PORT}/api/cash/cached`, {
+    response = await fetch(`http://127.0.0.1:${PORT}/api/cash/cached`, {
       signal: AbortSignal.timeout(SERVER_TIMEOUT_MS),
       redirect: "error",
     });
+  } catch {
+    return {
+      cached: null,
+      why: `PayOnce's server (pnpm ui) is not answering on port ${PORT}, so no balance was read and there is no headroom. Run pnpm cash for one fresh read`,
+    };
+  }
+  const notPanel: ServerBalances = {
+    cached: null,
+    why: `The server on port ${PORT} did not answer with a cash panel, so it may not be PayOnce's server. No balance was read and there is no headroom. Run pnpm cash for one fresh read`,
+  };
+  try {
+    if (response.status === 404) {
+      await response.body?.cancel();
+      return {
+        cached: null,
+        why: `The server on port ${PORT} answered 404 for the cached cash panel, as a PayOnce server older than this MCP server does, so no balance was read and there is no headroom. Restart pnpm ui, or run pnpm cash for one fresh read`,
+      };
+    }
     if (response.status !== 200 || response.body === null) {
       await response.body?.cancel();
-      return null;
+      return notPanel;
     }
     const chunks: Uint8Array[] = [];
     let bytes: number = 0;
     for await (const chunk of response.body) {
       bytes += chunk.byteLength;
       if (bytes > MAX_ANSWER_BYTES) {
-        return null;
+        return notPanel;
       }
       chunks.push(chunk);
     }
-    return cachedBalances(JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown);
+    const cached: CachedBalances | null = cachedBalances(JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown);
+    return cached === null ? notPanel : { cached, why: null };
   } catch {
-    return null;
+    return notPanel;
   }
 }
 
-function cashResult(ledger: Ledger, cached: CachedBalances | null): unknown {
-  const report: CashReport = cashView(ledger, cached);
+function cashResult(ledger: Ledger, server: ServerBalances): unknown {
+  const report: CashReport = cashView(ledger, server.cached);
   const read: boolean = report.airwallex.readAt !== null;
   return {
-    source: cached === null ? "ledger" : "server",
+    source: server.cached === null ? "ledger" : "server",
     balance: {
       read,
       why:
-        cached === null
-          ? `PayOnce's server (pnpm ui) is not answering on port ${PORT}, so no balance was read and there is no headroom. Run pnpm cash for one fresh read`
+        server.cached === null
+          ? server.why
           : read
             ? null
             : "PayOnce's server has not read the balances yet, so there is no headroom",
@@ -329,8 +353,8 @@ function createServer(): McpServer {
       annotations: READ_ONLY,
     },
     async (): Promise<CallToolResult> => {
-      const cached: CachedBalances | null = await serverBalances();
-      return answer((ledger: Ledger): unknown => cashResult(ledger, cached));
+      const server: ServerBalances = await serverBalances();
+      return answer((ledger: Ledger): unknown => cashResult(ledger, server));
     },
   );
 
