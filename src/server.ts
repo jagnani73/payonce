@@ -1611,9 +1611,14 @@ function name(body: Record<string, unknown>, field: string, missing: string): st
 // An Airwallex read that failed while checking a file is the bank's problem, not
 // the file's.
 function airwallexDown(error: unknown): HttpError | undefined {
-  return error instanceof AirwallexError || error instanceof AirwallexUnreachableError
-    ? new HttpError(502, `Airwallex could not be read, so the file was not checked: ${error.message}`)
-    : undefined;
+  if (!(error instanceof AirwallexError || error instanceof AirwallexUnreachableError)) {
+    return undefined;
+  }
+  const advice: string = airwallexAdvice(error);
+  return new HttpError(
+    502,
+    `Airwallex could not be read, so the file was not checked: ${error.message}${advice === "" ? "" : `. ${advice}`}`,
+  );
 }
 
 // The page sends the file's text inside JSON, so the guard's Origin and content

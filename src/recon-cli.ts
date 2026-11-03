@@ -219,6 +219,9 @@ function exitFor(report: ReconReport, outcome: string | null): number {
 function sayOutcome(outcome: RunOutcome): void {
   if (outcome.outcome === "failed") {
     say(`The run failed and changed no break: ${outcome.error}`);
+    if (outcome.advice !== "") {
+      say(outcome.advice);
+    }
     return;
   }
   if (outcome.outcome === "stale") {

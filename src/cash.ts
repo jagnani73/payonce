@@ -1,5 +1,5 @@
 import { getBalances, type BalanceState } from "./airwallex/balances.js";
-import { AirwallexClient } from "./airwallex/client.js";
+import { airwallexAdvice, AirwallexClient, AirwallexError, AirwallexUnreachableError } from "./airwallex/client.js";
 import {
   cashReport,
   payRunLines,
@@ -165,10 +165,12 @@ async function main(): Promise<void> {
     error: null,
     maxAgeMs: 0,
   };
+  let advice: string = "";
   try {
     state.balances = await getBalances(client);
     state.readAt = Date.now();
   } catch (error: unknown) {
+    advice = error instanceof AirwallexError || error instanceof AirwallexUnreachableError ? airwallexAdvice(error) : "";
     state.error = {
       message: error instanceof Error ? error.message : String(error),
       at: Date.now(),
@@ -195,6 +197,9 @@ async function main(): Promise<void> {
   say(describeFloors(reserve));
   if (state.error !== null) {
     say(`Airwallex could not be read: ${state.error.message}. PayOnce's own figures below are current.`);
+    if (advice !== "") {
+      say(advice);
+    }
   }
   say("");
   for (const currency of report.currencies) {

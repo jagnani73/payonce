@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { getBalances, type Balance } from "./airwallex/balances.js";
-import { AirwallexError, type AirwallexClient } from "./airwallex/client.js";
+import { airwallexAdvice, AirwallexError, AirwallexUnreachableError, type AirwallexClient } from "./airwallex/client.js";
 import { HISTORY_WINDOW_MS, listBalanceHistory, type HistoryItem } from "./airwallex/history.js";
 import { getTransfer, listTransfersSince, type Transfer } from "./airwallex/transfers.js";
 import { knownName, personName } from "./approvers.js";
@@ -454,7 +454,8 @@ function rules(at: number, balances: Map<string, BalancePair> | null, live: bool
 export type RunOutcome =
   | { outcome: "committed"; run: ReconRun; changes: BreakChanges; result: MatchResult }
   | { outcome: "stale"; run: ReconRun }
-  | { outcome: "failed"; run: ReconRun; error: string };
+  // advice is what a person can do about it, from airwallexAdvice, or empty.
+  | { outcome: "failed"; run: ReconRun; error: string; advice: string };
 
 function errorText(error: unknown): string {
   return cleanLine(error instanceof Error ? error.message : String(error), MAX_ERROR_TEXT);
@@ -498,7 +499,9 @@ export async function reconcileOnce(
   } catch (error: unknown) {
     const text: string = errorText(error);
     ledger.recon().failRun(run.id, text, reads.count, now());
-    return { outcome: "failed", run, error: text };
+    const advice: string =
+      error instanceof AirwallexError || error instanceof AirwallexUnreachableError ? airwallexAdvice(error) : "";
+    return { outcome: "failed", run, error: text, advice };
   }
   return commitRun(ledger, run, read, now());
 }
