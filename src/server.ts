@@ -13,6 +13,7 @@ import {
   AirwallexError,
   AirwallexUnreachableError,
   describeAirwallex,
+  withAdvice,
 } from "./airwallex/client.js";
 import { subscribe } from "./airwallex/webhooks.js";
 import { alertMessage, type AlertFacts } from "./alert-payloads.js";
@@ -1614,10 +1615,9 @@ function airwallexDown(error: unknown): HttpError | undefined {
   if (!(error instanceof AirwallexError || error instanceof AirwallexUnreachableError)) {
     return undefined;
   }
-  const advice: string = airwallexAdvice(error);
   return new HttpError(
     502,
-    `Airwallex could not be read, so the file was not checked: ${error.message}${advice === "" ? "" : `. ${advice}`}`,
+    `Airwallex could not be read, so the file was not checked: ${withAdvice(error.message, airwallexAdvice(error))}`,
   );
 }
 

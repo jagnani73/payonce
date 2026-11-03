@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename } from "node:path";
-import { airwallexAdvice, AirwallexClient, AirwallexError, AirwallexUnreachableError } from "./airwallex/client.js";
+import { airwallexAdvice, AirwallexClient, AirwallexError, AirwallexUnreachableError, withAdvice } from "./airwallex/client.js";
 import type { RunTotal } from "./approval.js";
 import { arrivalAdvice, feeSeenText, HOLIDAYS_NOTE, type ArrivalAdvice } from "./arrival.js";
 import { describePolicy, personName, policyFromEnv, type ApprovalPolicy } from "./approvers.js";
@@ -71,7 +71,7 @@ function airwallexDown(error: unknown): string | undefined {
     return undefined;
   }
   const advice: string = airwallexAdvice(error);
-  return `Airwallex could not be read, so the file was not checked: ${error.message}${advice === "" ? "" : `. ${advice}`}`;
+  return `Airwallex could not be read, so the file was not checked: ${withAdvice(error.message, advice)}`;
 }
 
 // Upload and check read Airwallex, GETs only. Show, approve and cancel do not.

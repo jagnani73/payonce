@@ -143,6 +143,11 @@ function requireEnv(name: string): string {
   return value;
 }
 
+// An error's message with advice after it, and one period between them.
+export function withAdvice(message: string, advice: string): string {
+  return advice === "" ? message : `${message.replace(/\.+$/, "")}. ${advice}`;
+}
+
 // Why AWX_BASE_URL cannot be used. Only the host of the value is ever named, and
 // a value with | in it is the list of choices .env.example gives.
 function baseUrlProblem(baseUrl: string, host: string | null): string {
