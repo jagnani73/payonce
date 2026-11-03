@@ -210,7 +210,7 @@ import {
   type DomainCheck,
   type RunCash,
 } from "./runs.js";
-import { SANDBOX_OUTCOMES, SandboxBank } from "./sandbox-bank.js";
+import { SandboxBank } from "./sandbox-bank.js";
 import {
   DEFAULT_EMAILS,
   DEFAULT_SCENARIO,
@@ -225,6 +225,7 @@ import { openTunnel, type Tunnel } from "./tunnel.js";
 import { Watcher } from "./watcher.js";
 import { WEBHOOK_PATH, WebhookReceiver, type WebhookEvent } from "./webhooks.js";
 import { whyFacts, type WhyBuild } from "./why-facts.js";
+import { SANDBOX_OUTCOMES } from "./words.js";
 
 // Before any setting below is read. Without a .env, the client stops the server
 // with the missing setting's name.

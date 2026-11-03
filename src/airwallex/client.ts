@@ -1,5 +1,5 @@
 import { cleanLine } from "../eml.js";
-import { redactKey } from "../model-reader.js";
+import { redactKey } from "../redact.js";
 
 const DEFAULT_BASE_URL: string = "https://api.sandbox.airwallex.com";
 // The sandbox API hosts Airwallex documents: api.sandbox.airwallex.com in its API

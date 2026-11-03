@@ -8,6 +8,9 @@ import {
 } from "./emails.js";
 import { KeywordReader } from "./keyword-reader.js";
 import { sayWarning } from "./printable.js";
+import { ModelReadError, type ModelTry } from "./reader-error.js";
+import { redactKey } from "./redact.js";
+import type { ModelFailure } from "./words.js";
 
 // Gemini's OpenAI-compatible endpoint. Any service that speaks the same chat
 // completions format can stand in for it.
@@ -74,43 +77,6 @@ export class ModelAnswerError extends Error {
   }
 }
 
-// Why one model gave no answer PayOnce could use. Nothing the service wrote is
-// kept, so what a try says can go on the page, the timeline and the terminal.
-export type ModelFailure =
-  | "busy"
-  | "limited"
-  | "key"
-  | "refused"
-  | "service"
-  | "timeout"
-  | "cut"
-  | "incomplete"
-  | "unusable"
-  | "unreachable"
-  | "failed";
-
-export interface ModelTry {
-  model: string;
-  failure: ModelFailure;
-  // The status the service answered with, for the failures that have one.
-  status: number | null;
-}
-
-const TRY_WORDS: Record<ModelFailure, string> = {
-  busy: "was busy",
-  limited: "was over its request limit",
-  key: "refused the key",
-  refused: "refused the request",
-  service: "had an error on its side",
-  timeout: `timed out after ${REQUEST_TIMEOUT_MS / 1000} s`,
-  cut: "cut its answer short",
-  incomplete: "stopped before its answer was complete",
-  unusable: "gave an answer PayOnce could not use",
-  unreachable: "could not be reached",
-  failed: "gave no answer",
-};
-const WITH_STATUS: ReadonlySet<ModelFailure> = new Set<ModelFailure>(["busy", "limited", "key", "refused", "service"]);
-
 function finishFailure(reason: string | null | undefined): ModelAnswerError {
   return reason === "length"
     ? new ModelAnswerError("cut", "The model stopped on its token budget before the answer was complete")
@@ -131,125 +97,20 @@ export function tryOf(model: string, error: unknown): ModelTry {
             : status >= 500
               ? "service"
               : "refused";
-    return { model, failure, status };
+    return { model, failure, status, seconds: null };
   }
   if (error instanceof ModelAnswerError) {
-    return { model, failure: error.failure, status: null };
+    return { model, failure: error.failure, status: null, seconds: null };
   }
   const name: string = error instanceof Error ? error.name : "";
   if (name === "TimeoutError" || name === "AbortError") {
-    return { model, failure: "timeout", status: null };
+    return { model, failure: "timeout", status: null, seconds: REQUEST_TIMEOUT_MS / 1000 };
   }
   // How fetch reports a connection that failed or broke off.
   if (error instanceof TypeError && (error.message === "fetch failed" || error.message === "terminated")) {
-    return { model, failure: "unreachable", status: null };
+    return { model, failure: "unreachable", status: null, seconds: null };
   }
-  return { model, failure: "failed", status: null };
-}
-
-// One try in PayOnce's words, such as "gemini-3.5-flash was busy (503)".
-export function tryText(attempt: ModelTry): string {
-  const status: string = attempt.status !== null && WITH_STATUS.has(attempt.failure) ? ` (${attempt.status})` : "";
-  return `${attempt.model} ${TRY_WORDS[attempt.failure]}${status}`;
-}
-
-// Every try in order, such as "gemini-3.5-flash was busy (503), then
-// gemini-3.1-flash-lite timed out after 8 s".
-export function triesText(tries: readonly ModelTry[]): string {
-  return tries.length === 0 ? "no model is set up" : tries.map(tryText).join(", then ");
-}
-
-// What tryText writes after the model's name, as a regular expression source, so
-// why-facts.ts can pass a line that holds tries without a copy of the words.
-export const TRY_WORDS_SOURCE: string = (Object.entries(TRY_WORDS) as [ModelFailure, string][])
-  .map(([failure, words]: [ModelFailure, string]): string =>
-    `${words.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}${WITH_STATUS.has(failure) ? " \\([0-9]{3}\\)" : ""}`,
-  )
-  .join("|");
-
-// Every model gave no answer PayOnce could use. The message holds PayOnce's words
-// only, so it can go on the timeline.
-export class ModelReadError extends Error {
-  readonly tries: ModelTry[];
-
-  constructor(tries: ModelTry[]) {
-    super(`The email reader could not read the email: ${triesText(tries)}`);
-    this.name = "ModelReadError";
-    this.tries = tries;
-  }
-}
-
-// A run this long that is part of the key, in any form below, counts as the key.
-const KEY_RUN: number = 20;
-
-// The forms the key could take in a service's answer: as it is, URL-encoded with
-// either case of hex, and base64 or base64url at each of the three byte
-// alignments, cut to the characters the key alone decides.
-function keyForms(key: string): string[] {
-  const encoded: string = encodeURIComponent(key);
-  const forms: Set<string> = new Set<string>([
-    key,
-    encoded,
-    encoded.replace(/%[0-9A-F]{2}/g, (escape: string): string => escape.toLowerCase()),
-  ]);
-  const bytes: Buffer = Buffer.from(key, "utf8");
-  for (let pad: number = 0; pad < 3; pad += 1) {
-    const base64: string = Buffer.concat([Buffer.alloc(pad), bytes]).toString("base64");
-    const core: string = base64.slice(Math.ceil((pad * 8) / 6), Math.floor(((pad + bytes.length) * 8) / 6));
-    forms.add(core);
-    forms.add(core.replaceAll("+", "-").replaceAll("/", "_"));
-  }
-  return [...forms].filter((form: string): boolean => form !== "");
-}
-
-// A to Z as a to z and nothing else, so the text keeps its length and a match in
-// it is a match at the same place in the text.
-function folded(text: string): string {
-  return text.replace(/[A-Z]/g, (letter: string): string => letter.toLowerCase());
-}
-
-// Text with the key cut out, for any error that could carry it, since some
-// services echo the key back. Every form of the key goes, and so does any run of
-// KEY_RUN or more characters that is part of one, such as a key cut short. Both
-// are matched whatever the case of their letters, since a service can echo the key
-// upper-cased. Each cut becomes the label.
-export function redactKey(text: string, key: string, label: string = "[key]"): string {
-  if (key === "") {
-    return text;
-  }
-  const forms: string[] = [...new Set<string>(keyForms(key).map(folded))];
-  let cut: string = text;
-  for (const form of forms) {
-    for (let at: number = folded(cut).indexOf(form); at !== -1; at = folded(cut).indexOf(form, at + label.length)) {
-      cut = `${cut.slice(0, at)}${label}${cut.slice(at + form.length)}`;
-    }
-  }
-  const runs: Set<string> = new Set<string>();
-  for (const form of forms) {
-    for (let at: number = 0; at + KEY_RUN <= form.length; at += 1) {
-      runs.add(form.slice(at, at + KEY_RUN));
-    }
-  }
-  const lower: string = folded(cut);
-  const covered: Uint8Array = new Uint8Array(cut.length);
-  for (let at: number = 0; at + KEY_RUN <= cut.length; at += 1) {
-    if (runs.has(lower.slice(at, at + KEY_RUN))) {
-      covered.fill(1, at, at + KEY_RUN);
-    }
-  }
-  let result: string = "";
-  for (let at: number = 0; at < cut.length; ) {
-    if (covered[at] === 1) {
-      while (covered[at] === 1) {
-        at += 1;
-      }
-      result += label;
-    } else {
-      result += cut[at] ?? "";
-      at += 1;
-    }
-  }
-  return result;
+  return { model, failure: "failed", status: null, seconds: null };
 }
 
 // The service refused the key, so asking another model will not help.

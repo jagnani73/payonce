@@ -3,7 +3,7 @@ import { dueDateProblem } from "./arrival.js";
 import { validDomain } from "./eml.js";
 import { INVOICE_ID_PATTERN, type TransferMethod } from "./ledger.js";
 import { printable } from "./printable.js";
-import { PAID_OUTCOME, SANDBOX_OUTCOMES } from "./sandbox-bank.js";
+import { PAID_OUTCOME, SANDBOX_OUTCOMES } from "./words.js";
 
 // A column a pay run file can have. Nothing else is read from a file: no bank
 // details and no phone number. supplier_domain is the domain the supplier's

@@ -4,25 +4,7 @@ import { getTransfer, waitForTransfer, type Transfer } from "./airwallex/transfe
 import { isOverdue } from "./deadlines.js";
 import type { Bank } from "./engine.js";
 import type { AttemptKind } from "./ledger.js";
-
-// The bank outcome that pays a transfer. Any other outcome is the failure type
-// the simulator fails it with.
-export const PAID_OUTCOME: string = "PAID";
-// The bank outcome that leaves a transfer in SENT, so the agent's deadline for it
-// runs out.
-export const STAYS_IN_FLIGHT: string = "STAYS_IN_FLIGHT";
-
-// What the sandbox bank can do with an original: fail it one of these ways, pay
-// it, or leave it in flight past its deadline. A pay run file can name one per row.
-export const SANDBOX_OUTCOMES: string[] = [
-  "CHANNEL_TIMEOUT",
-  "SYSTEM_ERROR",
-  "BENEFICIARY_BANK_RETURNED",
-  "ACCOUNT_CLOSED",
-  "INVALID_ACCOUNT_NAME_OR_NUMBER",
-  STAYS_IN_FLIGHT,
-  PAID_OUTCOME,
-];
+import { PAID_OUTCOME, SANDBOX_BANK_AFTER, STAYS_IN_FLIGHT } from "./words.js";
 
 const SETTLED_STATUSES: ReadonlySet<string> = new Set<string>([
   "PAID",
@@ -37,8 +19,6 @@ const READ_RETRY_MS: number = 1_500;
 // gives them. Anything else is left out of the line.
 const REFERENCE: RegExp = /^[A-Z0-9-]{1,30}$/;
 const ERROR_CODE: RegExp = /^[A-Za-z0-9_]{1,40}$/;
-export const SANDBOX_BANK_AFTER: string =
-  "PayOnce keeps reading the transfer from Airwallex as usual, and if the bank has neither paid nor failed it by its deadline, a person hears about it";
 
 // What the sandbox bank was doing when a call failed: reading the transfer,
 // waiting for Airwallex to move it past SCHEDULED, or asking the simulator to move

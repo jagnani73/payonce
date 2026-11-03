@@ -131,7 +131,7 @@ import {
   type ScannedObligation,
   type Signoff,
 } from "./ledger.js";
-import { ModelReadError, triesText } from "./model-reader.js";
+import { ModelReadError, triesText } from "./reader-error.js";
 import { formatMoney, readMinor, toMajor, toMinor } from "./money.js";
 import { holdLine, railFailureSeen, waitingLine } from "./outages.js";
 import { sendAttempt, syncTransfer, wasRejected, type Decide } from "./payments.js";

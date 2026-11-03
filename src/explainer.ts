@@ -6,12 +6,11 @@ import {
   keyRefused,
   ModelAnswerError,
   ModelError,
-  redactKey,
   REQUEST_TIMEOUT_MS,
-  triesText,
   tryOf,
-  type ModelTry,
 } from "./model-reader.js";
+import { triesText, type ModelTry } from "./reader-error.js";
+import { redactKey } from "./redact.js";
 import { printable, sayWarning } from "./printable.js";
 import { readerSettingsFromEnv, type ReaderSettings } from "./reader.js";
 import type { LegendEntry, WhyBuild, WhyFacts } from "./why-facts.js";

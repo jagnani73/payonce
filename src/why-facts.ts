@@ -70,11 +70,10 @@ import {
   type OutsidePayout,
   type RunRow,
 } from "./ledger.js";
-import { TRY_WORDS_SOURCE } from "./model-reader.js";
 import { formatMoney } from "./money.js";
 import { RAIL_FAILURE_CODES } from "./outages.js";
 import { currencyFloor, debitCurrency, floorFor, type ReservePolicy } from "./reserve.js";
-import { SANDBOX_BANK_AFTER } from "./sandbox-bank.js";
+import { SANDBOX_BANK_AFTER, TRY_WORDS_SOURCE } from "./words.js";
 
 // The facts a model is given to explain one invoice. Every value is PayOnce's own
 // words, a closed-pattern value such as a bank reference, a status or an amount,
