@@ -513,9 +513,22 @@ function parseDate(value) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+// Airwallex's short reference and failure code are kept as Airwallex sent them,
+// so each is shown only in the form Airwallex gives it, and otherwise in
+// PayOnce's words, as pnpm close and pnpm outage print them.
+const REFERENCE = /^[A-Z0-9-]{1,30}$/;
+const FAILURE_CODE = /^[A-Za-z0-9_]{1,40}$/;
+
+function shownReference(value) {
+  return typeof value === "string" && REFERENCE.test(value) ? value : "a reference PayOnce cannot show";
+}
+
 function failureText(code) {
   if (code === null || code === undefined || code === "") {
     return null;
+  }
+  if (!FAILURE_CODE.test(String(code))) {
+    return "A failure code PayOnce cannot show";
   }
   const meaning = FAILURE_CODES[String(code)];
   return meaning === undefined ? `Failure code ${code}` : `Failure code ${code} (${meaning})`;
@@ -1631,7 +1644,7 @@ function buildAttempt(attempt) {
   const failure = failureText(attempt.failureCode);
   // The bank's short reference is what the timeline messages call this payment.
   const reference =
-    typeof attempt.reference === "string" && attempt.reference !== "" ? attempt.reference : null;
+    typeof attempt.reference === "string" && attempt.reference !== "" ? shownReference(attempt.reference) : null;
   return h(
     "li",
     { class: "attempt" },
@@ -2180,7 +2193,7 @@ function buildApproval(invoiceId, approval, outage) {
             term("Why it was escalated", sentence(evidence.reason)),
             term(
               "Original payment",
-              hasReference ? h("span", { class: "mono" }, evidence.originalReference) : originalFacts,
+              hasReference ? h("span", { class: "mono" }, shownReference(evidence.originalReference)) : originalFacts,
               hasReference && originalFacts !== "" && h("span", { class: "terms__sub" }, originalFacts),
             ),
             term("Email evidence", sentence(evidence.emails)),
@@ -2696,7 +2709,7 @@ function buildReview(invoiceId, review, emailSummary) {
             h(
               "dd",
               null,
-              hasReference ? h("span", { class: "mono" }, review.reference) : "Paid",
+              hasReference ? h("span", { class: "mono" }, shownReference(review.reference)) : "Paid",
               hasReference && h("span", { class: "terms__sub" }, "Paid"),
             ),
           ],
@@ -2728,7 +2741,7 @@ function coveredNode(transfer) {
   return h(
     "span",
     { class: "terms__covered" },
-    h("span", { class: "mono" }, transfer.reference),
+    h("span", { class: "mono" }, shownReference(transfer.reference)),
     h(
       "span",
       { class: "terms__sub" },
@@ -6554,8 +6567,8 @@ function buildOutage(view, enders) {
         null,
         listNodes(counted, (payout) =>
           payout.invoiceId === null
-            ? payout.reference
-            : h("span", null, `${payout.reference} (`, outageLink(payout.invoiceId, null), ")"),
+            ? shownReference(payout.reference)
+            : h("span", null, `${shownReference(payout.reference)} (`, outageLink(payout.invoiceId, null), ")"),
         ),
       ),
       held.length > 0 && [
