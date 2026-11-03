@@ -696,13 +696,13 @@ function toUpload(row: UploadRow): Upload {
     sender: row.sender,
     senderName: row.sender_name,
     fromAsWritten: row.from_as_written,
-    replyTo: JSON.parse(row.reply_to) as string[],
+    replyTo: stringsOf(row.reply_to),
     dateAsWritten: row.date_as_written,
     subject: row.subject,
     body: row.body,
     styleText: row.style_text,
-    attachments: JSON.parse(row.attachments) as EmailAttachment[],
-    notes: JSON.parse(row.notes) as string[],
+    attachments: listOf<EmailAttachment>(row.attachments),
+    notes: stringsOf(row.notes),
     partial: row.partial === 1,
     state: row.state,
     invoiceId: row.invoice_id,
@@ -1235,7 +1235,7 @@ function toObligation(row: ObligationRow): Obligation {
     startedBy: row.started_by,
     supplierPhone: row.supplier_phone,
     payoutReference: row.payout_reference,
-    duplicateOf: row.duplicate_of === null ? [] : (JSON.parse(row.duplicate_of) as string[]),
+    duplicateOf: row.duplicate_of === null ? [] : stringsOf(row.duplicate_of),
     rejectedBy: row.rejected_by,
     runRowId: row.run_row_id,
     dueDate: row.due_date ?? null,
@@ -1352,7 +1352,7 @@ function toAttempt(row: AttemptRow): Attempt {
     rateMismatch: row.rate_mismatch,
     bankCreatedAt: row.bank_created_at ?? null,
     bankStatus: row.bank_status ?? null,
-    arrival: row.arrival === null || row.arrival === undefined ? null : (JSON.parse(row.arrival) as ArrivalTerms),
+    arrival: row.arrival === null || row.arrival === undefined ? null : objectOf<ArrivalTerms>(row.arrival),
     openedAt: row.opened_at ?? null,
     triedAt: row.tried_at ?? null,
     foundLateAt: row.found_late_at ?? null,
@@ -1630,7 +1630,7 @@ function toRun(row: RunRecord): Run {
     id: row.id,
     fileName: row.file_name,
     fileHash: row.file_hash,
-    columns: JSON.parse(row.columns) as string[],
+    columns: stringsOf(row.columns),
     uploadedBy: row.uploaded_by,
     uploadedAt: row.uploaded_at,
     state: row.state,
@@ -1647,7 +1647,7 @@ function toRunRow(row: RunRowRecord): RunRow {
     id: row.id,
     runId: row.run_id,
     line: row.line,
-    cells: JSON.parse(row.cells) as string[],
+    cells: stringsOf(row.cells),
     invoiceId: row.invoice_id,
     supplier: row.supplier,
     beneficiaryId: row.beneficiary_id,
@@ -1656,15 +1656,15 @@ function toRunRow(row: RunRowRecord): RunRow {
     transferMethod: row.transfer_method,
     sandboxOutcome: row.sandbox_outcome,
     action: row.action,
-    reasons: JSON.parse(row.reasons) as string[],
-    heldFor: JSON.parse(row.held_for) as string[],
+    reasons: stringsOf(row.reasons),
+    heldFor: stringsOf(row.held_for),
     newPayee: row.new_payee === 1,
     bankChangeId: row.bank_change_id,
     payee: row.payee,
     payTo: row.pay_to,
     accountKey: row.account_key,
     dueDate: row.due_date ?? null,
-    arrival: typeof row.arrival === "string" ? (JSON.parse(row.arrival) as ArrivalTerms) : null,
+    arrival: typeof row.arrival === "string" ? objectOf<ArrivalTerms>(row.arrival) : null,
     state: row.state,
     note: row.note,
   };
@@ -1750,13 +1750,13 @@ function toOutage(row: OutageRow): Outage {
     id: row.id,
     currency: row.currency,
     method: row.method,
-    codes: JSON.parse(row.codes) as string[],
+    codes: stringsOf(row.codes),
     state: row.state,
     declaredAt: row.declared_at,
     payees: row.payees,
     threshold: row.threshold,
     windowMinutes: row.window_minutes,
-    counted: JSON.parse(row.counted) as string[],
+    counted: stringsOf(row.counted),
     endedAt: row.ended_at,
     endedBy: row.ended_by,
     endNote: row.end_note,
@@ -6258,14 +6258,33 @@ interface SupplierRunRowRecord {
   skip_reasons: number | null;
 }
 
-// A JSON list of strings as a column keeps it, or none when it is not one.
-function stringsOf(json: string): string[] {
+// Stored JSON read soft, for the rows the board, the outage views and the incident
+// list read for every invoice: a value another program spoiled reads as none
+// instead of failing the whole view. What PayOnce writes reads as it always did.
+function parsedOf(json: string): unknown {
   try {
-    const parsed: unknown = JSON.parse(json);
-    return Array.isArray(parsed) ? parsed.filter((item: unknown): item is string => typeof item === "string") : [];
+    return JSON.parse(json);
   } catch {
-    return [];
+    return undefined;
   }
+}
+
+// A JSON list of strings as a column keeps it, or none when it is not one.
+export function stringsOf(json: string): string[] {
+  const parsed: unknown = parsedOf(json);
+  return Array.isArray(parsed) ? parsed.filter((item: unknown): item is string => typeof item === "string") : [];
+}
+
+// A JSON list as a column keeps it, or none when it is not one.
+export function listOf<T>(json: string): T[] {
+  const parsed: unknown = parsedOf(json);
+  return Array.isArray(parsed) ? (parsed as T[]) : [];
+}
+
+// A JSON object as a column keeps it, or null when it is not one.
+export function objectOf<T>(json: string): T | null {
+  const parsed: unknown = parsedOf(json);
+  return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as T) : null;
 }
 
 // An invoice as the supplier list reads it: only what its cautions, counts and

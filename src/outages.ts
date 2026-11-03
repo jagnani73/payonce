@@ -91,10 +91,11 @@ export function railOf(outage: { currency: string; method: string }): string {
   return `${outage.currency} ${outage.method}`;
 }
 
-// "91402 (channel timeout) and 91401 (system error)"
+// "91402 (channel timeout) and 91401 (system error)", or, for an outage whose
+// stored codes could not be read, "a rail-level code" as the alert says.
 export function codesText(codes: string[]): string {
   const named: string[] = codes.map((code: string): string => `${code} (${RAIL_FAILURE_CODES[code] ?? "rail failure"})`);
-  return named.length <= 1 ? (named[0] ?? "") : `${named.slice(0, -1).join(", ")} and ${named.at(-1)}`;
+  return named.length <= 1 ? (named[0] ?? "a rail-level code") : `${named.slice(0, -1).join(", ")} and ${named.at(-1)}`;
 }
 
 // HH:MM of an ISO time PayOnce wrote, which is UTC.

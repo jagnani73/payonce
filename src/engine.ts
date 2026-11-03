@@ -103,6 +103,7 @@ import {
   lateBesideLive,
   liveAtBank,
   mismatchedLive,
+  objectOf,
   RailOutageError,
   signersOf,
   type Approval,
@@ -294,11 +295,13 @@ function sendersNotOnFile(obligation: Obligation, emails: SupplierEmail[]): stri
   return unverifiedSenders(emails, obligation.supplierDomain);
 }
 
-// The stored findings, or what stands for them before anything was read.
+// The stored findings, or what stands for them before anything was read. Findings
+// that do not parse stand as not read, so the emails go to a person.
 function storedFindings(ledger: Ledger, invoiceId: string, emails: SupplierEmail[]): { findings: StoredFindings; stored: boolean } {
   const stored: string | undefined = ledger.findings(invoiceId);
-  if (stored !== undefined) {
-    return { findings: JSON.parse(stored) as StoredFindings, stored: true };
+  const findings: StoredFindings | null = stored === undefined ? null : objectOf<StoredFindings>(stored);
+  if (findings !== null) {
+    return { findings, stored: true };
   }
   return { findings: emails.length === 0 ? NO_FINDINGS : NOT_READ_FINDINGS, stored: false };
 }

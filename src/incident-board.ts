@@ -20,6 +20,7 @@ import { heldBeforePaying, pendingClose, REPLACEMENT_DEADLINE_REASON } from "./e
 import { candidatesFor, invoiceIndex, type InvoiceIndex, type Match } from "./intake.js";
 import {
   isExpired,
+  objectOf,
   withBank,
   type Approval,
   type Attempt,
@@ -373,8 +374,10 @@ function personSituation(
 ): Situation | null {
   const latest: Approval | undefined = ledger.latestApproval(obligation.invoiceId);
   if (kinds.has("awaiting-approval") && latest !== undefined) {
-    const terms: ApprovalTerms = JSON.parse(latest.terms) as ApprovalTerms;
-    return terms.action === "pay"
+    // Terms that do not parse are told apart by the invoice: a held one's request pays it.
+    const action: string =
+      objectOf<ApprovalTerms>(latest.terms)?.action ?? (heldBeforePaying(ledger, obligation) ? "pay" : "replace");
+    return action === "pay"
       ? situation("person", "approve-held", `Paying this held invoice waits for approval (${progress(latest)})`)
       : situation("person", "approve-replacement", `A replacement waits for approval (${progress(latest)})`);
   }

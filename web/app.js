@@ -5809,7 +5809,7 @@ function buildBoardOutage(outage, enders) {
       h("dt", null, "Since"),
       h("dd", null, since ?? "Not on file"),
       h("dt", null, "Failure codes"),
-      h("dd", null, codes),
+      h("dd", null, codes === "" ? "None on file" : codes),
       h("dt", null, "Payees"),
       h("dd", null, `${outage.payees} failed within ${outage.windowMinutes} minutes`),
       held.map(([label, items, build]) => [
@@ -6555,7 +6555,7 @@ function buildOutage(view, enders) {
       h("dt", null, "Declared"),
       h("dd", null, declared ?? "Not on file"),
       h("dt", null, "Failure codes"),
-      h("dd", null, codes),
+      h("dd", null, codes === "" ? "None on file" : codes),
       h("dt", null, "Payouts counted"),
       h(
         "dd",

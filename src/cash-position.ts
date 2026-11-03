@@ -5,6 +5,7 @@ import {
   isExpired,
   liveAtBank,
   mismatchedLive,
+  objectOf,
   withBank,
   type Approval,
   type Attempt,
@@ -116,8 +117,9 @@ function lineAmount(ledger: Ledger, obligation: Obligation, attempt: Attempt | n
   }
   const approval: Approval | undefined =
     attempt === null ? ledger.latestApproval(obligation.invoiceId) : ledger.approvalOf(attempt);
+  // Terms or a kept quote that do not parse read as no quote, as before one was taken.
   const fx: FxTerms | undefined =
-    approval === undefined ? undefined : (JSON.parse(approval.terms) as ApprovalTerms).fx;
+    approval === undefined ? undefined : objectOf<ApprovalTerms>(approval.terms)?.fx;
   const open: boolean =
     approval !== undefined &&
     (approval.state === "requested" || approval.state === "approved") &&
@@ -126,7 +128,8 @@ function lineAmount(ledger: Ledger, obligation: Obligation, attempt: Attempt | n
     return { amountMinor: fx.sellAmountMinor, estimated: false, fromQuote: true };
   }
   const kept: string | undefined = ledger.lastQuote(obligation.invoiceId);
-  const last: FxTerms | undefined = kept === undefined ? fx : (JSON.parse(kept) as LastQuote).fx;
+  const lastQuote: LastQuote | null = kept === undefined ? null : objectOf<LastQuote>(kept);
+  const last: FxTerms | undefined = lastQuote === null ? fx : lastQuote.fx;
   return last === undefined
     ? { amountMinor: 0, estimated: true, fromQuote: false }
     : { amountMinor: last.sellAmountMinor, estimated: true, fromQuote: true };

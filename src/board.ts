@@ -131,7 +131,8 @@ function heldLine(label: string, items: string[]): string {
 // An active outage, before everything else on the board: what it saw, what it
 // holds and how to end it.
 function outageLines(outage: BoardOutage): string[] {
-  const codes: string = outage.codes.map((entry: OutageCode): string => `${entry.code} (${entry.label})`).join(", ");
+  const codes: string =
+    outage.codes.map((entry: OutageCode): string => `${entry.code} (${entry.label})`).join(", ") || "a rail-level code";
   return [
     `  Outage ${outage.id} on ${outage.rail}, since ${utc(outage.declaredAt)}`,
     `${INDENT}Payouts to ${outage.payees} payees failed within ${outage.windowMinutes} minutes with ${codes}. PayOnce opens no new payment on ${outage.rail} until a person ends it`,
