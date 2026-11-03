@@ -11,6 +11,8 @@ export const SANDBOX_HOSTS: readonly string[] = ["api.sandbox.airwallex.com", "a
 // public certificate can exist for it, so the key cannot leave over TLS.
 export const OFFLINE_HOST: string = "sandbox.invalid";
 const ALLOWED_HOSTS: readonly string[] = [...SANDBOX_HOSTS, OFFLINE_HOST];
+const LOGIN_PATH: string = "/api/v1/authentication/login";
+export const LOGIN_REQUEST: string = `POST ${LOGIN_PATH}`;
 const TOKEN_REFRESH_MARGIN_MS: number = 60_000;
 const REQUEST_TIMEOUT_MS: number = 30_000;
 const MAX_ERROR_TEXT: number = 300;
@@ -53,6 +55,8 @@ function withoutSecrets(text: string, secrets: readonly Secret[], cap: number): 
 // client id, the API key or the token, so each is cut out of every part kept, and
 // a code that held one is dropped.
 export class AirwallexError extends Error {
+  // The method and path, such as LOGIN_REQUEST, with no query string.
+  readonly request: string;
   readonly status: number;
   readonly code: string | undefined;
   readonly source: string | undefined;
@@ -67,6 +71,7 @@ export class AirwallexError extends Error {
     const said: string = withoutSecrets(typeof body.message === "string" ? body.message : fallback, secrets, MAX_ERROR_TEXT);
     super(`${request} failed with ${status}${code === undefined ? "" : ` ${code}`}: ${said}`);
     this.name = "AirwallexError";
+    this.request = request;
     this.status = status;
     this.code = code;
     this.source = typeof body.source === "string" ? withoutSecrets(body.source, secrets, MAX_ERROR_TEXT) : undefined;
@@ -77,12 +82,40 @@ export class AirwallexError extends Error {
 // cause is not kept, because a refused header value names the value, so only its
 // message is, with the secrets cut out.
 export class AirwallexUnreachableError extends Error {
-  constructor(request: string, cause: unknown, secrets: readonly Secret[]) {
+  readonly request: string;
+  // The host the call went to, one of ALLOWED_HOSTS.
+  readonly host: string;
+
+  constructor(request: string, host: string, cause: unknown, secrets: readonly Secret[]) {
     const inner: unknown = cause instanceof Error ? (cause.cause ?? cause) : cause;
     const detail: string = withoutSecrets(inner instanceof Error ? inner.message : String(inner), secrets, MAX_ERROR_TEXT);
     super(`${request} did not complete: ${detail}`);
     this.name = "AirwallexUnreachableError";
+    this.request = request;
+    this.host = host;
   }
+}
+
+// What a person can do about a call that failed, in PayOnce's words. Only the
+// status, the request and the host decide it, never Airwallex's text, and no
+// credential is named but by its setting. Empty when trying again cannot help.
+export function airwallexAdvice(error: AirwallexError | AirwallexUnreachableError): string {
+  if (error instanceof AirwallexUnreachableError) {
+    return error.host === OFFLINE_HOST
+      ? `AWX_BASE_URL is the offline host, https://${OFFLINE_HOST}, so no call reaches Airwallex.`
+      : "Try again in a minute.";
+  }
+  if (error.request === LOGIN_REQUEST && (error.status === 401 || error.status === 403)) {
+    return "Airwallex refused the API key. Check AWX_CLIENT_ID and AWX_API_KEY in .env, then start PayOnce again.";
+  }
+  return error.status >= 500 || error.status === 429 ? "Try again in a minute." : "";
+}
+
+// The start-up line: the host every call goes to, and whether any reaches Airwallex.
+export function describeAirwallex(client: AirwallexClient): string {
+  return client.host === OFFLINE_HOST
+    ? `Airwallex calls go to ${OFFLINE_HOST}, the offline host, so no call reaches Airwallex and nothing can be paid`
+    : `Airwallex calls go to ${client.host}`;
 }
 
 function requireEnv(name: string): string {
@@ -111,7 +144,7 @@ async function send<T>(
     });
     text = await response.text();
   } catch (error: unknown) {
-    throw new AirwallexUnreachableError(request, error, secrets);
+    throw new AirwallexUnreachableError(request, new URL(url).hostname, error, secrets);
   }
 
   if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400)) {
@@ -136,6 +169,8 @@ async function send<T>(
 }
 
 export class AirwallexClient {
+  // The host every call goes to: one of the sandbox hosts or the offline host.
+  readonly host: string;
   private readonly baseUrl: string;
   private readonly clientId: string;
   private readonly apiKey: string;
@@ -158,6 +193,7 @@ export class AirwallexClient {
         `Refusing the Airwallex address in AWX_BASE_URL (host ${cleanLine(url.hostname, 100)}). PayOnce talks only to the sandbox: ${SANDBOX_HOSTS.map((host: string): string => `https://${host}`).join(" or ")}, or https://${OFFLINE_HOST} to run with no Airwallex`,
       );
     }
+    this.host = url.hostname;
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.clientId = clientId;
     this.apiKey = apiKey;
@@ -179,10 +215,9 @@ export class AirwallexClient {
       return this.token;
     }
 
-    const path: string = "/api/v1/authentication/login";
     const login: LoginResponse = await send<LoginResponse>(
-      `POST ${path}`,
-      `${this.baseUrl}${path}`,
+      LOGIN_REQUEST,
+      `${this.baseUrl}${LOGIN_PATH}`,
       {
         method: "POST",
         headers: { "x-client-id": this.clientId, "x-api-key": this.apiKey },

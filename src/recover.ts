@@ -1,5 +1,5 @@
 import { userInfo } from "node:os";
-import { AirwallexClient, AirwallexError, AirwallexUnreachableError } from "./airwallex/client.js";
+import { airwallexAdvice, AirwallexClient, AirwallexError, AirwallexUnreachableError } from "./airwallex/client.js";
 import { personName, policyFromEnv } from "./approvers.js";
 import { Dispatcher } from "./dispatcher.js";
 import { note, noteError, type Engine } from "./engine.js";
@@ -128,10 +128,9 @@ function stopped(
 ): void {
   const what: string =
     error instanceof AirwallexUnreachableError ? "Airwallex could not be reached" : "Airwallex answered with an error";
-  const again: string =
-    error instanceof AirwallexError && error.status < 500 && error.status !== 429 ? "" : " Try again in a minute.";
+  const advice: string = airwallexAdvice(error);
   if (ledger.obligation(invoiceId) === undefined) {
-    say(`${what}, so nothing was sent or stored.${again}`);
+    say(`${what}, so nothing was sent or stored.${advice === "" ? "" : ` ${advice}`}`);
     say(`  ${error.message}`);
     return;
   }

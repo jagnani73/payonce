@@ -7,7 +7,13 @@ import {
 } from "node:http";
 import { extname } from "node:path";
 import { BalanceCache, type BalanceState } from "./airwallex/balances.js";
-import { AirwallexClient, AirwallexError, AirwallexUnreachableError } from "./airwallex/client.js";
+import {
+  airwallexAdvice,
+  AirwallexClient,
+  AirwallexError,
+  AirwallexUnreachableError,
+  describeAirwallex,
+} from "./airwallex/client.js";
 import { subscribe } from "./airwallex/webhooks.js";
 import { alertMessage, type AlertFacts } from "./alert-payloads.js";
 import {
@@ -903,7 +909,8 @@ async function startIncident(request: IncomingMessage): Promise<unknown> {
     if (error instanceof AirwallexUnreachableError || error instanceof AirwallexError) {
       const what: string =
         error instanceof AirwallexUnreachableError ? "Airwallex could not be reached" : "Airwallex answered with an error";
-      throw new HttpError(502, `${what}, so nothing was sent or stored. Try again in a minute. ${error.message}`);
+      const advice: string = airwallexAdvice(error);
+      throw new HttpError(502, `${what}, so nothing was sent or stored.${advice === "" ? "" : ` ${advice}`} ${error.message}`);
     }
     throw error;
   }
@@ -2093,6 +2100,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 
 server.listen(PORT, HOST, (): void => {
   say(`PayOnce is at http://${HOST}:${PORT} (sandbox only, no real money)`);
+  say(describeAirwallex(client));
   say(`Supplier emails are read by: ${engine.reader.name}`);
   say(describePolicy(engine.approvals));
   say(describeFloors(engine.reserve));
