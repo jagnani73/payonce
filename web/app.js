@@ -3449,11 +3449,22 @@ function renderIncidentMain() {
   renderReview(detail);
   renderBankChange(detail);
   renderApproval(detail);
+  placeApproval();
   renderOutbox(detail);
   renderPayments(detail);
   renderEmails(detail);
   els.placeholder.hidden = true;
   els.detail.hidden = false;
+}
+
+// While the approval card is shown it comes first, so the close card cannot push
+// it below the first screen. Only the approval card moves, so a field someone is
+// typing in on another card keeps its focus.
+function placeApproval() {
+  const after = els.approval.hidden ? els.bankChange : els.why;
+  if (after.nextElementSibling !== els.approval) {
+    after.after(els.approval);
+  }
 }
 
 // ---------- messages to send ----------
