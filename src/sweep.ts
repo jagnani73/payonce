@@ -22,7 +22,7 @@ import {
 } from "./ledger.js";
 import { toMinor } from "./money.js";
 import { railFailureSeen } from "./outages.js";
-import { sayWarning } from "./printable.js";
+import { oneLine, say, sayWarning } from "./printable.js";
 
 const METHODS: ReadonlySet<string> = new Set<string>(["LOCAL", "SWIFT"]);
 
@@ -70,6 +70,7 @@ function adopt(engine: Engine, transfer: Transfer, state: FoundState): string | 
   }
   const fee: Fee | null = feeOf(transfer);
   const debit: Debit | null = debitOf(transfer);
+  const line: string = `Found payout ${transfer.short_reference_id}, sent outside PayOnce: ${payoutSummary(transfer)}`;
   engine.ledger.adoptPayout(
     {
       invoiceId,
@@ -103,8 +104,10 @@ function adopt(engine: Engine, transfer: Transfer, state: FoundState): string | 
       // bank details cannot stop the payout being taken on.
       ...sentToOf(transfer.beneficiary?.bank_details),
     },
-    `Found payout ${transfer.short_reference_id}, sent outside PayOnce: ${payoutSummary(transfer)}`,
+    line,
   );
+  // The line is written with the invoice, so it is printed here as note prints one.
+  say(`  ${"bank".padEnd(8)} ${oneLine(line)}`);
   return invoiceId;
 }
 
