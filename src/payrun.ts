@@ -378,6 +378,10 @@ async function main(): Promise<void> {
   // APPROVERS and the other settings, and run without a .env.
   loadEnvIfPresent();
   const [command, first, second, ...rest] = process.argv.slice(2);
+  if (command !== "upload" && command !== "show" && command !== "approve" && command !== "check" && command !== "cancel") {
+    fail(USAGE.join("\n"));
+    return;
+  }
   // Opening a ledger that is not there would make an empty one.
   if (!existsSync(LEDGER_PATH)) {
     fail(`There is no ${LEDGER_PATH} here. Start an incident first, or start pnpm ui once.`);
@@ -386,10 +390,6 @@ async function main(): Promise<void> {
   const ledger: Ledger = new Ledger(LEDGER_PATH);
   if (command === "upload") {
     await upload(ledger, first, [second, ...rest].join(" ").trim());
-    return;
-  }
-  if (command !== "show" && command !== "approve" && command !== "check" && command !== "cancel") {
-    fail(USAGE.join("\n"));
     return;
   }
   const run: Run | undefined = runOf(ledger, first);
