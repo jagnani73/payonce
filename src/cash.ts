@@ -8,6 +8,7 @@ import {
   type CashReport,
   type CurrencyCash,
 } from "./cash-position.js";
+import { loadEnvIfPresent } from "./env-file.js";
 import { Ledger, LEDGER_PATH, readingSoft } from "./ledger.js";
 import { formatMoney } from "./money.js";
 import { recordMissingFees } from "./payments.js";
@@ -144,6 +145,7 @@ function printCurrency(currency: CurrencyCash, report: CashReport): void {
 // nothing but fees. Exits 1 when Airwallex could not be read, the floors are
 // unreadable, or any headroom is below 0.
 async function main(): Promise<void> {
+  loadEnvIfPresent();
   // A credential missing from .env, or an address that is not the sandbox, in
   // PayOnce's words and with no stack trace.
   let client: AirwallexClient;

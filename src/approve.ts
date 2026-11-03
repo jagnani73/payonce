@@ -2,6 +2,7 @@ import { describeRate, markupOf, type ApprovalTerms, type DuplicateEvidence } fr
 import { arrivalAdvice, type ArrivalAdvice } from "./arrival.js";
 import { describePolicy, policyFromEnv, type ApprovalPolicy } from "./approvers.js";
 import { approvePayment, pendingApproval, type PendingApproval } from "./engine.js";
+import { loadEnvIfPresent } from "./env-file.js";
 import { Ledger, LEDGER_PATH, signersOf, type Approval, type Obligation, type Outage } from "./ledger.js";
 import { formatMoney } from "./money.js";
 import { railOf } from "./outages.js";
@@ -80,6 +81,8 @@ function show(pending: PendingApproval): void {
 // policy. A request opened since is refused, so nobody approves terms they did
 // not see.
 function main(): void {
+  // For APPROVERS. Without it every approval is refused, and the policy line says so.
+  loadEnvIfPresent();
   const invoiceId: string | undefined = process.argv[2];
   const requestId: number = Number(process.argv[3]);
   const approver: string | undefined = process.argv.slice(4).join(" ").trim() || undefined;

@@ -1,4 +1,5 @@
 import { policyFromEnv, type ApprovalPolicy } from "./approvers.js";
+import { loadEnvIfPresent } from "./env-file.js";
 import { outageHolding } from "./incident-board.js";
 import { Ledger, LEDGER_PATH, type OutageHold } from "./ledger.js";
 import {
@@ -16,18 +17,6 @@ import {
 import { printable, say, shownFailureCode, shownReference } from "./printable.js";
 
 const ENDED_SHOWN: number = 5;
-
-// Without a .env no approver list is set and the default rule applies, and
-// nothing is printed about it.
-function loadEnv(): void {
-  try {
-    process.loadEnvFile(".env");
-  } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-  }
-}
 
 function show(view: OutageView): void {
   say(`Outage ${view.id} on ${view.rail}, ${view.state}`);
@@ -84,7 +73,9 @@ function pickedUpText(ledger: Ledger, holds: OutageHold[]): string {
 // <ID> <NAME> <NOTE> ends one, as the page's button does. It writes only the
 // ledger: the server's watcher picks up what the outage held on its next check.
 function main(): void {
-  loadEnv();
+  // Without a .env no approver list is set and the default rule applies, and
+  // nothing is printed about it.
+  loadEnvIfPresent();
   const command: string | undefined = process.argv[2];
   const policy: ApprovalPolicy = policyFromEnv();
   const ledger: Ledger = new Ledger(LEDGER_PATH);

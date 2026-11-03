@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { AirwallexClient } from "./airwallex/client.js";
 import { NameError } from "./approvers.js";
+import { loadEnvIfPresent } from "./env-file.js";
 import { Ledger, LEDGER_PATH } from "./ledger.js";
 import { formatMoney } from "./money.js";
 import { printable, say, sayError } from "./printable.js";
@@ -51,16 +52,6 @@ const STATUS_TEXT: Record<WalletSummary["status"], string> = {
   "not-two-decimal": "not reconciled: PayOnce handles two-decimal currencies only",
   unreadable: "a movement cannot be read, so the wallet is not checked",
 };
-
-function loadEnv(): void {
-  try {
-    process.loadEnvFile(".env");
-  } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-  }
-}
 
 function fail(message: string): void {
   say(message);
@@ -243,7 +234,7 @@ function existingLedger(): Ledger | null {
 }
 
 async function runLive(): Promise<void> {
-  loadEnv();
+  loadEnvIfPresent();
   let client: AirwallexClient;
   try {
     client = AirwallexClient.fromEnv();
@@ -264,7 +255,7 @@ async function runLive(): Promise<void> {
 }
 
 function runOffline(): void {
-  loadEnv();
+  loadEnvIfPresent();
   const ledger: Ledger | null = existingLedger();
   if (ledger === null) {
     return;
@@ -280,7 +271,7 @@ function runOffline(): void {
 // Ledger only, read-only, so showing the report never creates or upgrades a file.
 // It exits by the check's rule, on the stored report and the latest run on file.
 function show(raw: string | undefined): void {
-  loadEnv();
+  loadEnvIfPresent();
   const currency: string | null = raw === undefined ? null : raw.trim().toUpperCase();
   if (currency !== null && shownCurrency(currency) === null) {
     fail(USAGE);

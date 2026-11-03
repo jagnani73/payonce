@@ -3,6 +3,7 @@ import { airwallexAdvice, AirwallexClient, AirwallexError, AirwallexUnreachableE
 import { personName, policyFromEnv } from "./approvers.js";
 import { Dispatcher } from "./dispatcher.js";
 import { note, noteError, type Engine } from "./engine.js";
+import { loadEnvIfPresent } from "./env-file.js";
 import { describeQuotes } from "./fx.js";
 import { Ledger, LEDGER_PATH, type Obligation, type RunRow } from "./ledger.js";
 import { describeOutageRule, outageRuleFromEnv } from "./outages.js";
@@ -25,6 +26,7 @@ const DEFAULT_OUTCOME: string = "CHANNEL_TIMEOUT";
 const CHECK_EVERY_MS: number = 2_000;
 
 async function main(): Promise<void> {
+  loadEnvIfPresent();
   const bankOutcome: string = process.argv[2] ?? DEFAULT_OUTCOME;
   // A credential missing from .env, or an address that is not the sandbox, in
   // PayOnce's words and with no stack trace. Nothing is stored or sent.

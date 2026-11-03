@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { policyFromEnv } from "./approvers.js";
+import { loadEnvIfPresent } from "./env-file.js";
 import { EXPLAIN_SYSTEM, ExplainError, explainerFromEnv, promptOf, shownAnswer, type Explainer, type ModelAnswer, type ShownAnswer } from "./explainer.js";
 import { Ledger, LEDGER_PATH } from "./ledger.js";
 import { printable, printableJson, say, sayError, sayWarning } from "./printable.js";
@@ -20,16 +21,6 @@ With facts, prints the facts and the legend exactly as they would be sent, and a
 const WIDTH: number = 80;
 // Every line goes through printable.ts, as pnpm board prints names. The answer
 // is cleaned after the legend swaps names and invoice numbers back in.
-
-function loadEnv(): void {
-  try {
-    process.loadEnvFile(".env");
-  } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-  }
-}
 
 function fail(message: string): never {
   sayError(message);
@@ -60,7 +51,7 @@ function legendText(legend: LegendEntry[]): string {
 }
 
 async function main(): Promise<void> {
-  loadEnv();
+  loadEnvIfPresent();
   const [invoiceId, mode, ...rest] = process.argv.slice(2);
   if (invoiceId === undefined || invoiceId === "" || (mode !== undefined && mode !== "facts") || rest.length > 0) {
     fail(USAGE);

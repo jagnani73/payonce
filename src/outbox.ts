@@ -7,6 +7,7 @@ import {
   type DraftView,
   type Outbox,
 } from "./drafts.js";
+import { loadEnvIfPresent } from "./env-file.js";
 import { INVOICE_ID_PATTERN, Ledger, LEDGER_PATH, type Obligation } from "./ledger.js";
 import { say } from "./printable.js";
 
@@ -89,6 +90,8 @@ function draftId(raw: string | undefined): number | null {
 }
 
 function main(): void {
+  // For the bank deadlines. Without a .env the defaults apply.
+  loadEnvIfPresent();
   const [invoiceId, action, arg, name, ...rest] = process.argv.slice(2);
   if (invoiceId === undefined || !INVOICE_ID_PATTERN.test(invoiceId)) {
     fail(USAGE);

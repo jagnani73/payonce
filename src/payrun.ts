@@ -5,6 +5,7 @@ import type { RunTotal } from "./approval.js";
 import { arrivalAdvice, feeSeenText, HOLIDAYS_NOTE, type ArrivalAdvice } from "./arrival.js";
 import { describePolicy, personName, policyFromEnv, type ApprovalPolicy } from "./approvers.js";
 import type { Engine } from "./engine.js";
+import { loadEnvIfPresent } from "./env-file.js";
 import {
   Ledger,
   LEDGER_PATH,
@@ -371,6 +372,9 @@ function approve(ledger: Ledger, run: Run, requestRaw: string | undefined, appro
 }
 
 async function main(): Promise<void> {
+  // Upload and check need the credentials; show, approve and cancel read only
+  // APPROVERS and the other settings, and run without a .env.
+  loadEnvIfPresent();
   const [command, first, second, ...rest] = process.argv.slice(2);
   const ledger: Ledger = new Ledger(LEDGER_PATH);
   if (command === "upload") {

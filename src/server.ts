@@ -79,6 +79,7 @@ import {
 } from "./drafts.js";
 import { MAX_EMAIL_BYTES, noteTexts, TOO_LARGE_TEXT, type ParsedEmail } from "./eml.js";
 import type { EmailFindings, SupplierEmail } from "./emails.js";
+import { loadEnvIfPresent } from "./env-file.js";
 import {
   ASKS_PER_DAY,
   ASKS_PER_MINUTE,
@@ -224,6 +225,10 @@ import { openTunnel, type Tunnel } from "./tunnel.js";
 import { Watcher } from "./watcher.js";
 import { WEBHOOK_PATH, WebhookReceiver, type WebhookEvent } from "./webhooks.js";
 import { whyFacts, type WhyBuild } from "./why-facts.js";
+
+// Before any setting below is read. Without a .env, the client stops the server
+// with the missing setting's name.
+loadEnvIfPresent();
 
 // Local demo server. It binds to loopback only and has no authentication.
 const HOST: string = "127.0.0.1";

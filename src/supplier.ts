@@ -1,3 +1,4 @@
+import { loadEnvIfPresent } from "./env-file.js";
 import type { BoardMoney, BoardTotal } from "./incident-board.js";
 import { Ledger, LEDGER_PATH } from "./ledger.js";
 import { formatMoney } from "./money.js";
@@ -60,17 +61,6 @@ const GROUP_WORDS: Record<string, string> = {
 function fail(message: string): void {
   say(message);
   process.exitCode = 1;
-}
-
-// Without a .env the default deadlines apply, and nothing is printed about it.
-function loadEnv(): void {
-  try {
-    process.loadEnvFile(".env");
-  } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-  }
 }
 
 function utc(at: string | null): string {
@@ -390,7 +380,8 @@ function main(): void {
     fail(USAGE);
     return;
   }
-  loadEnv();
+  // Without a .env the default deadlines apply, and nothing is printed about it.
+  loadEnvIfPresent();
   const ledger: Ledger = new Ledger(LEDGER_PATH);
   try {
     const word: string | undefined = args[0]?.trim();
