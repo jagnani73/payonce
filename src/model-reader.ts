@@ -84,18 +84,27 @@ function keyForms(key: string): string[] {
   return [...forms].filter((form: string): boolean => form !== "");
 }
 
+// A to Z as a to z and nothing else, so the text keeps its length and a match in
+// it is a match at the same place in the text.
+function folded(text: string): string {
+  return text.replace(/[A-Z]/g, (letter: string): string => letter.toLowerCase());
+}
+
 // Text with the key cut out, for any error that could carry it, since some
 // services echo the key back. Every form of the key goes, and so does any run of
-// KEY_RUN or more characters that is part of one, such as a key cut short. Each
-// cut becomes the label.
+// KEY_RUN or more characters that is part of one, such as a key cut short. Both
+// are matched whatever the case of their letters, since a service can echo the key
+// upper-cased. Each cut becomes the label.
 export function redactKey(text: string, key: string, label: string = "[key]"): string {
   if (key === "") {
     return text;
   }
-  const forms: string[] = keyForms(key);
+  const forms: string[] = [...new Set<string>(keyForms(key).map(folded))];
   let cut: string = text;
   for (const form of forms) {
-    cut = cut.replaceAll(form, label);
+    for (let at: number = folded(cut).indexOf(form); at !== -1; at = folded(cut).indexOf(form, at + label.length)) {
+      cut = `${cut.slice(0, at)}${label}${cut.slice(at + form.length)}`;
+    }
   }
   const runs: Set<string> = new Set<string>();
   for (const form of forms) {
@@ -103,9 +112,10 @@ export function redactKey(text: string, key: string, label: string = "[key]"): s
       runs.add(form.slice(at, at + KEY_RUN));
     }
   }
+  const lower: string = folded(cut);
   const covered: Uint8Array = new Uint8Array(cut.length);
   for (let at: number = 0; at + KEY_RUN <= cut.length; at += 1) {
-    if (runs.has(cut.slice(at, at + KEY_RUN))) {
+    if (runs.has(lower.slice(at, at + KEY_RUN))) {
       covered.fill(1, at, at + KEY_RUN);
     }
   }
