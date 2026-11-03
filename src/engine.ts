@@ -134,7 +134,7 @@ import {
 import { formatMoney, readMinor, toMajor, toMinor } from "./money.js";
 import { holdLine, railFailureSeen, waitingLine } from "./outages.js";
 import { sendAttempt, syncTransfer, wasRejected, type Decide } from "./payments.js";
-import { oneLine, say, sayError } from "./printable.js";
+import { oneLine, say, sayError, shownReference } from "./printable.js";
 import { debitCurrency, floorFor, type ReservePolicy } from "./reserve.js";
 
 // What the reader found. unverifiedSenders is kept for display; the policy works
@@ -3858,9 +3858,23 @@ function coveredByClose(ledger: Ledger, invoiceId: string): CoveredTransfer[] {
     );
 }
 
+// Airwallex's transfer ids are UUIDs and its statuses capital words, so a stored
+// value in any other form is not shown.
+const TRANSFER_ID: RegExp = /^[A-Za-z0-9-]{1,64}$/;
+const BANK_STATUS: RegExp = /^[A-Z_]{1,30}$/;
+
 // How a close names the transfers it covers, as the card and pnpm close show them.
+// The bank's reference, transfer id and status show only in their own forms,
+// because the refusal that carries this goes to the page and the terminal.
 export function coveredText(transfer: CoveredTransfer): string {
-  return `${transfer.reference} (${transfer.transferId}), ${transfer.status ?? "status not read"}, under the ${transfer.kind}'s request id`;
+  const id: string = TRANSFER_ID.test(transfer.transferId) ? transfer.transferId : "a transfer id PayOnce cannot show";
+  const status: string =
+    transfer.status === null
+      ? "status not read"
+      : BANK_STATUS.test(transfer.status)
+        ? transfer.status
+        : "a status PayOnce cannot show";
+  return `${shownReference(transfer.reference)} (${id}), ${status}, under the ${transfer.kind}'s request id`;
 }
 
 export function pendingClose(

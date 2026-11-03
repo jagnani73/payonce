@@ -1,5 +1,6 @@
 import {
   closeIncident,
+  coveredText,
   namingText,
   pendingClose,
   type CloseReview,
@@ -16,13 +17,6 @@ const TRANSFER_ID: RegExp = /^[A-Za-z0-9-]{1,64}$/;
 
 function names(name: string, transfer: CoveredTransfer): boolean {
   return name === transfer.reference || name === transfer.transferId;
-}
-
-// As coveredText words it, with the bank's identifiers printed only in their own
-// forms.
-function coveredLine(transfer: CoveredTransfer): string {
-  const id: string = TRANSFER_ID.test(transfer.transferId) ? transfer.transferId : "a transfer id PayOnce cannot show";
-  return `${shownReference(transfer.reference)} (${id}), ${transfer.status === null ? "status not read" : printable(transfer.status)}, under the ${transfer.kind}'s request id`;
 }
 
 // How --covers names a transfer: by its short reference, else by its transfer id.
@@ -99,7 +93,7 @@ function main(): void {
   if (review.covered.length > 0) {
     say("  covers    transfers listed under its request ids that do not match it:");
     for (const transfer of review.covered) {
-      say(`            ${coveredLine(transfer)}`);
+      say(`            ${coveredText(transfer)}`);
     }
   }
   const covers: string =
