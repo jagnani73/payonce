@@ -19,7 +19,7 @@ import {
   type RunRow,
 } from "./ledger.js";
 import { formatMoney } from "./money.js";
-import { printable, say } from "./printable.js";
+import { printable, say, utcTime } from "./printable.js";
 import { readerFromEnv } from "./reader.js";
 import { describeFloors, reserveFromEnv } from "./reserve.js";
 import { parseRunFile, type FileProblem, type ParsedRunFile } from "./run-file.js";
@@ -192,7 +192,7 @@ function printApproval(ledger: Ledger, pending: PendingRunApproval): void {
     say(`  not      ${printable(bar.name)}, who ${bar.why}`);
   }
   say(
-    `  expires  ${new Date(approval.expiresAt).toLocaleString()}${pending.expired ? " (expired)" : ""}`,
+    `  expires  ${utcTime(approval.expiresAt)}${pending.expired ? " (expired)" : ""}`,
   );
 }
 
@@ -200,7 +200,7 @@ function show(ledger: Ledger, run: Run): void {
   const rows: RunRow[] = ledger.runRows(run.id);
   const counts: RunCounts = runCounts(rows);
   say(
-    `Pay run ${run.id}, ${run.fileName}, uploaded by ${run.uploadedBy} at ${new Date(run.uploadedAt).toLocaleString()}: ${STATUS_WORDS[runStatus(ledger, run)]}`,
+    `Pay run ${run.id}, ${run.fileName}, uploaded by ${run.uploadedBy} at ${utcTime(run.uploadedAt)}: ${STATUS_WORDS[runStatus(ledger, run)]}`,
   );
   say(
     `  ${counts.pay} to pay (${totalsText(counts.totals)})${counts.held === 0 ? "" : `, ${counts.held} held for a person when sent`}, ${counts.skip} skipped`,

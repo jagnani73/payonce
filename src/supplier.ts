@@ -1,7 +1,7 @@
 import type { BoardMoney, BoardTotal } from "./incident-board.js";
 import { Ledger, LEDGER_PATH } from "./ledger.js";
 import { formatMoney } from "./money.js";
-import { printable, say, shownFailureCode, shownReference, UNSHOWN_FAILURE_CODE } from "./printable.js";
+import { printable, say, shownFailureCode, shownReference, UNSHOWN_FAILURE_CODE, utcTime } from "./printable.js";
 import {
   resolveSupplier,
   supplierDetail,
@@ -74,7 +74,7 @@ function loadEnv(): void {
 }
 
 function utc(at: string | null): string {
-  return at === null ? "a time not on file" : `${at.slice(0, 16).replace("T", " ")} UTC`;
+  return at === null ? "a time not on file" : utcTime(at);
 }
 
 function day(at: string | null): string {

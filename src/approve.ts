@@ -5,7 +5,7 @@ import { approvePayment, pendingApproval, type PendingApproval } from "./engine.
 import { Ledger, LEDGER_PATH, signersOf, type Approval, type Obligation, type Outage } from "./ledger.js";
 import { formatMoney } from "./money.js";
 import { railOf } from "./outages.js";
-import { printable, say, shownFailureCode, shownReference } from "./printable.js";
+import { printable, say, shownFailureCode, shownReference, utcTime } from "./printable.js";
 
 function describeDuplicate(duplicate: DuplicateEvidence): string {
   const paid: string = duplicate.paidBy === null ? "" : `, paid by ${shownReference(duplicate.paidBy)}`;
@@ -24,7 +24,7 @@ function show(pending: PendingApproval): void {
       `  from     ${formatMoney(terms.fx.sellAmountMinor, terms.fx.sellCurrency)} at ${describeRate(terms.fx)} (${markupOf(terms.fx)} from mid-market ${String(terms.fx.midRate)})`,
     );
     say(
-      `  quote    ${printable(terms.fx.quoteId)}, holds until ${new Date(terms.fx.validTo).toLocaleString()}`,
+      `  quote    ${printable(terms.fx.quoteId)}, holds until ${utcTime(terms.fx.validTo)}`,
     );
     say(
       `  fee      ${terms.fx.feeEstimateMinor === null ? `charged in ${terms.fx.sellCurrency} when it is sent` : `about ${formatMoney(terms.fx.feeEstimateMinor, terms.fx.sellCurrency)}`}`,
@@ -66,7 +66,7 @@ function show(pending: PendingApproval): void {
     say(`  not      ${printable(bar.name)}, who ${bar.why}`);
   }
   say(
-    `  expires  ${approval.expiresAt === null ? "already" : new Date(approval.expiresAt).toLocaleString()}${pending.expired ? " (expired)" : ""}`,
+    `  expires  ${approval.expiresAt === null ? "already" : utcTime(approval.expiresAt)}${pending.expired ? " (expired)" : ""}`,
   );
 }
 

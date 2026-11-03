@@ -32,6 +32,15 @@ export function shownFailureCode(value: unknown): string {
   return typeof value === "string" && FAILURE_CODE.test(value) ? value : UNSHOWN_FAILURE_CODE;
 }
 
+// A time as the terminal commands print it, "2026-11-03 01:49 UTC", whatever
+// zone the stored time was written in.
+export function utcTime(at: string | number): string {
+  const time: number = typeof at === "number" ? at : Date.parse(at);
+  return Number.isFinite(time)
+    ? `${new Date(time).toISOString().slice(0, 16).replace("T", " ")} UTC`
+    : "a time PayOnce cannot read";
+}
+
 // One line: a line break or any other control character becomes a space, and a
 // format character goes.
 export function printable(text: string): string {

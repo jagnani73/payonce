@@ -15,7 +15,7 @@ import {
 import { Ledger, LEDGER_PATH } from "./ledger.js";
 import { formatMoney } from "./money.js";
 import { sendsText, type OutageCode } from "./outages.js";
-import { printable, say, shownFailureCode } from "./printable.js";
+import { printable, say, shownFailureCode, utcTime } from "./printable.js";
 
 // The incident board in the terminal, ranked as the page ranks it. It reads only
 // the ledger, with no Airwallex call, and loads .env only if there is one, for the
@@ -65,10 +65,6 @@ function filtersOf(args: string[]): BoardFilters | null {
     }
   }
   return filters;
-}
-
-function utc(at: string): string {
-  return `${at.slice(0, 16).replace("T", " ")} UTC`;
 }
 
 // How long since an ISO time, in the largest whole unit.
@@ -135,7 +131,7 @@ function outageLines(outage: BoardOutage): string[] {
     outage.codes.map((entry: OutageCode): string => `${shownFailureCode(entry.code)} (${entry.label})`).join(", ") ||
     "a rail-level code";
   return [
-    `  Outage ${outage.id} on ${outage.rail}, since ${utc(outage.declaredAt)}`,
+    `  Outage ${outage.id} on ${outage.rail}, since ${utcTime(outage.declaredAt)}`,
     `${INDENT}Payouts to ${outage.payees} payees failed within ${outage.windowMinutes} minutes with ${codes}. PayOnce opens no new payment on ${outage.rail} until a person ends it`,
     heldLine("First payments waiting", outage.originals.map(printable)),
     heldLine("Replacements escalated", outage.replacements.map(printable)),
@@ -162,7 +158,7 @@ function entryLines(entry: BoardEntry, now: string): string[] {
           : "";
   const risk: string =
     entry.atRisk.length === 0 ? "nothing at risk" : `at risk ${entry.atRisk.map(moneyText).join(", ")}`;
-  const deadline: string = entry.deadlineAt === null ? "" : `. Deadline ${utc(entry.deadlineAt)}`;
+  const deadline: string = entry.deadlineAt === null ? "" : `. Deadline ${utcTime(entry.deadlineAt)}`;
   return [
     `  ${cut(printable(entry.invoiceId), ID_WIDTH)} ${cut(printable(entry.supplier), SUPPLIER_WIDTH)}${amount.padStart(AMOUNT_WIDTH)}  ${risk}, waiting ${waited(entry.waitingSince, now)}${where}`,
     `${INDENT}${entry.why}${deadline}`,
@@ -176,7 +172,7 @@ function print(report: BoardReport): void {
     report.filters.currency,
     report.filters.origin === null ? null : `origin ${report.filters.origin}`,
   ].filter((part: string | null): part is string => part !== null);
-  say(`Incident board at ${utc(report.generatedAt)}, from the ledger only`);
+  say(`Incident board at ${utcTime(report.generatedAt)}, from the ledger only`);
   if (applied.length > 0) {
     say(`Showing ${report.entries.length} of ${report.all}: ${applied.join(", ")}`);
   }
