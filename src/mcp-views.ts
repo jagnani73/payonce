@@ -125,10 +125,21 @@ function vouchedArrival(arrival: ArrivalTerms): ArrivalTerms | null {
 }
 
 // The advice for an estimate, which is PayOnce's own sentence, or null when the
-// estimate is not in PayOnce's own forms.
-function adviceOf(arrival: ArrivalTerms): ArrivalAdvice | null {
+// estimate is not in PayOnce's own forms. "If sent today" says when a payment
+// that can still be approved and sent would arrive, so, as the server's
+// adviceFor gives it, a used, void or expired request and a run that no longer
+// waits have none.
+function adviceOf(arrival: ArrivalTerms, live: boolean): ArrivalAdvice | null {
   const vouched: ArrivalTerms | null = vouchedArrival(arrival);
-  return vouched === null ? null : arrivalAdvice(vouched);
+  if (vouched === null) {
+    return null;
+  }
+  const advice: ArrivalAdvice = arrivalAdvice(vouched);
+  return live ? advice : { ...advice, sentToday: null };
+}
+
+function isLive(approval: Approval | RunApproval): boolean {
+  return (approval.state === "requested" || approval.state === "approved") && !isExpired(approval);
 }
 
 // The newest lines, oldest first.
@@ -273,7 +284,7 @@ export function incidentView(ledger: Ledger, invoiceId: string, lines: number): 
             state: approval.state,
             approver: approval.approver,
             terms: shownTerms(terms),
-            arrivalAdvice: terms.arrival === undefined ? null : adviceOf(terms.arrival),
+            arrivalAdvice: terms.arrival === undefined ? null : adviceOf(terms.arrival, isLive(approval)),
             needed: approval.needed,
             neededWhy: approval.neededWhy,
             signoffs: approval.signoffs.map((signoff: Signoff) => ({ approver: signoff.approver, at: signoff.at })),
@@ -351,7 +362,7 @@ export function runView(ledger: Ledger, runId: number, lines: number): unknown {
           arrival === null || row.currency === null || !CURRENCY.test(row.currency)
             ? null
             : feeSeenText(ledger, row.currency, arrival.method),
-        arrivalAdvice: arrival === null ? null : arrivalAdvice(arrival),
+        arrivalAdvice: arrival === null ? null : adviceOf(arrival, run.state === "waiting"),
         invoice: row.state === "released" && row.invoiceId !== null ? invoiceSummary(ledger, row.invoiceId) : null,
       };
     }),
@@ -365,7 +376,8 @@ export function runView(ledger: Ledger, runId: number, lines: number): unknown {
             approver: approval.approver,
             terms,
             arrivalAdvice: terms.rows.flatMap((row: RunRowTerms) => {
-              const advice: ArrivalAdvice | null = row.arrival === undefined ? null : adviceOf(row.arrival);
+              const advice: ArrivalAdvice | null =
+                row.arrival === undefined ? null : adviceOf(row.arrival, run.state === "waiting" && isLive(approval));
               return advice === null ? [] : [{ line: row.line, invoiceId: row.invoiceId, advice }];
             }),
             needed: approval.needed,
