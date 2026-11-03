@@ -139,7 +139,7 @@ function parseApprovers(raw: string): Approver[] {
       throw new Error(
         twin.name === name
           ? `${name} is listed twice`
-          : `${twin.name} and ${name} are the same name to PayOnce, which compares names by their letters and digits only`,
+          : `${twin.name} and ${name} are the same name to PayOnce, which compares names by their letters, digits and the spaces between words`,
       );
     }
     approvers.push({ name, limitMinor: toMinor(limit) });
