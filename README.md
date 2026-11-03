@@ -356,7 +356,7 @@ A movement whose transfer is still inside its window, or has not been read yet, 
 
 A break that waits for a person stays open until someone explains it, even after Airwallex's records stop showing it. PayOnce then marks it as no longer found. The one exception is a payout tied to no invoice, which clears when the sweep ties it.
 
-To explain breaks, open Reconciliation in the top bar, tick breaks of one kind, give your name and a note, and press Explain. The explanation covers those breaks with the facts the page showed. If a break's facts change later, such as a refund landing on a payout you explained, it opens again. `pnpm reconcile explain` does the same in the terminal, with the short fingerprints it printed. Put the note in quotes, and a name with a space in it, because each has to be one argument. Anyone with a name may explain a break, as anyone may close an incident, because explaining moves no money.
+To explain breaks, open Reconciliation in the top bar, tick breaks of one kind, give your name and a note, and press Explain. The explanation covers those breaks with the facts the page showed. If a break's facts change later, such as a refund landing on a payout you explained, it opens again. `pnpm reconcile explain` does the same in the terminal, with the short fingerprints it printed. Put a name with a space in it in quotes, because the name is one argument. Every word after the name is the note. Anyone with a name may explain a break, as anyone may close an incident, because explaining moves no money.
 
 Every break found, changed, cleared or explained goes on a hash chain of its own, with its own running hash, and `pnpm run audit` checks it after the invoice and pay run chains. Once the chain has its first line, an empty chain, a missing running hash, a running hash that went missing and started again, or a break that opened with no line counts as lines removed.
 
@@ -481,7 +481,7 @@ pnpm outage end <ID> <NAME> <NOTE>
 pnpm supplier [RECORD|INVOICE]
 pnpm reconcile [offline]
 pnpm reconcile show [CURRENCY]
-pnpm reconcile explain <ID[,ID...]> [NAME "NOTE" --facts=FP[,FP...]]
+pnpm reconcile explain <ID[,ID...]> [NAME NOTE --facts=FP[,FP...]]
 pnpm mcp
 pnpm ask <INVOICE> [facts]
 pnpm metrics [7d|30d|all] [json]
