@@ -1,6 +1,6 @@
 import { policyFromEnv, type ApprovalPolicy } from "./approvers.js";
 import { outageHolding } from "./incident-board.js";
-import { Ledger, LEDGER_PATH } from "./ledger.js";
+import { Ledger, LEDGER_PATH, type OutageHold } from "./ledger.js";
 import {
   describeOutageRule,
   endOutage,
@@ -58,6 +58,28 @@ function describeHeld(item: HeldItem): string {
   return `${what}: ${item.what}, now ${item.state ?? "not in the ledger"}`;
 }
 
+// What the end leaves for PayOnce to look at: the open and escalated invoices it
+// held, whose next look the end made due, and the pay runs still waiting, which
+// only the server releases. A closed invoice or a run released or cancelled since
+// gets nothing.
+function pickedUpText(ledger: Ledger, holds: OutageHold[]): string {
+  const invoices: number = holds.filter((hold: OutageHold): boolean => {
+    const state: string | undefined = hold.invoiceId === null ? undefined : ledger.obligation(hold.invoiceId)?.state;
+    return state === "open" || state === "escalated";
+  }).length;
+  const runs: number = holds.filter(
+    (hold: OutageHold): boolean => hold.runId !== null && ledger.run(hold.runId)?.state === "waiting",
+  ).length;
+  if (invoices === 0 && runs === 0) {
+    return "Ended. Nothing it held is still waiting, so PayOnce has nothing to pick up";
+  }
+  const what: string[] = [
+    ...(invoices === 0 ? [] : [`${invoices} ${invoices === 1 ? "invoice" : "invoices"}`]),
+    ...(runs === 0 ? [] : [`${runs} ${runs === 1 ? "pay run" : "pay runs"}`]),
+  ];
+  return `Ended. The server's watcher picks up the ${what.join(" and ")} it held on its next check, or the next ${runs === 0 ? "pnpm ui or pnpm recover" : "pnpm ui"} does`;
+}
+
 // pnpm outage lists the active outages and the last few ended. pnpm outage end
 // <ID> <NAME> <NOTE> ends one, as the page's button does. It writes only the
 // ledger: the server's watcher picks up what the outage held on its next check.
@@ -92,9 +114,7 @@ function main(): void {
   }
   try {
     const ended: EndedOutage = endOutage(ledger, policy, id, name, note, outageHolding(ledger));
-    say(
-      `Ended. The server's watcher picks up the ${ended.holds.length} ${ended.holds.length === 1 ? "invoice or run" : "invoices and runs"} it held on its next check, or the next pnpm ui or pnpm recover does`,
-    );
+    say(pickedUpText(ledger, ended.holds));
   } catch (error: unknown) {
     say(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
