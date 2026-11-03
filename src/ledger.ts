@@ -4246,10 +4246,13 @@ export class Ledger {
 
   // Closes again without paying an invoice a person had closed without paying,
   // which a payment found since reopened, once nothing for it is live at the bank,
-  // PayOnce's or sent outside it. By itself, PayOnce also leaves it alone while a
-  // transfer under one of its request ids that does not match it was found since
-  // a person last closed it: only a person (byPerson) clears that, and only the
-  // ones their close covered (covered), in the same transaction. False when
+  // PayOnce's or sent outside it. By itself, PayOnce leaves it alone while any
+  // payout sent outside PayOnce tied to it is in flight, paid or in a status it
+  // does not know (LIVE_OUTSIDE_PAYOUT), and while a transfer under one of its
+  // request ids that does not match it was found since a person last closed it.
+  // Only a person (byPerson) closes past a paid payout that names the invoice but
+  // does not pay it (BLOCKING_OUTSIDE_PAYOUT), and clears only the mismatched
+  // transfers their close covered (covered), in the same transaction. False when
   // nothing changed.
   rejectAgain(invoiceId: string, byPerson: boolean = false, covered: string[] = []): boolean {
     return this.transaction((): boolean => {
@@ -4257,10 +4260,11 @@ export class Ledger {
         .prepare(
           `UPDATE obligations SET state = 'rejected'
             WHERE invoice_id = ? AND state = 'escalated' AND rejected_by IS NOT NULL
-              AND NOT EXISTS (${LIVE_ATTEMPT}) AND NOT EXISTS (${BLOCKING_OUTSIDE_PAYOUT})
-              AND (? = 1 OR NOT EXISTS (${UNCLEARED_MISMATCH}))`,
+              AND NOT EXISTS (${LIVE_ATTEMPT})
+              AND (? = 1 OR (NOT EXISTS (${LIVE_OUTSIDE_PAYOUT}) AND NOT EXISTS (${UNCLEARED_MISMATCH})))
+              AND NOT EXISTS (${BLOCKING_OUTSIDE_PAYOUT})`,
         )
-        .run(invoiceId, invoiceId, invoiceId, byPerson ? 1 : 0, invoiceId);
+        .run(invoiceId, invoiceId, byPerson ? 1 : 0, invoiceId, invoiceId, invoiceId);
       if (Number(result.changes) !== 1) {
         return false;
       }
