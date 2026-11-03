@@ -513,7 +513,7 @@ async function readJson(
 // look cannot read does not stop the server: that look throws and sends nothing.
 // The wakes come after the read, so no look runs inside it.
 function pickUpInterrupted(): void {
-  const picked: { invoiceId: string; sent: { kind: AttemptKind; transferId: string }[] }[] = readingSoft(() =>
+  const picked: { invoiceId: string; sent: { kind: AttemptKind; transferId: string; reference: string | null }[] }[] = readingSoft(() =>
     engine.ledger
       .obligations()
       .filter(
@@ -523,16 +523,16 @@ function pickUpInterrupted(): void {
       .map((obligation: Obligation) => ({ invoiceId: obligation.invoiceId, sent: resumedBySandbox(obligation) })),
   );
   for (const { invoiceId, sent } of picked) {
-    for (const { kind, transferId } of sent) {
-      bank.sent(invoiceId, kind, transferId);
+    for (const { kind, transferId, reference } of sent) {
+      bank.sent(invoiceId, kind, transferId, reference);
     }
     agent.wake(invoiceId);
   }
 }
 
 // The payments in flight the sandbox bank goes back to paying.
-function resumedBySandbox(obligation: Obligation): { kind: AttemptKind; transferId: string }[] {
-  const sent: { kind: AttemptKind; transferId: string }[] = [];
+function resumedBySandbox(obligation: Obligation): { kind: AttemptKind; transferId: string; reference: string | null }[] {
+  const sent: { kind: AttemptKind; transferId: string; reference: string | null }[] = [];
   for (const attempt of engine.ledger.attempts(obligation.invoiceId)) {
     if (attempt.state !== "in_flight" || attempt.transferId === null) {
       continue;
@@ -544,7 +544,7 @@ function resumedBySandbox(obligation: Obligation): { kind: AttemptKind; transfer
       obligation.runRowId !== null ||
       (approval?.state === "used" && storedObject<ApprovalTerms>(approval.terms)?.action === "pay");
     if (attempt.kind === "replacement" || released) {
-      sent.push({ kind: attempt.kind, transferId: attempt.transferId });
+      sent.push({ kind: attempt.kind, transferId: attempt.transferId, reference: attempt.reference });
     }
   }
   return sent;

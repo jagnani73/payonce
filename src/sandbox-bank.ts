@@ -69,12 +69,13 @@ function sandboxError(step: BankStep, reference: string | null, error: unknown):
     : error;
 }
 
-// A read the sandbox bank makes, with an Airwallex failure in PayOnce's words.
-async function reading<T>(read: () => Promise<T>): Promise<T> {
+// A read the sandbox bank makes, with an Airwallex failure in PayOnce's words,
+// naming the transfer's reference when the caller has it.
+async function reading<T>(read: () => Promise<T>, reference: string | null = null): Promise<T> {
   try {
     return await read();
   } catch (error: unknown) {
-    throw sandboxError("read", null, error);
+    throw sandboxError("read", reference, error);
   }
 }
 
@@ -215,7 +216,7 @@ export class SandboxBank implements Bank {
   // run row's, else pays it. The simulator refuses every transition of a transfer
   // that converts, so the bank says so once and leaves it in PROCESSING, where the
   // agent's deadline for it runs out.
-  sent(invoiceId: string, kind: AttemptKind, transferId: string): void {
+  sent(invoiceId: string, kind: AttemptKind, transferId: string, reference: string | null = null): void {
     if (kind === "original" && this.scripted.has(invoiceId)) {
       return;
     }
@@ -225,7 +226,7 @@ export class SandboxBank implements Bank {
         : (this.held.get(invoiceId) ?? this.outcomeOf(invoiceId) ?? PAID_OUTCOME);
     this.held.delete(invoiceId);
     this.run(invoiceId, async (): Promise<void> => {
-      const transfer: Transfer = await reading((): Promise<Transfer> => this.read(transferId));
+      const transfer: Transfer = await reading((): Promise<Transfer> => this.read(transferId), reference);
       if (transfer.source_currency !== undefined && transfer.source_currency !== transfer.transfer_currency) {
         // Past its deadline the agent has said so already.
         if (!this.converting.has(transferId) && !isOverdue(transfer)) {

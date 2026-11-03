@@ -173,8 +173,10 @@ export const EMAILS_BEFORE_PAYMENT_REASON: string =
 
 // Told about each payment PayOnce sends. In the sandbox it plays the bank, so the
 // payment moves on. In production there is none, because the bank moves it.
+// reference is the transfer's short reference, which the bank names when it
+// cannot read the transfer.
 export interface Bank {
-  sent(invoiceId: string, kind: AttemptKind, transferId: string): void;
+  sent(invoiceId: string, kind: AttemptKind, transferId: string, reference?: string | null): void;
 }
 
 export interface Engine {
@@ -1433,7 +1435,7 @@ async function send(
     atRisk(arrival) ? "warning" : "payment",
     sentArrivalText(`${capitalise(kind)} ${created.short_reference_id}`, arrival),
   );
-  engine.bank?.sent(obligation.invoiceId, kind, created.id);
+  engine.bank?.sent(obligation.invoiceId, kind, created.id, created.short_reference_id);
   return created;
 }
 
@@ -3541,7 +3543,7 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
       const checks: TransferChecks = transferChecks(engine, obligation, attempt);
       transfer = await syncTransfer(engine.client, engine.ledger, existing.id, checks.decide);
       noteChecks(engine, invoiceId, checks);
-      engine.bank?.sent(invoiceId, attempt.kind, transfer.id);
+      engine.bank?.sent(invoiceId, attempt.kind, transfer.id, transfer.short_reference_id);
     } else if (attempt.transferId === null) {
       // A payout sent outside PayOnce since the attempt was opened, for example in
       // the Airwallex web app while its create call went unanswered, may already
@@ -3613,7 +3615,7 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
       }
       transfer = sent;
       noteChecks(engine, invoiceId, checks);
-      engine.bank?.sent(invoiceId, attempt.kind, transfer.id);
+      engine.bank?.sent(invoiceId, attempt.kind, transfer.id, transfer.short_reference_id);
     } else {
       transfer = await syncTransfer(engine.client, engine.ledger, attempt.transferId);
     }
