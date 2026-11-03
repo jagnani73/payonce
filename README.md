@@ -421,7 +421,7 @@ The request uses the reader's key, base URL, model list and 8 second timeout, an
 
 ## Run it
 
-You need Node 24 (PayOnce uses its built-in `node:sqlite`) and pnpm 12. If you do not have pnpm 12, run `corepack enable`, which then uses the version `package.json` names, or `npm install -g pnpm@12`.
+You need Node 24 (PayOnce uses its built-in `node:sqlite`) and pnpm 12. If you do not have pnpm 12, run `npm install -g pnpm@12`.
 
 ```bash
 pnpm install
