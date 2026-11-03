@@ -100,18 +100,17 @@ export function keyHash(detailsKey: string): string {
   return createHash("sha256").update(detailsKey).digest("hex").slice(0, 16);
 }
 
-// The fields that say which account a payment reaches, and of those the ones
-// that name the account itself. A change to any other field, such as a bank name
-// Airwallex rewrote from the routing number, an address or a category, is not
-// another account. payeeOf and the callback read-back compare these fields.
-export const ROUTE_FIELDS: readonly string[] = [
-  "bank_country_code",
-  "account_currency",
-  "account_number",
-  "account_routing_value1",
-  "iban",
-  "swift_code",
-];
+// The bank details fields known not to change where money goes, so a change to
+// one alone is not another account. Every other field counts, a field Airwallex
+// adds later included. bank_name is here because Airwallex rewrites it from the
+// routing number when a record is updated (seen on 2026-10-28: "Bank of America"
+// became "Bank of America, NA"), and the routing number, not the name, says
+// where the money goes. A field joins this list only with evidence that it
+// cannot route money, said here.
+export const NOT_ROUTING_FIELDS: ReadonlySet<string> = new Set<string>(["bank_name"]);
+
+// The fields that name the account itself. A payout with none of them is told
+// apart by its beneficiary in payeeOf.
 export const ACCOUNT_FIELDS: readonly string[] = ["account_number", "account_routing_value1", "iban", "swift_code"];
 
 // A field as the route compares it: Airwallex may change case or spacing when it
@@ -120,16 +119,24 @@ export function routeValue(raw: unknown): string {
   return typeof raw === "string" ? raw.replace(/\s+/g, "").toUpperCase() : "";
 }
 
-// The key of where money sent to these bank details goes: a hash of the route
-// fields, normalised as routeValue reads them. Every "is this another account?"
-// test compares it. Details with none of the account fields cannot be told apart
-// by where they go, so their key is the full accountKey and any change counts.
+// The key of where money sent to these bank details goes: a hash of every field
+// but NOT_ROUTING_FIELDS, deny by default, in name order, each string read as
+// routeValue reads it. The tests that would otherwise stop a supplier being paid
+// after a bank name changed compare it (see sameBankDetails, Ledger.holdsAccount
+// and verifiedBankChange). An account an approval or a decision pinned is still
+// compared by its full accountKey.
 export function routeKeyOf(details: TransferBankDetails | undefined): string {
-  const fields: TransferBankDetails = details ?? {};
-  if (ACCOUNT_FIELDS.every((field: string): boolean => routeValue(fields[field]) === "")) {
-    return keyHash(bankDetailsKey(details));
-  }
-  return keyHash(JSON.stringify(ROUTE_FIELDS.map((field: string): string[] => [field, routeValue(fields[field])])));
+  return keyHash(
+    JSON.stringify(
+      Object.entries(details ?? {})
+        .filter(([field]: [string, unknown]): boolean => !NOT_ROUTING_FIELDS.has(field))
+        .sort(([a]: [string, unknown], [b]: [string, unknown]): number => a.localeCompare(b))
+        .map(([field, value]: [string, unknown]): [string, unknown] => [
+          field,
+          typeof value === "string" ? routeValue(value) : value,
+        ]),
+    ),
+  );
 }
 
 // The routeKey of bank details stored as bankDetailsKey writes them, as a
@@ -149,9 +156,10 @@ export function routeOfDetailsKey(detailsKey: string): string | null {
   }
 }
 
-// True when a new transfer would go to the account the original went to. Only
-// the route fields count, so a bank name Airwallex rewrote is not new bank
-// details, and a change to the account, its routing or its country is.
+// True when a new transfer would go to the account the original went to. Every
+// field but NOT_ROUTING_FIELDS counts, so a bank name Airwallex rewrote is not new
+// bank details, and a change to any other field is. The replacement's terms
+// still pin the record's full accountKey.
 export function sameBankDetails(
   original: TransferBankDetails | undefined,
   current: TransferBankDetails,

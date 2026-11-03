@@ -5,7 +5,7 @@ import {
 } from "./airwallex/beneficiaries.js";
 import { getTransfer, type Transfer, type TransferBankDetails } from "./airwallex/transfers.js";
 import { personName } from "./approvers.js";
-import { bankDetailsKey } from "./assess.js";
+import { bankDetailsKey, NOT_ROUTING_FIELDS, routeValue } from "./assess.js";
 import { note, type Engine } from "./engine.js";
 import {
   liveAtBank,
@@ -27,14 +27,7 @@ const EDITABLE_FIELDS: Record<string, string> = {
   swift_code: "SWIFT code",
   bank_name: "Bank name",
 };
-// The fields that say which account money goes to. A record that holds these as
-// typed has taken the change, even if Airwallex rewrote a name.
-const ACCOUNT_FIELDS: ReadonlySet<string> = new Set<string>([
-  "account_number",
-  "account_routing_value1",
-  "iban",
-  "swift_code",
-]);
+
 // Account numbers are shown only by their last four characters.
 const MASKED_FIELDS: ReadonlySet<string> = new Set<string>(["account_number", "iban"]);
 // Airwallex's own hash of the details. It changes with them, so it is not a
@@ -70,10 +63,10 @@ export interface CallbackInput {
   details: Record<string, string>;
 }
 
-// Airwallex may change case or spacing when it stores a value.
+// Airwallex may change case or spacing when it stores a value, so values compare
+// as routeKeyOf reads them.
 function sameValue(a: unknown, b: string): boolean {
-  const key = (value: string): string => value.replace(/\s+/g, "").toUpperCase();
-  return typeof a === "string" && key(a) === key(b);
+  return typeof a === "string" && routeValue(a) === routeValue(b);
 }
 
 function digits(phone: string): string {
@@ -88,12 +81,12 @@ function isNumberOnFile(dialled: string, onFile: string): boolean {
 }
 
 // True when the details hold the account the entered fields name. Airwallex
-// rewrites names, such as a bank name it works out from the routing number, so
-// only the fields that say where money goes count.
+// rewrites a bank name it works out from the routing number, so, as routeKeyOf
+// reads details, every field but NOT_ROUTING_FIELDS counts.
 function holdsAccount(details: TransferBankDetails, entered: Record<string, string>): boolean {
   return Object.entries(entered).every(
     ([name, value]: [string, string]): boolean =>
-      !ACCOUNT_FIELDS.has(name) || sameValue(details[name], value),
+      NOT_ROUTING_FIELDS.has(name) || sameValue(details[name], value),
   );
 }
 
@@ -356,7 +349,7 @@ export async function recordBankChange(
     const differ: string[] = Object.entries(entered)
       .filter(([name, value]: [string, string]): boolean => !sameValue(after[name], value))
       .map(([name]: [string, string]): string => name);
-    if (differ.some((name: string): boolean => ACCOUNT_FIELDS.has(name))) {
+    if (differ.some((name: string): boolean => !NOT_ROUTING_FIELDS.has(name))) {
       engine.ledger.finishBankChange(id, "failed", null);
       settled = true;
       note(
