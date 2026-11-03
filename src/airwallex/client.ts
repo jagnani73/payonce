@@ -11,6 +11,7 @@ export const SANDBOX_HOSTS: readonly string[] = ["api.sandbox.airwallex.com", "a
 // public certificate can exist for it, so the key cannot leave over TLS.
 export const OFFLINE_HOST: string = "sandbox.invalid";
 const ALLOWED_HOSTS: readonly string[] = [...SANDBOX_HOSTS, OFFLINE_HOST];
+const ALLOWED_TEXT: string = `${SANDBOX_HOSTS.map((host: string): string => `https://${host}`).join(", ")} or https://${OFFLINE_HOST}`;
 const LOGIN_PATH: string = "/api/v1/authentication/login";
 export const LOGIN_REQUEST: string = `POST ${LOGIN_PATH}`;
 const TOKEN_REFRESH_MARGIN_MS: number = 60_000;
@@ -50,10 +51,10 @@ function withoutSecrets(text: string, secrets: readonly Secret[], cap: number): 
 
 // Airwallex answered with an error status. The message reaches the timeline, the
 // page and the terminal, so Airwallex's words are cut to one cleaned line, and a
-// code is kept only when it looks like one. A gateway's HTML page then becomes a
-// short line instead of a long one in the hash chain. An answer can echo the
-// client id, the API key or the token, so each is cut out of every part kept, and
-// a code that held one is dropped.
+// code is kept only when it looks like one. An answer that is not JSON, such as a
+// gateway's HTML page, is not quoted: the message says only that it was a page
+// that is not JSON. An answer can echo the client id, the API key or the token,
+// so each is cut out of every part kept, and a code that held one is dropped.
 export class AirwallexError extends Error {
   // The method and path, such as LOGIN_REQUEST, with no query string.
   readonly request: string;
@@ -108,6 +109,11 @@ export function airwallexAdvice(error: AirwallexError | AirwallexUnreachableErro
   if (error.request === LOGIN_REQUEST && (error.status === 401 || error.status === 403)) {
     return "Airwallex refused the API key. Check AWX_CLIENT_ID and AWX_API_KEY in .env, then start PayOnce again.";
   }
+  // Past the login the key works, so Airwallex refused it this one call, as for a
+  // scoped key without the permission the call needs.
+  if (error.status === 401 || error.status === 403) {
+    return "Airwallex refused the API key for this call. Check the key's permissions in the Airwallex web app.";
+  }
   return error.status >= 500 || error.status === 429 ? "Try again in a minute." : "";
 }
 
@@ -126,8 +132,22 @@ function requireEnv(name: string): string {
   return value;
 }
 
+// Why AWX_BASE_URL cannot be used. Only the host of the value is ever named, and
+// a value with | in it is the list of choices .env.example gives.
+function baseUrlProblem(baseUrl: string, host: string | null): string {
+  const what: string =
+    host === null
+      ? "AWX_BASE_URL is not an address PayOnce can use"
+      : `Refusing the Airwallex address in AWX_BASE_URL (host ${cleanLine(host, 100)})`;
+  const list: string = baseUrl.includes("|")
+    ? ". It holds |, so it looks like the list of choices from .env.example. Keep one of them"
+    : "";
+  return `${what}${list}. PayOnce talks only to the sandbox: set AWX_BASE_URL to ${ALLOWED_TEXT}, the last to run with no Airwallex`;
+}
+
 async function send<T>(
   request: string,
+  host: string,
   url: string,
   init: RequestInit,
   secrets: readonly Secret[],
@@ -144,24 +164,27 @@ async function send<T>(
     });
     text = await response.text();
   } catch (error: unknown) {
-    throw new AirwallexUnreachableError(request, new URL(url).hostname, error, secrets);
+    throw new AirwallexUnreachableError(request, host, error, secrets);
   }
 
   if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400)) {
     throw new AirwallexError(request, response.status, {}, REDIRECT_TEXT, secrets);
   }
   if (!response.ok) {
-    let body: ErrorBody = {};
+    let body: ErrorBody | null = null;
     try {
-      body = JSON.parse(text) as ErrorBody;
+      const parsed: unknown = JSON.parse(text);
+      body = typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as ErrorBody) : {};
     } catch {
-      body = {};
+      body = null;
     }
     throw new AirwallexError(
       request,
       response.status,
-      body,
-      text || response.statusText,
+      body ?? {},
+      body !== null || text.trim() === ""
+        ? text || response.statusText
+        : "Airwallex answered with a page that is not JSON",
       secrets,
     );
   }
@@ -179,19 +202,25 @@ export class AirwallexClient {
 
   constructor(baseUrl: string, clientId: string, apiKey: string) {
     // This code moves money, so it refuses to talk to anything but the sandbox, or
-    // the offline host: https on the default port, with no user name or password in
-    // the address.
-    const url: URL = new URL(baseUrl);
+    // the offline host: https on the default port, with no user name or password,
+    // path, query or fragment in the address.
+    let url: URL;
+    try {
+      url = new URL(baseUrl);
+    } catch {
+      throw new Error(baseUrlProblem(baseUrl, null));
+    }
     if (
       url.protocol !== "https:" ||
       !ALLOWED_HOSTS.includes(url.hostname) ||
       url.port !== "" ||
       url.username !== "" ||
-      url.password !== ""
+      url.password !== "" ||
+      url.pathname !== "/" ||
+      url.search !== "" ||
+      url.hash !== ""
     ) {
-      throw new Error(
-        `Refusing the Airwallex address in AWX_BASE_URL (host ${cleanLine(url.hostname, 100)}). PayOnce talks only to the sandbox: ${SANDBOX_HOSTS.map((host: string): string => `https://${host}`).join(" or ")}, or https://${OFFLINE_HOST} to run with no Airwallex`,
-      );
+      throw new Error(baseUrlProblem(baseUrl, url.hostname));
     }
     this.host = url.hostname;
     this.baseUrl = baseUrl.replace(/\/+$/, "");
@@ -201,7 +230,8 @@ export class AirwallexClient {
 
   static fromEnv(): AirwallexClient {
     return new AirwallexClient(
-      process.env["AWX_BASE_URL"] ?? DEFAULT_BASE_URL,
+      // Left empty, as NAME= in .env, it is the default, as when it is not set.
+      process.env["AWX_BASE_URL"] || DEFAULT_BASE_URL,
       requireEnv("AWX_CLIENT_ID"),
       requireEnv("AWX_API_KEY"),
     );
@@ -217,6 +247,7 @@ export class AirwallexClient {
 
     const login: LoginResponse = await send<LoginResponse>(
       LOGIN_REQUEST,
+      this.host,
       `${this.baseUrl}${LOGIN_PATH}`,
       {
         method: "POST",
@@ -235,6 +266,7 @@ export class AirwallexClient {
     const request: string = `${method} ${path.split("?")[0] ?? path}`;
     return send<T>(
       request,
+      this.host,
       `${this.baseUrl}${path}`,
       {
         method,
