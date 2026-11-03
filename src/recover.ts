@@ -1,8 +1,8 @@
 import { userInfo } from "node:os";
-import { AirwallexClient } from "./airwallex/client.js";
+import { AirwallexClient, AirwallexError, AirwallexUnreachableError } from "./airwallex/client.js";
 import { personName, policyFromEnv } from "./approvers.js";
 import { Dispatcher } from "./dispatcher.js";
-import { noteError, type Engine } from "./engine.js";
+import { note, noteError, type Engine } from "./engine.js";
 import { describeQuotes } from "./fx.js";
 import { Ledger, LEDGER_PATH, type Obligation, type RunRow } from "./ledger.js";
 import { describeOutageRule, outageRuleFromEnv } from "./outages.js";
@@ -85,23 +85,49 @@ async function main(): Promise<void> {
       await untilAtRest(ledger, agent, bank, invoiceId);
     } else {
       // An obligation with no payment yet is a run that stopped before paying, or
-      // one PayOnce held before paying.
+      // one PayOnce held before paying. A new one is announced once it is stored.
+      const obligation: Obligation = existing ?? (await openScenario(engine, invoiceId, scenarioId, startedBy));
       say(`${existing === undefined ? "New incident" : "Starting"} ${invoiceId}`);
-      await runScenario(
-        engine,
-        agent,
-        bank,
-        existing ?? (await openScenario(engine, invoiceId, scenarioId, startedBy)),
-        { bankOutcome, emailsName },
-      );
+      await runScenario(engine, agent, bank, obligation, { bankOutcome, emailsName });
     }
   } catch (error: unknown) {
-    noteError(ledger, invoiceId, error);
+    if (error instanceof AirwallexError || error instanceof AirwallexUnreachableError) {
+      stopped(ledger, invoiceId, bankOutcome, error);
+    } else {
+      noteError(ledger, invoiceId, error);
+    }
     process.exitCode = 1;
   } finally {
     watcher.stop();
   }
-  say(`  state: ${ledger.obligation(invoiceId)?.state ?? "unknown"}`);
+  const state: string | undefined = ledger.obligation(invoiceId)?.state;
+  if (state !== undefined) {
+    say(`  state: ${state}`);
+  }
+}
+
+// Airwallex could not be reached or answered with an error, in PayOnce's words
+// and with no stack trace. Before the invoice is stored nothing was sent. After
+// it, a payment may be on its way, so the next look finds out.
+function stopped(
+  ledger: Ledger,
+  invoiceId: string,
+  bankOutcome: string,
+  error: AirwallexError | AirwallexUnreachableError,
+): void {
+  const what: string =
+    error instanceof AirwallexUnreachableError ? "Airwallex could not be reached" : "Airwallex answered with an error";
+  const again: string =
+    error instanceof AirwallexError && error.status < 500 && error.status !== 429 ? "" : " Try again in a minute.";
+  if (ledger.obligation(invoiceId) === undefined) {
+    say(`${what}, so nothing was sent or stored.${again}`);
+    say(`  ${error.message}`);
+    return;
+  }
+  say(
+    `${what}, so PayOnce stopped. ${invoiceId} is in the ledger, and pnpm recover ${bankOutcome} ${invoiceId} or pnpm ui looks at it again.`,
+  );
+  note(ledger, invoiceId, "error", error.message);
 }
 
 await main();

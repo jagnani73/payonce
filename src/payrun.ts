@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
-import { AirwallexClient } from "./airwallex/client.js";
+import { AirwallexClient, AirwallexError, AirwallexUnreachableError } from "./airwallex/client.js";
 import type { RunTotal } from "./approval.js";
 import { arrivalAdvice, feeSeenText, HOLIDAYS_NOTE, type ArrivalAdvice } from "./arrival.js";
 import { describePolicy, personName, policyFromEnv, type ApprovalPolicy } from "./approvers.js";
@@ -61,6 +61,13 @@ const EVENTS_SHOWN: number = 8;
 function fail(message: string): void {
   say(message);
   process.exitCode = 1;
+}
+
+// The server's words for the same failure, so the terminal and the page agree.
+function airwallexDown(error: unknown): string | undefined {
+  return error instanceof AirwallexError || error instanceof AirwallexUnreachableError
+    ? `Airwallex could not be read, so the file was not checked: ${error.message}`
+    : undefined;
 }
 
 // Upload and check read Airwallex, GETs only. Show, approve and cancel do not.
@@ -270,7 +277,11 @@ async function upload(ledger: Ledger, path: string | undefined, uploader: string
     } else if (error instanceof WaitingRunError || error instanceof SameFileError) {
       fail(error.message);
     } else {
-      throw error;
+      const down: string | undefined = airwallexDown(error);
+      if (down === undefined) {
+        throw error;
+      }
+      fail(down);
     }
   }
 }
@@ -332,7 +343,7 @@ async function main(): Promise<void> {
     try {
       await recheckRun(engineFrom(ledger), run.id);
     } catch (error: unknown) {
-      fail(error instanceof Error ? error.message : String(error));
+      fail(airwallexDown(error) ?? (error instanceof Error ? error.message : String(error)));
     }
     show(ledger, ledger.run(run.id) ?? run);
   } else {
