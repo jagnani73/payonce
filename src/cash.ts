@@ -23,9 +23,14 @@ function amount(minor: number | null): string {
   return minor === null ? "Unknown" : formatMoney(minor, "").trim();
 }
 
+// A detail too long for its column goes on a line of its own under the label, so
+// the amounts stay in one column.
 function row(label: string, detail: string, value: string): string {
-  const left: string = `${label.padEnd(LABEL_WIDTH)}${detail}`.padEnd(LABEL_WIDTH + DETAIL_WIDTH);
-  return `  ${left}${value.padStart(AMOUNT_WIDTH)}`.trimEnd();
+  const left: string = `${label.padEnd(LABEL_WIDTH)}${detail}`;
+  if (detail === "" || left.length <= LABEL_WIDTH + DETAIL_WIDTH) {
+    return `  ${left.padEnd(LABEL_WIDTH + DETAIL_WIDTH)}${value.padStart(AMOUNT_WIDTH)}`.trimEnd();
+  }
+  return `${row(label, "", value)}\n  ${" ".repeat(LABEL_WIDTH)}${detail}`;
 }
 
 function linesOf(currency: CurrencyCash, kinds: CashKind[]): CashLine[] {
