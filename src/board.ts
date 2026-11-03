@@ -15,7 +15,7 @@ import {
 import { Ledger, LEDGER_PATH } from "./ledger.js";
 import { formatMoney } from "./money.js";
 import { sendsText, type OutageCode } from "./outages.js";
-import { printable, say } from "./printable.js";
+import { printable, say, shownFailureCode } from "./printable.js";
 
 // The incident board in the terminal, ranked as the page ranks it. It reads only
 // the ledger, with no Airwallex call, and loads .env only if there is one, for the
@@ -132,7 +132,8 @@ function heldLine(label: string, items: string[]): string {
 // holds and how to end it.
 function outageLines(outage: BoardOutage): string[] {
   const codes: string =
-    outage.codes.map((entry: OutageCode): string => `${entry.code} (${entry.label})`).join(", ") || "a rail-level code";
+    outage.codes.map((entry: OutageCode): string => `${shownFailureCode(entry.code)} (${entry.label})`).join(", ") ||
+    "a rail-level code";
   return [
     `  Outage ${outage.id} on ${outage.rail}, since ${utc(outage.declaredAt)}`,
     `${INDENT}Payouts to ${outage.payees} payees failed within ${outage.windowMinutes} minutes with ${codes}. PayOnce opens no new payment on ${outage.rail} until a person ends it`,

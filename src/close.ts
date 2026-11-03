@@ -1,18 +1,34 @@
 import {
   closeIncident,
-  coveredText,
   pendingClose,
   type CloseReview,
   type CoveredTransfer,
 } from "./engine.js";
 import { personName } from "./approvers.js";
 import { Ledger, LEDGER_PATH } from "./ledger.js";
-import { say } from "./printable.js";
+import { printable, say, shownReference } from "./printable.js";
 
 const COVERS_FLAG: string = "--covers=";
+// Airwallex's transfer ids are UUIDs. Anything else is not printed.
+const TRANSFER_ID: RegExp = /^[A-Za-z0-9-]{1,64}$/;
 
 function names(name: string, transfer: CoveredTransfer): boolean {
   return name === transfer.reference || name === transfer.transferId;
+}
+
+// As coveredText words it, with the bank's identifiers printed only in their own
+// forms.
+function coveredLine(transfer: CoveredTransfer): string {
+  const id: string = TRANSFER_ID.test(transfer.transferId) ? transfer.transferId : "a transfer id PayOnce cannot show";
+  return `${shownReference(transfer.reference)} (${id}), ${transfer.status === null ? "status not read" : printable(transfer.status)}, under the ${transfer.kind}'s request id`;
+}
+
+// How --covers names a transfer: by its short reference, else by its transfer id.
+function coverName(transfer: CoveredTransfer): string {
+  if (shownReference(transfer.reference) === transfer.reference) {
+    return transfer.reference;
+  }
+  return TRANSFER_ID.test(transfer.transferId) ? transfer.transferId : "<TRANSFER>";
 }
 
 // Without a name it only shows what is waiting. With a name and a note of what
@@ -49,12 +65,13 @@ function main(): void {
 
   const duplicate: boolean = review.kind === "duplicate" || review.kind === "unpaid";
   if (review.kind === "duplicate") {
-    say(`${invoiceId} is held before paying, as a likely second bill for ${review.reference}`);
+    // Invoice numbers, as one line.
+    say(`${invoiceId} is held before paying, as a likely second bill for ${printable(review.reference ?? "")}`);
   } else if (review.kind === "unpaid") {
     say(`${invoiceId} is waiting on a person and nothing for it is paid`);
   } else {
     say(`${invoiceId} is paid and waiting on a person`);
-    say(`  ${review.kind.padEnd(9)} ${review.reference ?? "no reference"} paid`);
+    say(`  ${review.kind.padEnd(9)} ${review.reference === null ? "no reference" : shownReference(review.reference)} paid`);
   }
   say(`  because   ${review.reason}`);
   if (review.emails !== null) {
@@ -63,13 +80,11 @@ function main(): void {
   if (review.covered.length > 0) {
     say("  covers    transfers listed under its request ids that do not match it:");
     for (const transfer of review.covered) {
-      say(`            ${coveredText(transfer)}`);
+      say(`            ${coveredLine(transfer)}`);
     }
   }
   const covers: string =
-    review.covered.length === 0
-      ? ""
-      : ` ${COVERS_FLAG}${review.covered.map((transfer: CoveredTransfer): string => transfer.reference).join(",")}`;
+    review.covered.length === 0 ? "" : ` ${COVERS_FLAG}${review.covered.map(coverName).join(",")}`;
   if (closedBy === undefined || closedBy.startsWith(COVERS_FLAG) || finding === "") {
     say(
       `To close it${duplicate ? " without paying" : ""}: pnpm close ${invoiceId} <NAME> <NOTE>${covers}`,

@@ -1,7 +1,7 @@
 import type { BoardMoney, BoardTotal } from "./incident-board.js";
 import { Ledger, LEDGER_PATH } from "./ledger.js";
 import { formatMoney } from "./money.js";
-import { printable, say } from "./printable.js";
+import { printable, say, shownFailureCode, shownReference, UNSHOWN_FAILURE_CODE } from "./printable.js";
 import {
   resolveSupplier,
   supplierDetail,
@@ -169,7 +169,7 @@ function accountLine(account: AccountView): string[] {
   const facts: string[] = [];
   if (account.lastPaid) {
     facts.push(
-      `last paid and checked${account.lastPaidReference === null ? "" : ` (${printable(account.lastPaidReference)})`}`,
+      `last paid and checked${account.lastPaidReference === null ? "" : ` (${shownReference(account.lastPaidReference)})`}`,
     );
   }
   if (account.recordLastStored) {
@@ -204,22 +204,22 @@ function accountLine(account: AccountView): string[] {
 }
 
 function paidByText(paid: PaidBy): string {
-  return `paid by ${paid.reference === null ? "a payment" : printable(paid.reference)}, ${paid.kind === "outside" ? "found" : "sent"} on ${day(paid.sentAt)}${paid.account === null ? "" : ` to ${paid.account}`} (${CHECK_WORDS[paid.check]})${paid.arrivesBy === null ? "" : `, usually arrives by ${paid.arrivesBy}`}`;
+  return `paid by ${paid.reference === null ? "a payment" : shownReference(paid.reference)}, ${paid.kind === "outside" ? "found" : "sent"} on ${day(paid.sentAt)}${paid.account === null ? "" : ` to ${paid.account}`} (${CHECK_WORDS[paid.check]})${paid.arrivesBy === null ? "" : `, usually arrives by ${paid.arrivesBy}`}`;
 }
 
 function paymentLine(payment: PaymentView): string {
   const failure: string =
     payment.failureCode === null
       ? ""
-      : `, ${printable(payment.failureCode)} (${payment.failureWords ?? "a code PayOnce has no words for"})`;
+      : `, ${shownFailureCode(payment.failureCode)} (${payment.failureWords ?? "a code PayOnce has no words for"})`;
   const extra: string[] = [
     ...(payment.foundLate ? ["found late"] : []),
     ...(payment.rateMismatch ? ["rate did not match its approval"] : []),
     ...(payment.mismatchedReference === null
       ? []
-      : [`transfer ${printable(payment.mismatchedReference)} under its request id does not match the invoice${payment.mismatchedStatus === null ? "" : ` (${printable(payment.mismatchedStatus)})`}`]),
+      : [`transfer ${shownReference(payment.mismatchedReference)} under its request id does not match the invoice${payment.mismatchedStatus === null ? "" : ` (${printable(payment.mismatchedStatus)})`}`]),
   ];
-  return `${INDENT}${payment.kind} ${payment.reference === null ? "(no reference)" : printable(payment.reference)}  ${printable(payment.state)}${payment.bankStatus === null ? "" : `, bank status ${printable(payment.bankStatus)}`}${failure}, ${amount(payment.amountMinor, payment.currency)}, ${payment.account === null ? "account not on file" : `to ${payment.account}`} (${CHECK_WORDS[payment.check]}), ${payment.kind === "outside" ? "found" : "sent"} ${utc(payment.sentAt)}${extra.length === 0 ? "" : `, ${extra.join(", ")}`}`;
+  return `${INDENT}${payment.kind} ${payment.reference === null ? "(no reference)" : shownReference(payment.reference)}  ${printable(payment.state)}${payment.bankStatus === null ? "" : `, bank status ${printable(payment.bankStatus)}`}${failure}, ${amount(payment.amountMinor, payment.currency)}, ${payment.account === null ? "account not on file" : `to ${payment.account}`} (${CHECK_WORDS[payment.check]}), ${payment.kind === "outside" ? "found" : "sent"} ${utc(payment.sentAt)}${extra.length === 0 ? "" : `, ${extra.join(", ")}`}`;
 }
 
 function invoiceLines(invoice: InvoiceView): string[] {
@@ -362,7 +362,7 @@ function printDetail(detail: SupplierDetail): void {
     ),
     ...detail.outages.failures.map(
       (failure: SupplierDetail["outages"]["failures"][number]): string =>
-        `  ${failure.reference === null ? "A payout" : printable(failure.reference)} failed with ${failure.code === null ? "a code PayOnce does not show" : `${failure.code} (${failure.codeWords ?? "rail failure"})`} at ${utc(failure.failedAt)}${failure.invoiceId === null ? "" : `, ${printable(failure.invoiceId)}`}${failure.outageId === null ? "" : `, counted by outage ${failure.outageId}`}`,
+        `  ${failure.reference === null ? "A payout" : shownReference(failure.reference)} failed with ${failure.code === null ? UNSHOWN_FAILURE_CODE : `${shownFailureCode(failure.code)} (${failure.codeWords ?? "rail failure"})`} at ${utc(failure.failedAt)}${failure.invoiceId === null ? "" : `, ${printable(failure.invoiceId)}`}${failure.outageId === null ? "" : `, counted by outage ${failure.outageId}`}`,
     ),
   ]);
   section("Pay runs", detail.runs.map(runLine));

@@ -5,11 +5,11 @@ import { approvePayment, pendingApproval, type PendingApproval } from "./engine.
 import { Ledger, LEDGER_PATH, signersOf, type Approval, type Obligation, type Outage } from "./ledger.js";
 import { formatMoney } from "./money.js";
 import { railOf } from "./outages.js";
-import { printable, say } from "./printable.js";
+import { printable, say, shownFailureCode, shownReference } from "./printable.js";
 
 function describeDuplicate(duplicate: DuplicateEvidence): string {
-  const paid: string = duplicate.paidBy === null ? "" : `, paid by ${duplicate.paidBy}`;
-  return `${duplicate.invoiceId}, ${duplicate.state}${paid}`;
+  const paid: string = duplicate.paidBy === null ? "" : `, paid by ${shownReference(duplicate.paidBy)}`;
+  return `${printable(duplicate.invoiceId)}, ${duplicate.state}${paid}`;
 }
 
 function show(pending: PendingApproval): void {
@@ -24,7 +24,7 @@ function show(pending: PendingApproval): void {
       `  from     ${formatMoney(terms.fx.sellAmountMinor, terms.fx.sellCurrency)} at ${describeRate(terms.fx)} (${markupOf(terms.fx)} from mid-market ${String(terms.fx.midRate)})`,
     );
     say(
-      `  quote    ${terms.fx.quoteId}, holds until ${new Date(terms.fx.validTo).toLocaleString()}`,
+      `  quote    ${printable(terms.fx.quoteId)}, holds until ${new Date(terms.fx.validTo).toLocaleString()}`,
     );
     say(
       `  fee      ${terms.fx.feeEstimateMinor === null ? `charged in ${terms.fx.sellCurrency} when it is sent` : `about ${formatMoney(terms.fx.feeEstimateMinor, terms.fx.sellCurrency)}`}`,
@@ -42,9 +42,9 @@ function show(pending: PendingApproval): void {
   }
   if (terms.action === "replace") {
     const failure: string =
-      terms.evidence.failureCode === null ? "" : ` (${terms.evidence.failureCode})`;
+      terms.evidence.failureCode === null ? "" : ` (${shownFailureCode(terms.evidence.failureCode)})`;
     say(
-      `  because  original ${terms.evidence.originalReference} ${terms.evidence.originalState}${failure}: ${terms.evidence.reason}`,
+      `  because  original ${shownReference(terms.evidence.originalReference)} ${terms.evidence.originalState}${failure}: ${terms.evidence.reason}`,
     );
     say(`  emails   ${terms.evidence.emails}`);
   } else {

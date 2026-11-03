@@ -13,7 +13,7 @@ import {
   type OutagesReport,
   type OutageView,
 } from "./outages.js";
-import { say } from "./printable.js";
+import { printable, say, shownFailureCode, shownReference } from "./printable.js";
 
 const ENDED_SHOWN: number = 5;
 
@@ -31,7 +31,8 @@ function loadEnv(): void {
 
 function show(view: OutageView): void {
   say(`Outage ${view.id} on ${view.rail}, ${view.state}`);
-  say(`  ${view.text}`);
+  // It names the stored codes, so it prints as one line.
+  say(`  ${printable(view.text)}`);
   say(`  declared ${view.declaredAt}`);
   for (const payout of view.counted) {
     say(`  counted  ${describeCounted(payout)}`);
@@ -49,7 +50,7 @@ function show(view: OutageView): void {
 
 function describeCounted(payout: CountedPayout): string {
   const invoice: string = payout.invoiceId === null ? "no invoice" : payout.invoiceId;
-  return `${payout.reference} (${invoice}, ${payout.origin === "payonce" ? "sent by PayOnce" : "sent outside PayOnce"}), ${payout.code}, failed ${payout.failedAt}, seen ${payout.seenAt}`;
+  return `${shownReference(payout.reference)} (${invoice}, ${payout.origin === "payonce" ? "sent by PayOnce" : "sent outside PayOnce"}), ${shownFailureCode(payout.code)}, failed ${payout.failedAt}, seen ${payout.seenAt}`;
 }
 
 function describeHeld(item: HeldItem): string {
