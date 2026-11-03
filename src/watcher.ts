@@ -138,6 +138,10 @@ export class Watcher {
     const seen: (RepeatedFailure & { message: string; fromSweep: boolean }) | null = this.checkFailure;
     const fromSweep: boolean = this.sweeping;
     if (seen === null || seen.message !== message || seen.fromSweep !== fromSweep) {
+      // The failure this one replaces says how often it repeated first.
+      if (seen !== null && seen.since > 0) {
+        sayWarning(`  watcher  ${seen.since} more ${seen.since === 1 ? "check" : "checks"} failed: ${seen.message}`);
+      }
       sayWarning(`  watcher  check failed: ${message}`);
       this.checkFailure = { message, fromSweep, printedAt: now, since: 0, seenAt: now };
       return;
