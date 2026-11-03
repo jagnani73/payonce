@@ -1,5 +1,6 @@
 import type { TransferBankDetails } from "./airwallex/transfers.js";
-import { accountKeyOf, endingOf, keyHash } from "./approval.js";
+import { endingOf, keyHash } from "./approval.js";
+import { routeKeyOf, routeOfDetailsKey } from "./assess.js";
 import { knownName } from "./approvers.js";
 import { CHANGED_BANK_DETAILS_REASON, LAST_PAID_CHANGED_REASON } from "./decide.js";
 import { templateLabel } from "./drafts.js";
@@ -181,7 +182,8 @@ export interface Verification {
 export interface AccountView {
   // A, B, C on this page, in the order first seen.
   label: string;
-  // accountKeyOf the bank details: the key approval terms carry.
+  // Where money sent to the account goes: the routeKey of its bank details, or
+  // the accountKey approval terms carry when the ledger keeps no routeKey for it.
   accountKey: string;
   ending: string | null;
   firstSeen: string | null;
@@ -646,8 +648,8 @@ function ending(value: string | null): string | null {
   return value !== null && ENDING.test(value) ? value : null;
 }
 
-// The account key and ending of bank details stored as bankDetailsKey writes
-// them, as a callback's applied_key holds them.
+// The routeKey and ending of bank details stored as bankDetailsKey writes them,
+// as a callback's applied_key holds them.
 function appliedAccount(appliedKey: string): { key: string; ending: string | null } {
   let ending: string | null = null;
   try {
@@ -658,7 +660,7 @@ function appliedAccount(appliedKey: string): { key: string; ending: string | nul
   } catch {
     ending = null;
   }
-  return { key: keyHash(appliedKey), ending };
+  return { key: routeOfDetailsKey(appliedKey) ?? keyHash(appliedKey), ending };
 }
 
 // The account the record held before a callback, from the JSON the callback
@@ -669,7 +671,7 @@ function beforeAccount(oldDetails: string): { key: string; ending: string | null
     if (details === null || typeof details !== "object" || Array.isArray(details)) {
       return null;
     }
-    return { key: accountKeyOf(details as TransferBankDetails), ending: endingOf(details) };
+    return { key: routeKeyOf(details as TransferBankDetails), ending: endingOf(details) };
   } catch {
     return null;
   }
@@ -847,7 +849,7 @@ function ownersOf(links: SupplierLinks): Owners {
   }
   for (const callback of links.callbacks) {
     if (callback.appliedKey !== null) {
-      addOwner(owners.byKey, keyHash(callback.appliedKey), callback.beneficiaryId);
+      addOwner(owners.byKey, appliedAccount(callback.appliedKey).key, callback.beneficiaryId);
     }
     const before: { key: string } | null = beforeAccount(callback.oldDetails);
     if (before !== null) {
@@ -974,7 +976,12 @@ function accountsOf(ledger: Ledger, facts: RecordFacts, owners: Owners): Account
   const labelOf: Map<string, string> = new Map<string, string>(
     ordered.map(({ key }: { key: string }, index: number): [string, string] => [key, letters(index)]),
   );
-  const lastPaid = ledger.lastPaidTransfer(facts.id);
+  // By where its money went, as every other account here.
+  const paidTo = ledger.lastPaidTransfer(facts.id);
+  const lastPaid: Accounts["lastPaid"] =
+    paidTo === undefined
+      ? undefined
+      : { ...paidTo, accountKey: paidTo.routeKey ?? ledger.accountRoutes().get(paidTo.accountKey) ?? paidTo.accountKey };
   const unchecked = lastPaid === undefined ? ledger.lastPaidUnchecked(facts.id) : undefined;
   const storedSighting: Sighting | undefined = seen
     .filter(
@@ -1002,7 +1009,7 @@ function accountsOf(ledger: Ledger, facts: RecordFacts, owners: Owners): Account
     .filter((callback: SupplierCallback): boolean => callback.state === "applied")
     .at(-1);
   const appliedKey: string | null =
-    latestApplied === undefined || latestApplied.appliedKey === null ? null : keyHash(latestApplied.appliedKey);
+    latestApplied === undefined || latestApplied.appliedKey === null ? null : appliedAccount(latestApplied.appliedKey).key;
   // Each payment, payout, callback and failure under the account it went to, so
   // each account reads only its own.
   const byTransfer: Map<string, SupplierAttempt> = new Map<string, SupplierAttempt>();
@@ -1015,7 +1022,7 @@ function accountsOf(ledger: Ledger, facts: RecordFacts, owners: Owners): Account
   const payoutsTo: Map<string, SupplierPayout[]> = grouped(facts.payouts, (payout: SupplierPayout): string | null => payout.sentKey);
   const verifyingOf: Map<string, SupplierCallback[]> = grouped(
     facts.callbacks.filter((callback: SupplierCallback): boolean => callback.state === "applied"),
-    (callback: SupplierCallback): string | null => (callback.appliedKey === null ? null : keyHash(callback.appliedKey)),
+    (callback: SupplierCallback): string | null => (callback.appliedKey === null ? null : appliedAccount(callback.appliedKey).key),
   );
   const payeesTo: Map<string, SupplierFailure[]> = grouped(facts.failures, (failure: SupplierFailure): string | null => {
     const attempt: SupplierAttempt | undefined = byTransfer.get(failure.transferId);

@@ -17,9 +17,18 @@ import {
   type RunAuditSnapshot,
   type RunEventFields,
 } from "./audit-trail.js";
+import type { TransferBankDetails } from "./airwallex/transfers.js";
 import type { ApprovalTerms, FxTerms } from "./approval.js";
 import type { ArrivalTerms } from "./arrival.js";
-import { failedStatus, FAILED_STATUS_LIST, type Debit } from "./assess.js";
+import {
+  bankDetailsKey,
+  failedStatus,
+  FAILED_STATUS_LIST,
+  keyHash,
+  routeKeyOf,
+  routeOfDetailsKey,
+  type Debit,
+} from "./assess.js";
 import type { EmailAttachment, SupplierEmail } from "./emails.js";
 import { oneLine } from "./printable.js";
 import { ReconStore } from "./recon-store.js";
@@ -499,10 +508,46 @@ export interface Attempt {
   // wallet. Null until it has been read since PayOnce kept them.
   mismatchedAmountMinor: number | null;
   mismatchedCurrency: string | null;
-  // The accountKey of the bank details it was decided or approved for. Its
-  // transfer and every retry are checked against it. Null on a found payout's,
-  // and on one from before it was kept that no approval or pay run row named.
+  // The accountKey of the bank details it was decided or approved for. Null on a
+  // found payout's, and on one from before it was kept that no approval or pay
+  // run row named.
   accountKey: string | null;
+  // The routeKey of those details: where the money goes. Its transfer and every
+  // retry are checked against it, so a change to a field that does not say where
+  // money goes is not another account. Null on attempts from before it was kept
+  // that nothing on file gave it for, which are checked by accountKey instead.
+  routeKey: string | null;
+}
+
+// An account a payment is decided or approved for, or that a stored payment was
+// checked against: its accountKey and, when known, its routeKey. Two accounts
+// are the same when their routeKeys match, or, with either routeKey not known,
+// their accountKeys.
+export interface AccountRef {
+  accountKey: string;
+  routeKey: string | null;
+}
+
+// True when details hold the account ref names, by where the money goes.
+export function holdsAccount(ref: AccountRef, details: TransferBankDetails): boolean {
+  return ref.routeKey !== null ? ref.routeKey === routeKeyOf(details) : ref.accountKey === keyHash(bankDetailsKey(details));
+}
+
+// The latest checked payment PayOnce made to a beneficiary, with the account it
+// went to.
+export interface LastPaid extends AccountRef {
+  transferId: string;
+  reference: string | null;
+}
+
+// True when two sets of bank details, as bankDetailsKey writes them, go to the
+// same account.
+function sameRoute(a: string, b: string): boolean {
+  if (a === b) {
+    return true;
+  }
+  const route: string | null = routeOfDetailsKey(a);
+  return route !== null && route === routeOfDetailsKey(b);
 }
 
 // The quote an attempt is sent with, from the terms of the approval it was opened
@@ -526,9 +571,11 @@ export interface PayoutMoney {
   currency: string | null;
   feeMinor: number | null;
   feeCurrency: string | null;
-  // The accountKey of the bank details the transfer went to and their last four
-  // characters, for the supplier view only. Nothing PayOnce decides reads them.
+  // The accountKey and routeKey of the bank details the transfer went to and
+  // their last four characters, for the supplier view only. Nothing PayOnce
+  // decides reads them.
   sentKey?: string | null;
+  sentRoute?: string | null;
   sentEnding?: string | null;
 }
 
@@ -552,6 +599,7 @@ export interface FoundPayout {
   amountMinor: number | null;
   currency: string | null;
   sentKey: string | null;
+  sentRoute: string | null;
   sentEnding: string | null;
 }
 
@@ -589,6 +637,8 @@ export interface ApprovalRequest {
   needed: number;
   neededWhy: string;
   expiresAt: number;
+  // The routeKey of the account an invoice's terms name. A run's rows keep theirs.
+  routeKey?: string | null;
 }
 
 interface ApprovalRow {
@@ -989,6 +1039,10 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     expires_at: "TEXT",
     needed: "INTEGER NOT NULL DEFAULT 1",
     needed_why: "TEXT NOT NULL DEFAULT ''",
+    // The routeKey of the bank details the terms' accountKey hashes, kept beside
+    // the terms so the binding is unchanged. Who may approve is worked out by it.
+    // Null on requests from before it.
+    route_key: "TEXT",
   },
   attempts: {
     reference: "TEXT",
@@ -1042,6 +1096,12 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     // decides reads them. Null until read since the columns were added.
     sent_key: "TEXT",
     sent_ending: "TEXT",
+    // The routeKeys of account_key and sent_key: where the money goes. A transfer
+    // and every retry are checked against route_key, and the supplier view groups
+    // accounts by them. Null on attempts from before the columns that no callback
+    // on file gave details for (backfillRoutes).
+    route_key: "TEXT",
+    sent_route: "TEXT",
     // When PayOnce first recorded the attempt failed, and first recorded it paid,
     // as ISO times, written only by TIME_TRIGGERS. For a found payout's original,
     // when PayOnce took it on. For the metrics only: nothing PayOnce decides reads
@@ -1087,6 +1147,10 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     // arrives, as ArrivalTerms JSON.
     due_date: "TEXT",
     arrival: "TEXT",
+    // The routeKey of account_key, as the check read the record. Null on rows
+    // from before it, and on a released row whose last check read another
+    // account than the run approved.
+    route_key: "TEXT",
   },
   outside_payouts: {
     reference: "TEXT NOT NULL DEFAULT ''",
@@ -1099,6 +1163,7 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     // As on attempts, for the supplier view only.
     sent_key: "TEXT",
     sent_ending: "TEXT",
+    sent_route: "TEXT",
   },
 };
 
@@ -1192,6 +1257,7 @@ interface AttemptRow {
   mismatched_amount_minor: number | null;
   mismatched_currency: string | null;
   account_key: string | null;
+  route_key: string | null;
 }
 
 export class DuplicatePaymentError extends Error {
@@ -1369,6 +1435,7 @@ function toAttempt(row: AttemptRow): Attempt {
     mismatchedAmountMinor: row.mismatched_amount_minor ?? null,
     mismatchedCurrency: row.mismatched_currency ?? null,
     accountKey: row.account_key ?? null,
+    routeKey: row.route_key ?? null,
   };
 }
 
@@ -1477,6 +1544,8 @@ export interface CheckedRow {
   payee: string | null;
   payTo: string | null;
   accountKey: string | null;
+  // The routeKey of the record the check read, where the row's money goes.
+  routeKey: string | null;
   // The due date the file gives, or null.
   dueDate: string | null;
   // When a pay row usually arrives, as its approvers see it. Null on a skip row.
@@ -1597,6 +1666,7 @@ interface RunRowRecord {
   payee: string | null;
   pay_to: string | null;
   account_key: string | null;
+  route_key: string | null;
   state: RunRowState;
   note: string | null;
   due_date: string | null;
@@ -1669,6 +1739,7 @@ function toRunRow(row: RunRowRecord): RunRow {
     payee: row.payee,
     payTo: row.pay_to,
     accountKey: row.account_key,
+    routeKey: row.route_key ?? null,
     dueDate: row.due_date ?? null,
     arrival: typeof row.arrival === "string" ? storedObject<ArrivalTerms>(row.arrival) : null,
     state: row.state,
@@ -2047,6 +2118,7 @@ export class Ledger {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       let accountKeyAdded: boolean = false;
+      let routeKeyAdded: boolean = false;
       for (const [table, columns] of Object.entries(ADDED_COLUMNS)) {
         const existing: string[] = (
           this.db.prepare(`PRAGMA table_info(${table})`).all() as unknown as ColumnRow[]
@@ -2063,6 +2135,9 @@ export class Ledger {
             }
             if (table === "attempts" && name === "account_key") {
               accountKeyAdded = true;
+            }
+            if (table === "attempts" && name === "route_key") {
+              routeKeyAdded = true;
             }
             // A pending attempt with no transfer from before tries were kept may
             // have been tried at any time, so it counts as tried now.
@@ -2084,6 +2159,9 @@ export class Ledger {
       // Once every column is there, in the same write lock as the column add.
       if (accountKeyAdded) {
         this.backfillAccountKeys();
+      }
+      if (routeKeyAdded) {
+        this.backfillRoutes();
       }
       this.db.exec("COMMIT");
     } catch (error: unknown) {
@@ -2163,6 +2241,74 @@ export class Ledger {
            WHERE obligations.invoice_id = attempts.invoice_id)
        WHERE account_key IS NULL AND approval_id IS NULL AND kind = 'original'`,
     );
+  }
+
+  // An accountKey kept before routeKeys were gets one from the bank details a
+  // callback kept: the record it read before the change, or the record after it
+  // (applied_key), whichever has that accountKey. Attempts, where they went, run
+  // rows and payouts sent outside PayOnce alike. Any other keeps none and is
+  // compared by accountKey, as before. Only inside addColumns' transaction.
+  private backfillRoutes(): void {
+    const routes: Map<string, string> = this.callbackRoutes();
+    const pairs: [string, string, string][] = [
+      ["attempts", "account_key", "route_key"],
+      ["attempts", "sent_key", "sent_route"],
+      ["outside_payouts", "sent_key", "sent_route"],
+      ["run_rows", "account_key", "route_key"],
+    ];
+    for (const [table, full, route] of pairs) {
+      const set: StatementSync = this.db.prepare(
+        `UPDATE ${table} SET ${route} = ? WHERE ${full} = ? AND ${route} IS NULL`,
+      );
+      for (const [key, value] of routes) {
+        set.run(value, key);
+      }
+    }
+  }
+
+  // The accountKey and routeKey of every set of bank details a callback kept.
+  private callbackRoutes(): Map<string, string> {
+    const routes: Map<string, string> = new Map<string, string>();
+    const rows = this.db
+      .prepare("SELECT applied_key, old_details FROM bank_changes")
+      .all() as unknown as { applied_key: string | null; old_details: string | null }[];
+    for (const row of rows) {
+      if (row.applied_key !== null) {
+        const route: string | null = routeOfDetailsKey(row.applied_key);
+        if (route !== null) {
+          routes.set(keyHash(row.applied_key), route);
+        }
+      }
+      const before: unknown = row.old_details === null ? null : parsedOf(row.old_details);
+      if (before !== null && typeof before === "object" && !Array.isArray(before)) {
+        const details: TransferBankDetails = before as TransferBankDetails;
+        routes.set(keyHash(bankDetailsKey(details)), routeKeyOf(details));
+      }
+    }
+    return routes;
+  }
+
+  // Every accountKey the ledger keeps with the routeKey of the same details: from
+  // attempts, where they went, run rows, payouts sent outside PayOnce, approval
+  // requests and the details callbacks kept. The supplier view groups accounts through it, so an
+  // approval's accountKey joins the account its details go to.
+  accountRoutes(): Map<string, string> {
+    const routes: Map<string, string> = this.callbackRoutes();
+    const rows = this.db
+      .prepare(
+        `SELECT account_key AS full, route_key AS route FROM attempts WHERE account_key IS NOT NULL AND route_key IS NOT NULL
+          UNION SELECT sent_key, sent_route FROM attempts WHERE sent_key IS NOT NULL AND sent_route IS NOT NULL
+          UNION SELECT sent_key, sent_route FROM outside_payouts WHERE sent_key IS NOT NULL AND sent_route IS NOT NULL
+          UNION SELECT account_key, route_key FROM run_rows WHERE account_key IS NOT NULL AND route_key IS NOT NULL
+          UNION SELECT json_extract(terms, '$.accountKey'), route_key FROM approvals
+                 WHERE route_key IS NOT NULL
+                   AND CASE WHEN json_valid(terms) THEN json_type(terms, '$.accountKey') = 'text' ELSE 0 END`,
+      )
+      .all() as unknown as { full: string; route: string }[];
+    for (const row of rows) {
+      routes.set(row.full, row.route);
+    }
+    return routes;
   }
 
   // When an attempt from before account_key was opened: opened_at, or else when
@@ -3171,6 +3317,7 @@ export class Ledger {
     quote: AttemptQuote | null,
     accountKey: string | null,
     openedAt: string = new Date().toISOString(),
+    routeKey: string | null = null,
   ): void {
     // The unique index refuses a second attempt that is not failed. A transfer the
     // ledger keeps failed while the bank has it live refuses one too.
@@ -3181,8 +3328,9 @@ export class Ledger {
       this.db
         .prepare(
           `INSERT INTO attempts
-             (request_id, invoice_id, kind, state, quote_id, quote_valid_to, approval_id, opened_at, account_key)
-           VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
+             (request_id, invoice_id, kind, state, quote_id, quote_valid_to, approval_id, opened_at, account_key,
+              route_key)
+           VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           requestId,
@@ -3193,6 +3341,7 @@ export class Ledger {
           approvalId,
           openedAt,
           accountKey,
+          routeKey,
         );
     } catch (error: unknown) {
       if (isUniqueViolation(error)) {
@@ -3224,15 +3373,17 @@ export class Ledger {
   // quote in its terms, so a retry sends the same one. Such a payment is opened
   // only on an approval with a quote. The attempt keeps the account it goes to:
   // the one the approval's terms name, or else decided, the one the agent
-  // decided on. Every payment the engine opens names one. No payment is opened on
-  // a rail with an active outage: RailOutageError rolls the caller's transaction
-  // back, so an approval it would have spent stays approved.
+  // decided on. Every payment the engine opens names one. route is the routeKey
+  // of the record the caller just checked holds that account. No payment is
+  // opened on a rail with an active outage: RailOutageError rolls the caller's
+  // transaction back, so an approval it would have spent stays approved.
   openAttempt(
     invoiceId: string,
     kind: AttemptKind,
     lease: Lease,
     released: number | null,
     decided: string | null,
+    route: string | null = null,
   ): Attempt {
     if (!this.db.isTransaction) {
       throw new Error("An attempt is opened only inside a ledger transaction");
@@ -3260,7 +3411,7 @@ export class Ledger {
     }
     const requestId: string = randomUUID();
     const openedAt: string = new Date().toISOString();
-    this.insertAttempt(requestId, invoiceId, kind, approvalId, quote, key, openedAt);
+    this.insertAttempt(requestId, invoiceId, kind, approvalId, quote, key, openedAt, key === null ? null : route);
     return {
       requestId,
       invoiceId,
@@ -3290,6 +3441,7 @@ export class Ledger {
       mismatchedAmountMinor: null,
       mismatchedCurrency: null,
       accountKey: key,
+      routeKey: key === null ? null : route,
     };
   }
 
@@ -3386,8 +3538,8 @@ export class Ledger {
         .prepare(
           `INSERT INTO attempts
              (request_id, invoice_id, kind, transfer_id, reference, state, failure_code,
-              fee_minor, fee_currency, amount_minor, currency, sent_key, sent_ending)
-           VALUES (?, ?, 'original', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              fee_minor, fee_currency, amount_minor, currency, sent_key, sent_ending, sent_route)
+           VALUES (?, ?, 'original', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           found.requestId,
@@ -3402,6 +3554,7 @@ export class Ledger {
           found.currency,
           found.sentKey,
           found.sentEnding,
+          found.sentRoute,
         );
       this.appendEvent(input.invoiceId, "bank", line, null);
       this.db.exec("COMMIT");
@@ -3440,8 +3593,8 @@ export class Ledger {
         .prepare(
           `INSERT OR IGNORE INTO outside_payouts
              (transfer_id, invoice_id, found_at, reference, state, amount_minor, currency,
-              fee_minor, fee_currency, sent_key, sent_ending)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              fee_minor, fee_currency, sent_key, sent_ending, sent_route)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           payout.transferId,
@@ -3455,6 +3608,7 @@ export class Ledger {
           payout.feeCurrency,
           payout.sentKey ?? null,
           payout.sentEnding ?? null,
+          payout.sentRoute ?? null,
         );
       if (Number(result.changes) !== 1) {
         return false;
@@ -3502,7 +3656,8 @@ export class Ledger {
             SET state = ?, amount_minor = COALESCE(?, amount_minor),
                 currency = COALESCE(?, currency), fee_minor = COALESCE(?, fee_minor),
                 fee_currency = COALESCE(?, fee_currency),
-                sent_key = COALESCE(?, sent_key), sent_ending = COALESCE(?, sent_ending)
+                sent_key = COALESCE(?, sent_key), sent_ending = COALESCE(?, sent_ending),
+                sent_route = COALESCE(?, sent_route)
           WHERE transfer_id = ?`,
       )
       .run(
@@ -3513,6 +3668,7 @@ export class Ledger {
         money.feeCurrency,
         money.sentKey ?? null,
         money.sentEnding ?? null,
+        money.sentRoute ?? null,
         transferId,
       );
   }
@@ -3654,13 +3810,14 @@ export class Ledger {
   // Where an attempt's transfer went, as last read, for the supplier view only.
   // Its own write after record, so the duplicate lock's write is untouched, and
   // a value that could not be read keeps the one on file.
-  recordSentTo(requestId: string, sentKey: string | null, sentEnding: string | null): void {
+  recordSentTo(requestId: string, sentKey: string | null, sentRoute: string | null, sentEnding: string | null): void {
     this.db
       .prepare(
-        `UPDATE attempts SET sent_key = COALESCE(?, sent_key), sent_ending = COALESCE(?, sent_ending)
+        `UPDATE attempts SET sent_key = COALESCE(?, sent_key), sent_route = COALESCE(?, sent_route),
+                sent_ending = COALESCE(?, sent_ending)
           WHERE request_id = ?`,
       )
-      .run(sentKey, sentEnding, requestId);
+      .run(sentKey, sentRoute, sentEnding, requestId);
   }
 
   // Marks an attempt PayOnce had failed with no transfer as one Airwallex now
@@ -3813,6 +3970,7 @@ export class Ledger {
     approvalId: number,
     lease: Lease,
     unchanged: () => boolean,
+    route: string | null = null,
   ): Attempt | undefined {
     this.db.exec("BEGIN IMMEDIATE");
     try {
@@ -3838,7 +3996,7 @@ export class Ledger {
         this.db.exec("ROLLBACK");
         return undefined;
       }
-      const attempt: Attempt = this.openAttempt(invoiceId, "original", lease, approvalId, null);
+      const attempt: Attempt = this.openAttempt(invoiceId, "original", lease, approvalId, null, route);
       this.db.exec("COMMIT");
       return attempt;
     } catch (error: unknown) {
@@ -4275,8 +4433,8 @@ export class Ledger {
       const result: { changes: number | bigint } = this.db
         .prepare(
           `INSERT INTO approvals
-             (invoice_id, binding, terms, requested_at, expires_at, needed, needed_why)
-           SELECT ?, ?, ?, ?, ?, ?, ?
+             (invoice_id, binding, terms, requested_at, expires_at, needed, needed_why, route_key)
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?
             WHERE EXISTS (SELECT 1 FROM obligations WHERE invoice_id = ? AND state = 'escalated')`,
         )
         .run(
@@ -4287,6 +4445,7 @@ export class Ledger {
           new Date(request.expiresAt).toISOString(),
           request.needed,
           request.neededWhy,
+          request.routeKey ?? null,
           invoiceId,
         );
       this.db.exec("COMMIT");
@@ -4418,6 +4577,7 @@ export class Ledger {
     approvalId: number,
     lease: Lease,
     unchanged: () => boolean,
+    route: string | null = null,
   ): Attempt | undefined {
     this.db.exec("BEGIN IMMEDIATE");
     try {
@@ -4438,7 +4598,7 @@ export class Ledger {
         this.db.exec("ROLLBACK");
         return undefined;
       }
-      const attempt: Attempt = this.openAttempt(invoiceId, "replacement", lease, approvalId, null);
+      const attempt: Attempt = this.openAttempt(invoiceId, "replacement", lease, approvalId, null, route);
       this.db.exec("COMMIT");
       return attempt;
     } catch (error: unknown) {
@@ -4491,30 +4651,39 @@ export class Ledger {
   }
 
   // The latest callback applied to this beneficiary, from any invoice paid to it,
-  // when it verified exactly the bank details the record holds now. A record
-  // changed since, in PayOnce or outside it, has none, even when it changed back
-  // to details an older callback verified.
-  verifiedBankChange(beneficiaryId: string, detailsKey: string): BankChange | undefined {
+  // when it verified the account the record holds now: where the money goes, so a
+  // bank name Airwallex rewrote since does not undo it. A record changed to
+  // another account since, in PayOnce or outside it, has none, even when it
+  // changed back to an account an older callback verified.
+  verifiedBankChange(beneficiaryId: string, details: TransferBankDetails): BankChange | undefined {
     const row: BankChangeRow | undefined = this.db
       .prepare(
         `SELECT * FROM bank_changes WHERE beneficiary_id = ? AND state = 'applied'
           ORDER BY id DESC LIMIT 1`,
       )
       .get(beneficiaryId) as unknown as BankChangeRow | undefined;
-    return row === undefined || row.applied_key !== detailsKey ? undefined : toBankChange(row);
+    return row === undefined || row.applied_key === null || !sameRoute(row.applied_key, bankDetailsKey(details))
+      ? undefined
+      : toBankChange(row);
   }
 
-  // Everyone who recorded an applied callback for these details of this
-  // beneficiary. None of them may approve a payment to them.
+  // Everyone who recorded an applied callback for the account these details go
+  // to, of this beneficiary. None of them may approve a payment to it.
   bankChangeRecorders(beneficiaryId: string, detailsKey: string): string[] {
-    return (
-      this.db
-        .prepare(
-          `SELECT DISTINCT called_by FROM bank_changes
-            WHERE beneficiary_id = ? AND state = 'applied' AND applied_key = ?`,
+    return [
+      ...new Set<string>(
+        (
+          this.db
+            .prepare(
+              `SELECT called_by, applied_key FROM bank_changes
+                WHERE beneficiary_id = ? AND state = 'applied' AND applied_key IS NOT NULL ORDER BY id`,
+            )
+            .all(beneficiaryId) as unknown as { called_by: string; applied_key: string }[]
         )
-        .all(beneficiaryId, detailsKey) as unknown as { called_by: string }[]
-    ).map((row: { called_by: string }): string => row.called_by);
+          .filter((row: { applied_key: string }): boolean => sameRoute(row.applied_key, detailsKey))
+          .map((row: { called_by: string }): string => row.called_by),
+      ),
+    ];
   }
 
   // Who recorded each callback on this invoice, in any state, oldest first. Only
@@ -4650,12 +4819,10 @@ export class Ledger {
   // PayOnce do not count, so a record changed and paid in the web app does not
   // become the account on file, and nor does a payment from before the account
   // was kept that nothing checked (lastPaidUnchecked).
-  lastPaidTransfer(
-    beneficiaryId: string,
-  ): { transferId: string; reference: string | null; accountKey: string } | undefined {
-    const row: { transfer_id: string; reference: string | null; account_key: string } | undefined = this.db
+  lastPaidTransfer(beneficiaryId: string): LastPaid | undefined {
+    const row: { transfer_id: string; reference: string | null; account_key: string; route_key: string | null } | undefined = this.db
       .prepare(
-        `SELECT attempts.transfer_id, attempts.reference, attempts.account_key FROM attempts
+        `SELECT attempts.transfer_id, attempts.reference, attempts.account_key, attempts.route_key FROM attempts
            JOIN obligations ON obligations.invoice_id = attempts.invoice_id
           WHERE obligations.beneficiary_id = ? AND obligations.origin = 'payonce'
             AND attempts.state = 'paid' AND attempts.transfer_id IS NOT NULL
@@ -4663,11 +4830,16 @@ export class Ledger {
           ORDER BY attempts.rowid DESC LIMIT 1`,
       )
       .get(beneficiaryId) as unknown as
-      | { transfer_id: string; reference: string | null; account_key: string }
+      | { transfer_id: string; reference: string | null; account_key: string; route_key: string | null }
       | undefined;
     return row === undefined
       ? undefined
-      : { transferId: row.transfer_id, reference: row.reference, accountKey: row.account_key };
+      : {
+          transferId: row.transfer_id,
+          reference: row.reference,
+          accountKey: row.account_key,
+          routeKey: row.route_key ?? null,
+        };
   }
 
   // The latest payment PayOnce sent this beneficiary that the bank paid and that
@@ -4728,7 +4900,7 @@ export class Ledger {
         )
         .all() as unknown as SupplierPayoutRow[]
     ).map(toSupplierPayout);
-    return { obligations, attempts, payouts, ...this.supplierShared(null), drafts: [], holds: [] };
+    return routedRead({ obligations, attempts, payouts, ...this.supplierShared(null), drafts: [], holds: [] }, this.accountRoutes());
   }
 
   // What a record's detail reads of that one beneficiary record: what the list
@@ -4828,7 +5000,10 @@ export class Ledger {
         endedAt: row.ended_at,
       }),
     );
-    return { obligations, attempts, payouts, ...this.supplierShared(beneficiaryId), drafts, holds };
+    return routedRead(
+      { obligations, attempts, payouts, ...this.supplierShared(beneficiaryId), drafts, holds },
+      this.accountRoutes(),
+    );
   }
 
   // What the list and a detail both read: approvals with only the account their
@@ -5002,6 +5177,11 @@ export class Ledger {
         WHERE action = 'pay' AND account_key IS NOT NULL AND beneficiary_id IS NOT NULL`,
       except,
     ).map((row: { beneficiary_id: string; key: string }) => ({ beneficiaryId: row.beneficiary_id, key: row.key }));
+    // By where the money goes, as the record's own read gives its keys.
+    const routes: Map<string, string> = this.accountRoutes();
+    for (const entry of keys) {
+      entry.key = routes.get(entry.key) ?? entry.key;
+    }
     const callbacks: { beneficiaryId: string; appliedKey: string | null; oldDetails: string }[] = all<{
       beneficiary_id: string;
       applied_key: string | null;
@@ -5097,8 +5277,8 @@ export class Ledger {
         `INSERT INTO run_rows
            (run_id, line, cells, invoice_id, supplier, beneficiary_id, currency, amount_minor,
             transfer_method, sandbox_outcome, action, reasons, held_for, new_payee,
-            bank_change_id, payee, pay_to, account_key, due_date, arrival)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            bank_change_id, payee, pay_to, account_key, due_date, arrival, route_key)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         runId,
@@ -5121,6 +5301,7 @@ export class Ledger {
         row.accountKey,
         row.dueDate,
         row.arrival === null ? null : JSON.stringify(row.arrival),
+        row.routeKey,
       );
   }
 
@@ -5208,7 +5389,7 @@ export class Ledger {
         `UPDATE run_rows SET invoice_id = ?, supplier = ?, beneficiary_id = ?, currency = ?,
                 amount_minor = ?, transfer_method = ?, sandbox_outcome = ?, action = ?,
                 reasons = ?, held_for = ?, new_payee = ?, bank_change_id = ?, payee = ?,
-                pay_to = ?, account_key = ?, due_date = ?, arrival = ?
+                pay_to = ?, account_key = ?, due_date = ?, arrival = ?, route_key = ?
           WHERE run_id = ? AND line = ?`,
       );
       for (const row of rows) {
@@ -5230,6 +5411,7 @@ export class Ledger {
           row.accountKey,
           row.dueDate,
           row.arrival === null ? null : JSON.stringify(row.arrival),
+          row.routeKey,
           runId,
           row.line,
         );
@@ -5357,10 +5539,11 @@ export class Ledger {
             );
           const marked: { changes: number | bigint } = this.db
             .prepare(
-              `UPDATE run_rows SET state = 'released', account_key = ?, pay_to = ?
+              `UPDATE run_rows SET state = 'released', account_key = ?, pay_to = ?,
+                      route_key = CASE WHEN account_key = ? THEN route_key END
                 WHERE id = ? AND run_id = ? AND state = 'waiting'`,
             )
-            .run(row.accountKey, row.payTo, row.rowId, runId);
+            .run(row.accountKey, row.payTo, row.accountKey, row.rowId, runId);
           if (Number(marked.changes) !== 1) {
             throw new Error(`Row ${row.line} of run ${runId} is not waiting to be released`);
           }
@@ -6249,6 +6432,32 @@ function toSupplierObligation(row: SupplierObligationRow): SupplierObligation {
     duplicateOf: row.duplicate_of === null ? [] : stringsOf(row.duplicate_of),
     currency: row.currency,
     transferMethod: row.transfer_method,
+  };
+}
+
+// A supplier read with every accountKey given as the routeKey of the same
+// details where the ledger knows it (accountRoutes), so the view groups accounts
+// by where the money goes and a bank name Airwallex rewrote makes no new one. A
+// key the ledger knows no routeKey for stays as it is.
+function routedRead<
+  T extends {
+    attempts: SupplierAttempt[];
+    payouts: SupplierPayout[];
+    approvals: SupplierApproval[];
+    runRows: SupplierRunRow[];
+  },
+>(read: T, routes: Map<string, string>): T {
+  const route = (key: string | null): string | null => (key === null ? null : (routes.get(key) ?? key));
+  return {
+    ...read,
+    attempts: read.attempts.map((attempt: T["attempts"][number]) => ({
+      ...attempt,
+      accountKey: route(attempt.accountKey),
+      sentKey: route(attempt.sentKey),
+    })),
+    payouts: read.payouts.map((payout: T["payouts"][number]) => ({ ...payout, sentKey: route(payout.sentKey) })),
+    approvals: read.approvals.map((approval: SupplierApproval) => ({ ...approval, accountKey: route(approval.accountKey) })),
+    runRows: read.runRows.map((row: SupplierRunRow) => ({ ...row, accountKey: route(row.accountKey) })),
   };
 }
 

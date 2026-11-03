@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { Quote } from "./airwallex/fx.js";
 import type { Transfer, TransferBankDetails } from "./airwallex/transfers.js";
 import { arrivalBlock, type ArrivalTerms } from "./arrival.js";
-import { bankDetailsKey, debitOf, originalStateOf, type Debit } from "./assess.js";
+import { bankDetailsKey, debitOf, keyHash, originalStateOf, routeKeyOf, type Debit } from "./assess.js";
 import type { Decision, OriginalTransferState } from "./incident.js";
 import type { BankChange, Obligation, ObligationState, TransferMethod } from "./ledger.js";
 import { formatMoney, toMinor } from "./money.js";
@@ -295,11 +295,10 @@ export function heldTermsFor(
   };
 }
 
-// The accountKey for bank details already written by bankDetailsKey.
-export function keyHash(detailsKey: string): string {
-  return createHash("sha256").update(detailsKey).digest("hex").slice(0, 16);
-}
+export { keyHash };
 
+// A hash of every bank detail, which approval terms carry to pin the details a
+// person saw. Whether two details are the same account is routeKeyOf's question.
 export function accountKeyOf(details: TransferBankDetails | undefined): string {
   return keyHash(bankDetailsKey(details));
 }
@@ -310,13 +309,15 @@ const ENDING: RegExp = /^[A-Za-z0-9]{1,4}$/;
 
 export interface SentTo {
   sentKey: string | null;
+  sentRoute: string | null;
   sentEnding: string | null;
 }
 
-const NOT_SENT_TO: SentTo = { sentKey: null, sentEnding: null };
+const NOT_SENT_TO: SentTo = { sentKey: null, sentRoute: null, sentEnding: null };
 
-// Where a transfer went, for the supplier view only: the accountKey of its bank
-// details and the last four characters of the account number or IBAN. Both null
+// Where a transfer went, for the supplier view only: the accountKey and routeKey
+// of its bank details and the last four characters of the account number or
+// IBAN. All null
 // when the transfer carries no bank details, or details that are not an object,
 // such as null, and the ending null when it is not letters and digits. Nothing
 // PayOnce decides reads them, and it never throws, so tying a payout, the check
@@ -328,7 +329,7 @@ export function sentToOf(details: unknown): SentTo {
   }
   try {
     const bankDetails: TransferBankDetails = details as TransferBankDetails;
-    return { sentKey: accountKeyOf(bankDetails), sentEnding: endingOf(bankDetails) };
+    return { sentKey: accountKeyOf(bankDetails), sentRoute: routeKeyOf(bankDetails), sentEnding: endingOf(bankDetails) };
   } catch {
     return NOT_SENT_TO;
   }

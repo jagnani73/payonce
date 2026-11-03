@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Transfer, TransferBankDetails } from "./airwallex/transfers.js";
 import type { OriginalTransferState } from "./incident.js";
 import type { AttemptState } from "./ledger.js";
@@ -93,14 +94,69 @@ export function bankDetailsKey(details: TransferBankDetails | undefined): string
   );
 }
 
-// True when a new transfer would go to the same account the original went to.
-// Any difference counts, so a change Airwallex makes to its own formatting
-// escalates and does not slip through.
+// A short hash of a key string: the accountKey of bank details written by
+// bankDetailsKey, or a routeKey.
+export function keyHash(detailsKey: string): string {
+  return createHash("sha256").update(detailsKey).digest("hex").slice(0, 16);
+}
+
+// The fields that say which account a payment reaches, and of those the ones
+// that name the account itself. A change to any other field, such as a bank name
+// Airwallex rewrote from the routing number, an address or a category, is not
+// another account. payeeOf and the callback read-back compare these fields.
+export const ROUTE_FIELDS: readonly string[] = [
+  "bank_country_code",
+  "account_currency",
+  "account_number",
+  "account_routing_value1",
+  "iban",
+  "swift_code",
+];
+export const ACCOUNT_FIELDS: readonly string[] = ["account_number", "account_routing_value1", "iban", "swift_code"];
+
+// A field as the route compares it: Airwallex may change case or spacing when it
+// stores a value.
+export function routeValue(raw: unknown): string {
+  return typeof raw === "string" ? raw.replace(/\s+/g, "").toUpperCase() : "";
+}
+
+// The key of where money sent to these bank details goes: a hash of the route
+// fields, normalised as routeValue reads them. Every "is this another account?"
+// test compares it. Details with none of the account fields cannot be told apart
+// by where they go, so their key is the full accountKey and any change counts.
+export function routeKeyOf(details: TransferBankDetails | undefined): string {
+  const fields: TransferBankDetails = details ?? {};
+  if (ACCOUNT_FIELDS.every((field: string): boolean => routeValue(fields[field]) === "")) {
+    return keyHash(bankDetailsKey(details));
+  }
+  return keyHash(JSON.stringify(ROUTE_FIELDS.map((field: string): string[] => [field, routeValue(fields[field])])));
+}
+
+// The routeKey of bank details stored as bankDetailsKey writes them, as a
+// callback's applied_key keeps them, or null when they cannot be read.
+export function routeOfDetailsKey(detailsKey: string): string | null {
+  try {
+    const entries: unknown = JSON.parse(detailsKey);
+    if (!Array.isArray(entries)) {
+      return null;
+    }
+    const pairs: [string, unknown][] = entries.filter(
+      (entry: unknown): entry is [string, unknown] => Array.isArray(entry) && typeof entry[0] === "string",
+    );
+    return routeKeyOf(Object.fromEntries(pairs) as TransferBankDetails);
+  } catch {
+    return null;
+  }
+}
+
+// True when a new transfer would go to the account the original went to. Only
+// the route fields count, so a bank name Airwallex rewrote is not new bank
+// details, and a change to the account, its routing or its country is.
 export function sameBankDetails(
   original: TransferBankDetails | undefined,
   current: TransferBankDetails,
 ): boolean {
-  return original !== undefined && bankDetailsKey(original) === bankDetailsKey(current);
+  return original !== undefined && routeKeyOf(original) === routeKeyOf(current);
 }
 
 export function resendCanFix(transfer: Transfer): boolean {

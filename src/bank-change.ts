@@ -299,7 +299,7 @@ export async function recordBankChange(
   const alreadyOnRecord: boolean = holdsAccount(current, entered);
   if (
     alreadyOnRecord &&
-    engine.ledger.verifiedBankChange(obligation.beneficiaryId, bankDetailsKey(current)) !== undefined
+    engine.ledger.verifiedBankChange(obligation.beneficiaryId, current) !== undefined
   ) {
     throw new Error("A callback for the bank details on file is recorded already");
   }

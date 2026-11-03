@@ -25,7 +25,7 @@ import {
   type SignoffRule,
 } from "./approvers.js";
 import { arrivalFor, ifSentOn, today } from "./arrival.js";
-import { bankDetailsKey } from "./assess.js";
+import { routeKeyOf } from "./assess.js";
 import { committedAcross, committedByInvoice, type CommittedExcept } from "./cash-position.js";
 import { withCurrencyLocks } from "./currency-lock.js";
 import type { Dispatcher } from "./dispatcher.js";
@@ -105,7 +105,8 @@ interface Payee {
   record: BeneficiaryRecord | undefined;
   details: TransferBankDetails | undefined;
   methods: string[];
-  lastPaid: { reference: string | null; accountKey: string; payTo: string } | undefined;
+  // routeKey is where that payment's money went.
+  lastPaid: { reference: string | null; routeKey: string; payTo: string } | undefined;
 }
 
 const METHODS: readonly TransferMethod[] = ["LOCAL", "SWIFT"];
@@ -162,7 +163,7 @@ async function readPayees(engine: Engine, rows: RunFileRow[]): Promise<Map<strin
         .beneficiary?.bank_details;
       lastPaid = {
         reference: last.reference,
-        accountKey: accountKeyOf(sentTo),
+        routeKey: routeKeyOf(sentTo),
         payTo: sentTo === undefined ? "details not known" : accountEnding(sentTo),
       };
     }
@@ -315,15 +316,12 @@ function checkRow(
           );
         }
       }
-      // A changed account is paid only once a callback verified it.
-      const key: string = accountKeyOf(details);
+      // A changed account is paid only once a callback verified it. Only where the
+      // money goes counts, so a bank name Airwallex rewrote is not a change.
       if (payee.lastPaid === undefined) {
         newPayee = true;
-      } else if (payee.lastPaid.accountKey !== key) {
-        const verified: BankChange | undefined = ledger.verifiedBankChange(
-          row.beneficiaryId,
-          bankDetailsKey(details),
-        );
+      } else if (payee.lastPaid.routeKey !== routeKeyOf(details)) {
+        const verified: BankChange | undefined = ledger.verifiedBankChange(row.beneficiaryId, details);
         if (verified !== undefined) {
           bankChangeId = verified.id;
         } else {
@@ -360,6 +358,7 @@ function checkRow(
     payee: details === undefined ? null : name,
     payTo: details === undefined ? null : payTo(name, details),
     accountKey: details === undefined ? null : accountKeyOf(details),
+    routeKey: details === undefined ? null : routeKeyOf(details),
     dueDate: row.dueDate,
     arrival:
       pays && method !== null && row.currency !== null

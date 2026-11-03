@@ -46,7 +46,7 @@ function record(ledger: Ledger, transfer: Transfer, decide: Decide | null = null
   // For the supplier view only, so a failure here never changes the payment step.
   try {
     const sent: SentTo = sentToOf(transfer.beneficiary?.bank_details);
-    ledger.recordSentTo(transfer.request_id, sent.sentKey, sent.sentEnding);
+    ledger.recordSentTo(transfer.request_id, sent.sentKey, sent.sentRoute, sent.sentEnding);
   } catch (error: unknown) {
     sayWarning(`  ledger   could not keep where ${transfer.short_reference_id ?? transfer.id} went: ${error instanceof Error ? error.message : String(error)}`);
   }
