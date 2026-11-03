@@ -884,13 +884,19 @@ async function startIncident(request: IncomingMessage): Promise<unknown> {
     );
   }
   const invoiceId: string = given === "" ? newInvoiceId(engine.ledger) : given;
-  const obligation: Obligation = await openScenario(
-    engine,
-    invoiceId,
-    scenarioId,
-    startedBy,
-    dueDate === "" ? null : dueDate,
-  );
+  let obligation: Obligation;
+  try {
+    obligation = await openScenario(engine, invoiceId, scenarioId, startedBy, dueDate === "" ? null : dueDate);
+  } catch (error: unknown) {
+    // Airwallex is read before the invoice is written, so nothing is stored. The
+    // person reads PayOnce's words first and Airwallex's after them.
+    if (error instanceof AirwallexUnreachableError || error instanceof AirwallexError) {
+      const what: string =
+        error instanceof AirwallexUnreachableError ? "Airwallex could not be reached" : "Airwallex answered with an error";
+      throw new HttpError(502, `${what}, so nothing was sent or stored. Try again in a minute. ${error.message}`);
+    }
+    throw error;
+  }
   runScenario(engine, agent, bank, obligation, { bankOutcome, emailsName }).catch(
     (error: unknown): void => noteError(engine.ledger, invoiceId, error),
   );
