@@ -1651,6 +1651,14 @@ function buildAttempt(attempt) {
   // The bank's short reference is what the timeline messages call this payment.
   const reference =
     typeof attempt.reference === "string" && attempt.reference !== "" ? shownReference(attempt.reference) : null;
+  // The timeline quotes Airwallex's status, such as CANCELLED for a failed
+  // transfer, so the card names it too when it is not the state shown.
+  const bank =
+    typeof attempt.bankStatus === "string" &&
+    /^[A-Z_]{1,30}$/.test(attempt.bankStatus) &&
+    attempt.bankStatus.toLowerCase() !== String(attempt.state)
+      ? attempt.bankStatus
+      : null;
   return h(
     "li",
     { class: "attempt" },
@@ -1662,6 +1670,7 @@ function buildAttempt(attempt) {
     ),
     badge(ATTEMPT_STATES[attempt.state], attempt.state, false),
     failure !== null && h("p", { class: "attempt__failure" }, failure),
+    bank !== null && h("p", { class: "attempt__ids" }, "Airwallex shows ", h("span", { class: "mono" }, bank)),
     h(
       "p",
       { class: "attempt__ids" },
@@ -4468,7 +4477,11 @@ function renderRunCash(run) {
           cashRow("To pay", `${entry.payments === 1 ? "1 payment" : `${entry.payments} payments`}`, amount(entry.payMinor)),
           cashRow(
             "Fees",
-            entry.feeUnknown > 0 ? (entry.feeUnknown === entry.payments ? "not known" : `not known for ${entry.feeUnknown}`) : "the latest recorded",
+            entry.feeUnknown > 0
+              ? entry.feeUnknown === entry.payments
+                ? "not known at the last check"
+                : `not known for ${entry.feeUnknown} at the last check`
+              : "the latest recorded at the last check",
             amount(entry.feeMinor),
             entry.feeUnknown > 0 ? "is-unknown" : null,
           ),
@@ -4921,7 +4934,7 @@ function candidateRow(candidate, checked) {
 
 function matchLead(candidates, suggested) {
   if (candidates.length === 0) {
-    return "No invoice number from the ledger is in this email. Pick the invoice it is about, or dismiss it.";
+    return "PayOnce found no invoice number from the ledger in this email. It looks only for numbers with a digit in them. Pick the invoice it is about, or dismiss it.";
   }
   if (suggested !== null) {
     return "It names one invoice. Check it, then deliver the email there.";
@@ -5442,16 +5455,24 @@ function accountNode(account) {
   );
 }
 
+// A payment from before PayOnce kept an amount, an account or a send time says so
+// once, instead of "not on file" for each.
+const OLD_DETAILS = "(details from before PayOnce kept them)";
+
 function paymentNode(payment) {
+  const amountKnown = typeof payment.amountMinor === "number";
+  const timeKnown = parseDate(payment.sentAt) !== null;
+  const old = !amountKnown || payment.account === null || !timeKnown;
   const parts = [
     payment.bankStatus !== null ? payment.bankStatus : null,
     payment.failureCode !== null ? `${payment.failureCode} (${payment.failureWords ?? "a code PayOnce has no words for"})` : null,
-    typeof payment.amountMinor === "number" ? formatMoney(payment.amountMinor, payment.currency ?? "") : "amount not on file",
-    payment.account !== null ? `to account ${payment.account}` : "account not on file",
-    PAYMENT_CHECKS[payment.check] ?? humanize(payment.check),
+    amountKnown ? formatMoney(payment.amountMinor, payment.currency ?? "") : null,
+    payment.account !== null ? `to account ${payment.account}` : null,
+    old && payment.check === "not-kept" ? null : (PAYMENT_CHECKS[payment.check] ?? humanize(payment.check)),
     payment.foundLate ? "found late" : null,
     payment.rateMismatch ? "rate did not match its approval" : null,
   ].filter((part) => part !== null);
+  const when = timeKnown ? [payment.kind === "outside" ? "Found " : "Sent ", whenNode(payment.sentAt)] : [];
   const state = payment.kind === "outside" ? null : ATTEMPT_STATES[payment.state];
   return h(
     "li",
@@ -5463,7 +5484,14 @@ function paymentNode(payment) {
       h("span", { class: "mono" }, payment.reference ?? "no reference"),
       badge(state ?? null, payment.state),
     ),
-    h("span", { class: "supplier-item__sub" }, parts.join(", "), ". ", payment.kind === "outside" ? "Found " : "Sent ", whenNode(payment.sentAt)),
+    h(
+      "span",
+      { class: "supplier-item__sub" },
+      parts.join(", "),
+      parts.length > 0 && when.length > 0 ? ". " : "",
+      when,
+      old ? `${parts.length > 0 || when.length > 0 ? " " : ""}${OLD_DETAILS}` : "",
+    ),
     payment.mismatchedReference !== null &&
       h(
         "span",
@@ -5481,8 +5509,7 @@ function paidByNode(paid) {
     null,
     "Paid by ",
     paid.reference === null ? "a payment" : h("span", { class: "mono" }, paid.reference),
-    paid.kind === "outside" ? ", found " : ", sent ",
-    whenNode(paid.sentAt),
+    parseDate(paid.sentAt) === null ? [] : [paid.kind === "outside" ? ", found " : ", sent ", whenNode(paid.sentAt)],
     paid.account !== null ? ` to account ${paid.account}` : "",
     ` (${PAYMENT_CHECKS[paid.check] ?? humanize(paid.check)})`,
     paid.arrivesBy !== null ? `. It usually arrives by ${paid.arrivesBy}` : "",
