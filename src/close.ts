@@ -4,6 +4,7 @@ import {
   pendingClose,
   type CloseReview,
   type CoveredTransfer,
+  type NamingPayout,
 } from "./engine.js";
 import { personName } from "./approvers.js";
 import { Ledger, LEDGER_PATH } from "./ledger.js";
@@ -70,9 +71,11 @@ function main(): void {
     say(`${invoiceId} is held before paying, as a likely second bill for ${printable(review.reference ?? "")}`);
   } else if (review.kind === "unpaid") {
     say(
-      review.namesOnly.length > 0
-        ? `${invoiceId} is waiting on a person. A payout that names it is paid, but it does not match its amount, currency or account, so PayOnce does not count it as paying the invoice`
-        : `${invoiceId} is waiting on a person and nothing for it is paid`,
+      review.namesOnly.length === 0
+        ? `${invoiceId} is waiting on a person and nothing for it is paid`
+        : review.namesOnly.every((payout: NamingPayout): boolean => payout.checked)
+          ? `${invoiceId} is waiting on a person. A payout that names it is paid, but it does not match its amount, currency or account, so PayOnce does not count it as paying the invoice`
+          : `${invoiceId} is waiting on a person. A payout that names it is paid, but PayOnce could not check it yet, so it does not count it as paying the invoice`,
     );
   } else {
     say(`${invoiceId} is paid and waiting on a person`);
@@ -84,7 +87,7 @@ function main(): void {
   }
   for (const payout of review.namesOnly) {
     // The bank's short reference, printed only in its own form.
-    say(`  names it  ${namingText({ ...payout, reference: shownReference(payout.reference) })}, and does not match this invoice`);
+    say(`  names it  ${namingText({ ...payout, reference: shownReference(payout.reference) })}`);
   }
   if (review.covered.length > 0) {
     say("  covers    transfers listed under its request ids that do not match it:");

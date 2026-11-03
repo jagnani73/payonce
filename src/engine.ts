@@ -102,6 +102,7 @@ import {
   DuplicatePaymentError,
   expiryOf,
   holdsAccount,
+  payoutVerdict,
   isExpired,
   lateBesideLive,
   liveAtBank,
@@ -392,12 +393,15 @@ export function payoutSummary(transfer: Transfer): string {
 function payoutMoney(transfer: Transfer): PayoutMoney {
   const fee: Fee | null = feeOf(transfer);
   const debit: Debit | null = debitOf(transfer);
+  const delivered: number | null = readMinor(transfer.transfer_amount);
   return {
     amountMinor: debit?.minor ?? null,
     currency: debit?.currency ?? null,
     feeMinor: fee?.minor ?? null,
     feeCurrency: fee?.currency ?? null,
     beneficiaryId: transfer.beneficiary_id ?? null,
+    deliveredMinor: delivered,
+    deliveredCurrency: delivered === null || typeof transfer.transfer_currency !== "string" ? null : transfer.transfer_currency,
     // Where it went, for the supplier view only. sentToOf never throws, so odd
     // bank details cannot stop the payout being tied or the check before a payment.
     ...sentToOf(transfer.beneficiary?.bank_details),
@@ -714,13 +718,16 @@ async function linkUnseenPayouts(engine: Engine, invoiceId: string): Promise<boo
 }
 
 // Reads each outside payout the bank has not finished with, and notes any it has
-// paid or failed since. Returns them all as they now stand.
+// paid or failed since. One tied before PayOnce kept what a payout delivered and
+// where it went is read once too, a paid one included. Then each paid one is
+// judged against the beneficiary record as it is now (judgePayouts). Returns
+// them all as they now stand.
 async function syncOutsidePayouts(
   engine: Engine,
   invoiceId: string,
 ): Promise<OutsidePayout[]> {
   for (const payout of engine.ledger.outsidePayouts(invoiceId)) {
-    if (payout.state === "paid" || payout.state === "failed") {
+    if ((payout.state === "paid" && payout.checked === true) || payout.state === "failed") {
       continue;
     }
     const transfer: Transfer = await getTransfer(engine.client, payout.transferId);
@@ -736,7 +743,56 @@ async function syncOutsidePayouts(
       railFailureSeen(engine.ledger, transfer, "look");
     }
   }
+  await judgePayouts(engine, invoiceId);
   return engine.ledger.outsidePayouts(invoiceId);
+}
+
+// Works out, for each paid payout sent outside PayOnce tied to the invoice,
+// whether it pays it (payoutVerdict), against the account PayOnce would pay now
+// (payingRoute), and keeps it. Reads the beneficiary record only when one is
+// paid.
+async function judgePayouts(engine: Engine, invoiceId: string): Promise<void> {
+  const obligation: Obligation | undefined = engine.ledger.obligation(invoiceId);
+  const paid: OutsidePayout[] = engine.ledger
+    .outsidePayouts(invoiceId)
+    .filter((payout: OutsidePayout): boolean => payout.state === "paid");
+  if (obligation === undefined || paid.length === 0) {
+    return;
+  }
+  const record: TransferBankDetails | undefined = (
+    await findBeneficiary(engine.client, obligation.beneficiaryId)
+  )?.beneficiary?.bank_details;
+  const route: string | null = payingRoute(engine.ledger, obligation, record);
+  for (const payout of paid) {
+    engine.ledger.setPayoutVerdict(payout.transferId, payoutVerdict(obligation, payout, route));
+  }
+}
+
+// The routeKey of the account PayOnce would pay this invoice's beneficiary now
+// without a person, the account the first-payment hold and checkAccount expect:
+// the record's when it holds the account of PayOnce's last checked payment to
+// the beneficiary, when a verified callback matches it, or when PayOnce has
+// never paid the beneficiary; else that last checked payment's account. Null
+// when there is none, as for a beneficiary paid only before PayOnce kept which
+// account each payment went to. Only a payout sent outside PayOnce that went
+// there pays the invoice.
+function payingRoute(
+  ledger: Ledger,
+  obligation: Obligation,
+  record: TransferBankDetails | undefined,
+): string | null {
+  const last: LastPaid | undefined = ledger.lastPaidTransfer(obligation.beneficiaryId);
+  if (record !== undefined) {
+    const neverPaid: boolean = last === undefined && ledger.lastPaidUnchecked(obligation.beneficiaryId) === undefined;
+    if (
+      neverPaid ||
+      (last !== undefined && holdsAccount(last, record)) ||
+      ledger.verifiedBankChange(obligation.beneficiaryId, record) !== undefined
+    ) {
+      return routeKeyOf(record);
+    }
+  }
+  return last === undefined ? null : knownRoute(last.routeKey);
 }
 
 // A status PayOnce does not recognise counts as live.
@@ -1754,11 +1810,14 @@ function paidOutsideCause(engine: Engine, invoiceId: string, paidBy: OutsidePayo
 }
 
 // A paid payout that names the invoice but does not pay it (payoutPays): another
-// amount, currency or account. Nothing more is sent beside it, and a person
-// decides.
+// amount, currency or account, or one PayOnce could not check. Nothing more is
+// sent beside it, and a person decides.
 function namesOnlyCause(engine: Engine, invoiceId: string, namedBy: OutsidePayout): NeverSentCause {
   return {
-    payment: `payout ${namedBy.reference} sent outside PayOnce names this invoice and is paid, but does not match its amount, currency or account`,
+    payment:
+      namedBy.pays === false
+        ? `payout ${namedBy.reference} sent outside PayOnce names this invoice and is paid, but does not match its amount, currency or account`
+        : `payout ${namedBy.reference} sent outside PayOnce names this invoice and is paid, but PayOnce could not check its amount, currency or account`,
     then: "a person checks it, and can close the invoice without paying",
     reason: OUTSIDE_PAYOUT_REASON,
     hold: (): NextLook => holdForOutsidePayout(engine, invoiceId),
@@ -3726,38 +3785,42 @@ export interface CloseReview {
   reason: string;
   emails: string | null;
   covered: CoveredTransfer[];
-  // Paid payouts sent outside PayOnce that name this invoice but do not pay it
-  // (payoutPays): what the card shows of each, so a person sees they do not.
+  // Paid payouts sent outside PayOnce that name this invoice but do not pay it,
+  // or that PayOnce could not check yet (payoutPays): what the card shows of
+  // each, so a person sees they do not count.
   namesOnly: NamingPayout[];
 }
 
 // A payout that names an invoice without paying it, as the close card shows it:
-// the bank's short reference, what it took and the last four characters of the
-// account it went to. Never the payee's name.
+// the bank's short reference, what it delivered, the last four characters of
+// the account it went to, and checked, false while PayOnce could not tell
+// whether it pays the invoice. Never the payee's name.
 export interface NamingPayout {
   reference: string;
   amountMinor: number | null;
   currency: string | null;
   ending: string | null;
+  checked: boolean;
 }
 
 function namingPayout(payout: OutsidePayout): NamingPayout {
   return {
     reference: payout.reference,
-    amountMinor: payout.amountMinor,
-    currency: payout.currency,
+    amountMinor: payout.deliveredMinor ?? null,
+    currency: payout.deliveredCurrency ?? null,
     ending: payout.sentEnding ?? null,
+    checked: payout.pays === false,
   };
 }
 
-// How the close card and pnpm close name a payout that names the invoice but does
-// not pay it.
+// How pnpm close names a payout that names the invoice but does not pay it, or
+// that PayOnce could not check yet.
 export function namingText(payout: NamingPayout): string {
   const amount: string =
     payout.amountMinor === null || payout.currency === null
       ? "an amount PayOnce did not read"
       : formatMoney(payout.amountMinor, payout.currency);
-  return `${payout.reference}, ${amount}, to ${payout.ending === null ? "an account PayOnce did not read" : `the account ending ${payout.ending}`}, paid`;
+  return `${payout.reference}, ${amount}, to ${payout.ending === null ? "an account PayOnce did not read" : `the account ending ${payout.ending}`}, paid, ${payout.checked ? "and does not match this invoice" : "and PayOnce could not check it yet"}`;
 }
 
 // A transfer under the request id of one of the invoice's attempts (kind) that

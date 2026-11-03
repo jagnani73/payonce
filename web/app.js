@@ -2731,7 +2731,9 @@ function buildReview(invoiceId, review, emailSummary) {
       duplicate
         ? `This invoice looks like a second bill for ${review.reference}. If it is, close it without paying. If it is not, PayOnce pays it once it is approved.`
         : unpaid && namesOnly.length > 0
-          ? "A payout sent outside PayOnce names this invoice and is paid, but it does not match the invoice's amount, currency or account, so PayOnce does not count it as paying the invoice. Check it with the supplier. If the invoice should not be paid, close it without paying. Otherwise leave it waiting."
+          ? namesOnly.every((payout) => payout.checked === true)
+            ? "A payout sent outside PayOnce names this invoice and is paid, but it does not match the invoice's amount, currency or account, so PayOnce does not count it as paying the invoice. Check it with the supplier. If the invoice should not be paid, close it without paying. Otherwise leave it waiting."
+            : "A payout sent outside PayOnce names this invoice and is paid, but PayOnce could not check its amount, currency or account yet, so it does not count it as paying the invoice. Check it with the supplier. If the invoice should not be paid, close it without paying. Otherwise leave it waiting."
           : unpaid
             ? "Nothing for this invoice is with the bank or paid. If it should not be paid, close it without paying."
             : `The bank reports the ${paidPayment} as paid, so PayOnce will not send another. Check with the supplier, then close the incident.`,
@@ -2768,7 +2770,7 @@ function buildReview(invoiceId, review, emailSummary) {
         h("dd", null, review.covered.map(coveredNode)),
       ],
       namesOnly.length > 0 && [
-        h("dt", null, "Names this invoice but does not match it"),
+        h("dt", null, "Names this invoice but does not count as paying it"),
         h("dd", null, namesOnly.map(namingNode)),
       ],
     ),
@@ -2777,8 +2779,9 @@ function buildReview(invoiceId, review, emailSummary) {
   els.review.hidden = false;
 }
 
-// A paid payout sent outside PayOnce that names the invoice but does not pay it:
-// its reference, what it took and the last four characters of the account.
+// A paid payout sent outside PayOnce that names the invoice but does not pay it,
+// or that PayOnce could not check yet: its reference, what it delivered and the
+// last four characters of the account.
 function namingNode(payout) {
   const amount =
     Number.isFinite(payout.amountMinor) && typeof payout.currency === "string"
@@ -2789,7 +2792,11 @@ function namingNode(payout) {
     "span",
     { class: "terms__covered" },
     h("span", { class: "mono" }, shownReference(payout.reference)),
-    h("span", { class: "terms__sub" }, `${amount}, ${ending}, paid`),
+    h(
+      "span",
+      { class: "terms__sub" },
+      `${amount}, ${ending}, paid. ${payout.checked === true ? "Does not match this invoice" : "Not checked yet"}`,
+    ),
   );
 }
 
