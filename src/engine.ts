@@ -3101,6 +3101,11 @@ async function replaceUnderLock(
     if (engine.ledger.obligation(invoiceId)?.state !== "open") {
       return null;
     }
+    // A payout sent outside PayOnce that another process tied while this look
+    // waited for the lock holds the replacement, as it holds an approved one.
+    if (anyLive(engine.ledger.outsidePayouts(invoiceId))) {
+      return null;
+    }
     // An email delivered since assess read the thread is read before anything
     // is sent.
     if (engine.ledger.emailCount(invoiceId) !== assessment.emails.length) {
