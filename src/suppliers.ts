@@ -1215,6 +1215,11 @@ function cautionsOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts, owne
       code: "new-payee",
       text: "PayOnce has never paid this record. Paying a held invoice or a pay run row to it needs two approvers.",
     });
+  } else if (lastPaid !== undefined && !ledger.paidOnApproval(facts.id)) {
+    found.push({
+      code: "new-payee",
+      text: "PayOnce has paid this record only by itself, and never on a person's approval. Paying a held invoice or a pay run row to it needs two approvers.",
+    });
   }
   if (lastPaid === undefined && unchecked !== undefined) {
     const paid: SupplierAttempt | undefined = accounts.byTransfer.get(unchecked.transferId);

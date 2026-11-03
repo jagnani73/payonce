@@ -2952,8 +2952,8 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
       "bank-details",
     );
   }
-  // Two approvers for a payee PayOnce has never paid, and for an account it has
-  // not paid this supplier before, as for a pay run's row.
+  // Two approvers for a payee PayOnce has never paid on a person's approval, and
+  // for an account it has not paid this supplier before, as for a pay run's row.
   const payee: SignoffRule | null = payeeRule(engine, obligation, bankDetails);
   const rule: SignoffRule =
     elsewhere !== undefined
@@ -3013,9 +3013,11 @@ async function continueHeld(engine: Engine, obligation: Obligation): Promise<Nex
 }
 
 // Two approvers for a payment to a beneficiary PayOnce has never paid, to one it
-// paid only before it kept which account each payment went to, or to an account
-// it has not paid this supplier before, by the account its last checked payment
-// kept. Null when PayOnce last paid this very account.
+// paid only before it kept which account each payment went to, to an account it
+// has not paid this supplier before, by the account its last checked payment
+// kept, or to one PayOnce has paid only by itself, with no person approving any
+// payment to it (paidOnApproval). Null when PayOnce last paid this very account
+// and a person has approved a payment to the beneficiary.
 function payeeRule(engine: Engine, obligation: Obligation, bankDetails: TransferBankDetails): SignoffRule | null {
   const last: LastPaid | undefined = engine.ledger.lastPaidTransfer(obligation.beneficiaryId);
   if (last === undefined) {
@@ -3023,10 +3025,17 @@ function payeeRule(engine: Engine, obligation: Obligation, bankDetails: Transfer
       ? { needed: 2, why: "PayOnce has never paid this beneficiary" }
       : { needed: 2, why: "PayOnce paid this supplier before it kept which account each payment went to" };
   }
-  return holdsAccount(last, bankDetails)
+  if (!holdsAccount(last, bankDetails)) {
+    return { needed: 2, why: "it pays an account PayOnce has not paid this supplier before" };
+  }
+  return engine.ledger.paidOnApproval(obligation.beneficiaryId)
     ? null
-    : { needed: 2, why: "it pays an account PayOnce has not paid this supplier before" };
+    : { needed: 2, why: PAID_ONLY_BY_ITSELF };
 }
+
+// Why a held invoice needs two approvers when PayOnce has paid the beneficiary
+// only with payments no person approved. A fixed string, which why-facts reads.
+export const PAID_ONLY_BY_ITSELF: string = "PayOnce has never paid this beneficiary on a person's approval";
 
 // A held invoice with nothing a person could approve paying: any open request is
 // withdrawn, and the timeline says what the invoice waits on.

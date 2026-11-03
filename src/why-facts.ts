@@ -638,6 +638,7 @@ const WHY_PARTS: readonly ReasonPart[] = [
   fixedPart("it pays an account the original payment did not go to"),
   fixedPart("PayOnce does not know who started this payment"),
   fixedPart("PayOnce has never paid this beneficiary"),
+  fixedPart("PayOnce has never paid this beneficiary on a person's approval"),
   fixedPart("it pays an account PayOnce has not paid this supplier before"),
   fixedPart("PayOnce paid this supplier before it kept which account each payment went to"),
   slotPart(`the amount is above (${MONEY})`, (match: RegExpExecArray): string => match[0]),

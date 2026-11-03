@@ -113,7 +113,7 @@ function printRows(ledger: Ledger, rows: (CheckedRow | RunRow)[]): void {
   for (const row of rows) {
     say(rowText(row));
     if (row.payTo !== null && row.action === "pay") {
-      say(`           to ${printable(row.payTo)}${row.newPayee ? ", a payee PayOnce has never paid" : ""}`);
+      say(`           to ${printable(row.payTo)}${row.newPayee ? ", a payee PayOnce has never paid on a person's approval" : ""}`);
     }
     if (row.arrival !== null && row.currency !== null) {
       const advice: ArrivalAdvice = arrivalAdvice(row.arrival);

@@ -319,6 +319,10 @@ function checkRow(
       }
       // A changed account is paid only once a callback verified it. Only where the
       // money goes counts, so a bank name Airwallex rewrote is not a change.
+      // A payee no person has approved a payment to counts as new, whatever PayOnce
+      // paid it by itself (paidOnApproval). The account check below still compares
+      // with the last payment, automatic or not.
+      newPayee = !ledger.paidOnApproval(row.beneficiaryId);
       if (payee.lastPaid === undefined) {
         newPayee = true;
       } else if (payee.lastPaid.routeKey !== routeKeyOf(details)) {
@@ -639,7 +643,7 @@ export function largestTotal(terms: RunTerms): { amountMinor: number; currency: 
 }
 
 // How many approvers a run needs, and why: two for a payee PayOnce has never
-// paid, for an account a callback verified, for a supplier_domain with a
+// paid on a person's approval (newPayee), for an account a callback verified, for a supplier_domain with a
 // caution (domainChecks), when any currency's total is above
 // TWO_APPROVERS_ABOVE, and when the uploader's name, stored before names were
 // checked, does not follow the name rule, so the uploader cannot be barred.
@@ -653,7 +657,7 @@ export function runRule(
   const pay: PayRow[] = payRows(rows);
   const fresh: PayRow | undefined = pay.find((row: PayRow): boolean => row.newPayee);
   if (fresh !== undefined) {
-    return { needed: 2, why: `row ${fresh.line} pays ${fresh.payee}, which PayOnce has never paid` };
+    return { needed: 2, why: `row ${fresh.line} pays ${fresh.payee}, which PayOnce has never paid on a person's approval` };
   }
   const changed: PayRow | undefined = pay.find((row: PayRow): boolean => row.bankChange !== null);
   if (changed !== undefined) {

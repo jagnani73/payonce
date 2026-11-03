@@ -4925,6 +4925,32 @@ export class Ledger {
         };
   }
 
+  // True when PayOnce has paid this beneficiary on a person's approval: a payment
+  // the bank paid that was opened on an approval that was used (approval_id), or
+  // the original of a released row of an approved pay run. An automatic payment,
+  // a single incident's original or an automatic replacement, counts as the
+  // account PayOnce last paid but not here, so paying a payee once by itself never
+  // stands in for the two approvers a payee nobody approved a payment to takes.
+  // Attempts from before approval_id was kept do not count.
+  paidOnApproval(beneficiaryId: string): boolean {
+    return (
+      this.db
+        .prepare(
+          `SELECT 1 FROM attempts JOIN obligations ON obligations.invoice_id = attempts.invoice_id
+            WHERE obligations.beneficiary_id = ? AND obligations.origin = 'payonce'
+              AND attempts.state = 'paid' AND attempts.transfer_id IS NOT NULL AND attempts.misdirected = 0
+              AND ((attempts.approval_id IS NOT NULL
+                    AND EXISTS (SELECT 1 FROM approvals WHERE approvals.id = attempts.approval_id
+                                 AND approvals.state = 'used'))
+                OR (attempts.kind = 'original' AND obligations.run_row_id IS NOT NULL
+                    AND EXISTS (SELECT 1 FROM run_rows WHERE run_rows.id = obligations.run_row_id
+                                 AND run_rows.state = 'released')))
+            LIMIT 1`,
+        )
+        .get(beneficiaryId) !== undefined
+    );
+  }
+
   // The latest payment PayOnce sent this beneficiary that the bank paid and that
   // kept no account: one from before attempts kept the account each payment went
   // to, which nothing on file shows was checked. Undefined when there is none.
