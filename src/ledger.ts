@@ -1144,10 +1144,13 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     // decides reads them. Null until read since the columns were added.
     sent_key: "TEXT",
     sent_ending: "TEXT",
-    // The routeKeys of account_key and sent_key: where the money goes. A transfer
-    // and every retry are checked against route_key, and the supplier view groups
-    // accounts by them. Null on attempts from before the columns that no callback
-    // on file gave details for (backfillRoutes).
+    // The routeKeys of account_key and sent_key: where the money goes. Nothing
+    // that sends money reads them: a transfer (accountMismatch) and every retry
+    // (requireAccount) are checked against the full account_key. The
+    // first-payment hold, payeeRule and the pay run checks compare a record with
+    // the route_key of the account PayOnce last paid (lastPaidTransfer), and the
+    // supplier view groups accounts by them. Null on attempts from before the
+    // columns that no callback on file gave details for (rebuildRoutes).
     route_key: "TEXT",
     sent_route: "TEXT",
     // When PayOnce first recorded the attempt failed, and first recorded it paid,
