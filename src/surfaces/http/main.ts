@@ -6,6 +6,7 @@ import { describePolicy } from "../../domain/approvers.js";
 import { describeQuotes } from "../../domain/fx.js";
 import { runKey } from "../../domain/patterns.js";
 import { describeFloors } from "../../domain/reserve.js";
+import type { InvoiceSnapshot } from "../../domain/situation.js";
 import { createEngine, type EngineBuild } from "../../engine/create.js";
 import { CurrencyBusyError } from "../../engine/currency-lock.js";
 import { Dispatcher } from "../../engine/dispatcher.js";
@@ -23,6 +24,7 @@ import { loadSettings, type Settings } from "../../settings.js";
 import { LeaseLostError, type Ledger } from "../../store/ledger.js";
 import { cashReport, payRunLines, type CashReport } from "../../store/read/cash.js";
 import { printableError, say, sayError } from "../../text/printable.js";
+import { readInvoiceSnapshots } from "../../views/snapshot.js";
 import { httpApp, type HttpApp } from "./app.js";
 import { HOST, requestListener, type Route } from "./router.js";
 import { cashRoutes } from "./routes/cash.js";
@@ -151,7 +153,14 @@ function main(): void {
   const alerts: Alerts | null =
     alertSetting.target === null
       ? null
-      : new Alerts(engine.ledger, engine.approvals, alertSetting.target, `http://${HOST}:${port}`, alertCash);
+      : new Alerts(
+          engine.ledger,
+          (invoiceIds: string[], now: number): InvoiceSnapshot[] =>
+            readInvoiceSnapshots(engine.ledger, { policy: engine.approvals, askWhy: false }, now, invoiceIds),
+          alertSetting.target,
+          `http://${HOST}:${port}`,
+          alertCash,
+        );
 
   const app: HttpApp = httpApp({
     settings,

@@ -34,7 +34,6 @@ import {
   type RunChainReport,
   type RunLedgerReport,
 } from "../store/audit-trail.js";
-import type { ApprovalPolicy } from "../domain/approvers.js";
 import { waiting, type Contact } from "../domain/contacts.js";
 import { BENEFICIARY_ID_PATTERN } from "../domain/patterns.js";
 import { approvedUnderway, heldBeforePaying } from "../domain/live.js";
@@ -66,7 +65,6 @@ import { say, sayWarning } from "../text/printable.js";
 import { shownCurrency, shownInvoice, shownReference } from "../recon/recon-match.js";
 import type { KindTotal, ReconAlertState, ReconBreak } from "../store/recon-store.js";
 import { runStatus } from "../runs/runs.js";
-import { readInvoiceSnapshots } from "../views/snapshot.js";
 
 // How often the server looks for conditions that need a person, how long a new
 // alert waits before it is posted (so a request opened a moment after an
@@ -641,12 +639,15 @@ export interface AlertsStatus {
   stopped: string | null;
 }
 
+// The situations of the invoices named, as the views load them, at now.
+export type SnapshotsOf = (invoiceIds: string[], now: number) => InvoiceSnapshot[];
+
 // Works out what needs a person from the ledger, records it, and posts the
 // alerts that are due. Only pnpm ui runs it. The CLI only writes the ledger, and
 // the server's next check sees what it did.
 export class Alerts {
   private readonly ledger: Ledger;
-  private readonly policy: ApprovalPolicy;
+  private readonly snapshots: SnapshotsOf;
   private readonly target: AlertTarget;
   private readonly base: string;
   private readonly cash: () => AlertCash;
@@ -658,11 +659,11 @@ export class Alerts {
   private audit: FoundCondition[] = [];
   private timer: NodeJS.Timeout | null = null;
 
-  // policy is the approval policy the situations read. base is the local page
-  // the links point to. cash is the panel's report.
-  constructor(ledger: Ledger, policy: ApprovalPolicy, target: AlertTarget, base: string, cash: () => AlertCash) {
+  // snapshots loads the situations of the invoices with a person. base is the
+  // local page the links point to. cash is the panel's report.
+  constructor(ledger: Ledger, snapshots: SnapshotsOf, target: AlertTarget, base: string, cash: () => AlertCash) {
     this.ledger = ledger;
-    this.policy = policy;
+    this.snapshots = snapshots;
     this.target = target;
     this.base = base;
     this.cash = cash;
@@ -715,13 +716,11 @@ export class Alerts {
     const obligations: Obligation[] = this.ledger.obligations();
     // Only an invoice with a person can need one, so only those are read whole.
     const snapshots: Map<string, InvoiceSnapshot> = new Map(
-      readInvoiceSnapshots(
-        this.ledger,
-        { policy: this.policy, askWhy: false },
-        now,
+      this.snapshots(
         obligations
           .filter((obligation: Obligation): boolean => obligation.state === "escalated")
           .map((obligation: Obligation): string => obligation.invoiceId),
+        now,
       ).map((snapshot: InvoiceSnapshot): [string, InvoiceSnapshot] => [snapshot.obligation.invoiceId, snapshot]),
     );
     for (const obligation of obligations) {
