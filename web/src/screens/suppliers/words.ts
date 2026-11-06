@@ -23,7 +23,7 @@ export function phoneText(ending: string | null): string {
   return ending === null ? "no phone on file" : `phone ending ${ending}`;
 }
 
-// What tells same-named records apart: "USD · Local · record 6170b987 · ···6789 · no phone on file".
+// What tells same-named records apart: "US · USD · Local · ···6789 · no phone on file".
 export function recordFacts(row: Pick<SupplierListRow, "hint" | "accountEnding" | "phoneEnding">): string {
   return [row.hint, endingText(row.accountEnding), phoneText(row.phoneEnding)].filter((part: string): boolean => part !== "").join(" · ");
 }

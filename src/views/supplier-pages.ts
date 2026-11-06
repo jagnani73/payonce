@@ -67,14 +67,14 @@ const METHOD_WORDS: Record<string, string> = { LOCAL: "Local", SWIFT: "SWIFT" };
 
 const DRAFT_STATES: Record<string, string> = { draft: "Draft", copied: "Copied", sent: "Marked as sent", dismissed: "Dismissed" };
 
-// "US · USD · Local · ···6789": what tells two records of one name apart,
-// without the record's id.
-function hintOf(country: string | null, currencies: string[], methods: string[], ending: string | null): string {
+// "US · USD · Local": with the account ending and the phone ending the page
+// shows beside it, what tells two records of one name apart, without the
+// record's id.
+function hintOf(country: string | null, currencies: string[], methods: string[]): string {
   return [
     ...(country === null ? [] : [country]),
     ...(currencies.length === 0 ? [] : [currencies.join(", ")]),
     ...(methods.length === 0 ? [] : [methods.map((method: string): string => METHOD_WORDS[method] ?? method).join(", ")]),
-    ...(ending === null ? [] : [`···${ending}`]),
   ].join(" · ");
 }
 
@@ -92,7 +92,7 @@ export function supplierRows(ledger: Ledger, now: number): SupplierListRow[] {
     return {
       key: summary.key,
       name: summary.name,
-      hint: hintOf(summary.country, currencies, methods, summary.accountEnding),
+      hint: hintOf(summary.country, currencies, methods),
       sameName: summary.sameName.length,
       country: summary.country,
       currencies,
@@ -180,12 +180,7 @@ export function supplierView(ledger: Ledger, settings: Settings, now: number, ke
       key: detail.key,
       name: detail.name,
       otherNames: detail.names.filter((name: string): boolean => name !== detail.name),
-      hint: hintOf(
-        detail.country,
-        detail.currencies,
-        detail.methods,
-        detail.accounts.find((account: RecordAccount): boolean => account.recordLastStored)?.ending ?? null,
-      ),
+      hint: hintOf(detail.country, detail.currencies, detail.methods),
       cautions: detail.cautions.map(
         (caution: RecordCaution): SupplierCaution => ({
           code: caution.code,

@@ -79,7 +79,7 @@ The supplier view shows one Airwallex beneficiary record at a time: what PayOnce
 ### The list
 - The list puts a record first when it has an entry in the board's `person` group or a phone proposal waiting. Then come records with a must-tier caution, then the most money at risk, then the name and the key.
 - Each list row gives the account ending the record held the last time PayOnce stored it, and the phone on file's last four digits.
-- `suppliersView` shapes the list for the page (`supplierRows`). Each row gives the name, a hint (its bank country, currencies, methods and account ending), how many records share its name, its payments open and in all, and each caution code with a short label (`CAUTION_LABELS`).
+- `suppliersView` shapes the list for the page (`supplierRows`). Each row gives the name, a hint (its bank country, currencies and methods), how many records share its name, its payments open and in all, and each caution code with a short label (`CAUTION_LABELS`).
 - A row's country is the bank country of the newest transfer PayOnce sent to the record, from its route advisory. The ledger keeps no bank name per account, so an account's label names it by its ending.
 - The list's search matches the name, the record's id, and three or more of the last characters of the account ending.
 - `suppliersView` takes `q` and keeps the records whose name or id holds it, ignoring case.

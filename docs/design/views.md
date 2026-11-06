@@ -98,7 +98,7 @@ A view is a typed, read-only answer built from the ledger for the page, the MCP 
 - An uploaded email's view carries its Date header as written, as `Theirs`, and the time it was uploaded. Both are null for an email the simulator played.
 - `SettingsView` names the `.env` variables behind each row (`SettingRow.variables`), and none for a limit fixed in PayOnce, such as Ask why's caps. It never holds a secret: for the Airwallex keys it says only whether each is set.
 - `IncidentsView.totals` follow every filter the rows do, scope, search and `me` included, and count the waiting pay run's rows while the run passes them. Each wallet names the runs in `runWaiting` (`runsWaiting`). `wallets` lists every wallet a payment in the ledger is paid from, closed payments included.
-- A supplier hint, in the list, on the record and in search, is its bank country (from the newest transfer PayOnce sent there), currencies, methods and account ending, such as "US · USD · Local · ···6789". It never shows the record's id.
+- A supplier hint, in the list and on the record, is its bank country (from the newest transfer PayOnce sent there), currencies and methods, such as "US · USD · Local", and the page shows the account and phone endings beside it. Search adds the account ending to it. It never shows the record's id.
 - `ReconView.lastCheck.at` is the latest check that ran, failed or not, and `lastOkAt` the latest one that read Airwallex in full.
 - The movements route answers `ReconMovementView`: amount and balance as `Money`, and how PayOnce explains the movement in words (`howText`).
 - `StatusView` reads little, because every screen polls it every 10 seconds.

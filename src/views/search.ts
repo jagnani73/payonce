@@ -19,11 +19,13 @@ const UPLOAD_LABELS: Record<string, string> = { waiting: "In the inbox", deliver
 export function searchView(ledger: Ledger, settings: Settings, now: number, q: string): SearchView {
   return readingSoft((): SearchView => {
     const found: SearchRead = ledger.search(q, SEARCH_LIMIT);
-    // The supplier list's hint, read only when a record is found.
+    // The supplier list's hint and account ending, read only when a record is found.
     let hint: Map<string, string> | undefined;
     const hints = (): Map<string, string> =>
       (hint ??= new Map<string, string>(
-        supplierRows(ledger, now).flatMap((row: SupplierListRow): [string, string][] => (row.key === null ? [] : [[row.key, row.hint]])),
+        supplierRows(ledger, now).flatMap((row: SupplierListRow): [string, string][] =>
+          row.key === null ? [] : [[row.key, [row.hint, row.accountEnding === null ? "" : `···${row.accountEnding}`].filter((part: string): boolean => part !== "").join(" · ")]],
+        ),
       ));
     const snapshots: InvoiceSnapshot[] = readInvoiceSnapshots(
       ledger,
