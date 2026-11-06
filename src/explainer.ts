@@ -16,9 +16,9 @@ import { printable, sayWarning } from "./printable.js";
 import { modelServicesFromEnv } from "./reader.js";
 import type { LegendEntry, WhyBuild, WhyFacts } from "./why-facts.js";
 
-// Asks the model reader's models why PayOnce did what it did on one invoice, from
-// the facts why-facts.ts builds: Claude's first when CLAUDE_API_KEY is set, then
-// the ones READER_API_KEY is for. The answer is for a person to read and nothing
+// Asks a model why PayOnce did what it did on one invoice, from the facts
+// why-facts.ts builds: CLAUDE_ASK_MODEL's Claude models first when CLAUDE_API_KEY
+// is set, then the reader's models READER_API_KEY is for. The answer is for a person to read and nothing
 // else: it is never stored in the ledger, the timeline, approval terms, alerts or
 // drafts, and nothing PayOnce decides reads it.
 
@@ -182,10 +182,10 @@ export class Explainer {
   }
 }
 
-// The explainer on the reader's services and model lists, or null without
-// CLAUDE_API_KEY or READER_API_KEY.
+// The explainer on the reader's services, with CLAUDE_ASK_MODEL's Claude models
+// and READER_MODEL's, or null without CLAUDE_API_KEY or READER_API_KEY.
 export function explainerFromEnv(env: NodeJS.ProcessEnv = process.env): Explainer | null {
-  const services: ModelService[] = modelServicesFromEnv(env);
+  const services: ModelService[] = modelServicesFromEnv(env, "ask");
   return services.length === 0 ? null : new Explainer(services);
 }
 

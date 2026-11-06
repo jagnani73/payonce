@@ -4,28 +4,39 @@ import { ModelReader } from "./model-reader.js";
 import {
   chatService,
   claudeService,
+  DEFAULT_CLAUDE_ASK_MODELS,
   DEFAULT_CLAUDE_MODELS,
   DEFAULT_GEMINI_MODELS,
   type ModelService,
 } from "./model-service.js";
 
-// CLAUDE_MODEL and READER_MODEL are comma-separated lists, tried in order.
-function modelsFromEnv(env: NodeJS.ProcessEnv, name: "CLAUDE_MODEL" | "READER_MODEL"): string[] {
+// CLAUDE_MODEL, CLAUDE_ASK_MODEL and READER_MODEL are comma-separated lists,
+// tried in order.
+function modelsFromEnv(env: NodeJS.ProcessEnv, name: "CLAUDE_MODEL" | "CLAUDE_ASK_MODEL" | "READER_MODEL"): string[] {
   return (env[name] ?? "")
     .split(",")
     .map((model: string): string => model.trim())
     .filter((model: string): boolean => model !== "");
 }
 
-// The model services the reader and the incident explainer share, in the order
-// they are asked: Claude when CLAUDE_API_KEY is set, then the service
-// READER_API_KEY is for, which is Gemini unless READER_BASE_URL names another.
-// A list left unset takes its service's default models. Empty without either key.
-export function modelServicesFromEnv(env: NodeJS.ProcessEnv = process.env): ModelService[] {
+// The model services the reader or the incident explainer asks, in order:
+// Claude when CLAUDE_API_KEY is set, then the service READER_API_KEY is for,
+// which is Gemini unless READER_BASE_URL names another. The reader's Claude
+// models are CLAUDE_MODEL's, Ask why's are CLAUDE_ASK_MODEL's, and both share
+// READER_MODEL. A list left unset takes its default models. Empty without
+// either key.
+export function modelServicesFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  use: "reader" | "ask" = "reader",
+): ModelService[] {
   const services: ModelService[] = [];
   const claudeKey: string | undefined = env["CLAUDE_API_KEY"];
   if (claudeKey) {
-    services.push(claudeService(claudeKey, modelsFromEnv(env, "CLAUDE_MODEL")));
+    services.push(
+      use === "ask"
+        ? claudeService(claudeKey, modelsFromEnv(env, "CLAUDE_ASK_MODEL"), DEFAULT_CLAUDE_ASK_MODELS)
+        : claudeService(claudeKey, modelsFromEnv(env, "CLAUDE_MODEL")),
+    );
   }
   const readerKey: string | undefined = env["READER_API_KEY"];
   if (readerKey) {

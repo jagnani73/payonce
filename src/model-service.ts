@@ -11,8 +11,11 @@ import type { ModelFailure } from "./words.js";
 // Anthropic's Messages API. The host is fixed, so CLAUDE_API_KEY goes nowhere else.
 export const CLAUDE_URL: string = "https://api.anthropic.com/v1/messages";
 export const ANTHROPIC_VERSION: string = "2026-10-21";
-// Measured on 2026-11-06 (docs/design/email-reader.md).
+// Measured on 2026-11-06 (docs/design/email-reader.md and ask-why.md). The reader
+// asks Haiku first, the faster at the same findings. Ask why asks Sonnet first,
+// whose explanations fit the cap and were more accurate.
 export const DEFAULT_CLAUDE_MODELS: string[] = ["claude-haiku-5-5", "claude-sonnet-5-5"];
+export const DEFAULT_CLAUDE_ASK_MODELS: string[] = ["claude-sonnet-5-5", "claude-haiku-5-5"];
 // The Messages API needs a cap on the answer, and thinking counts against it.
 // At low effort the models skipped thinking on these requests, and the timeout
 // ends a request long before the cap.
@@ -56,13 +59,17 @@ function hostOf(url: string): string {
   }
 }
 
-export function claudeService(apiKey: string, models: string[]): ModelService {
+export function claudeService(
+  apiKey: string,
+  models: string[],
+  defaults: string[] = DEFAULT_CLAUDE_MODELS,
+): ModelService {
   return {
     api: "messages",
     apiKey,
     url: CLAUDE_URL,
     host: hostOf(CLAUDE_URL),
-    models: models.length > 0 ? models : DEFAULT_CLAUDE_MODELS,
+    models: models.length > 0 ? models : defaults,
   };
 }
 
@@ -185,7 +192,8 @@ function bodyOf(service: ModelService, model: string, request: ModelRequest): st
       system: request.system,
       messages: [{ role: "user", content: request.prompt }],
       // No thinking setting: low effort lets the model skip thinking, and the
-      // same body works on every Claude model CLAUDE_MODEL may name.
+      // same body works on every Claude model CLAUDE_MODEL or CLAUDE_ASK_MODEL
+      // may name.
       output_config: { effort: "low", format: { type: "json_schema", schema: request.schema } },
     });
   }
