@@ -29,6 +29,13 @@ export interface Engine {
 // Null when it waits for news or for a person.
 export type NextLook = number | null;
 
+// How a look was asked for. runTurn gives it the pay run's turn, so it may send
+// a pay run row's first payment. Only the release and the server's watcher give
+// it, so no other look sends a row out of turn.
+export interface LookOptions {
+  runTurn: boolean;
+}
+
 // What one step of a look comes to: the look ends with the time of its next look,
 // or with the work under way that gives it, or it goes on to the next step. A
 // step is a plain function that awaits nothing itself: the look returns the work

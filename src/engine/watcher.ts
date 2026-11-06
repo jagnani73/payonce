@@ -207,7 +207,7 @@ export class Watcher {
           !this.agent.isBusy(runKey(runId))
         ) {
           runsWoken.add(runId);
-          this.agent.wake(invoiceId, true);
+          this.agent.wake(invoiceId, { runTurn: true });
         }
       }
     }

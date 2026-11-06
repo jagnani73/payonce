@@ -26,6 +26,7 @@ import {
   RETRY_FAILED_LOOK_MS,
   type Assessment,
   type Engine,
+  type LookOptions,
   type NextLook,
   type StepResult,
 } from "./engine.js";
@@ -99,16 +100,16 @@ async function act(
 // payment the bank has paid or failed since the last look. Then it reads new
 // emails, decides and acts. A replacement already out is waited on until its
 // deadline, never approved a second time. An escalated invoice pays only on a
-// matching approval. sendRunRow lets the look send a pay run row's first
-// payment, which only the release and the server's watcher pass.
+// matching approval. A pay run row's first payment is sent only on a look with
+// the run's turn (LookOptions).
 export async function resumeIncident(
   engine: Engine,
   invoiceId: string,
-  sendRunRow: boolean = false,
+  options: LookOptions,
 ): Promise<void> {
   let next: NextLook;
   try {
-    next = await look(engine, invoiceId, sendRunRow);
+    next = await look(engine, invoiceId, options);
   } catch (error: unknown) {
     // A deadline already passed stays due, and the watcher has the agent try
     // again a minute later rather than on every check.
@@ -129,7 +130,7 @@ export async function resumeIncident(
 interface Look {
   readonly engine: Engine;
   readonly invoiceId: string;
-  readonly sendRunRow: boolean;
+  readonly options: LookOptions;
   obligation: Obligation;
   original: Transfer | null;
   liveReplacement: Transfer | null;
@@ -159,12 +160,12 @@ const SENT_STEPS: readonly ((look: SentLook) => StepResult)[] = [
 // the bank has no original, reads the payouts sent outside PayOnce and the new
 // emails, and takes SENT_STEPS. Every await is here, in this order, so a look
 // runs beside other looks and the sweep as it always has (see StepResult).
-async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Promise<NextLook> {
+async function look(engine: Engine, invoiceId: string, options: LookOptions): Promise<NextLook> {
   const read: Obligation | undefined = engine.ledger.obligation(invoiceId);
   if (read === undefined) {
     throw new Error(`${invoiceId} is not in the ledger`);
   }
-  const look: Look = { engine, invoiceId, sendRunRow, obligation: read, original: null, liveReplacement: null };
+  const look: Look = { engine, invoiceId, options, obligation: read, original: null, liveReplacement: null };
 
   // A transfer kept beside an attempt because it does not match the invoice is
   // read like any payment with the bank.
@@ -322,7 +323,7 @@ function nothingSent(look: Look): NextLook | Promise<NextLook> {
   const { engine, invoiceId, obligation }: Look = look;
   const refused: Attempt | undefined = engine.ledger.attempts(invoiceId).at(-1);
   if (refused === undefined && obligation.state === "open") {
-    return startFirst(engine, obligation, look.sendRunRow);
+    return startFirst(engine, obligation, look.options);
   }
   if (refused !== undefined && obligation.state === "open") {
     return continueHeld(engine, holdRefused(engine, obligation, refused));

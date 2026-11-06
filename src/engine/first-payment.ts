@@ -23,7 +23,7 @@ import {
 } from "../store/ledger.js";
 import { committedAcross, committedByInvoice } from "./cash-position.js";
 import { withCurrencyLock } from "./currency-lock.js";
-import { RETRY_FAILED_LOOK_MS, type Engine, type NextLook } from "./engine.js";
+import { RETRY_FAILED_LOOK_MS, type Engine, type LookOptions, type NextLook } from "./engine.js";
 import { anyLive } from "./facts.js";
 import { listOf, messageOf, note } from "./lines.js";
 import { linkUnseenPayouts } from "./outside.js";
@@ -318,14 +318,14 @@ export function holdRefused(engine: Engine, obligation: Obligation, refused: Att
 
 // The first payment of an open invoice with no attempt. A pay run's row sends its
 // original, to the account the run approved, only in its turn: when the release
-// or the server's watcher passes sendRunRow. Any other look leaves it for that
-// turn. Any other invoice is here only when its first send failed before an
-// attempt was opened, and the look tries it again. When startPayment holds it
+// or the server's watcher gives the look the run's turn. Any other look leaves it
+// for that turn. Any other invoice is here only when its first send failed before
+// an attempt was opened, and the look tries it again. When startPayment holds it
 // instead, the next look comes at once, and asks a person.
 export async function startFirst(
   engine: Engine,
   obligation: Obligation,
-  sendRunRow: boolean,
+  options: LookOptions,
 ): Promise<NextLook> {
   const invoiceId: string = obligation.invoiceId;
   let account: AccountRef | null = null;
@@ -334,7 +334,7 @@ export async function startFirst(
     if (row === undefined || row.accountKey === null) {
       throw new Error(`${invoiceId} has no pay run row to send it from`);
     }
-    if (!sendRunRow) {
+    if (!options.runTurn) {
       note(
         engine.ledger,
         invoiceId,

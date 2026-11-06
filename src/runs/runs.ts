@@ -1243,7 +1243,7 @@ export async function releaseRun(engine: Engine, agent: Dispatcher, runId: numbe
   // these wakes, and the server's watcher once the release has stopped, may send
   // a row's first payment.
   for (const invoiceId of released.released) {
-    agent.wake(invoiceId, true);
+    agent.wake(invoiceId, { runTurn: true });
     await agent.whenIdle(invoiceId);
   }
   const sent: number = released.released.filter(
