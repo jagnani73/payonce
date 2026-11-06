@@ -16,7 +16,6 @@ import { railOf } from "../../../outages/outages.js";
 import { amountMinorOf, amountProblem, BENEFICIARY_ID_PATTERN } from "../../../runs/run-file.js";
 import { readingSoft, type Obligation, type Outage, type TransferMethod } from "../../../store/ledger.js";
 import { SANDBOX_OUTCOMES } from "../../../text/words.js";
-import { liveFrom, type Live } from "../../../views/context.js";
 import type { IncidentView, Notice, PaymentCheckView, PaymentCreated } from "../../../views/contract.js";
 import { incidentView } from "../../../views/incident.js";
 import { paymentCheckView, readRecord, type RecordRead } from "../../../views/payment-check.js";
@@ -48,8 +47,7 @@ interface PaymentForm {
 }
 
 export function paymentRoutes(app: HttpApp): Route[] {
-  const { engine, agent, bank, settings, isBusy, cash } = app;
-  const live: Live = liveFrom(isBusy);
+  const { engine, agent, bank, settings, live, cash } = app;
   const records: Map<string, { at: number; read: Promise<RecordRead> }> = new Map();
 
   function readForm(body: Record<string, unknown>): PaymentForm {
