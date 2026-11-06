@@ -253,6 +253,8 @@ export interface InvoiceSnapshot {
 export interface RunSnapshot {
   run: Run;
   rows: RunRow[];
+  // Every request for the run, oldest first.
+  requests: RunApproval[];
   // The latest request, with its terms read soft and who may not approve it.
   request: { approval: RunApproval; terms: RunTerms | null; barred: Barred[] } | null;
   outage: { outage: Outage; enders: string[] | null } | null;
@@ -428,7 +430,7 @@ export function approverChoices(snapshot: InvoiceSnapshot, now: number): Approve
   if (request === undefined || request.terms === null) {
     return [];
   }
-  return choicesFor(
+  return signerChoices(
     policy,
     request.approval,
     paymentAmount(request.terms),
@@ -438,7 +440,7 @@ export function approverChoices(snapshot: InvoiceSnapshot, now: number): Approve
   );
 }
 
-function choicesFor(
+export function signerChoices(
   policy: ApprovalPolicy,
   request: Pick<Approval, "state" | "signoffs">,
   amount: PaymentAmount,

@@ -12,6 +12,7 @@ import { note } from "./lines.js";
 import {
   liveAtBank,
   type Attempt,
+  type Ledger,
   type Obligation,
   type OutsidePayout,
   type PayRunRow,
@@ -114,17 +115,17 @@ interface ComparedPayment {
   what: string;
 }
 
-function comparedPayment(engine: Engine, obligation: Obligation): ComparedPayment | undefined {
+function comparedPayment(ledger: Ledger, obligation: Obligation): ComparedPayment | undefined {
   // An original Airwallex refused never became a transfer, so the one paid on an
   // approval after it is the one to compare with.
-  const original: Attempt | undefined = engine.ledger
+  const original: Attempt | undefined = ledger
     .attempts(obligation.invoiceId)
     .filter((attempt: Attempt): boolean => attempt.kind === "original" && attempt.transferId !== null)
     .at(-1);
   if (original?.transferId !== undefined && original.transferId !== null) {
     return { transferId: original.transferId, what: "original payment" };
   }
-  const last: { transferId: string } | undefined = engine.ledger.lastPaidTransfer(obligation.beneficiaryId);
+  const last: { transferId: string } | undefined = ledger.lastPaidTransfer(obligation.beneficiaryId);
   return last === undefined
     ? undefined
     : { transferId: last.transferId, what: "payment PayOnce last made to this supplier" };
@@ -134,21 +135,21 @@ function comparedPayment(engine: Engine, obligation: Obligation): ComparedPaymen
 // a payment not yet with the bank, an approval not yet spent, or a pay run row
 // approved or released and not sent yet. Changing the record then would change
 // the account that payment goes to outside its turn.
-function anotherPaymentStarting(engine: Engine, obligation: Obligation): boolean {
+function anotherPaymentStarting(ledger: Ledger, obligation: Obligation, now: number): boolean {
   return (
-    engine.ledger.scannedObligations().some(
+    ledger.scannedObligations().some(
       (other: ScannedObligation): boolean =>
         other.invoiceId !== obligation.invoiceId &&
         other.beneficiaryId === obligation.beneficiaryId &&
         other.state !== "settled" &&
         other.state !== "rejected" &&
-        (engine.ledger
+        (ledger
           .attempts(other.invoiceId)
           .some((attempt: Attempt): boolean => attempt.state === "pending") ||
-          engine.ledger.latestApproval(other.invoiceId)?.state === "approved"),
+          ledger.latestApproval(other.invoiceId)?.state === "approved"),
     ) ||
-    engine.ledger
-      .payRunRows()
+    ledger
+      .payRunRows(now)
       .some(
         (row: PayRunRow): boolean =>
           row.beneficiaryId === obligation.beneficiaryId && row.invoiceId !== obligation.invoiceId,
@@ -160,7 +161,7 @@ function anotherPaymentStarting(engine: Engine, obligation: Obligation): boolean
 // is with the bank or paid: every payment PayOnce sent has failed, or it was held
 // before paying a supplier PayOnce has paid before, no payout sent outside
 // PayOnce is live, and no other invoice to the supplier is about to pay.
-function blockedReason(engine: Engine, obligation: Obligation): string | null {
+export function blockedReason(ledger: Ledger, obligation: Obligation, now: number = Date.now()): string | null {
   if (obligation.supplierPhone === null) {
     return "No phone number is on file for this supplier, so there is no number to call back";
   }
@@ -169,30 +170,30 @@ function blockedReason(engine: Engine, obligation: Obligation): string | null {
       ? "The incident is closed"
       : "The incident is not waiting on a person";
   }
-  const attempts: Attempt[] = engine.ledger.attempts(obligation.invoiceId);
+  const attempts: Attempt[] = ledger.attempts(obligation.invoiceId);
   if (attempts.some(liveAtBank)) {
     return "A payment for this invoice is still with the bank or paid, so its bank details stay as they are";
   }
-  if (comparedPayment(engine, obligation) === undefined) {
-    return engine.ledger.lastPaidUnchecked(obligation.beneficiaryId) === undefined
+  if (comparedPayment(ledger, obligation) === undefined) {
+    return ledger.lastPaidUnchecked(obligation.beneficiaryId) === undefined
       ? "PayOnce has not paid this supplier before, so there are no bank details to compare new ones with. Approve paying the account on file, or close the invoice without paying"
       : "PayOnce paid this supplier only before it kept which account each payment went to, so there are no checked bank details to compare new ones with. Approve paying the account on file, or close the invoice without paying";
   }
   if (
-    engine.ledger
+    ledger
       .outsidePayouts(obligation.invoiceId)
       .some((payout: OutsidePayout): boolean => payout.state !== "failed")
   ) {
     return "A payout for this invoice sent outside PayOnce may already pay it";
   }
-  if (anotherPaymentStarting(engine, obligation)) {
+  if (anotherPaymentStarting(ledger, obligation, now)) {
     return "Another invoice to this supplier is about to be paid. Record the callback once it has gone to the bank";
   }
   return null;
 }
 
 export async function bankChangeForm(engine: Engine, obligation: Obligation): Promise<BankChangeForm> {
-  const blocked: string | null = blockedReason(engine, obligation);
+  const blocked: string | null = blockedReason(engine.ledger, obligation);
   if (blocked !== null) {
     return { phoneOnFile: obligation.supplierPhone, fields: [], blocked, comparedSentAt: null };
   }
@@ -201,7 +202,7 @@ export async function bankChangeForm(engine: Engine, obligation: Obligation): Pr
   // The same read recordBankChange makes, so the form starts from the time it
   // checks. A read that fails leaves the form to start from now: recording the
   // callback reads the transfer again and checks the time.
-  const compared: ComparedPayment | undefined = comparedPayment(engine, obligation);
+  const compared: ComparedPayment | undefined = comparedPayment(engine.ledger, obligation);
   let sentAtMs: number = Number.NaN;
   if (compared !== undefined) {
     try {
@@ -251,7 +252,7 @@ export async function recordBankChange(
   if (obligation === undefined) {
     throw new Error(`${invoiceId} is not in the ledger`);
   }
-  const blocked: string | null = blockedReason(engine, obligation);
+  const blocked: string | null = blockedReason(engine.ledger, obligation);
   if (blocked !== null || obligation.supplierPhone === null) {
     throw new Error(blocked ?? "No phone number is on file for this supplier");
   }
@@ -264,7 +265,7 @@ export async function recordBankChange(
     );
   }
 
-  const compared: ComparedPayment | undefined = comparedPayment(engine, obligation);
+  const compared: ComparedPayment | undefined = comparedPayment(engine.ledger, obligation);
   if (compared === undefined) {
     throw new Error("PayOnce has no payment to this supplier to compare new bank details with");
   }

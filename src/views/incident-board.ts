@@ -303,7 +303,7 @@ function progress(approval: { signoffs: unknown[]; needed: number }): string {
 // first, because it is the one invoice they name, not only among other digits,
 // and it is open or escalated. named: those that name it any weaker way, beside
 // other invoices, only nearly or among other digits.
-interface InboxNames {
+export interface InboxNames {
   offered: number;
   named: number;
 }
@@ -530,7 +530,7 @@ function outageAlso(mark: BoardOutageMark, found: Situation): string | null {
 
 // The first active outage on a rail a pay row of the run pays on, as the release
 // checks them. The run is released whole, so it touches every row.
-function runOutage(ledger: Ledger, rows: RunRow[]): Outage | undefined {
+export function runOutage(ledger: Ledger, rows: RunRow[]): Outage | undefined {
   for (const row of rows) {
     const outage: Outage | undefined =
       row.currency === null || row.transferMethod === null
@@ -711,7 +711,7 @@ function add(map: Map<string, CashLine[]>, key: string, line: CashLine): void {
 // How many waiting uploads name each invoice, split as the inbox's match card
 // offers them. The invoices are indexed once for every upload, and only when an
 // upload waits.
-function inboxNames(ledger: Ledger, indexOf: () => InvoiceIndex): Map<string, InboxNames> {
+export function inboxNames(ledger: Ledger, indexOf: () => InvoiceIndex): Map<string, InboxNames> {
   const names: Map<string, InboxNames> = new Map<string, InboxNames>();
   const waiting: Upload[] = ledger.uploads(0).filter((upload: Upload): boolean => upload.state === "waiting");
   if (waiting.length === 0) {

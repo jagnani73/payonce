@@ -1,7 +1,6 @@
 import type { ApprovalTerms, RunTerms } from "../domain/approval.js";
 import { knownName, type ApprovalPolicy, type Barred } from "../domain/approvers.js";
 import { deadlineMinutes } from "../domain/deadlines.js";
-import { liveAtBank, payoutNotFailed } from "../domain/live.js";
 import { reasonOf } from "../domain/reasons.js";
 import type {
   EmailsSnapshot,
@@ -13,10 +12,12 @@ import type {
   RunTurn,
   SnapshotTimes,
 } from "../domain/situation.js";
+import { blockedReason } from "../engine/bank-change.js";
 import { pendingApproval } from "../engine/person.js";
-import { candidatesFor, invoiceIndex, type InvoiceIndex, type Match } from "../intake/intake.js";
+import { invoiceIndex, type InvoiceIndex } from "../intake/intake.js";
 import { endRefusal, outageEnders } from "../outages/outages.js";
 import { runBarred } from "../runs/runs.js";
+import { inboxNames, runOutage, type InboxNames } from "./incident-board.js";
 import {
   readingSoft,
   storedObject,
@@ -35,14 +36,11 @@ import {
   type Run,
   type RunApproval,
   type RunRow,
-  type ScannedObligation,
-  type Upload,
 } from "../store/ledger.js";
 
 // Loads what situationOf and runSituationOf read, from the ledger alone, in one
 // read transaction, reading stored JSON soft as every view does. Nothing here
-// writes. Reads the Ledger has no method for are worked out here from its public
-// reads: callbackBlocked and the inbox counts.
+// writes.
 
 export interface SnapshotOptions {
   policy: ApprovalPolicy;
@@ -69,8 +67,7 @@ interface Shared {
   payouts: Map<string, MetricsPayout[]>;
   holds: Map<string, OutageHold[]>;
   queued: PayRunRow[];
-  inbox: Map<string, { offered: number; named: number }>;
-  scanned: ScannedObligation[];
+  inbox: Map<string, InboxNames>;
 }
 
 function grouped<T extends { invoiceId: string }>(items: T[]): Map<string, T[]> {
@@ -81,30 +78,6 @@ function grouped<T extends { invoiceId: string }>(items: T[]): Map<string, T[]> 
     map.set(item.invoiceId, list);
   }
   return map;
-}
-
-// How many waiting uploads name each invoice: offered when the inbox offers it
-// first, named for any weaker match.
-function inboxNames(ledger: Ledger): Map<string, { offered: number; named: number }> {
-  const names: Map<string, { offered: number; named: number }> = new Map();
-  const waiting: Upload[] = ledger.uploads(0).filter((upload: Upload): boolean => upload.state === "waiting");
-  if (waiting.length === 0) {
-    return names;
-  }
-  const index: InvoiceIndex = invoiceIndex(ledger);
-  for (const upload of waiting) {
-    const match: Match = candidatesFor(ledger, upload, index);
-    for (const candidate of match.candidates) {
-      const counted: { offered: number; named: number } = names.get(candidate.invoiceId) ?? { offered: 0, named: 0 };
-      if (match.suggested === candidate.invoiceId) {
-        counted.offered += 1;
-      } else {
-        counted.named += 1;
-      }
-      names.set(candidate.invoiceId, counted);
-    }
-  }
-  return names;
 }
 
 function sharedOf(ledger: Ledger, now: number): Shared {
@@ -120,51 +93,8 @@ function sharedOf(ledger: Ledger, now: number): Shared {
     payouts: grouped(metrics.payouts),
     holds: grouped(holds.map((hold: OutageHold): OutageHold & { invoiceId: string } => ({ ...hold, invoiceId: hold.invoiceId ?? "" }))),
     queued: ledger.payRunRows(now),
-    inbox: inboxNames(ledger),
-    scanned: ledger.scannedObligations(),
+    inbox: inboxNames(ledger, (): InvoiceIndex => invoiceIndex(ledger)),
   };
-}
-
-// Why a callback cannot be recorded for the invoice now, or null: the ledger-only
-// checks of bank-change.ts blockedReason, which the engine does not export, in
-// the same order and words.
-function callbackBlocked(ledger: Ledger, shared: Shared, obligation: Obligation, attempts: Attempt[]): string | null {
-  if (obligation.supplierPhone === null) {
-    return "No phone number is on file for this supplier, so there is no number to call back";
-  }
-  if (obligation.state !== "escalated") {
-    return obligation.state === "settled" ? "The incident is closed" : "The incident is not waiting on a person";
-  }
-  if (attempts.some(liveAtBank)) {
-    return "A payment for this invoice is still with the bank or paid, so its bank details stay as they are";
-  }
-  const original: boolean = attempts.some(
-    (attempt: Attempt): boolean => attempt.kind === "original" && attempt.transferId !== null,
-  );
-  if (!original && ledger.lastPaidTransfer(obligation.beneficiaryId) === undefined) {
-    return ledger.lastPaidUnchecked(obligation.beneficiaryId) === undefined
-      ? "PayOnce has not paid this supplier before, so there are no bank details to compare new ones with. Approve paying the account on file, or close the invoice without paying"
-      : "PayOnce paid this supplier only before it kept which account each payment went to, so there are no checked bank details to compare new ones with. Approve paying the account on file, or close the invoice without paying";
-  }
-  if (ledger.outsidePayouts(obligation.invoiceId).some(payoutNotFailed)) {
-    return "A payout for this invoice sent outside PayOnce may already pay it";
-  }
-  const starting: boolean =
-    shared.scanned.some(
-      (other: ScannedObligation): boolean =>
-        other.invoiceId !== obligation.invoiceId &&
-        other.beneficiaryId === obligation.beneficiaryId &&
-        other.state !== "settled" &&
-        other.state !== "rejected" &&
-        (ledger.attempts(other.invoiceId).some((attempt: Attempt): boolean => attempt.state === "pending") ||
-          ledger.latestApproval(other.invoiceId)?.state === "approved"),
-    ) ||
-    shared.queued.some(
-      (row: PayRunRow): boolean => row.beneficiaryId === obligation.beneficiaryId && row.invoiceId !== obligation.invoiceId,
-    );
-  return starting
-    ? "Another invoice to this supplier is about to be paid. Record the callback once it has gone to the bank"
-    : null;
 }
 
 function emailsOf(ledger: Ledger, invoiceId: string): EmailsSnapshot {
@@ -259,6 +189,7 @@ function invoiceSnapshot(
   shared: Shared,
   options: SnapshotOptions,
   obligation: Obligation,
+  now: number,
 ): InvoiceSnapshot {
   const invoiceId: string = obligation.invoiceId;
   const attempts: Attempt[] = ledger.attempts(invoiceId);
@@ -278,15 +209,14 @@ function invoiceSnapshot(
     run: row === undefined || run === undefined ? null : { run, row },
     turn: turnOf(ledger, shared, obligation),
     inbox: shared.inbox.get(invoiceId) ?? { offered: 0, named: 0 },
-    callbackBlocked: callbackBlocked(ledger, shared, obligation, attempts),
+    callbackBlocked: blockedReason(ledger, obligation, now),
     signing: {
       policy: options.policy,
       barred: barredOf(ledger, obligation, requests.at(-1)),
       startedKnown: knownName(obligation.startedBy) !== null,
     },
     deadlineMinutes: deadlineMinutes(obligation.transferMethod),
-    // The ledger has no read of obligations.look_at yet.
-    nextCheckAt: null,
+    nextCheckAt: checkAt(ledger.nextCheckAt(invoiceId)),
     lastCheck: options.lastCheck?.(invoiceId) ?? null,
     busy: options.busy?.(invoiceId) ?? false,
     times: timesOf(ledger, shared, obligation),
@@ -294,11 +224,17 @@ function invoiceSnapshot(
   };
 }
 
+function checkAt(at: string | null): number | null {
+  const ms: number = at === null ? Number.NaN : Date.parse(at);
+  return Number.isFinite(ms) ? ms : null;
+}
+
 function invoiceSnapshots(
   ledger: Ledger,
   shared: Shared,
   options: SnapshotOptions,
   invoiceIds: string[] | null,
+  now: number,
 ): InvoiceSnapshot[] {
   const obligations: Obligation[] =
     invoiceIds === null
@@ -306,7 +242,7 @@ function invoiceSnapshots(
       : invoiceIds
           .map((invoiceId: string): Obligation | undefined => ledger.obligation(invoiceId))
           .filter((obligation: Obligation | undefined): obligation is Obligation => obligation !== undefined);
-  return obligations.map((obligation: Obligation): InvoiceSnapshot => invoiceSnapshot(ledger, shared, options, obligation));
+  return obligations.map((obligation: Obligation): InvoiceSnapshot => invoiceSnapshot(ledger, shared, options, obligation, now));
 }
 
 function read<T>(ledger: Ledger, fn: () => T): T {
@@ -330,30 +266,20 @@ export function readInvoiceSnapshots(
   now: number,
   invoiceIds: string[] | null = null,
 ): InvoiceSnapshot[] {
-  return read(ledger, (): InvoiceSnapshot[] => invoiceSnapshots(ledger, sharedOf(ledger, now), options, invoiceIds));
+  return read(ledger, (): InvoiceSnapshot[] => invoiceSnapshots(ledger, sharedOf(ledger, now), options, invoiceIds, now));
 }
 
-// The first active outage on a rail a pay row of the run pays on, as the release
-// checks them.
-function runOutage(ledger: Ledger, rows: RunRow[]): Outage | undefined {
-  for (const row of rows) {
-    if (row.action !== "pay" || row.state !== "waiting" || row.invoiceId === null) {
-      continue;
-    }
-    const outage: Outage | undefined =
-      row.currency === null || row.transferMethod === null ? undefined : ledger.activeOutage(row.currency, row.transferMethod);
-    if (outage !== undefined) {
-      return outage;
-    }
-  }
-  return undefined;
-}
-
-function runSnapshot(ledger: Ledger, options: SnapshotOptions, shared: () => Shared, run: Run): RunSnapshot {
+function runSnapshot(ledger: Ledger, options: SnapshotOptions, shared: () => Shared, run: Run, now: number): RunSnapshot {
   const rows: RunRow[] = ledger.runRows(run.id);
-  const approval: RunApproval | undefined = ledger.latestRunApproval(run.id);
+  const requests: RunApproval[] = ledger.runApprovalsFor(run.id);
+  const approval: RunApproval | undefined = requests.at(-1);
   const terms: RunTerms | null = approval === undefined ? null : storedObject<RunTerms>(approval.terms);
-  const outage: Outage | undefined = runOutage(ledger, rows);
+  // A waiting run is released whole, so an active outage on the rail of any of
+  // its pay rows holds all of it.
+  const outage: Outage | undefined = runOutage(
+    ledger,
+    rows.filter((row: RunRow): boolean => row.action === "pay" && row.state === "waiting" && row.invoiceId !== null),
+  );
   const standing: LedgerEvent | undefined = ledger
     .runEvents(run.id)
     .filter((event: LedgerEvent): boolean => event.topic !== null)
@@ -364,11 +290,12 @@ function runSnapshot(ledger: Ledger, options: SnapshotOptions, shared: () => Sha
   return {
     run,
     rows,
+    requests,
     request: approval === undefined ? null : { approval, terms, barred: terms === null ? [] : runBarred(ledger, terms) },
     outage: outage === undefined ? null : { outage, enders: outageEnders(options.policy) },
     policy: options.policy,
     standing: standing?.message ?? null,
-    released: released.length === 0 ? [] : invoiceSnapshots(ledger, shared(), options, released),
+    released: released.length === 0 ? [] : invoiceSnapshots(ledger, shared(), options, released, now),
   };
 }
 
@@ -386,7 +313,7 @@ export function readRunSnapshot(
 ): RunSnapshot | undefined {
   return read(ledger, (): RunSnapshot | undefined => {
     const run: Run | undefined = ledger.run(runId);
-    return run === undefined ? undefined : runSnapshot(ledger, options, sharedOnce(ledger, now), run);
+    return run === undefined ? undefined : runSnapshot(ledger, options, sharedOnce(ledger, now), run, now);
   });
 }
 
@@ -394,6 +321,6 @@ export function readRunSnapshot(
 export function readRunSnapshots(ledger: Ledger, options: SnapshotOptions, now: number): RunSnapshot[] {
   return read(ledger, (): RunSnapshot[] => {
     const shared: () => Shared = sharedOnce(ledger, now);
-    return ledger.runs().map((run: Run): RunSnapshot => runSnapshot(ledger, options, shared, run));
+    return ledger.runs().map((run: Run): RunSnapshot => runSnapshot(ledger, options, shared, run, now));
   });
 }
