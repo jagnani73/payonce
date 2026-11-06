@@ -9,7 +9,6 @@ import {
   type BeneficiarySpec,
 } from "../airwallex/beneficiaries.js";
 import type { Transfer } from "../airwallex/transfers.js";
-import { personName } from "../domain/approvers.js";
 import type { Dispatcher } from "./dispatcher.js";
 import { loadEmails, type SupplierEmail } from "../reader/emails.js";
 import { deliver } from "./emails.js";
@@ -17,6 +16,7 @@ import type { Engine } from "./engine.js";
 import { heldBeforePaying } from "./facts.js";
 import { startPayment } from "./first-payment.js";
 import { waitOnOutage } from "./look.js";
+import { openPayment, type Payee } from "./new-payment.js";
 import { payAgain, type PayAgainResult } from "./person.js";
 import { RailOutageError, type Attempt, type Ledger, type Obligation, type TransferMethod } from "../store/ledger.js";
 import type { SandboxBank } from "./sandbox-bank.js";
@@ -130,29 +130,9 @@ export function newInvoiceId(ledger: Ledger): string {
   }
 }
 
-// Records the demo invoice as an obligation to the scenario's supplier. startedBy
-// is the name the person starting it gave, and that person cannot approve its
-// replacement. dueDate is when the supplier expects the money, or null.
-export async function openScenario(
-  engine: Engine,
-  invoiceId: string,
-  scenarioId: string,
-  starter: string,
-  dueDate: string | null = null,
-): Promise<Obligation> {
-  const startedBy: string = personName(starter);
-  const def: ScenarioDef | undefined = SCENARIOS.find(
-    (scenario: ScenarioDef): boolean => scenario.id === scenarioId,
-  );
-  if (def === undefined) {
-    throw new Error(`Unknown scenario ${scenarioId}`);
-  }
-  // openObligation leaves an existing row as it is, so a reused invoice number
-  // would run this scenario against someone else's invoice. It is checked again
-  // after the lookups, with nothing awaited between that check and the insert.
-  if (engine.ledger.obligation(invoiceId) !== undefined) {
-    throw new Error(`${invoiceId} is already in the ledger`);
-  }
+// The scenario's supplier: its beneficiary, found or created in Airwallex, and
+// the invoice's own floor when the scenario sets one.
+async function scenarioPayee(engine: Engine, def: ScenarioDef, invoiceId: string): Promise<Payee> {
   const beneficiary: Beneficiary = await findOrCreateBeneficiary(
     engine.client,
     def.beneficiaryPerRun
@@ -165,23 +145,45 @@ export async function openScenario(
       : (await getAvailableMinor(engine.client, def.sourceCurrency ?? def.currency)) -
         def.amountMinor -
         Math.round(def.tightReserveFeeMinor * 1.5);
-  if (engine.ledger.obligation(invoiceId) !== undefined) {
-    throw new Error(`${invoiceId} is already in the ledger`);
-  }
-  return engine.ledger.openObligation({
-    invoiceId,
+  return {
+    beneficiaryId: beneficiary.id,
     supplier: def.supplier,
     supplierDomain: SUPPLIER_DOMAIN,
-    beneficiaryId: beneficiary.id,
-    currency: def.currency,
-    amountMinor: def.amountMinor,
-    transferMethod: def.transferMethod,
-    invoiceFloorMinor,
-    startedBy,
     supplierPhone: def.supplierPhone,
-    sourceCurrency: def.sourceCurrency ?? def.currency,
-    dueDate,
-  });
+    invoiceFloorMinor,
+  };
+}
+
+// Records the demo invoice as an obligation to the scenario's supplier, through
+// openPayment with the scenario's own values. starter is the name the person
+// starting it gave, and that person cannot approve its replacement. dueDate is
+// when the supplier expects the money, or null.
+export async function openScenario(
+  engine: Engine,
+  invoiceId: string,
+  scenarioId: string,
+  starter: string,
+  dueDate: string | null = null,
+): Promise<Obligation> {
+  const def: ScenarioDef | undefined = SCENARIOS.find(
+    (scenario: ScenarioDef): boolean => scenario.id === scenarioId,
+  );
+  if (def === undefined) {
+    throw new Error(`Unknown scenario ${scenarioId}`);
+  }
+  return openPayment(
+    engine,
+    {
+      invoiceId,
+      amountMinor: def.amountMinor,
+      currency: def.currency,
+      wallet: def.sourceCurrency ?? def.currency,
+      transferMethod: def.transferMethod,
+      dueDate,
+      starter,
+    },
+    (): Promise<Payee> => scenarioPayee(engine, def, invoiceId),
+  );
 }
 
 // True when nothing is running for the invoice and the ledger shows none of its

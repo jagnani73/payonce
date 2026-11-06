@@ -166,7 +166,7 @@ function readRecords(text: string): { records: RawRecord[]; problem: FileProblem
   return { records, problem: null };
 }
 
-function amountProblem(raw: string): string | null {
+export function amountProblem(raw: string): string | null {
   if (raw === "") {
     return "The amount is empty";
   }
@@ -192,7 +192,7 @@ function amountProblem(raw: string): string | null {
 }
 
 // Read as a string, so 40.005 is refused instead of rounded.
-function amountMinorOf(raw: string): number {
+export function amountMinorOf(raw: string): number {
   const match: RegExpExecArray | null = AMOUNT_PATTERN.exec(raw);
   if (match === null) {
     return Number.NaN;
@@ -200,7 +200,7 @@ function amountMinorOf(raw: string): number {
   return Number(match[1]) * 10 ** MINOR_DIGITS + Number((match[2] ?? "").padEnd(MINOR_DIGITS, "0"));
 }
 
-function twoDecimals(currency: string): boolean {
+export function twoDecimals(currency: string): boolean {
   try {
     return (
       new Intl.NumberFormat("en", { style: "currency", currency }).resolvedOptions()
