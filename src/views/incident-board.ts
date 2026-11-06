@@ -16,7 +16,9 @@ import {
   OUTAGE_REASON,
 } from "../domain/decide.js";
 import { deadlineMinutes } from "../domain/deadlines.js";
-import { heldBeforePaying, pendingClose, REPLACEMENT_DEADLINE_REASON } from "../engine/engine.js";
+import { heldBeforePaying } from "../engine/facts.js";
+import { pendingClose } from "../engine/person.js";
+import { REPLACEMENT_DEADLINE_REASON } from "../engine/reason-text.js";
 import { candidatesFor, invoiceIndex, type InvoiceIndex, type Match } from "../intake/intake.js";
 import {
   isExpired,

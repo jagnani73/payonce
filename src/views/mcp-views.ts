@@ -21,7 +21,7 @@ import {
 } from "../store/audit-trail.js";
 import { cashReport, payRunLines, type CashReport } from "../engine/cash-position.js";
 import { summarise, unverifiedSenders, type EmailFindings, type SupplierEmail } from "../reader/emails.js";
-import { pendingApproval, pendingClose } from "../engine/engine.js";
+import { pendingApproval, pendingClose } from "../engine/person.js";
 import { boardGroups, outageHolding, type BoardGroupOf } from "./incident-board.js";
 import {
   isExpired,

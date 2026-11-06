@@ -40,21 +40,18 @@ import {
   UNVERIFIED_SENDER_REASON,
 } from "../domain/decide.js";
 import { emailEvidence, type SupplierEmail } from "../reader/emails.js";
+import { heldBeforePaying } from "../engine/facts.js";
+import { pendingApproval, pendingClose, type CloseReview, type PendingApproval } from "../engine/person.js";
 import {
   ACCOUNT_CHANGED_REASON,
   CASH_HOLD_REASON,
   EMAILS_BEFORE_PAYMENT_REASON,
-  heldBeforePaying,
   LATE_TRANSFER_REASON,
   MISMATCHED_FAILED_REASON,
   MISMATCHED_TRANSFER_REASON,
-  pendingApproval,
-  pendingClose,
   REPLACEMENT_DEADLINE_REASON,
   RUN_ACCOUNT_CHANGED_REASON,
-  type CloseReview,
-  type PendingApproval,
-} from "../engine/engine.js";
+} from "../engine/reason-text.js";
 import { quoteValidity } from "../domain/fx.js";
 import { currentSettings } from "../settings.js";
 import {

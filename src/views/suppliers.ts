@@ -6,7 +6,7 @@ import { CHANGED_BANK_DETAILS_REASON, LAST_PAID_CHANGED_REASON } from "../domain
 import { templateLabel } from "../outbox/drafts.js";
 import { numberOf, numbersOf, sameInvoiceNumber, supplierNameKey } from "../domain/duplicates.js";
 import { summarise, unverifiedSenders, type SupplierEmail } from "../reader/emails.js";
-import { ACCOUNT_CHANGED_REASON, LATE_TRANSFER_REASON, RUN_ACCOUNT_CHANGED_REASON } from "../engine/engine.js";
+import { ACCOUNT_CHANGED_REASON, LATE_TRANSFER_REASON, RUN_ACCOUNT_CHANGED_REASON } from "../engine/reason-text.js";
 import {
   boardEntriesFor,
   GROUP_LABELS,

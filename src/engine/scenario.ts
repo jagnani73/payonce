@@ -12,15 +12,12 @@ import type { Transfer } from "../airwallex/transfers.js";
 import { personName } from "../domain/approvers.js";
 import type { Dispatcher } from "./dispatcher.js";
 import { loadEmails, type SupplierEmail } from "../reader/emails.js";
-import {
-  deliver,
-  heldBeforePaying,
-  payAgain,
-  startPayment,
-  waitOnOutage,
-  type Engine,
-  type PayAgainResult,
-} from "./engine.js";
+import { deliver } from "./emails.js";
+import type { Engine } from "./engine.js";
+import { heldBeforePaying } from "./facts.js";
+import { startPayment } from "./first-payment.js";
+import { waitOnOutage } from "./look.js";
+import { payAgain, type PayAgainResult } from "./person.js";
 import { RailOutageError, type Attempt, type Ledger, type Obligation, type TransferMethod } from "../store/ledger.js";
 import type { SandboxBank } from "./sandbox-bank.js";
 

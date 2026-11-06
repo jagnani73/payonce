@@ -44,15 +44,9 @@ import {
   OUTSIDE_PAYOUT_REASON,
   UNREADABLE_CASH_REASON,
 } from "../domain/decide.js";
-import {
-  heldBeforePaying,
-  LATE_TRANSFER_REASON,
-  pendingApproval,
-  pendingClose,
-  REPLACEMENT_DEADLINE_REASON,
-  type CloseReview,
-  type PendingApproval,
-} from "../engine/engine.js";
+import { heldBeforePaying } from "../engine/facts.js";
+import { pendingApproval, pendingClose, type CloseReview, type PendingApproval } from "../engine/person.js";
+import { LATE_TRANSFER_REASON, REPLACEMENT_DEADLINE_REASON } from "../engine/reason-text.js";
 import {
   isExpired,
   type Alert,

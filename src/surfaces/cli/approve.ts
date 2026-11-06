@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { describeRate, markupOf, type ApprovalTerms, type DuplicateEvidence } from "../../domain/approval.js";
 import { arrivalAdvice, type ArrivalAdvice } from "../../domain/arrival.js";
 import { describePolicy, type ApprovalPolicy } from "../../domain/approvers.js";
-import { approvePayment, pendingApproval, type PendingApproval } from "../../engine/engine.js";
+import { approvePayment, pendingApproval, type PendingApproval } from "../../engine/person.js";
 import { loadEnvIfPresent } from "../../env-file.js";
 import { Ledger, LEDGER_PATH, signersOf, type Approval, type Obligation, type Outage } from "../../store/ledger.js";
 import { formatMoney } from "../../domain/money.js";

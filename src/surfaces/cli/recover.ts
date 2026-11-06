@@ -3,7 +3,8 @@ import { airwallexAdvice, AirwallexError, AirwallexUnreachableError } from "../.
 import { personName } from "../../domain/approvers.js";
 import { createEngine, type EngineBuild } from "../../engine/create.js";
 import { Dispatcher } from "../../engine/dispatcher.js";
-import { note, noteError, type Engine } from "../../engine/engine.js";
+import type { Engine } from "../../engine/engine.js";
+import { note, noteError } from "../../engine/lines.js";
 import { loadEnvIfPresent } from "../../env-file.js";
 import { describeQuotes } from "../../domain/fx.js";
 import type { Ledger, Obligation, RunRow } from "../../store/ledger.js";

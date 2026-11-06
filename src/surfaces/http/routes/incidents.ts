@@ -4,15 +4,15 @@ import type { ApprovalTerms } from "../../../domain/approval.js";
 import { dueDateProblem } from "../../../domain/arrival.js";
 import type { Barred } from "../../../domain/approvers.js";
 import { bankChangeForm, recordBankChange, type BankChangeForm, type CallbackInput } from "../../../engine/bank-change.js";
+import { noteError } from "../../../engine/lines.js";
 import {
   approvePayment,
   closeIncident,
-  noteError,
   payAgain,
   pendingApproval,
   pendingClose,
   type PayAgainResult,
-} from "../../../engine/engine.js";
+} from "../../../engine/person.js";
 import { DEFAULT_SCENARIO, newInvoiceId, openScenario, runScenario, SCENARIOS, type ScenarioDef } from "../../../engine/scenario.js";
 import { noteTexts } from "../../../intake/eml.js";
 import { outageView } from "../../../outages/outages.js";

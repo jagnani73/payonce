@@ -1,6 +1,6 @@
 import { subscribe } from "../../airwallex/webhooks.js";
 import type { ApprovalTerms } from "../../domain/approval.js";
-import { note } from "../../engine/engine.js";
+import { note } from "../../engine/lines.js";
 import { readingSoft, storedObject, withBank, type Approval, type Attempt, type AttemptKind, type Obligation } from "../../store/ledger.js";
 import { say, sayWarning } from "../../text/printable.js";
 import type { HttpApp } from "./app.js";

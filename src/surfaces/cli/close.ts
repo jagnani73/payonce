@@ -1,14 +1,14 @@
 import { existsSync } from "node:fs";
 import { loadSettings } from "../../settings.js";
+import type { CoveredTransfer } from "../../engine/facts.js";
 import {
   closeIncident,
   coveredText,
   namingText,
   pendingClose,
   type CloseReview,
-  type CoveredTransfer,
   type NamingPayout,
-} from "../../engine/engine.js";
+} from "../../engine/person.js";
 import { personName } from "../../domain/approvers.js";
 import { Ledger, LEDGER_PATH } from "../../store/ledger.js";
 import { printable, say, shownReference } from "../../text/printable.js";

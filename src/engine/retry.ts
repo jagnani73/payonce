@@ -1,0 +1,343 @@
+import { findTransferByRequestId, type Transfer } from "../airwallex/transfers.js";
+import { accountKeyOf, type ApprovalTerms } from "../domain/approval.js";
+import { deadlineMinutes } from "../domain/deadlines.js";
+import { OUTSIDE_PAYOUT_REASON } from "../domain/decide.js";
+import { debitCurrency } from "../domain/reserve.js";
+import {
+  liveAtBank,
+  payoutVerdict,
+  type Approval,
+  type Attempt,
+  type AttemptKind,
+  type Obligation,
+  type ObligationState,
+  type OutsidePayout,
+  type RunRow,
+} from "../store/ledger.js";
+import { capitalise } from "../text/printable.js";
+import { withCurrencyLock } from "./currency-lock.js";
+import type { Engine, NextLook } from "./engine.js";
+import { anyLive } from "./facts.js";
+import { holdMismatched, holdPaidTwice } from "./late-mismatched.js";
+import { note } from "./lines.js";
+import { holdForOutsidePayout } from "./outside.js";
+import { sendAttempt, wasRejected } from "./payments.js";
+import { ACCOUNT_CHANGED_REASON, LATE_TRANSFER_REASON, MISMATCHED_TRANSFER_REASON } from "./reason-text.js";
+import { requireAccount, type TransferChecks } from "./send.js";
+
+// A pending attempt is not sent again while a payout for the invoice sent outside
+// PayOnce is live. It stays pending under its request id, which keeps the
+// duplicate lock, so PayOnce opens no other payment for the invoice either. It is
+// tried again on a look after that payout has failed.
+export function holdRetryForOutsidePayout(engine: Engine, invoiceId: string, attempt: Attempt): NextLook {
+  engine.ledger.escalate(invoiceId, OUTSIDE_PAYOUT_REASON);
+  note(
+    engine.ledger,
+    invoiceId,
+    "warning",
+    `${capitalise(attempt.kind)} payment not sent again: a payout for this invoice was sent outside PayOnce and may already pay it. The ${attempt.kind} stays open under its request id, and a later look sends it only if that payout fails`,
+    "retry",
+  );
+  return holdForOutsidePayout(engine, invoiceId);
+}
+
+// The record no longer holds the account a pending payment was decided or
+// approved for, so it is not sent again. Restoring those details in Airwallex
+// lets the next look send it. Once it is marked failed, restoring them sends
+// nothing by itself: the invoice is with a person like any other whose payment
+// failed, held before paying for an original, or under the policy's bank-details
+// rule for a replacement, and pays only on an approval. The waiting line says so
+// until the next look, at once, says what the invoice waits on.
+export function accountChangedCause(engine: Engine, invoiceId: string, kind: AttemptKind): NeverSentCause {
+  const hold = (): NextLook => {
+    note(
+      engine.ledger,
+      invoiceId,
+      "approval",
+      "Waiting on a person. The bank details on file are not the ones this payment was decided or approved for, so PayOnce does not send it again. Restore those details in Airwallex and check again to send it",
+      "waiting",
+    );
+    return null;
+  };
+  return {
+    payment: "the bank details on file are not the ones it was decided or approved for",
+    then: "a person decides how to pay the invoice, or closes it without paying",
+    reason: ACCOUNT_CHANGED_REASON,
+    hold,
+    afterFail: (): NextLook => {
+      note(
+        engine.ledger,
+        invoiceId,
+        "approval",
+        `Waiting on a person. The ${kind} was marked failed without being sent, so restoring those details no longer sends it: paying this invoice now takes a person's approval, or a person closes it without paying`,
+        "waiting",
+      );
+      return Date.now();
+    },
+  };
+}
+
+// When a pending attempt with no transfer counts as never sent: a bank deadline
+// of its method after its latest create try, or after it was opened when it has
+// had none. One with neither time on file is given a try time now, so it waits a
+// full deadline and is never failed on the first look.
+function neverSentAt(engine: Engine, obligation: Obligation, attempt: Attempt): number {
+  let from: number = Date.parse(attempt.triedAt ?? attempt.openedAt ?? "");
+  if (!Number.isFinite(from)) {
+    from = Date.now();
+    engine.ledger.tried(attempt.requestId, from);
+  }
+  return from + deadlineMinutes(obligation.transferMethod) * 60_000;
+}
+
+// What pays an invoice when a pending attempt with no transfer may never have
+// been sent: a payout sent outside PayOnce that has paid it, a transfer found late
+// that the bank has live, or a paid transfer under another attempt's request id
+// that does not match the invoice. payment says so in PayOnce's words, then says what
+// marking the attempt failed leaves, reason is why the invoice waits for a person
+// meanwhile, hold how it waits, and afterFail what the look does once the attempt
+// is marked failed.
+interface NeverSentCause {
+  payment: string;
+  then: string;
+  reason: string;
+  hold: () => NextLook;
+  afterFail: () => NextLook;
+}
+
+export function paidOutsideCause(engine: Engine, invoiceId: string, paidBy: OutsidePayout): NeverSentCause {
+  return {
+    payment: `payout ${paidBy.reference} sent outside PayOnce has paid this invoice`,
+    then: "a person can close the invoice",
+    reason: OUTSIDE_PAYOUT_REASON,
+    hold: (): NextLook => holdForOutsidePayout(engine, invoiceId),
+    afterFail: (): NextLook => holdForOutsidePayout(engine, invoiceId),
+  };
+}
+
+// A paid payout that names the invoice but does not pay it (payoutPays): another
+// amount, currency or account, or one PayOnce could not check. Nothing more is
+// sent beside it, and a person decides.
+export function namesOnlyCause(engine: Engine, obligation: Obligation, namedBy: OutsidePayout): NeverSentCause {
+  const invoiceId: string = obligation.invoiceId;
+  return {
+    payment:
+      payoutVerdict(obligation, namedBy, null) !== null
+        ? `payout ${namedBy.reference} sent outside PayOnce names this invoice and is paid, but does not match its amount, currency or account`
+        : `payout ${namedBy.reference} sent outside PayOnce names this invoice and is paid, but PayOnce could not check its amount, currency or account`,
+    then: "a person checks it, and can close the invoice without paying",
+    reason: OUTSIDE_PAYOUT_REASON,
+    hold: (): NextLook => holdForOutsidePayout(engine, invoiceId),
+    afterFail: (): NextLook => holdForOutsidePayout(engine, invoiceId),
+  };
+}
+
+// The attempt is held while the late transfer may pay the invoice. Once it is
+// marked failed, the duplicate lock is free, and the next look, at once, records
+// the late transfer in its own state and follows it like any payment.
+export function lateTransferCause(engine: Engine, invoiceId: string, late: Attempt): NeverSentCause {
+  const named: string = `${late.kind} ${late.reference ?? late.transferId ?? ""}`;
+  return {
+    payment: `${named}, found late, is live at the bank and may pay this invoice`,
+    then: `${named} counts as this invoice's payment`,
+    reason: LATE_TRANSFER_REASON,
+    hold: (): NextLook => holdPaidTwice(engine, invoiceId, late),
+    afterFail: (): NextLook => Date.now(),
+  };
+}
+
+// A paid transfer under the request id of another attempt that does not match the
+// invoice. Once the attempt is marked failed, a person can close the invoice from
+// the close card.
+export function mismatchedCause(engine: Engine, invoiceId: string, mismatched: Attempt): NeverSentCause {
+  const reference: string = mismatched.mismatchedReference ?? mismatched.mismatchedTransferId ?? "";
+  return {
+    payment: `transfer ${reference} under the failed ${mismatched.kind}'s request id is paid but does not match this invoice`,
+    then: "a person can close the invoice",
+    reason: MISMATCHED_TRANSFER_REASON,
+    hold: (): NextLook => holdMismatched(engine, invoiceId, mismatched),
+    afterFail: (): NextLook => holdMismatched(engine, invoiceId, mismatched),
+  };
+}
+
+// A pending attempt with no transfer, on an invoice something else pays (cause).
+// It is held as any retry is until neverSentAt, and the look comes back then.
+// After that, if Airwallex still lists no transfer under its request id, it never
+// became one: it is marked failed, which releases the duplicate lock. The attempt
+// is read again, listed and failed under the lock of the wallet it pays from,
+// which a retry holds from its create try to recording the transfer, so no try is
+// under way meanwhile, and a try another process made since this look read it
+// moves the deadline on. failAttempt changes only an attempt still pending with no
+// transfer. A transfer listed by then is recorded by the next look, due at once.
+export async function failNeverSent(
+  engine: Engine,
+  obligation: Obligation,
+  attempt: Attempt,
+  cause: NeverSentCause,
+): Promise<NextLook> {
+  const invoiceId: string = obligation.invoiceId;
+  const kind: string = capitalise(attempt.kind);
+  engine.ledger.escalate(invoiceId, cause.reason);
+  let deadline: number = neverSentAt(engine, obligation, attempt);
+  if (Date.now() >= deadline) {
+    const failed: boolean | number = await withCurrencyLock(
+      engine.ledger,
+      debitCurrency(obligation),
+      async (): Promise<boolean | number> => {
+        const now: Attempt | undefined = engine.ledger
+          .attempts(invoiceId)
+          .find((current: Attempt): boolean => current.requestId === attempt.requestId);
+        if (now === undefined || now.state !== "pending" || now.transferId !== null) {
+          return false;
+        }
+        const due: number = neverSentAt(engine, obligation, now);
+        if (Date.now() < due) {
+          return due;
+        }
+        return (
+          (await findTransferByRequestId(engine.client, attempt.requestId)) === undefined &&
+          engine.ledger.failAttempt(attempt.requestId, null, false)
+        );
+      },
+    );
+    if (failed === false) {
+      return Date.now();
+    }
+    if (failed === true) {
+      note(
+        engine.ledger,
+        invoiceId,
+        "payment",
+        `${kind} payment marked failed: Airwallex lists no transfer under its request id a bank deadline after it was last tried, and ${cause.payment}. PayOnce sent nothing for it, so ${cause.then}`,
+        "retry",
+      );
+      return cause.afterFail();
+    }
+    deadline = failed;
+  }
+  note(
+    engine.ledger,
+    invoiceId,
+    "warning",
+    `${kind} payment not sent again: ${cause.payment}. If Airwallex still lists no transfer for the ${attempt.kind} at ${new Date(deadline).toISOString().slice(11, 16)} UTC, a bank deadline after it was last tried, PayOnce marks it failed and ${cause.then}`,
+    "retry",
+  );
+  cause.hold();
+  return deadline;
+}
+
+// True for an attempt sent on a quote that ran out a bank deadline ago. Airwallex
+// refuses to create a transfer on a quote that has run out, and a transfer
+// created before then has had that long to show.
+function quoteLapsed(obligation: Obligation, attempt: Attempt): boolean {
+  if (attempt.quoteValidTo === null) {
+    return false;
+  }
+  const deadline: number =
+    Date.parse(attempt.quoteValidTo) + deadlineMinutes(obligation.transferMethod) * 60_000;
+  return !(Date.now() < deadline);
+}
+
+// Sends an attempt still pending with no transfer again, under its request_id,
+// holding the currency lock of the wallet the money leaves. A retry pays the
+// record as it is now, so every payment goes out only to the account it was
+// decided or approved for, which the attempt keeps. Throws AccountChangedError,
+// sending nothing, when the record no longer holds it. An attempt from before the
+// account was kept is checked as it was then: against the approval it was opened
+// on, so a request another process opened since does not count, then the run
+// row's account, since a person may have approved another account after the row
+// was held.
+//
+// Once its quote has run out a bank deadline ago, a payment from another
+// currency's wallet has one last try, which fails it if Airwallex refuses its
+// quote and lists no transfer for it. Null then: nothing was sent, and a person
+// approves it on a new quote.
+//
+// Undefined, with nothing sent, when the ledger shows a payout for the invoice
+// sent outside PayOnce live, another payment for it live at the bank, such as a
+// transfer found late (paidTwice), the invoice closed, or the attempt no longer
+// pending with no transfer, just before the create call. Another process may
+// have tied the payout, recorded the late transfer, closed the invoice, or failed
+// or recorded the attempt, while this one waited for the lock.
+export async function retry(
+  engine: Engine,
+  obligation: Obligation,
+  attempt: Attempt,
+  original: Transfer | null,
+  checks: TransferChecks,
+): Promise<Transfer | null | undefined> {
+  const approval: Approval | undefined = engine.ledger.approvalOf(attempt);
+  const approved: ApprovalTerms | undefined =
+    approval?.state === "used" ? (JSON.parse(approval.terms) as ApprovalTerms) : undefined;
+  const row: RunRow | undefined =
+    obligation.runRowId === null ? undefined : engine.ledger.runRow(obligation.runRowId);
+  if (attempt.accountKey !== null) {
+    await requireAccount(
+      engine,
+      obligation,
+      attempt.accountKey,
+      attempt.approvalId === null ? "payment was decided" : "payment was approved",
+    );
+  } else if (attempt.kind === "replacement") {
+    await requireAccount(
+      engine,
+      obligation,
+      approved?.action === "replace"
+        ? approved.accountKey
+        : accountKeyOf(original?.beneficiary?.bank_details),
+      "replacement was approved",
+    );
+  } else if (approved?.action === "pay") {
+    await requireAccount(engine, obligation, approved.accountKey, "payment was approved");
+  } else if (row?.accountKey !== undefined && row.accountKey !== null) {
+    await requireAccount(engine, obligation, row.accountKey, "pay run was approved");
+  }
+  const lapsed: boolean = quoteLapsed(obligation, attempt);
+  const invoiceId: string = obligation.invoiceId;
+  const state: ObligationState | undefined = engine.ledger.obligation(invoiceId)?.state;
+  const attempts: Attempt[] = engine.ledger.attempts(invoiceId);
+  if (
+    (state !== "open" && state !== "escalated") ||
+    anyLive(engine.ledger.outsidePayouts(invoiceId)) ||
+    attempts.some(
+      (current: Attempt): boolean => current.requestId !== attempt.requestId && liveAtBank(current),
+    ) ||
+    !attempts.some(
+      (current: Attempt): boolean =>
+        current.requestId === attempt.requestId &&
+        current.state === "pending" &&
+        current.transferId === null,
+    )
+  ) {
+    return undefined;
+  }
+  try {
+    return await sendAttempt(
+      engine.client,
+      engine.ledger,
+      obligation,
+      attempt,
+      lapsed ? "lapsed" : "retry",
+      checks.decide,
+    );
+  } catch (error: unknown) {
+    // Nothing was sent only if the last try failed the attempt on a refusal.
+    // Anything else, such as a failed listing, fails the look, which is retried.
+    const failed: boolean = engine.ledger
+      .attempts(obligation.invoiceId)
+      .some(
+        (current: Attempt): boolean =>
+          current.requestId === attempt.requestId && current.state === "failed",
+      );
+    if (!lapsed || !wasRejected(error) || !failed) {
+      throw error;
+    }
+    note(
+      engine.ledger,
+      obligation.invoiceId,
+      "payment",
+      `${capitalise(attempt.kind)} payment never became a transfer: its exchange rate quote ran out, and Airwallex refused a last try under the same request id and lists no transfer with it (${error.code ?? String(error.status)}). Nothing was sent, so it needs a new approval on a new quote`,
+    );
+    return null;
+  }
+}

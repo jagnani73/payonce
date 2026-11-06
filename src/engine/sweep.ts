@@ -4,15 +4,10 @@ import { debitOf, feeOf, originalStateOf, type Debit, type Fee } from "../domain
 import { isOverdue } from "../domain/deadlines.js";
 import type { Dispatcher } from "./dispatcher.js";
 import { invoiceForPayout, type PayoutMatch } from "../domain/duplicates.js";
-import {
-  linkOutsidePayout,
-  note,
-  noteMismatchedTransfer,
-  payoutSummary,
-  recordLateTransfer,
-  unrecordedAttemptOf,
-  type Engine,
-} from "./engine.js";
+import type { Engine } from "./engine.js";
+import { noteMismatchedTransfer, recordLateTransfer, unrecordedAttemptOf } from "./late-mismatched.js";
+import { note, payoutSummary } from "./lines.js";
+import { linkOutsidePayout } from "./outside.js";
 import type { OriginalTransferState } from "../domain/incident.js";
 import {
   INVOICE_ID_PATTERN,

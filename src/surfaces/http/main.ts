@@ -9,7 +9,8 @@ import { cashReport, payRunLines, type CashReport } from "../../engine/cash-posi
 import { createEngine, type EngineBuild } from "../../engine/create.js";
 import { CurrencyBusyError } from "../../engine/currency-lock.js";
 import { Dispatcher } from "../../engine/dispatcher.js";
-import { noteError, type Engine } from "../../engine/engine.js";
+import type { Engine } from "../../engine/engine.js";
+import { noteError } from "../../engine/lines.js";
 import { recordMissingFees } from "../../engine/payments.js";
 import { SandboxBank } from "../../engine/sandbox-bank.js";
 import { Watcher } from "../../engine/watcher.js";

@@ -7,7 +7,8 @@ import { AirwallexError, AirwallexUnreachableError } from "../airwallex/client.j
 import { getTransfer, type Transfer, type TransferBankDetails } from "../airwallex/transfers.js";
 import { personName } from "../domain/approvers.js";
 import { bankDetailsKey, NOT_ROUTING_FIELDS, routeValue } from "../domain/assess.js";
-import { note, type Engine } from "./engine.js";
+import type { Engine } from "./engine.js";
+import { note } from "./lines.js";
 import {
   liveAtBank,
   type Attempt,

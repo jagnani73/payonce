@@ -30,7 +30,8 @@ import { committedAcross, committedByInvoice, type CommittedExcept } from "../en
 import { withCurrencyLocks } from "../engine/currency-lock.js";
 import type { Dispatcher } from "../engine/dispatcher.js";
 import { likelyDuplicates, sameBillAndNumber, sameNumberExactly, sameSupplier, type Bill } from "../domain/duplicates.js";
-import { lineWanted, type Engine } from "../engine/engine.js";
+import type { Engine } from "../engine/engine.js";
+import { lineWanted } from "../engine/lines.js";
 import {
   alreadyInLedger,
   isExpired,

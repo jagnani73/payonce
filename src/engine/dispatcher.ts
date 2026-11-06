@@ -1,4 +1,6 @@
-import { noteError, resumeIncident, type Engine } from "./engine.js";
+import type { Engine } from "./engine.js";
+import { noteError } from "./lines.js";
+import { resumeIncident } from "./look.js";
 
 // Runs the agent's work one invoice at a time. A webhook, a status check, new
 // emails and a person's action can all arrive together, so every step on an
