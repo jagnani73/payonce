@@ -40,8 +40,8 @@ import { linkUnseenPayouts, syncOutsidePayouts } from "./outside.js";
 import { syncTransfer } from "./payments.js";
 import { MISMATCHED_FAILED_REASON, MISMATCHED_TRANSFER_REASON, withFloorReason } from "./reason-text.js";
 import { replaceUnderLock } from "./replacement.js";
-import { accountChangedCause, failNeverSent, holdPending, retry } from "./retry.js";
-import { AccountChangedError, noteChecks, replacementOverdue, transferChecks, waitForBank, type TransferChecks } from "./send.js";
+import { failNeverSent, holdPending, retryUnderLock, type Retried } from "./retry.js";
+import { noteChecks, replacementOverdue, transferChecks, waitForBank, type TransferChecks } from "./send.js";
 
 // An invoice whose payment an outage held waits for a person to end it. The hold
 // line goes on its timeline once, and a standing line says what it waits on, both
@@ -200,27 +200,18 @@ async function look(engine: Engine, invoiceId: string, options: LookOptions): Pr
       }
       const paying: Obligation = look.obligation;
       const checks: TransferChecks = transferChecks(engine, paying, attempt);
-      let sent: Transfer | null | undefined;
-      try {
-        sent = await withCurrencyLock(
-          engine.ledger,
-          debitCurrency(paying),
-          (): Promise<Transfer | null | undefined> => retry(engine, paying, attempt, look.original, checks),
-        );
-      } catch (error: unknown) {
-        if (!(error instanceof AccountChangedError)) {
-          throw error;
-        }
-        return failNeverSent(engine, paying, attempt, accountChangedCause(engine, invoiceId, attempt.kind));
+      const retried: Retried = await retryUnderLock(engine, paying, attempt, look.original, checks);
+      if (retried.kind === "account-changed") {
+        return failNeverSent(engine, paying, attempt, { kind: "account-changed" });
       }
       // The next look, at once, holds or records it as the ledger now stands.
-      if (sent === undefined) {
+      if (retried.kind === "changed") {
         return Date.now();
       }
-      if (sent === null) {
+      if (retried.kind === "lapsed") {
         continue;
       }
-      transfer = sent;
+      transfer = retried.transfer;
       noteChecks(engine, invoiceId, checks);
       engine.bank?.sent(invoiceId, attempt.kind, transfer.id, transfer.short_reference_id);
     } else {
