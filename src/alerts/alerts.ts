@@ -62,6 +62,7 @@ import type {
 } from "../store/ledger.js";
 import { formatMoney } from "../domain/money.js";
 import { say, sayWarning } from "../text/printable.js";
+import { redactKeys } from "../text/redact.js";
 import { shownCurrency, shownInvoice, shownReference } from "../recon/recon-match.js";
 import type { KindTotal, ReconAlertState, ReconBreak } from "../store/recon-store.js";
 import { runStatus } from "../runs/runs.js";
@@ -543,15 +544,15 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-// The address, its path and its query never reach a log line or the ledger.
+// The address, its path and its query never reach a log line or the ledger. Each
+// is cut as redactKey cuts a key: URL-encoded, in either case, cut short, or with
+// spaces or line breaks between its characters.
 function redact(text: string, url: URL): string {
-  let out: string = text;
-  for (const part of [url.href, `${url.origin}${url.pathname}`, url.pathname, url.search]) {
-    if (part.length > 1) {
-      out = out.split(part).join("[webhook]");
-    }
-  }
-  return out;
+  return redactKeys(
+    text,
+    [url.href, `${url.origin}${url.pathname}`, url.pathname, url.search].filter((part: string): boolean => part.length > 1),
+    "[webhook]",
+  );
 }
 
 interface Answer {
