@@ -27,9 +27,11 @@ import { AccountChangedError, requireAccount, type TransferChecks } from "./send
 // A pending attempt is not sent again while a payout for the invoice sent outside
 // PayOnce is live. It stays pending under its request id, which keeps the
 // duplicate lock, so PayOnce opens no other payment for the invoice either. It is
-// tried again on a look after that payout has failed.
+// tried again on a look after that payout has failed. The invoice is escalated
+// for the payout on every such look, and the row is written only when that
+// changes it.
 function holdRetryForOutsidePayout(engine: Engine, invoiceId: string, attempt: Attempt): NextLook {
-  engine.ledger.escalate(invoiceId, reasonFor("outside-payout"));
+  engine.ledger.escalateIfChanged(invoiceId, reasonFor("outside-payout"));
   note(
     engine.ledger,
     invoiceId,
