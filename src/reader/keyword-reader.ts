@@ -1,10 +1,5 @@
-import {
-  summarise,
-  type EmailAttachment,
-  type EmailFindings,
-  type EmailReader,
-  type SupplierEmail,
-} from "./emails.js";
+import { summarise, type EmailAttachment, type EmailFindings, type SupplierEmail } from "../domain/emails.js";
+import type { EmailReader } from "./emails.js";
 
 // Matches a handful of phrases and understands nothing else. It reads the emails
 // when no model is set up, and runs beside the model when one is. The text is

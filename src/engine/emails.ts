@@ -1,6 +1,6 @@
 import type { ApprovalTerms } from "../domain/approval.js";
+import { summarise, unverifiedSenders, type EmailFindings, type SupplierEmail } from "../domain/emails.js";
 import { isExpired } from "../domain/live.js";
-import { summarise, unverifiedSenders, type EmailFindings, type SupplierEmail } from "../reader/emails.js";
 import { ModelReadError, triesText } from "../reader/reader-error.js";
 import { checkedObject, type Approval, type Ledger, type Obligation } from "../store/ledger.js";
 import { findingsOnFile, isStoredFindings, requestTerms, type StoredFindings } from "../store/stored.js";

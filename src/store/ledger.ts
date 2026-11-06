@@ -1,8 +1,8 @@
 import type { TransferBankDetails } from "../airwallex/transfers.js";
 import type { ArrivalTerms } from "../domain/arrival.js";
 import type { Debit } from "../domain/assess.js";
+import type { SupplierEmail } from "../domain/emails.js";
 import type { Reason, StoredReason } from "../domain/reasons.js";
-import type { SupplierEmail } from "../reader/emails.js";
 import { AlertStore, type Alert, type AlertFinish, type FoundCondition, type RecordedConditions } from "./alerts.js";
 import {
   ApprovalStore,

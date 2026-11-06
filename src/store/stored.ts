@@ -1,6 +1,6 @@
 import type { ApprovalTerms, FxTerms, LastQuote } from "../domain/approval.js";
 import type { ArrivalTerms } from "../domain/arrival.js";
-import type { EmailFindings, SupplierEmail } from "../reader/emails.js";
+import type { EmailFindings, SupplierEmail } from "../domain/emails.js";
 import type { Approval } from "./approvals.js";
 import { checkedObject, storedShape } from "./db.js";
 import type { Ledger } from "./ledger.js";

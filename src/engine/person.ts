@@ -7,11 +7,11 @@ import {
   type Approver,
   type Barred,
 } from "../domain/approvers.js";
+import { emailEvidence, type SupplierEmail } from "../domain/emails.js";
 import { isExpired, liveAtBank, payoutNamesOnly, payoutPays } from "../domain/live.js";
 import { formatMoney } from "../domain/money.js";
 import { STATUS_PATTERN } from "../domain/patterns.js";
 import { closeKindFor } from "../domain/situation.js";
-import { emailEvidence, type SupplierEmail } from "../reader/emails.js";
 import {
   DuplicatePaymentError,
   payoutVerdict,

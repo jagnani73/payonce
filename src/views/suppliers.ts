@@ -2,10 +2,10 @@ import type { TransferBankDetails } from "../airwallex/transfers.js";
 import { endingOf, keyHash } from "../domain/approval.js";
 import { knownRoute, routeKeyOf, routeOfDetailsKey } from "../domain/assess.js";
 import { knownName, policyFromEnv } from "../domain/approvers.js";
+import { summarise, unverifiedSenders, type SupplierEmail } from "../domain/emails.js";
 import { liveAtBank } from "../domain/live.js";
 import { templateLabel } from "../outbox/drafts.js";
 import { numberOf, numbersOf, sameInvoiceNumber, supplierNameKey } from "../domain/duplicates.js";
-import { summarise, unverifiedSenders, type SupplierEmail } from "../reader/emails.js";
 import { accountChangedReason } from "../domain/reasons.js";
 import {
   CHANGED_RECENTLY_MS,

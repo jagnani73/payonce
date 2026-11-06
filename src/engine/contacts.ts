@@ -10,7 +10,7 @@ import {
   type ContactSource,
   type EmailText,
 } from "../domain/contacts.js";
-import { unverifiedSenders, type SupplierEmail } from "../reader/emails.js";
+import { unverifiedSenders, type SupplierEmail } from "../domain/emails.js";
 import type { ContactChange, Ledger, Obligation } from "../store/ledger.js";
 
 // A person putting a phone number on file for a supplier record, or changing or

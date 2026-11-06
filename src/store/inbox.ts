@@ -1,4 +1,4 @@
-import type { EmailAttachment } from "../reader/emails.js";
+import type { EmailAttachment } from "../domain/emails.js";
 import { isUniqueViolation, storedList, storedStrings, type Db } from "./db.js";
 import type { InvoiceStore, Obligation } from "./invoices.js";
 

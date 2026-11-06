@@ -1,6 +1,7 @@
 import type { FxTerms } from "../domain/approval.js";
 import { today } from "../domain/arrival.js";
 import { failedStatus } from "../domain/assess.js";
+import { unverifiedSenders, type SupplierEmail } from "../domain/emails.js";
 import { deadlineAt, inFlight, keptFailedLive, pastDeadline, watching } from "../domain/live.js";
 import { debitCurrency } from "../domain/reserve.js";
 import {
@@ -14,7 +15,6 @@ import { noteTexts } from "../intake/eml.js";
 import type { DraftMove } from "../store/ledger.js";
 import { MOVES_FROM, outboxOf, type DraftOffer, type DraftView as StoredDraftView, type NotOffered, type Outbox } from "../outbox/drafts.js";
 import type { OutageSend } from "../outages/outages.js";
-import { unverifiedSenders, type SupplierEmail } from "../reader/emails.js";
 import type { Settings } from "../settings.js";
 import { crossCurrency, readingSoft, storedObject, type Attempt, type Ledger, type Obligation, type OutsidePayout } from "../store/ledger.js";
 import { attemptLostFee, type CashReport } from "../store/read/cash.js";

@@ -1,11 +1,6 @@
 import { decide } from "../../domain/decide.js";
-import {
-  loadEmails,
-  unverifiedSenders,
-  type EmailFindings,
-  type EmailReader,
-  type SupplierEmail,
-} from "../../reader/emails.js";
+import { unverifiedSenders, type EmailFindings, type SupplierEmail } from "../../domain/emails.js";
+import { loadEmails, type EmailReader } from "../../reader/emails.js";
 import type { Decision, Incident, OriginalTransferState } from "../../domain/incident.js";
 import { KeywordReader } from "../../reader/keyword-reader.js";
 import { say } from "../../text/printable.js";

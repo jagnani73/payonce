@@ -1,4 +1,4 @@
-import type { EmailAttachment, SupplierEmail } from "../reader/emails.js";
+import type { EmailAttachment, SupplierEmail } from "../domain/emails.js";
 import type { Db } from "./db.js";
 
 interface EmailRow {

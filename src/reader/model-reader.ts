@@ -1,11 +1,6 @@
+import { summarise, type EmailAttachment, type EmailFindings, type SupplierEmail } from "../domain/emails.js";
 import { noteTexts } from "../intake/eml.js";
-import {
-  summarise,
-  type EmailAttachment,
-  type EmailFindings,
-  type EmailReader,
-  type SupplierEmail,
-} from "./emails.js";
+import type { EmailReader } from "./emails.js";
 import { KeywordReader } from "./keyword-reader.js";
 import {
   firstAnswer,

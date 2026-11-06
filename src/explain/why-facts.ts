@@ -11,10 +11,10 @@ import {
 import { knownName, sameName, type ApprovalPolicy, type Barred } from "../domain/approvers.js";
 import { HOLIDAYS_NOTE, type ArrivalTerms } from "../domain/arrival.js";
 import { setterBarWhy } from "../domain/contacts.js";
+import { emailEvidence, type SupplierEmail } from "../domain/emails.js";
 import { isExpired } from "../domain/live.js";
 import { deadlineMinutes } from "../domain/deadlines.js";
 import { EMAILS_UNREAD_REASON } from "../domain/decide.js";
-import { emailEvidence, type SupplierEmail } from "../reader/emails.js";
 import { heldBeforePaying } from "../engine/facts.js";
 import { pendingApproval, pendingClose, type CloseReview, type PendingApproval } from "../engine/person.js";
 import {

@@ -11,9 +11,9 @@ import { signoffsNeeded, type SignoffRule } from "../domain/approvers.js";
 import { routeKeyOf } from "../domain/assess.js";
 import { namingNotToPay as namingNotToPayText } from "../domain/decide.js";
 import { likelyDuplicates } from "../domain/duplicates.js";
+import { emailEvidence, type SupplierEmail } from "../domain/emails.js";
 import { reasonText, type StoredReason } from "../domain/reasons.js";
 import { debitCurrency } from "../domain/reserve.js";
-import { emailEvidence, type SupplierEmail } from "../reader/emails.js";
 import {
   crossCurrency,
   holdsAccount,

@@ -9,8 +9,9 @@ import {
   type BeneficiarySpec,
 } from "../airwallex/beneficiaries.js";
 import type { Transfer } from "../airwallex/transfers.js";
+import type { SupplierEmail } from "../domain/emails.js";
 import type { Dispatcher } from "./dispatcher.js";
-import { loadEmails, type SupplierEmail } from "../reader/emails.js";
+import { loadEmails } from "../reader/emails.js";
 import { deliver } from "./emails.js";
 import type { Engine } from "./engine.js";
 import { heldBeforePaying } from "./facts.js";
