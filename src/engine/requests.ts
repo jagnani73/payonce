@@ -29,6 +29,7 @@ import {
 import type { Engine, NextLook, Rate } from "./engine.js";
 import { note } from "./lines.js";
 import { quoteLine, requestExpiry } from "./rates.js";
+import { requestTerms } from "./stored.js";
 import { countedFromToday } from "./terms.js";
 
 // barredFrom, on the ledger as it is now. The account's routeKey is the one given
@@ -67,7 +68,7 @@ function approvalProblem(
   rule: SignoffRule,
   approval: Approval,
 ): string | null {
-  const approved: ApprovalTerms = JSON.parse(approval.terms) as ApprovalTerms;
+  const approved: ApprovalTerms = requestTerms(approval);
   return signoffProblem(
     engine.approvals,
     rule,
@@ -91,7 +92,7 @@ export function voidIfStale(
   if (isExpired(approval)) {
     why = "expired before it was used";
   } else if (bindingOf(current) !== approval.binding) {
-    const approved: ApprovalTerms = JSON.parse(approval.terms) as ApprovalTerms;
+    const approved: ApprovalTerms = requestTerms(approval);
     why = `is void: ${changedFields(approved, current).join(", ")} changed`;
   } else {
     const problem: string | null = approvalProblem(engine, obligation, rule, approval);
@@ -144,7 +145,7 @@ export function awaitApproval(
     request = requestMatch(latest, bindingOf(terms), rule);
   }
   const previous: FxTerms | undefined =
-    latest === undefined ? undefined : (JSON.parse(latest.terms) as ApprovalTerms).fx;
+    latest === undefined ? undefined : requestTerms(latest).fx;
   noteReplacedRequest(engine, invoiceId, latest, terms, request);
   if (request.opening) {
     // Another process closed the invoice meanwhile.

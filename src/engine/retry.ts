@@ -23,6 +23,7 @@ import { note } from "./lines.js";
 import { holdForOutsidePayout } from "./outside.js";
 import { sendAttempt, wasRejected } from "./payments.js";
 import { AccountChangedError, requireAccount, type TransferChecks } from "./send.js";
+import { requestTerms } from "./stored.js";
 
 // A pending attempt is not sent again while a payout for the invoice sent outside
 // PayOnce is live. It stays pending under its request id, which keeps the
@@ -360,7 +361,7 @@ async function retry(
 ): Promise<Retried> {
   const approval: Approval | undefined = engine.ledger.approvalOf(attempt);
   const approved: ApprovalTerms | undefined =
-    approval?.state === "used" ? (JSON.parse(approval.terms) as ApprovalTerms) : undefined;
+    approval?.state === "used" ? requestTerms(approval) : undefined;
   const row: RunRow | undefined =
     obligation.runRowId === null ? undefined : engine.ledger.runRow(obligation.runRowId);
   try {

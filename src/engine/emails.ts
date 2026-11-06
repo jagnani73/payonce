@@ -1,10 +1,11 @@
 import type { ApprovalTerms } from "../domain/approval.js";
 import { summarise, unverifiedSenders, type EmailFindings, type SupplierEmail } from "../reader/emails.js";
 import { ModelReadError, triesText } from "../reader/reader-error.js";
-import { isExpired, storedObject, type Approval, type Ledger, type Obligation } from "../store/ledger.js";
+import { checkedObject, isExpired, storedShape, type Approval, type Ledger, type Obligation } from "../store/ledger.js";
 import { sayWarning } from "../text/printable.js";
 import type { Engine, StoredFindings } from "./engine.js";
 import { messageOf, note } from "./lines.js";
+import { findingsOnFile, isStoredFindings, requestTerms } from "./stored.js";
 
 const NO_FINDINGS: StoredFindings = {
   claimsNonReceipt: false,
@@ -27,12 +28,14 @@ export function sendersNotOnFile(obligation: Obligation, emails: SupplierEmail[]
 }
 
 // The stored findings, or what stands for them before anything was read. They are
-// read strict, so a look on findings that do not parse throws and pays nothing.
-// Only a view, such as the board's pendingClose, reads them soft (readingSoft), and
-// there findings that do not parse stand as not read.
+// read strict, so a look on findings that do not parse, or are not in the shape
+// PayOnce writes, throws and pays nothing. Only a view, such as the board's
+// pendingClose, reads them soft (readingSoft), and there such findings stand as
+// not read.
 export function storedFindings(ledger: Ledger, invoiceId: string, emails: SupplierEmail[]): { findings: StoredFindings; stored: boolean } {
   const stored: string | undefined = ledger.findings(invoiceId);
-  const findings: StoredFindings | null = stored === undefined ? null : storedObject<StoredFindings>(stored);
+  const findings: StoredFindings | null =
+    stored === undefined ? null : storedShape(stored, isStoredFindings, findingsOnFile(invoiceId));
   if (findings !== null) {
     return { findings, stored: true };
   }
@@ -110,7 +113,7 @@ export async function readNewEmails(engine: Engine, obligation: Obligation, held
   const thread: SupplierEmail[] = engine.ledger.emails(invoiceId);
   const stored: string | undefined = engine.ledger.findings(invoiceId);
   const previous: StoredFindings | undefined =
-    stored === undefined ? undefined : (JSON.parse(stored) as StoredFindings);
+    stored === undefined ? undefined : checkedObject(stored, isStoredFindings, findingsOnFile(invoiceId));
   // Findings saved before the count was kept cover the whole thread.
   const readCount: number =
     previous === undefined ? 0 : (previous.emailsRead ?? thread.length);
@@ -200,7 +203,7 @@ export function noteEvidenceUpgrade(engine: Engine, invoiceId: string, approval:
   ) {
     return;
   }
-  const terms: ApprovalTerms = JSON.parse(approval.terms) as ApprovalTerms;
+  const terms: ApprovalTerms = requestTerms(approval);
   const evidence: string | undefined = terms.action === "replace" ? terms.evidence.emails : undefined;
   if (evidence === undefined || EMAIL_COUNT.test(evidence)) {
     return;
