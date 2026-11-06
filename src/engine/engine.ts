@@ -4,6 +4,7 @@ import type { FxTerms } from "../domain/approval.js";
 import type { ApprovalPolicy } from "../domain/approvers.js";
 import type { ArrivalTerms } from "../domain/arrival.js";
 import type { Decision, Incident } from "../domain/incident.js";
+import type { Clause, Reason } from "../domain/reasons.js";
 import type { ReservePolicy } from "../domain/reserve.js";
 import type { EmailFindings, EmailReader, SupplierEmail } from "../reader/emails.js";
 import type { AttemptKind, BankChange, Ledger } from "../store/ledger.js";
@@ -71,6 +72,14 @@ export interface Rate {
   endsAt: number;
 }
 
+// A decision with its reason as codes. The policy's reasons become codes as they
+// leave decide.ts, and the text is rendered from them wherever it is written: an
+// escalation, a timeline line or approval terms.
+export interface Decided {
+  action: Decision["action"];
+  reason: Reason;
+}
+
 export interface Assessment {
   original: Transfer;
   incident: Incident;
@@ -88,9 +97,9 @@ export interface Assessment {
   // When a replacement sent now usually arrives. Null for an invoice with no due
   // date, so its terms are as they were before.
   arrival: ArrivalTerms | null;
-  decision: Decision;
-  // The floor reason added to the decision's reason, or null when none was.
-  floor: string | null;
+  decision: Decided;
+  // The floor clause added to the decision's reason, or null when none was.
+  floor: Clause | null;
   // A paid invoice this one looks like a second bill for, once the original has
   // failed. Null when there is none.
   paidDuplicate: string | null;

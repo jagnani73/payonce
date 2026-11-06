@@ -1,5 +1,25 @@
+import {
+  parseReason,
+  reasonColumns,
+  storedReason,
+  type Reason,
+  type ReasonColumns,
+  type StoredReason,
+} from "../domain/reasons.js";
 import { storedStrings, type Db } from "./db.js";
 import type { Timelines } from "./timeline.js";
+
+// Every escalation writes the reason's text and its codes together, as
+// reasonColumns gives them, in this order.
+export const SET_REASON: string =
+  "escalation_reason = ?, escalation_code = ?, escalation_clauses = ?, escalation_slots = ?";
+
+interface ReasonRow {
+  escalation_reason: string;
+  escalation_code: string;
+  escalation_clauses: string;
+  escalation_slots: string;
+}
 
 // An invoice number PayOnce accepts. A found payout's reference becomes its
 // invoice number only when it fits.
@@ -327,38 +347,64 @@ export class InvoiceStore {
     ).map((row: InvoiceRow): string => row.invoice_id);
   }
 
-  escalate(invoiceId: string, reason: string): void {
+  // The reason an invoice read as obligation holds, as codes. The codes on file
+  // are used while they render the text it was read with, so a reason another
+  // process wrote since is never taken for the one read; otherwise that text is
+  // parsed. Either way the reason renders obligation.escalationReason exactly.
+  reasonOf(obligation: Pick<Obligation, "invoiceId" | "escalationReason">): StoredReason | null {
+    const row: ReasonRow | undefined = this.db
+      .prepare(
+        `SELECT escalation_reason, escalation_code, escalation_clauses, escalation_slots
+           FROM obligations WHERE invoice_id = ?`,
+      )
+      .get(obligation.invoiceId) as unknown as ReasonRow | undefined;
+    return row !== undefined && row.escalation_reason === obligation.escalationReason
+      ? storedReason({
+          text: row.escalation_reason,
+          code: row.escalation_code,
+          clauses: row.escalation_clauses,
+          slots: row.escalation_slots,
+        })
+      : obligation.escalationReason === ""
+        ? null
+        : parseReason(obligation.escalationReason);
+  }
+
+  escalate(invoiceId: string, reason: StoredReason | null): void {
+    const columns: ReasonColumns = reasonColumns(reason);
     this.db
       .prepare(
-        `UPDATE obligations SET state = 'escalated', escalation_reason = ?
+        `UPDATE obligations SET state = 'escalated', ${SET_REASON}
           WHERE invoice_id = ?`,
       )
-      .run(reason, invoiceId);
+      .run(columns.text, columns.code, columns.clauses, columns.slots, invoiceId);
   }
 
   // Rewords the reason of an invoice that is still escalated with the reason it
   // was read with, so a close or another change from another process meanwhile
   // is left alone. True when it changed it.
-  rewordEscalation(invoiceId: string, from: string, to: string): boolean {
+  rewordEscalation(invoiceId: string, from: StoredReason | null, to: StoredReason): boolean {
+    const columns: ReasonColumns = reasonColumns(to);
     const result: { changes: number | bigint } = this.db
       .prepare(
-        `UPDATE obligations SET escalation_reason = ?
+        `UPDATE obligations SET ${SET_REASON}
           WHERE invoice_id = ? AND state = 'escalated' AND escalation_reason = ?`,
       )
-      .run(to, invoiceId, from);
+      .run(columns.text, columns.code, columns.clauses, columns.slots, invoiceId, reasonColumns(from).text);
     return Number(result.changes) === 1;
   }
 
   // Holds an invoice for a person before anything is paid. duplicateOf lists the
   // invoices it looks like a second bill for, and is empty when it is held for
   // another reason.
-  holdBeforePaying(invoiceId: string, duplicateOf: string[], reason: string): void {
+  holdBeforePaying(invoiceId: string, duplicateOf: string[], reason: Reason): void {
+    const columns: ReasonColumns = reasonColumns(reason);
     this.db
       .prepare(
-        `UPDATE obligations SET state = 'escalated', escalation_reason = ?, duplicate_of = ?
+        `UPDATE obligations SET state = 'escalated', ${SET_REASON}, duplicate_of = ?
           WHERE invoice_id = ?`,
       )
-      .run(reason, JSON.stringify(duplicateOf), invoiceId);
+      .run(columns.text, columns.code, columns.clauses, columns.slots, JSON.stringify(duplicateOf), invoiceId);
   }
 
   // The invoices a held invoice looks like a second bill for, as they are now.
@@ -386,26 +432,31 @@ export class InvoiceStore {
   // Sends an open invoice to a person with reason. One already with a person keeps
   // the reason it went there for, and a closed one is left as it is, so a close
   // another process made meanwhile stands. True when the invoice is with a person.
-  escalateIfOpen(invoiceId: string, reason: string): boolean {
+  escalateIfOpen(invoiceId: string, reason: Reason): boolean {
+    const columns: ReasonColumns = reasonColumns(reason);
     const result: { changes: number | bigint } = this.db
       .prepare(
         `UPDATE obligations
             SET escalation_reason = CASE state WHEN 'escalated' THEN escalation_reason ELSE ? END,
+                escalation_code = CASE state WHEN 'escalated' THEN escalation_code ELSE ? END,
+                escalation_clauses = CASE state WHEN 'escalated' THEN escalation_clauses ELSE ? END,
+                escalation_slots = CASE state WHEN 'escalated' THEN escalation_slots ELSE ? END,
                 state = 'escalated'
           WHERE invoice_id = ? AND state IN ('open', 'escalated')`,
       )
-      .run(reason, invoiceId);
+      .run(columns.text, columns.code, columns.clauses, columns.slots, invoiceId);
     return Number(result.changes) === 1;
   }
 
   // Sends an invoice to a person unless it is settled, so a close another process
   // made meanwhile stands.
-  escalateUnlessSettled(invoiceId: string, reason: string): void {
+  escalateUnlessSettled(invoiceId: string, reason: Reason): void {
+    const columns: ReasonColumns = reasonColumns(reason);
     this.db
       .prepare(
-        `UPDATE obligations SET state = 'escalated', escalation_reason = ?
+        `UPDATE obligations SET state = 'escalated', ${SET_REASON}
           WHERE invoice_id = ? AND state <> 'settled'`,
       )
-      .run(reason, invoiceId);
+      .run(columns.text, columns.code, columns.clauses, columns.slots, invoiceId);
   }
 }

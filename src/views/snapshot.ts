@@ -1,7 +1,6 @@
 import type { ApprovalTerms, RunTerms } from "../domain/approval.js";
 import { knownName, type ApprovalPolicy, type Barred } from "../domain/approvers.js";
 import { deadlineMinutes } from "../domain/deadlines.js";
-import { reasonOf } from "../domain/reasons.js";
 import type {
   EmailsSnapshot,
   InvoiceSnapshot,
@@ -205,7 +204,7 @@ function invoiceSnapshot(
     attempts,
     payouts: ledger.outsidePayouts(invoiceId),
     requests,
-    reason: reasonOf(obligation.escalationReason),
+    reason: ledger.reasonOf(obligation),
     emails: emailsOf(ledger, invoiceId),
     outage: outageOf(ledger, options.policy, obligation),
     run: row === undefined || run === undefined ? null : { run, row },

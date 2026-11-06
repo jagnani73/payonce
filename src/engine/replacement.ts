@@ -2,17 +2,18 @@ import { getAvailableMinor } from "../airwallex/balances.js";
 import type { Transfer } from "../airwallex/transfers.js";
 import { accountKeyOf } from "../domain/approval.js";
 import { decide, OUTAGE_REASON } from "../domain/decide.js";
-import type { Decision, Incident } from "../domain/incident.js";
+import type { Incident } from "../domain/incident.js";
+import { reasonText } from "../domain/reasons.js";
 import { debitCurrency } from "../domain/reserve.js";
 import { holdLine } from "../outages/outages.js";
 import type { Attempt, Lease, Obligation, Outage } from "../store/ledger.js";
 import { committedAcross, committedByInvoice } from "./cash-position.js";
-import type { Assessment, Engine, NextLook } from "./engine.js";
+import type { Assessment, Decided, Engine, NextLook } from "./engine.js";
 import { escalate } from "./escalated.js";
 import { anyLive, paidDuplicate } from "./facts.js";
 import { note } from "./lines.js";
 import { linkUnseenPayouts } from "./outside.js";
-import { secondBill, withFloorReason } from "./reason-text.js";
+import { decided, secondBill, withFloorReason } from "./reason-text.js";
 import { requireAccount, send, waitForBank } from "./send.js";
 import { arrivalClause } from "./terms.js";
 
@@ -40,7 +41,7 @@ export async function replaceUnderLock(
 
   let incident: Incident = assessment.incident;
   let paid: string | null = assessment.paidDuplicate;
-  const next: Attempt | Decision | Outage | null = engine.ledger.transaction((): Attempt | Decision | Outage | null => {
+  const next: Attempt | Decided | Outage | null = engine.ledger.transaction((): Attempt | Decided | Outage | null => {
     // Another process may have sent the invoice to a person, or a person may have
     // closed it without paying, while this look waited for the lock or read
     // Airwallex. Only an approval pays an invoice with a person, and nothing pays
@@ -68,7 +69,7 @@ export async function replaceUnderLock(
     };
     // assess makes this check too. Made again here for an invoice paid since.
     paid = paidDuplicate(engine.ledger, obligation);
-    const decision: Decision = secondBill(decide(incident), paid);
+    const decision: Decided = secondBill(decided(decide(incident), incident), paid);
     if (decision.action !== "replace") {
       return decision;
     }
@@ -88,7 +89,7 @@ export async function replaceUnderLock(
     return escalateForOutage(engine, obligation, { ...assessment, incident, paidDuplicate: paid }, next);
   }
   if ("action" in next) {
-    note(engine.ledger, invoiceId, "decision", `Escalate: ${next.reason}${arrivalClause(assessment)}`, "decision");
+    note(engine.ledger, invoiceId, "decision", `Escalate: ${reasonText(next.reason)}${arrivalClause(assessment)}`, "decision");
     // The first request names the floor as well, as every later one does.
     return escalate(
       engine,

@@ -4,20 +4,21 @@ import { getTransfer, type Transfer, type TransferBankDetails } from "../airwall
 import type { ArrivalTerms } from "../domain/arrival.js";
 import { originalStateOf, resendCanFix, sameBankDetails } from "../domain/assess.js";
 import { isOverdue } from "../domain/deadlines.js";
-import { decide, namingNotToPay } from "../domain/decide.js";
-import type { Decision, Incident, OriginalTransferState } from "../domain/incident.js";
+import { decide } from "../domain/decide.js";
+import type { Incident, OriginalTransferState } from "../domain/incident.js";
 import { formatMoney, invoiceMoney, toMinor } from "../domain/money.js";
+import { reasonText, type Reason } from "../domain/reasons.js";
 import { debitCurrency, floorFor } from "../domain/reserve.js";
 import type { SupplierEmail } from "../reader/emails.js";
 import { crossCurrency, liveAtBank, type Attempt, type BankChange, type Obligation } from "../store/ledger.js";
 import { capitalise } from "../text/printable.js";
 import { committedMinor } from "./cash-position.js";
 import { emailsNotRead, sendersNotOnFile, storedFindings } from "./emails.js";
-import type { Assessment, Engine, Rate, StoredFindings } from "./engine.js";
+import type { Assessment, Decided, Engine, Rate, StoredFindings } from "./engine.js";
 import { anyLive, paidDuplicate } from "./facts.js";
 import { note } from "./lines.js";
 import { rateFor } from "./rates.js";
-import { secondBill } from "./reason-text.js";
+import { decided, namingNotToPay, secondBill } from "./reason-text.js";
 import { arrivalClause, arrivalOf } from "./terms.js";
 
 // The floor as the cost line names it.
@@ -153,7 +154,7 @@ export async function assess(
   // every request, names it (namingPaidDuplicate).
   const paid: string | null =
     originalState === "failed" ? paidDuplicate(engine.ledger, obligation) : null;
-  const decision: Decision = secondBill(decide(incident), paid);
+  const decision: Decided = secondBill(decided(decide(incident), incident), paid);
   // Once an invoice has gone to a person, the policy no longer acts for itself.
   const held: string =
     obligation.state !== "escalated"
@@ -184,7 +185,7 @@ export async function assess(
   // The arrival is advice for people. The policy decided without it. The ask not
   // to pay is named here as the request and the alert name it. The floor and a
   // paid second bill have standing warnings of their own (noteFloor, noteSecondBill).
-  const said: string =
+  const said: Reason =
     decision.action === "escalate"
       ? namingNotToPay(decision.reason, incident.supplierAsksNotToPay)
       : decision.reason;
@@ -192,7 +193,7 @@ export async function assess(
     engine.ledger,
     obligation.invoiceId,
     "decision",
-    `${capitalise(decision.action)}: ${said}${held}${arrivalClause(assessment)}`,
+    `${capitalise(decision.action)}: ${reasonText(said)}${held}${arrivalClause(assessment)}`,
     "decision",
   );
   return assessment;

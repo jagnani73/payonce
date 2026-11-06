@@ -1,16 +1,16 @@
 import { getBankDetails } from "../airwallex/beneficiaries.js";
 import type { Transfer, TransferBankDetails } from "../airwallex/transfers.js";
-import { accountKeyOf, conversionText, rateMismatch, type ApprovalTerms, type FxTerms } from "../domain/approval.js";
+import { accountKeyOf, conversionText, type ApprovalTerms, type FxTerms } from "../domain/approval.js";
 import { arrivalFor, atRisk, sentArrivalText, today, type ArrivalTerms } from "../domain/arrival.js";
 import { routeKeyOf } from "../domain/assess.js";
 import { deadlineOf, describeDeadline } from "../domain/deadlines.js";
 import { formatMoney, invoiceMoney, toMinor } from "../domain/money.js";
+import { accountMismatchOf, rateMismatchOf, reasonFor, reasonText, type Reason } from "../domain/reasons.js";
 import type { Approval, Attempt, AttemptKind, Obligation } from "../store/ledger.js";
 import { capitalise } from "../text/printable.js";
 import type { Engine, NextLook } from "./engine.js";
 import { messageOf, note } from "./lines.js";
 import { sendAttempt, wasRejected, type Decide } from "./payments.js";
-import { REPLACEMENT_DEADLINE_REASON } from "../domain/reasons.js";
 
 // The beneficiary record no longer holds the account a payment was decided or
 // approved for.
@@ -46,7 +46,7 @@ export async function requireAccount(
 // A payment from another currency's wallet must go out on the quote a person
 // approved. The money has moved by then, so a transfer at any other rate goes to
 // a person, and only a person closes the invoice. Why it did not, or null.
-function rateProblem(engine: Engine, attempt: Attempt, transfer: Transfer): string | null {
+function rateProblem(engine: Engine, attempt: Attempt, transfer: Transfer): Reason | null {
   if (attempt.quoteId === null) {
     return null;
   }
@@ -55,11 +55,7 @@ function rateProblem(engine: Engine, attempt: Attempt, transfer: Transfer): stri
   const approval: Approval | undefined = engine.ledger.approvalOf(attempt);
   const approved: FxTerms | undefined =
     approval?.state === "used" ? (JSON.parse(approval.terms) as ApprovalTerms).fx : undefined;
-  const problem: string | null = rateMismatch(
-    approved?.quoteId === attempt.quoteId ? approved : undefined,
-    transfer,
-  );
-  return problem === null ? null : `${attempt.kind} ${transfer.short_reference_id} ${problem}`;
+  return rateMismatchOf(attempt.kind, approved?.quoteId === attempt.quoteId ? approved : undefined, transfer);
 }
 
 // A transfer is paid to the beneficiary record as it is when it is created, which
@@ -69,14 +65,12 @@ function rateProblem(engine: Engine, attempt: Attempt, transfer: Transfer): stri
 // and goes to a person. So does one that shows no bank details, which nobody
 // could check, as a transfer with no conversion fails the rate check. Why, or
 // null when it went to the account it was meant for.
-function accountMismatch(attempt: Attempt, transfer: Transfer): string | null {
+function accountMismatch(attempt: Attempt, transfer: Transfer): Reason | null {
   const sentTo: TransferBankDetails | undefined = transfer.beneficiary?.bank_details;
   if (attempt.accountKey === null || (sentTo !== undefined && accountKeyOf(sentTo) === attempt.accountKey)) {
     return null;
   }
-  return sentTo === undefined
-    ? `${attempt.kind} ${transfer.short_reference_id} shows no bank details, so PayOnce cannot check they are the ones it was decided or approved for`
-    : `${attempt.kind} ${transfer.short_reference_id} went to bank details that are not the ones it was decided or approved for`;
+  return accountMismatchOf(attempt.kind, transfer.short_reference_id, sentTo !== undefined);
 }
 
 // The checks a transfer gets wherever its attempt first gains it: when it is
@@ -98,17 +92,17 @@ export function transferChecks(engine: Engine, obligation: Obligation, attempt: 
     warnings,
     decide: (transfer: Transfer): void => {
       warnings.length = 0;
-      const rate: string | null = rateProblem(engine, attempt, transfer);
+      const rate: Reason | null = rateProblem(engine, attempt, transfer);
       if (rate !== null) {
-        engine.ledger.markRateMismatch(attempt.requestId, rate);
+        engine.ledger.markRateMismatch(attempt.requestId, reasonText(rate));
         engine.ledger.escalate(obligation.invoiceId, rate);
-        warnings.push(capitalise(rate));
+        warnings.push(capitalise(reasonText(rate)));
       }
-      const account: string | null = accountMismatch(attempt, transfer);
+      const account: Reason | null = accountMismatch(attempt, transfer);
       if (account !== null) {
         engine.ledger.markMisdirected(attempt.requestId);
         engine.ledger.escalate(obligation.invoiceId, account);
-        warnings.push(capitalise(account));
+        warnings.push(capitalise(reasonText(account)));
       }
     },
   };
@@ -211,9 +205,9 @@ export function replacementOverdue(
   invoiceId: string,
   replacement: Transfer,
 ): NextLook {
-  const reason: string = REPLACEMENT_DEADLINE_REASON;
+  const reason: Reason = reasonFor("deadline-replacement");
   engine.ledger.escalate(invoiceId, reason);
-  note(engine.ledger, invoiceId, "decision", `Escalate: ${reason}`, "decision");
+  note(engine.ledger, invoiceId, "decision", `Escalate: ${reasonText(reason)}`, "decision");
   note(
     engine.ledger,
     invoiceId,

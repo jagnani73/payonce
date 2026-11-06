@@ -1,7 +1,15 @@
 import { knownRoute } from "../domain/assess.js";
+import { reasonColumns, type Reason, type ReasonColumns } from "../domain/reasons.js";
 import { DuplicatePaymentError, type AttemptState, type AttemptStore } from "./attempts.js";
 import { isUniqueViolation, type Db } from "./db.js";
-import { sourceColumn, type InvoiceRow, type InvoiceStore, type NewObligation, type Obligation } from "./invoices.js";
+import {
+  SET_REASON,
+  sourceColumn,
+  type InvoiceRow,
+  type InvoiceStore,
+  type NewObligation,
+  type Obligation,
+} from "./invoices.js";
 import type { Timelines } from "./timeline.js";
 
 // A payout for the invoice bound as the parameter, sent outside PayOnce, that is
@@ -258,7 +266,7 @@ export class PayoutStore {
   // transaction: a closed invoice is reopened with reopen when that is given, and
   // an open or escalated one gets a look due at once, so a step that stops after
   // the tie, as on a timeline line it could not write, leaves nothing undone.
-  linkOutsidePayout(invoiceId: string, payout: OutsidePayout, reopen: string | null = null): boolean {
+  linkOutsidePayout(invoiceId: string, payout: OutsidePayout, reopen: Reason | null = null): boolean {
     const now: string = new Date().toISOString();
     return this.db.transaction((): boolean => {
       const result: { changes: number | bigint } = this.db
@@ -291,12 +299,13 @@ export class PayoutStore {
         return false;
       }
       if (reopen !== null) {
+        const columns: ReasonColumns = reasonColumns(reopen);
         this.db
           .prepare(
-            `UPDATE obligations SET state = 'escalated', escalation_reason = ?
+            `UPDATE obligations SET state = 'escalated', ${SET_REASON}
               WHERE invoice_id = ? AND state IN ('settled', 'rejected')`,
           )
-          .run(reopen, invoiceId);
+          .run(columns.text, columns.code, columns.clauses, columns.slots, invoiceId);
       }
       this.invoices.lookNow(invoiceId);
       return true;

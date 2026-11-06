@@ -3,9 +3,17 @@ import { findBeneficiary, type BeneficiaryRecord } from "../airwallex/beneficiar
 import type { Transfer, TransferBankDetails } from "../airwallex/transfers.js";
 import { accountKeyOf } from "../domain/approval.js";
 import { routeKeyOf } from "../domain/assess.js";
-import { LAST_PAID_CHANGED_REASON, OUTSIDE_PAYOUT_REASON, UNCONFIRMED_ACCOUNT_REASON } from "../domain/decide.js";
 import { likelyDuplicates, sameNumberForSupplier } from "../domain/duplicates.js";
 import { formatMoney } from "../domain/money.js";
+import {
+  heldAsSecondBill,
+  heldForRate,
+  heldForSameNumber,
+  reasonFor,
+  reasonText,
+  refusedOriginal,
+  type Reason,
+} from "../domain/reasons.js";
 import { debitCurrency, floorFor } from "../domain/reserve.js";
 import {
   crossCurrency,
@@ -25,14 +33,8 @@ import { committedAcross, committedByInvoice } from "./cash-position.js";
 import { withCurrencyLock } from "./currency-lock.js";
 import { RETRY_FAILED_LOOK_MS, type Engine, type LookOptions, type NextLook } from "./engine.js";
 import { anyLive } from "./facts.js";
-import { listOf, messageOf, note } from "./lines.js";
+import { messageOf, note } from "./lines.js";
 import { linkUnseenPayouts } from "./outside.js";
-import {
-  BENEFICIARY_MISSING_REASON,
-  CASH_HOLD_REASON,
-  EMAILS_BEFORE_PAYMENT_REASON,
-  RUN_ACCOUNT_CHANGED_REASON,
-} from "../domain/reasons.js";
 import { deadlineLook, send, waitForBank } from "./send.js";
 
 function waitingForFirst(ledger: Ledger, invoiceId: string): Obligation | undefined {
@@ -45,11 +47,11 @@ function waitingForFirst(ledger: Ledger, invoiceId: string): Obligation | undefi
 // duplicateOf that only share its number, for another amount or currency.
 type FirstPayment =
   | { kind: "send"; obligation: Obligation; attempt: Attempt }
-  | { kind: "held"; duplicateOf: string[]; sameNumber: string[]; reason: string; detail: string | null };
+  | { kind: "held"; duplicateOf: string[]; sameNumber: string[]; reason: Reason; detail: string | null };
 
 // Puts a hold startPayment wrote on the timelines, after its transaction.
 function noteHold(engine: Engine, invoiceId: string, held: Extract<FirstPayment, { kind: "held" }>): void {
-  note(engine.ledger, invoiceId, "decision", `Escalate: ${held.reason}`, "decision");
+  note(engine.ledger, invoiceId, "decision", `Escalate: ${reasonText(held.reason)}`, "decision");
   if (held.detail !== null) {
     note(engine.ledger, invoiceId, "warning", held.detail, "cost");
   }
@@ -71,34 +73,34 @@ async function accountProblem(
   engine: Engine,
   obligation: Obligation,
   account: AccountRef,
-): Promise<{ problem: string | null; route: string | null }> {
+): Promise<{ problem: Reason | null; route: string | null }> {
   const record: BeneficiaryRecord | undefined = await findBeneficiary(
     engine.client,
     obligation.beneficiaryId,
   );
   const details: TransferBankDetails | undefined = record?.beneficiary?.bank_details;
   if (details === undefined) {
-    return { problem: BENEFICIARY_MISSING_REASON, route: null };
+    return { problem: reasonFor("beneficiary-missing"), route: null };
   }
   return accountKeyOf(details) === account.accountKey
     ? { problem: null, route: routeKeyOf(details) }
-    : { problem: RUN_ACCOUNT_CHANGED_REASON, route: null };
+    : { problem: reasonFor("run-account-changed"), route: null };
 }
 
 // Why a first payment to the record as it is now waits for a person because of
-// where PayOnce last paid this supplier, or null. LAST_PAID_CHANGED_REASON when
+// where PayOnce last paid this supplier, or null. last-paid-account-changed when
 // the record no longer holds the account of PayOnce's last checked payment to
 // it, whether or not a callback verified the one it holds: continueHeld then
 // waits for a callback, and once there is one needs two approvers and bars
-// whoever recorded it. UNCONFIRMED_ACCOUNT_REASON when PayOnce paid this
-// supplier only before it kept which account each payment went to. A supplier
-// PayOnce has never paid is not held for this. Reads only the ledger.
-function lastPaidHold(ledger: Ledger, obligation: Obligation, record: TransferBankDetails): string | null {
+// whoever recorded it. account-unconfirmed when PayOnce paid this supplier only
+// before it kept which account each payment went to. A supplier PayOnce has
+// never paid is not held for this. Reads only the ledger.
+function lastPaidHold(ledger: Ledger, obligation: Obligation, record: TransferBankDetails): Reason | null {
   const last: LastPaid | undefined = ledger.lastPaidTransfer(obligation.beneficiaryId);
   if (last !== undefined) {
-    return holdsAccount(last, record) ? null : LAST_PAID_CHANGED_REASON;
+    return holdsAccount(last, record) ? null : reasonFor("last-paid-account-changed");
   }
-  return ledger.lastPaidUnchecked(obligation.beneficiaryId) === undefined ? null : UNCONFIRMED_ACCOUNT_REASON;
+  return ledger.lastPaidUnchecked(obligation.beneficiaryId) === undefined ? null : reasonFor("account-unconfirmed");
 }
 
 // Why a new invoice is held before paying because of other invoices: it looks
@@ -120,12 +122,12 @@ function heldForOthers(
   if (duplicateOf.length === 0 && !anyLive(ledger.outsidePayouts(obligation.invoiceId))) {
     return undefined;
   }
-  const reason: string =
+  const reason: Reason =
     duplicates.length > 0
-      ? `it looks like a second bill for ${listOf(duplicates)}: the same supplier and amount, and the same invoice number apart from case, spacing, leading zeros or letters added at the end`
+      ? heldAsSecondBill(duplicates)
       : sameNumber.length > 0
-        ? `it has the same invoice number as ${listOf(sameNumber)}, apart from case, spacing, leading zeros or letters added at the end, for the same supplier, and PayOnce pays an invoice number once`
-        : OUTSIDE_PAYOUT_REASON;
+        ? heldForSameNumber(sameNumber)
+        : reasonFor("outside-payout");
   return { kind: "held", duplicateOf, sameNumber, reason, detail: null };
 }
 
@@ -188,13 +190,13 @@ export async function startPayment(
         account === null
           ? (await findBeneficiary(engine.client, obligation.beneficiaryId))?.beneficiary?.bank_details
           : undefined;
-      const checked: { problem: string | null; route: string | null } =
+      const checked: { problem: Reason | null; route: string | null } =
         account !== null
           ? await accountProblem(engine, obligation, account)
           : record === undefined
-            ? { problem: BENEFICIARY_MISSING_REASON, route: null }
+            ? { problem: reasonFor("beneficiary-missing"), route: null }
             : { problem: null, route: routeKeyOf(record) };
-      const wrongAccount: string | null = checked.problem;
+      const wrongAccount: Reason | null = checked.problem;
       const decidedKey: string | null = account?.accountKey ?? (record === undefined ? null : accountKeyOf(record));
 
       const first: FirstPayment = engine.ledger.transaction((): FirstPayment => {
@@ -216,7 +218,7 @@ export async function startPayment(
         // another, waits for a person, as a replacement does: a callback first,
         // then two approvers. So does any account of a supplier PayOnce paid only
         // before it kept which account each payment went to.
-        const lastPaid: string | null = record === undefined ? null : lastPaidHold(engine.ledger, now, record);
+        const lastPaid: Reason | null = record === undefined ? null : lastPaidHold(engine.ledger, now, record);
         if (lastPaid !== null) {
           engine.ledger.holdBeforePaying(invoiceId, [], lastPaid);
           return { kind: "held", duplicateOf: [], sameNumber: [], reason: lastPaid, detail: null };
@@ -225,21 +227,23 @@ export async function startPayment(
         // it, or to pay elsewhere, so a person reads the email first. That
         // includes a pay run row waiting its turn.
         if (engine.ledger.emailCount(invoiceId) > 0) {
-          engine.ledger.holdBeforePaying(invoiceId, [], EMAILS_BEFORE_PAYMENT_REASON);
-          return { kind: "held", duplicateOf: [], sameNumber: [], reason: EMAILS_BEFORE_PAYMENT_REASON, detail: null };
+          const reason: Reason = reasonFor("emails-before-payment");
+          engine.ledger.holdBeforePaying(invoiceId, [], reason);
+          return { kind: "held", duplicateOf: [], sameNumber: [], reason, detail: null };
         }
         // The agent never pays at a rate nobody has seen, so this is the least
         // serious reason to hold it and comes after the others.
         if (crossCurrency(now)) {
-          const reason: string = `it is paid from ${now.sourceCurrency}, so a person approves the exchange rate before PayOnce pays it`;
+          const reason: Reason = heldForRate(now.sourceCurrency);
           engine.ledger.holdBeforePaying(invoiceId, [], reason);
           return { kind: "held", duplicateOf: [], sameNumber: [], reason, detail: null };
         }
         if (availableMinor !== null) {
           const short: string | null = floorBreach(engine, now, availableMinor, before);
           if (short !== null) {
-            engine.ledger.holdBeforePaying(invoiceId, [], CASH_HOLD_REASON);
-            return { kind: "held", duplicateOf: [], sameNumber: [], reason: CASH_HOLD_REASON, detail: short };
+            const reason: Reason = reasonFor("run-row-below-floor");
+            engine.ledger.holdBeforePaying(invoiceId, [], reason);
+            return { kind: "held", duplicateOf: [], sameNumber: [], reason, detail: short };
           }
         }
         return {
@@ -315,10 +319,10 @@ function floorBreach(
 // Airwallex refused every original the invoice was sent with, so nothing was
 // paid. It goes to a person and pays only on an approval, like a held invoice.
 export function holdRefused(engine: Engine, obligation: Obligation, refused: Attempt): Obligation {
-  const reason: string = `Airwallex refused the original payment${refused.failureCode === null ? "" : ` (${refused.failureCode})`}, so nothing was sent`;
+  const reason: Reason = refusedOriginal(refused.failureCode);
   engine.ledger.escalate(obligation.invoiceId, reason);
-  note(engine.ledger, obligation.invoiceId, "decision", `Escalate: ${reason}`, "decision");
-  return { ...obligation, state: "escalated", escalationReason: reason };
+  note(engine.ledger, obligation.invoiceId, "decision", `Escalate: ${reasonText(reason)}`, "decision");
+  return { ...obligation, state: "escalated", escalationReason: reasonText(reason) };
 }
 
 // The first payment of an open invoice with no attempt. A pay run's row sends its

@@ -1,7 +1,7 @@
 import { findTransferByRequestId, type Transfer } from "../airwallex/transfers.js";
 import { accountKeyOf, type ApprovalTerms } from "../domain/approval.js";
 import { deadlineMinutes } from "../domain/deadlines.js";
-import { OUTSIDE_PAYOUT_REASON } from "../domain/decide.js";
+import { reasonFor, type Reason } from "../domain/reasons.js";
 import { debitCurrency } from "../domain/reserve.js";
 import {
   liveAtBank,
@@ -22,7 +22,6 @@ import { holdMismatched, holdPaidTwice } from "./late-mismatched.js";
 import { note } from "./lines.js";
 import { holdForOutsidePayout } from "./outside.js";
 import { sendAttempt, wasRejected } from "./payments.js";
-import { ACCOUNT_CHANGED_REASON, LATE_TRANSFER_REASON, MISMATCHED_TRANSFER_REASON } from "../domain/reasons.js";
 import { AccountChangedError, requireAccount, type TransferChecks } from "./send.js";
 
 // A pending attempt is not sent again while a payout for the invoice sent outside
@@ -30,7 +29,7 @@ import { AccountChangedError, requireAccount, type TransferChecks } from "./send
 // duplicate lock, so PayOnce opens no other payment for the invoice either. It is
 // tried again on a look after that payout has failed.
 function holdRetryForOutsidePayout(engine: Engine, invoiceId: string, attempt: Attempt): NextLook {
-  engine.ledger.escalate(invoiceId, OUTSIDE_PAYOUT_REASON);
+  engine.ledger.escalate(invoiceId, reasonFor("outside-payout"));
   note(
     engine.ledger,
     invoiceId,
@@ -87,7 +86,7 @@ export type NeverSentCause =
 interface CauseText {
   payment: string;
   then: string;
-  reason: string;
+  reason: Reason;
 }
 
 function causeText(obligation: Obligation, cause: NeverSentCause): CauseText {
@@ -96,7 +95,7 @@ function causeText(obligation: Obligation, cause: NeverSentCause): CauseText {
       return {
         payment: `payout ${cause.payout.reference} sent outside PayOnce has paid this invoice`,
         then: "a person can close the invoice",
-        reason: OUTSIDE_PAYOUT_REASON,
+        reason: reasonFor("outside-payout"),
       };
     case "names-only":
       return {
@@ -105,14 +104,14 @@ function causeText(obligation: Obligation, cause: NeverSentCause): CauseText {
             ? `payout ${cause.payout.reference} sent outside PayOnce names this invoice and is paid, but does not match its amount, currency or account`
             : `payout ${cause.payout.reference} sent outside PayOnce names this invoice and is paid, but PayOnce could not check its amount, currency or account`,
         then: "a person checks it, and can close the invoice without paying",
-        reason: OUTSIDE_PAYOUT_REASON,
+        reason: reasonFor("outside-payout"),
       };
     case "late": {
       const named: string = `${cause.late.kind} ${cause.late.reference ?? cause.late.transferId ?? ""}`;
       return {
         payment: `${named}, found late, is live at the bank and may pay this invoice`,
         then: `${named} counts as this invoice's payment`,
-        reason: LATE_TRANSFER_REASON,
+        reason: reasonFor("late-transfer"),
       };
     }
     case "mismatched": {
@@ -120,14 +119,14 @@ function causeText(obligation: Obligation, cause: NeverSentCause): CauseText {
       return {
         payment: `transfer ${reference} under the failed ${cause.mismatched.kind}'s request id is paid but does not match this invoice`,
         then: "a person can close the invoice",
-        reason: MISMATCHED_TRANSFER_REASON,
+        reason: reasonFor("unrecognised-transfer"),
       };
     }
     case "account-changed":
       return {
         payment: "the bank details on file are not the ones it was decided or approved for",
         then: "a person decides how to pay the invoice, or closes it without paying",
-        reason: ACCOUNT_CHANGED_REASON,
+        reason: reasonFor("account-changed-before-send"),
       };
   }
 }

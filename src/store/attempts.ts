@@ -12,6 +12,7 @@ import {
   routeKeyOf,
   type Debit,
 } from "../domain/assess.js";
+import type { Reason } from "../domain/reasons.js";
 import { isUniqueViolation, storedObject, type Db } from "./db.js";
 import {
   crossCurrency,
@@ -758,7 +759,7 @@ export class AttemptStore {
     reference: string,
     status: string | null,
     debit: Debit | null,
-    reason: string,
+    reason: Reason,
   ): boolean {
     return this.db.transaction((): boolean => {
       const result: { changes: number | bigint } = this.db

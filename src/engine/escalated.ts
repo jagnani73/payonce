@@ -2,8 +2,9 @@ import type { Transfer } from "../airwallex/transfers.js";
 import { bindingOf, type ReplacementTerms } from "../domain/approval.js";
 import type { SignoffRule } from "../domain/approvers.js";
 import { originalStateOf, routeKeyOf } from "../domain/assess.js";
-import { decide, OUTAGE_REASON } from "../domain/decide.js";
+import { decide } from "../domain/decide.js";
 import type { OriginalTransferState } from "../domain/incident.js";
+import { clauseText, reasonFor, reasonText, secondBillPaid } from "../domain/reasons.js";
 import { debitCurrency } from "../domain/reserve.js";
 import {
   isExpired,
@@ -22,7 +23,7 @@ import type { Assessment, Engine, NextLook } from "./engine.js";
 import { anyLive, paidDuplicate } from "./facts.js";
 import { note } from "./lines.js";
 import { holdForOutsidePayout, linkUnseenPayouts } from "./outside.js";
-import { asRequested, secondBillReason, withFloorReason } from "./reason-text.js";
+import { asRequested, withFloorReason } from "./reason-text.js";
 import { awaitApproval, ruleFor, voidIfStale } from "./requests.js";
 import { requireAccount, send, waitForBank } from "./send.js";
 import { countedFromToday, termsOf } from "./terms.js";
@@ -49,10 +50,10 @@ export function escalate(
   engine.ledger.escalate(
     obligation.invoiceId,
     as === "outage"
-      ? OUTAGE_REASON
+      ? reasonFor("outage")
       : assessment.decision.action === "escalate"
         ? assessment.decision.reason
-        : obligation.escalationReason,
+        : engine.ledger.reasonOf(obligation),
   );
   if (assessment.incident.outsidePayoutLive) {
     return holdForOutsidePayout(engine, obligation.invoiceId);
@@ -163,13 +164,14 @@ function noteFloor(
   if (assessment.floor === null) {
     return;
   }
+  const floor: string = clauseText(assessment.floor);
   note(
     engine.ledger,
     obligation.invoiceId,
     "warning",
     requested
-      ? `Also, ${assessment.floor}. The approval request says this too, and only an approval of that request releases a replacement`
-      : `Also, ${assessment.floor}`,
+      ? `Also, ${floor}. The approval request says this too, and only an approval of that request releases a replacement`
+      : `Also, ${floor}`,
     "floor",
   );
 }
@@ -187,13 +189,12 @@ function noteSecondBill(
   if (paid === null || decide(assessment.incident).action === "replace") {
     return;
   }
+  const secondBill: string = reasonText(secondBillPaid(paid));
   note(
     engine.ledger,
     obligation.invoiceId,
     "warning",
-    requested
-      ? `Also, ${secondBillReason(paid)}. The approval request says this too`
-      : `Also, ${secondBillReason(paid)}`,
+    requested ? `Also, ${secondBill}. The approval request says this too` : `Also, ${secondBill}`,
     "second-bill",
   );
 }

@@ -1,5 +1,6 @@
 import type { StatementSync } from "node:sqlite";
 import { ROUTE_SCHEME } from "../domain/assess.js";
+import { parseReason, reasonColumns, type ReasonColumns } from "../domain/reasons.js";
 import type { BankChangeStore } from "./bank-changes.js";
 import type { ColumnRow, Db } from "./db.js";
 
@@ -331,6 +332,14 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     // nothing PayOnce decides reads it. '' on an invoice already sent to a person
     // when the column was added, whose first time is not known.
     escalated_at: "TEXT",
+    // escalation_reason as codes (domain/reasons.ts): its lead's code, '' with no
+    // reason and 'unrecognised' for a text PayOnce does not write, and its clauses
+    // and slots as JSON. Written with the text by every escalation, and backfilled
+    // from the text once when the columns are added. The text stays the record: a
+    // row whose codes do not render it is read by its text.
+    escalation_code: "TEXT NOT NULL DEFAULT ''",
+    escalation_clauses: "TEXT NOT NULL DEFAULT '[]'",
+    escalation_slots: "TEXT NOT NULL DEFAULT '{}'",
   },
   approvals: {
     requested_at: "TEXT",
@@ -576,6 +585,7 @@ export class Schema {
   private addColumns(): void {
     this.db.transaction((): void => {
       let accountKeyAdded: boolean = false;
+      let reasonCodesAdded: boolean = false;
       for (const [table, columns] of Object.entries(ADDED_COLUMNS)) {
         const existing: string[] = (
           this.db.prepare(`PRAGMA table_info(${table})`).all() as unknown as ColumnRow[]
@@ -592,6 +602,9 @@ export class Schema {
             }
             if (table === "attempts" && name === "account_key") {
               accountKeyAdded = true;
+            }
+            if (table === "obligations" && name === "escalation_code") {
+              reasonCodesAdded = true;
             }
             // A pending attempt with no transfer from before tries were kept may
             // have been tried at any time, so it counts as tried now.
@@ -614,8 +627,28 @@ export class Schema {
       if (accountKeyAdded) {
         this.backfillAccountKeys();
       }
+      if (reasonCodesAdded) {
+        this.backfillReasonCodes();
+      }
       this.rebuildRoutes();
     });
+  }
+
+  // Every invoice with a reason from before the code columns gets the codes its
+  // text parses to, 'unrecognised' for a text PayOnce does not write. Only inside
+  // addColumns' transaction.
+  private backfillReasonCodes(): void {
+    const rows = this.db
+      .prepare("SELECT invoice_id, escalation_reason FROM obligations WHERE escalation_reason <> ''")
+      .all() as unknown as { invoice_id: string; escalation_reason: string }[];
+    const set: StatementSync = this.db.prepare(
+      `UPDATE obligations SET escalation_code = ?, escalation_clauses = ?, escalation_slots = ?
+        WHERE invoice_id = ?`,
+    );
+    for (const row of rows) {
+      const columns: ReasonColumns = reasonColumns(parseReason(row.escalation_reason));
+      set.run(columns.code, columns.clauses, columns.slots, row.invoice_id);
+    }
   }
 
   // An attempt from before account_key keeps the account something checked when

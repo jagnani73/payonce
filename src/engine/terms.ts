@@ -1,6 +1,7 @@
 import type { TransferBankDetails } from "../airwallex/transfers.js";
 import { termsFor, withArrival, type ApprovalTerms, type ReplacementTerms } from "../domain/approval.js";
 import { arrivalFor, ifSentOn, replacementArrivalText, today, type ArrivalTerms } from "../domain/arrival.js";
+import { reasonText } from "../domain/reasons.js";
 import { emailEvidence } from "../reader/emails.js";
 import { isExpired, type Approval, type Ledger, type Obligation } from "../store/ledger.js";
 import type { Assessment } from "./engine.js";
@@ -65,11 +66,12 @@ function evidenceSummary(obligation: Obligation, assessment: Assessment): string
   return emailEvidence(assessment.findings.summary, assessment.emails, obligation.supplierDomain);
 }
 
+// The terms carry the reason as its text, so codes never reach a binding.
 export function termsOf(obligation: Obligation, assessment: Assessment): ReplacementTerms {
   return termsFor(
     obligation,
     assessment.original,
-    assessment.decision,
+    { action: assessment.decision.action, reason: reasonText(assessment.decision.reason) },
     evidenceSummary(obligation, assessment),
     assessment.bankDetails,
     assessment.bankChange,

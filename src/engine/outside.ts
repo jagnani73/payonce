@@ -2,7 +2,7 @@ import { findBeneficiary } from "../airwallex/beneficiaries.js";
 import { getTransfer, listTransfersSince, type Transfer, type TransferBankDetails } from "../airwallex/transfers.js";
 import { sentToOf } from "../domain/approval.js";
 import { debitOf, feeOf, knownRoute, originalStateOf, routeKeyOf, type Debit, type Fee } from "../domain/assess.js";
-import { OUTSIDE_PAYOUT_REASON } from "../domain/decide.js";
+import { reasonFor } from "../domain/reasons.js";
 import { nearlyPays } from "../domain/duplicates.js";
 import { readMinor } from "../domain/money.js";
 import { railFailureSeen } from "../outages/outages.js";
@@ -63,7 +63,7 @@ export function linkOutsidePayout(
       state,
       ...payoutMoney(transfer),
     },
-    state === "failed" ? null : OUTSIDE_PAYOUT_REASON,
+    state === "failed" ? null : reasonFor("outside-payout"),
   );
   if (!linked) {
     return false;

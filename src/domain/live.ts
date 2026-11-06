@@ -1,6 +1,6 @@
 import type { Approval, Attempt, Obligation, OutsidePayout } from "../store/ledger.js";
 import { failedStatus } from "./assess.js";
-import type { StoredReason } from "./reasons.js";
+import { deadlineReason, type StoredReason } from "./reasons.js";
 
 // Every notion of "live" PayOnce has, each defined once: per transfer, per
 // outside payout, per payment over its transfers and payouts, and per request.
@@ -132,9 +132,7 @@ export function pastDeadline(
   now: number,
 ): boolean {
   const at: number | null = deadlineAt(attempt, deadlineMinutes);
-  return at === null
-    ? reason?.code === "deadline-original" || reason?.code === "deadline-replacement"
-    : now >= at;
+  return at === null ? deadlineReason(reason) : now >= at;
 }
 
 // ---------- one outside payout ----------

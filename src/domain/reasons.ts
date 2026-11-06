@@ -1,4 +1,6 @@
-import { rateText } from "./approval.js";
+import type { Transfer } from "../airwallex/transfers.js";
+import { rateText, type FxTerms } from "./approval.js";
+import { debitOf, type Debit } from "./assess.js";
 import {
   BELOW_FLOOR_REASON,
   CHANGED_BANK_DETAILS_REASON,
@@ -30,9 +32,11 @@ import { formatMoney } from "./money.js";
 import { CURRENCY_SOURCE, REFERENCE_SOURCE } from "./patterns.js";
 
 // Every reason PayOnce stores, as a code with its slots and the clauses the
-// engine adds, and the exact text each renders to. The text stays the record:
-// reasonText gives today's string byte for byte, and parseReason reads any
-// stored text back, so a row written before codes existed needs no backfill.
+// engine adds, and the exact text each renders to. The engine builds reasons as
+// codes and the ledger stores the codes beside the text, which stays the record:
+// reasonText gives the text byte for byte. parseReason reads a text with no codes
+// back: a row from before codes, which the ledger backfills once, and the reason
+// texts in timeline lines and approval terms, which stay text.
 
 export type ReasonFamily =
   | "bank-deadline"
@@ -258,7 +262,7 @@ function named(slots: Slots): string {
   return `${slots.kind ?? ""} ${slots.reference ?? ""}`;
 }
 
-function secondBillPaid<C extends string>(code: C): Part<C> {
+function secondBillPaidPart<C extends string>(code: C): Part<C> {
   return {
     code,
     source: `it looks like a second bill for (${INVOICE}), which is paid`,
@@ -367,7 +371,7 @@ function leadParts(): Part<ReasonCode>[] {
     fixed("run-row-below-floor", CASH_HOLD_REASON),
     fixed("run-account-changed", RUN_ACCOUNT_CHANGED_REASON),
     fixed("beneficiary-missing", BENEFICIARY_MISSING_REASON),
-    secondBillPaid("second-bill-paid"),
+    secondBillPaidPart("second-bill-paid"),
     {
       code: "second-bill",
       source: `it looks like a second bill for (${INVOICE_LIST}): the same supplier and amount, and the same invoice number apart from (${escaped(SECOND_BILL_TAIL)}|${escaped(SECOND_BILL_LEGACY_TAIL)})`,
@@ -419,7 +423,7 @@ function clauseParts(): Part<ClauseCode>[] {
     fixed("below-floor", BELOW_FLOOR_REASON),
     fixed("cash-unreadable", UNREADABLE_CASH_REASON),
     fixed("no-floor", NO_FLOOR_CLAUSE),
-    secondBillPaid("second-bill-paid"),
+    secondBillPaidPart("second-bill-paid"),
     fixed("asks-not-to-pay", NOT_TO_PAY_CLAUSE),
   ];
 }
@@ -431,8 +435,7 @@ interface Grammar {
   clauseOf: Map<ClauseCode, Compiled<ClauseCode>>;
 }
 
-// Built on first use, not at load: engine.ts exports some of the constants, and
-// it may import this module back.
+// Built on first use.
 let grammar: Grammar | null = null;
 
 function grammarOf(): Grammar {
@@ -512,9 +515,278 @@ export function parseReason(text: string): StoredReason {
   return { code: "unrecognised", text };
 }
 
-// The reason an invoice holds, or null when it never went to a person.
-export function reasonOf(escalationReason: string): StoredReason | null {
-  return escalationReason === "" ? null : parseReason(escalationReason);
+export function clauseText(clause: Clause): string {
+  return grammarOf().clauseOf.get(clause.code)?.text(clause.slots) ?? "";
+}
+
+// A lone clause as the engine writes it on a line of its own ("Also, ..."), or
+// null for text that is not one.
+export function parseClause(text: string): Clause | null {
+  for (const part of grammarOf().clauses) {
+    const found: { slots: Slots; end: number } | null = matchAt(part, text, 0);
+    if (found !== null && found.end === text.length) {
+      const clause: Clause = { code: part.code, slots: found.slots };
+      if (clauseText(clause) === text) {
+        return clause;
+      }
+    }
+  }
+  return null;
+}
+
+// ---------- reasons as obligations stores them ----------
+
+// The four columns an escalation writes: the text, which stays the record, and
+// its lead's code, clauses and slots as JSON. A reason that never went to a
+// person has an empty text and code.
+export interface ReasonColumns {
+  text: string;
+  code: string;
+  clauses: string;
+  slots: string;
+}
+
+export function reasonColumns(reason: StoredReason | null): ReasonColumns {
+  if (reason === null) {
+    return { text: "", code: "", clauses: "[]", slots: "{}" };
+  }
+  return reason.code === "unrecognised"
+    ? { text: reason.text, code: "unrecognised", clauses: "[]", slots: "{}" }
+    : {
+        text: reasonText(reason),
+        code: reason.code,
+        clauses: JSON.stringify(reason.clauses),
+        slots: JSON.stringify(reason.slots),
+      };
+}
+
+function isReasonCode(code: string): code is ReasonCode {
+  return Object.hasOwn(FAMILIES, code);
+}
+
+function isClauseCode(code: unknown): code is ClauseCode {
+  return typeof code === "string" && grammarOf().clauseOf.has(code as ClauseCode);
+}
+
+// The codes as stored, when they render the stored text exactly, or null.
+function codedReason(columns: ReasonColumns): Reason | null {
+  if (!isReasonCode(columns.code)) {
+    return null;
+  }
+  try {
+    const slots: unknown = JSON.parse(columns.slots);
+    const clauses: unknown = JSON.parse(columns.clauses);
+    if (
+      slots === null ||
+      typeof slots !== "object" ||
+      Array.isArray(slots) ||
+      !Array.isArray(clauses) ||
+      !clauses.every(
+        (clause: unknown): boolean =>
+          typeof clause === "object" &&
+          clause !== null &&
+          isClauseCode((clause as { code?: unknown }).code) &&
+          typeof (clause as { slots?: unknown }).slots === "object",
+      )
+    ) {
+      return null;
+    }
+    const reason: Reason = { code: columns.code, slots: slots as Slots, clauses: clauses as Clause[] };
+    return reasonText(reason) === columns.text ? reason : null;
+  } catch {
+    return null;
+  }
+}
+
+let driftSaid: boolean = false;
+
+// The reason a row holds, from its codes. The text is the record: a row whose
+// codes do not render its text, as when a PayOnce from before codes rewrote the
+// text of a row this one coded, or one with none, is read by parsing the text,
+// and the first such row in a process says so once.
+export function storedReason(columns: ReasonColumns): StoredReason | null {
+  if (columns.text === "") {
+    return null;
+  }
+  const coded: Reason | null = codedReason(columns);
+  if (coded !== null) {
+    return coded;
+  }
+  if (columns.code !== "" && columns.code !== "unrecognised" && !driftSaid) {
+    driftSaid = true;
+    console.warn("An escalation reason's stored codes do not match its text, so PayOnce read the text instead");
+  }
+  return parseReason(columns.text);
+}
+
+// ---------- building reasons ----------
+
+export function reasonFor(code: ReasonCode, slots: Slots = {}): Reason {
+  return { code, slots, clauses: [] };
+}
+
+export const NOT_TO_PAY: Clause = { code: "asks-not-to-pay", slots: {} };
+
+// The policy's reason as codes. decide.ts gives each reason as one of its
+// constants, or the cross-currency one built on the wallet, so the text maps to
+// one code exactly. Anything else throws, and the look fails closed.
+export function policyReason(text: string, wallet: string): Reason {
+  for (const code of POLICY_CODES) {
+    const reason: Reason = reasonFor(code, code === "new-rate-replacement" ? { wallet } : {});
+    if (reasonText(reason) === text) {
+      return reason;
+    }
+  }
+  throw new Error("The policy gave a reason PayOnce has no code for");
+}
+
+const POLICY_CODES: readonly ReasonCode[] = [
+  "outside-payout",
+  "new-bank-details",
+  "asks-not-to-pay",
+  "bank-details-changed",
+  "unverified-sender",
+  "emails-unread",
+  "email-partly-unread",
+  "unknown-status",
+  "non-receipt",
+  "settled",
+  "deadline-original",
+  "in-flight",
+  "replacement-failed",
+  "not-resendable",
+  "sent-outside",
+  "below-floor",
+  "cash-unreadable",
+  "no-floor",
+  "two-approvers",
+  "new-rate-replacement",
+  "replace",
+];
+
+// The floor clause for floorReason's text: the clause the engine adds to another
+// reason, whose text for no floor is the short one.
+export function floorClause(floorText: string): Clause {
+  if (floorText === BELOW_FLOOR_REASON) {
+    return { code: "below-floor", slots: {} };
+  }
+  if (floorText === UNREADABLE_CASH_REASON) {
+    return { code: "cash-unreadable", slots: {} };
+  }
+  if (floorText === NO_FLOOR_REASON) {
+    return { code: "no-floor", slots: {} };
+  }
+  throw new Error("The policy gave a floor reason PayOnce has no code for");
+}
+
+export const FLOOR_CLAUSES: readonly ClauseCode[] = ["below-floor", "cash-unreadable", "no-floor"];
+
+export function secondBillPaid(invoice: string): Reason {
+  return reasonFor("second-bill-paid", { invoice });
+}
+
+// A first payment held as a likely second bill for invoices on file, or for one
+// with the same number for the same supplier.
+export function heldAsSecondBill(invoices: string[]): Reason {
+  return reasonFor("second-bill", { invoices });
+}
+
+export function heldForSameNumber(invoices: string[]): Reason {
+  return reasonFor("same-invoice-number", { invoices });
+}
+
+// A first payment from another currency's wallet, held for a person to approve
+// the rate.
+export function heldForRate(wallet: string): Reason {
+  return reasonFor("new-rate-first-payment", { wallet });
+}
+
+export function refusedOriginal(failureCode: string | null): Reason {
+  return reasonFor("refused", failureCode === null ? {} : { failureCode });
+}
+
+export function foundAfterClose(kind: TransferKind, reference: string): Reason {
+  return reasonFor("found-after-close", { kind, reference });
+}
+
+// A transfer that went to other bank details than it was decided or approved
+// for, or that shows none.
+export function accountMismatchOf(kind: TransferKind, reference: string, shown: boolean): Reason {
+  return reasonFor(shown ? "misdirected" : "no-bank-details-shown", { kind, reference });
+}
+
+// Why a transfer did not go out on its approved quote, or null when it did. fx is
+// undefined when no approval covers the quote it was sent with. Rates are
+// compared as Airwallex gives them, never inverted, and a transfer with no
+// conversion on it does not match.
+export function rateMismatchOf(kind: TransferKind, fx: FxTerms | undefined, transfer: Transfer): Reason | null {
+  const debit: Debit | null = debitOf(transfer);
+  if (
+    fx !== undefined &&
+    transfer.conversion?.currency_pair === fx.currencyPair &&
+    transfer.conversion.rate === fx.clientRate &&
+    debit?.minor === fx.sellAmountMinor &&
+    debit.currency === fx.sellCurrency
+  ) {
+    return null;
+  }
+  const actual: Slots =
+    transfer.conversion === undefined
+      ? { noRate: true }
+      : debit === null
+        ? { rate: { pair: transfer.conversion.currency_pair, rate: transfer.conversion.rate }, amountUnreadable: true }
+        : {
+            rate: { pair: transfer.conversion.currency_pair, rate: transfer.conversion.rate },
+            amount: { minor: debit.minor, currency: debit.currency },
+          };
+  return reasonFor("rate-mismatch", {
+    kind,
+    reference: transfer.short_reference_id,
+    ...actual,
+    ...(fx === undefined
+      ? { noQuoteApproved: true }
+      : {
+          approved: {
+            pair: fx.currencyPair,
+            rate: fx.clientRate,
+            minor: fx.sellAmountMinor,
+            currency: fx.sellCurrency,
+          },
+        }),
+  });
+}
+
+// The same reason without the clauses named, as alerts compare it, so a floor
+// clause the agent adds or drops as the balance moves does not alert again.
+export function withoutClauses(reason: StoredReason, codes: readonly ClauseCode[]): StoredReason {
+  return reason.code === "unrecognised"
+    ? reason
+    : { ...reason, clauses: reason.clauses.filter((clause: Clause): boolean => !codes.includes(clause.code)) };
+}
+
+// ---------- what a reason is about ----------
+
+// The supplier's bank details: asked for, changed after the original, or changed
+// since PayOnce last paid the supplier.
+export function aboutBankDetailsReason(reason: StoredReason | null): boolean {
+  const code: string | undefined = reason?.code;
+  return code === "new-bank-details" || code === "bank-details-changed" || code === "last-paid-account-changed";
+}
+
+// The record's bank details changed after a payment to it was made, decided or
+// approved.
+export function accountChangedReason(reason: StoredReason | null): boolean {
+  const code: string | undefined = reason?.code;
+  return (
+    code === "bank-details-changed" ||
+    code === "last-paid-account-changed" ||
+    code === "account-changed-before-send" ||
+    code === "run-account-changed"
+  );
+}
+
+export function deadlineReason(reason: StoredReason | null): boolean {
+  return reason?.code === "deadline-original" || reason?.code === "deadline-replacement";
 }
 
 function sameSlots(a: Slots, b: Slots): boolean {

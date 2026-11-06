@@ -1,9 +1,8 @@
-import { OUTSIDE_PAYOUT_REASON } from "../domain/decide.js";
+import { reasonFor, type Reason } from "../domain/reasons.js";
 import { liveAtBank, mismatchedLive, type Attempt, type Ledger, type ObligationState } from "../store/ledger.js";
 import type { Engine, NextLook } from "./engine.js";
 import { anyLive, coveredByClose, type CoveredTransfer } from "./facts.js";
 import { listOf, note } from "./lines.js";
-import { MISMATCHED_FAILED_REASON, MISMATCHED_TRANSFER_REASON } from "../domain/reasons.js";
 
 // Closes the incident on the state the look read the invoice in. False, with
 // nothing changed, when the ledger refuses (see settle).
@@ -77,11 +76,13 @@ export function closeRefused(engine: Engine, invoiceId: string): NextLook {
   }
   const outside: boolean = anyLive(engine.ledger.outsidePayouts(invoiceId));
   if (outside || coveredByClose(engine.ledger, invoiceId).length > 0) {
-    const reason: string = outside
-      ? OUTSIDE_PAYOUT_REASON
-      : engine.ledger.attempts(invoiceId).some(mismatchedLive)
-        ? MISMATCHED_TRANSFER_REASON
-        : MISMATCHED_FAILED_REASON;
+    const reason: Reason = reasonFor(
+      outside
+        ? "outside-payout"
+        : engine.ledger.attempts(invoiceId).some(mismatchedLive)
+          ? "unrecognised-transfer"
+          : "unrecognised-transfer-failed",
+    );
     if (engine.ledger.escalateIfOpen(invoiceId, reason)) {
       note(engine.ledger, invoiceId, "approval", closeWaitingLine(engine.ledger, invoiceId), "waiting");
     }

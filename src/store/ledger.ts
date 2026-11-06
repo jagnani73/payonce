@@ -1,6 +1,7 @@
 import type { TransferBankDetails } from "../airwallex/transfers.js";
 import type { ArrivalTerms } from "../domain/arrival.js";
 import type { Debit } from "../domain/assess.js";
+import type { Reason, StoredReason } from "../domain/reasons.js";
 import type { SupplierEmail } from "../reader/emails.js";
 import { AlertStore, type Alert, type AlertFinish, type FoundCondition, type RecordedConditions } from "./alerts.js";
 import {
@@ -472,7 +473,7 @@ export class Ledger {
     return this.repos.invoices.obligationForReference(reference);
   }
 
-  linkOutsidePayout(invoiceId: string, payout: OutsidePayout, reopen: string | null = null): boolean {
+  linkOutsidePayout(invoiceId: string, payout: OutsidePayout, reopen: Reason | null = null): boolean {
     return this.repos.payouts.linkOutsidePayout(invoiceId, payout, reopen);
   }
 
@@ -592,15 +593,19 @@ export class Ledger {
     return this.repos.attempts.failAttempt(requestId, failureCode, refused);
   }
 
-  escalate(invoiceId: string, reason: string): void {
+  reasonOf(obligation: Pick<Obligation, "invoiceId" | "escalationReason">): StoredReason | null {
+    return this.repos.invoices.reasonOf(obligation);
+  }
+
+  escalate(invoiceId: string, reason: StoredReason | null): void {
     this.repos.invoices.escalate(invoiceId, reason);
   }
 
-  rewordEscalation(invoiceId: string, from: string, to: string): boolean {
+  rewordEscalation(invoiceId: string, from: StoredReason | null, to: StoredReason): boolean {
     return this.repos.invoices.rewordEscalation(invoiceId, from, to);
   }
 
-  holdBeforePaying(invoiceId: string, duplicateOf: string[], reason: string): void {
+  holdBeforePaying(invoiceId: string, duplicateOf: string[], reason: Reason): void {
     this.repos.invoices.holdBeforePaying(invoiceId, duplicateOf, reason);
   }
 
@@ -640,7 +645,7 @@ export class Ledger {
     reference: string,
     status: string | null,
     debit: Debit | null,
-    reason: string,
+    reason: Reason,
   ): boolean {
     return this.repos.attempts.addMismatched(requestId, transferId, reference, status, debit, reason);
   }
@@ -649,11 +654,11 @@ export class Ledger {
     return this.repos.attempts.setMismatchedStatus(transferId, status, debit);
   }
 
-  escalateIfOpen(invoiceId: string, reason: string): boolean {
+  escalateIfOpen(invoiceId: string, reason: Reason): boolean {
     return this.repos.invoices.escalateIfOpen(invoiceId, reason);
   }
 
-  escalateUnlessSettled(invoiceId: string, reason: string): void {
+  escalateUnlessSettled(invoiceId: string, reason: Reason): void {
     this.repos.invoices.escalateUnlessSettled(invoiceId, reason);
   }
 

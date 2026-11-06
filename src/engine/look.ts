@@ -38,7 +38,7 @@ import { holdMismatched, holdPaidTwice, syncMismatched } from "./late-mismatched
 import { describe, lineWanted, note } from "./lines.js";
 import { linkUnseenPayouts, syncOutsidePayouts } from "./outside.js";
 import { syncTransfer } from "./payments.js";
-import { MISMATCHED_FAILED_REASON, MISMATCHED_TRANSFER_REASON } from "../domain/reasons.js";
+import { reasonFor, type StoredReason } from "../domain/reasons.js";
 import { withFloorReason } from "./reason-text.js";
 import { replaceUnderLock } from "./replacement.js";
 import { failNeverSent, holdPending, retryUnderLock, type Retried } from "./retry.js";
@@ -264,10 +264,12 @@ async function look(engine: Engine, invoiceId: string, options: LookOptions): Pr
 // unless another process has changed the reason or closed the invoice meanwhile.
 function sayMismatchedFailed(look: Look): void {
   const { engine, invoiceId }: Look = look;
+  const reason: StoredReason | null = engine.ledger.reasonOf(look.obligation);
   if (
-    look.obligation.escalationReason === MISMATCHED_TRANSFER_REASON &&
+    reason?.code === "unrecognised-transfer" &&
+    reason.clauses.length === 0 &&
     !engine.ledger.attempts(invoiceId).some(mismatchedLive) &&
-    engine.ledger.rewordEscalation(invoiceId, MISMATCHED_TRANSFER_REASON, MISMATCHED_FAILED_REASON)
+    engine.ledger.rewordEscalation(invoiceId, reason, reasonFor("unrecognised-transfer-failed"))
   ) {
     look.obligation = engine.ledger.obligation(invoiceId) ?? look.obligation;
   }

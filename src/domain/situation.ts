@@ -28,7 +28,14 @@ import {
 } from "./live.js";
 import { formatAmount, formatMoney } from "./money.js";
 import { RAIL_PATTERN } from "./patterns.js";
-import { labelOf, reasonText, reasonView, type ReasonView, type StoredReason } from "./reasons.js";
+import {
+  aboutBankDetailsReason,
+  labelOf,
+  reasonText,
+  reasonView,
+  type ReasonView,
+  type StoredReason,
+} from "./reasons.js";
 import { capitalise } from "../text/printable.js";
 import type {
   Approval,
@@ -389,13 +396,7 @@ function unpaidKind(kind: CloseKind | undefined): boolean {
 
 // The bank details a supplier email or the reason is about.
 export function aboutBankDetails(snapshot: InvoiceSnapshot): boolean {
-  const code: string | undefined = snapshot.reason?.code;
-  return (
-    code === "new-bank-details" ||
-    code === "bank-details-changed" ||
-    code === "last-paid-account-changed" ||
-    snapshot.emails.asksForNewBankDetails
-  );
+  return aboutBankDetailsReason(snapshot.reason) || snapshot.emails.asksForNewBankDetails;
 }
 
 export function phoneOnFile(obligation: Pick<Obligation, "supplierPhone">): boolean {

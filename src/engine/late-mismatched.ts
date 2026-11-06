@@ -1,13 +1,13 @@
 import type { Transfer } from "../airwallex/transfers.js";
 import { attemptStateOf, debitOf } from "../domain/assess.js";
 import { readMinor } from "../domain/money.js";
+import { foundAfterClose, reasonFor } from "../domain/reasons.js";
 import type { Attempt, AttemptState, Ledger, Obligation, ObligationState } from "../store/ledger.js";
 import { capitalise } from "../text/printable.js";
 import type { Engine, NextLook } from "./engine.js";
 import { anyLive, paidTwice } from "./facts.js";
 import { describe, note } from "./lines.js";
 import { syncTransfer } from "./payments.js";
-import { LATE_TRANSFER_REASON, MISMATCHED_TRANSFER_REASON } from "../domain/reasons.js";
 import { noteChecks, transferChecks, type TransferChecks } from "./send.js";
 
 // The attempt a transfer Airwallex lists belongs to, when the ledger has no
@@ -58,7 +58,7 @@ export function noteMismatchedTransfer(engine: Engine, transfer: Transfer): bool
       transfer.short_reference_id,
       transfer.status ?? null,
       debitOf(transfer),
-      MISMATCHED_TRANSFER_REASON,
+      reasonFor("unrecognised-transfer"),
     )
   ) {
     return false;
@@ -98,7 +98,7 @@ export function syncMismatched(engine: Engine, attempt: Attempt, transfer: Trans
 // and once it has failed, the invoice carries on, but PayOnce never closes it by
 // itself until a person has.
 export function holdMismatched(engine: Engine, invoiceId: string, attempt: Attempt): NextLook {
-  engine.ledger.escalateUnlessSettled(invoiceId, MISMATCHED_TRANSFER_REASON);
+  engine.ledger.escalateUnlessSettled(invoiceId, reasonFor("unrecognised-transfer"));
   if (engine.ledger.voidOpenApprovals(invoiceId)) {
     note(
       engine.ledger,
@@ -125,7 +125,7 @@ export function holdMismatched(engine: Engine, invoiceId: string, attempt: Attem
 // never replaces, because the look holds it here before the policy runs, so the
 // alert and the close card name it.
 export function holdPaidTwice(engine: Engine, invoiceId: string, late: Attempt): NextLook {
-  engine.ledger.escalate(invoiceId, LATE_TRANSFER_REASON);
+  engine.ledger.escalate(invoiceId, reasonFor("late-transfer"));
   if (engine.ledger.voidOpenApprovals(invoiceId)) {
     note(
       engine.ledger,
@@ -182,12 +182,9 @@ export async function recordLateTransfer(engine: Engine, transfer: Transfer): Pr
     kept = live && engine.ledger.attemptOf(attempt.requestId, read.id)?.state === "failed";
     const state: ObligationState | undefined = engine.ledger.obligation(invoiceId)?.state;
     if (twice) {
-      engine.ledger.escalate(invoiceId, LATE_TRANSFER_REASON);
+      engine.ledger.escalate(invoiceId, reasonFor("late-transfer"));
     } else if (live && (state === "settled" || state === "rejected")) {
-      engine.ledger.escalate(
-        invoiceId,
-        `${attempt.kind} ${read.short_reference_id} was found in Airwallex after the invoice was closed`,
-      );
+      engine.ledger.escalate(invoiceId, foundAfterClose(attempt.kind, read.short_reference_id));
     }
     engine.ledger.lookNow(invoiceId);
   });

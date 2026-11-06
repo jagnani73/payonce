@@ -9,8 +9,9 @@ import {
 } from "../domain/approval.js";
 import { signoffsNeeded, type SignoffRule } from "../domain/approvers.js";
 import { routeKeyOf } from "../domain/assess.js";
-import { namingNotToPay } from "../domain/decide.js";
+import { namingNotToPay as namingNotToPayText } from "../domain/decide.js";
 import { likelyDuplicates } from "../domain/duplicates.js";
+import { reasonText, type StoredReason } from "../domain/reasons.js";
 import { debitCurrency } from "../domain/reserve.js";
 import { emailEvidence, type SupplierEmail } from "../reader/emails.js";
 import {
@@ -35,7 +36,7 @@ import { anyLive } from "./facts.js";
 import { listOf, note } from "./lines.js";
 import { holdForOutsidePayout, linkUnseenPayouts, syncOutsidePayouts } from "./outside.js";
 import { rateFor } from "./rates.js";
-import { PAID_ONLY_BY_ITSELF } from "./reason-text.js";
+import { namingNotToPay, PAID_ONLY_BY_ITSELF } from "./reason-text.js";
 import { awaitApproval, voidIfStale } from "./requests.js";
 import { requireAccount, send, waitForBank } from "./send.js";
 import { arrivalOf } from "./terms.js";
@@ -193,7 +194,19 @@ function closeAgain(engine: Engine, invoiceId: string, rejectedBy: string): Next
 // terms say of them (evidence, null with none).
 type HeldEmails =
   | { kind: "next"; at: NextLook }
-  | { kind: "read"; reason: string; emails: SupplierEmail[]; evidence: string | null };
+  | { kind: "read"; reason: StoredReason | null; emails: SupplierEmail[]; evidence: string | null };
+
+// The reason a held invoice is held for, naming the supplier's ask not to pay. A
+// reason PayOnce does not recognise has no codes to add a clause to, so it gets
+// the clause as text, as decide.ts writes it.
+function namingNotToPayHeld(reason: StoredReason | null, asksNotToPay: boolean): StoredReason | null {
+  if (reason !== null && reason.code !== "unrecognised") {
+    return namingNotToPay(reason, asksNotToPay);
+  }
+  const text: string = reason === null ? "" : reason.text;
+  const named: string = namingNotToPayText(text, asksNotToPay);
+  return named === text ? reason : { code: "unrecognised", text: named };
+}
 
 // A held invoice reads its emails like any other, and its terms carry what they
 // say. Until every email is read, nothing is offered for approval, and the look
@@ -208,15 +221,16 @@ function heldEmails(engine: Engine, obligation: Obligation): HeldEmails {
   );
   // A supplier who asks to hold, cancel or not pay the invoice is named in the
   // reason it is held for, so the alert, the request and the card say so.
-  const reason: string = namingNotToPay(obligation.escalationReason, findings.asksNotToPay === true);
-  if (reason !== obligation.escalationReason) {
+  const was: StoredReason | null = engine.ledger.reasonOf(obligation);
+  const reason: StoredReason | null = namingNotToPayHeld(was, findings.asksNotToPay === true);
+  if (reason !== was && reason !== null) {
     // Another process changed the reason or the invoice since this look read it.
     // Terms built on the reason read would open a request the next look voids, so
     // the look comes again at once and reads the invoice as it is then.
-    if (!engine.ledger.rewordEscalation(invoiceId, obligation.escalationReason, reason)) {
+    if (!engine.ledger.rewordEscalation(invoiceId, was, reason)) {
       return { kind: "next", at: Date.now() };
     }
-    note(engine.ledger, invoiceId, "decision", `Escalate: ${reason}`, "decision");
+    note(engine.ledger, invoiceId, "decision", `Escalate: ${reasonText(reason)}`, "decision");
   }
   if (emailsNotRead(findings, stored, emails)) {
     // An email delivered by another process while the others were read is read
@@ -243,13 +257,13 @@ function heldEmails(engine: Engine, obligation: Obligation): HeldEmails {
 // The held invoice as its terms see it: the reason it is held for, and the
 // invoices it was held for and any that match it now: one started after it, or
 // one that came first while this one was held for another reason.
-function withNewDuplicates(engine: Engine, obligation: Obligation, reason: string): Obligation {
+function withNewDuplicates(engine: Engine, obligation: Obligation, reason: StoredReason | null): Obligation {
   const added: string[] = likelyDuplicates(engine.ledger, obligation)
     .map((other: ScannedObligation): string => other.invoiceId)
     .filter((other: string): boolean => !obligation.duplicateOf.includes(other));
   const held: Obligation = {
     ...obligation,
-    escalationReason: reason,
+    escalationReason: reason === null ? "" : reasonText(reason),
     duplicateOf: [...obligation.duplicateOf, ...added],
   };
   if (added.length > 0) {

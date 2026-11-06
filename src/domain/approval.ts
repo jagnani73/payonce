@@ -482,30 +482,6 @@ export function conversionText(transfer: Transfer): string {
   return `, paid with ${formatMoney(debit.minor, debit.currency)} at ${rateText(transfer.conversion.currency_pair, transfer.conversion.rate)}`;
 }
 
-// Why a transfer did not go out on its approved quote, or null when it did. fx is
-// undefined when no approval covers the quote it was sent with. Rates are
-// compared as Airwallex gives them, never inverted, and a transfer with no
-// conversion on it does not match.
-export function rateMismatch(fx: FxTerms | undefined, transfer: Transfer): string | null {
-  const debit: Debit | null = debitOf(transfer);
-  if (
-    fx !== undefined &&
-    transfer.conversion?.currency_pair === fx.currencyPair &&
-    transfer.conversion.rate === fx.clientRate &&
-    debit?.minor === fx.sellAmountMinor &&
-    debit.currency === fx.sellCurrency
-  ) {
-    return null;
-  }
-  const actual: string =
-    transfer.conversion === undefined
-      ? "with no exchange rate on it"
-      : `at ${rateText(transfer.conversion.currency_pair, transfer.conversion.rate)} (${debit === null ? "amount not readable" : formatMoney(debit.minor, debit.currency)})`;
-  return fx === undefined
-    ? `went out ${actual}, and no approval covers the quote it was sent with`
-    : `went out ${actual}, not the approved ${describeRate(fx)} (${formatMoney(fx.sellAmountMinor, fx.sellCurrency)})`;
-}
-
 declare const fromTerms: unique symbol;
 
 // What a payment takes from the company's wallet, which approval limits and the

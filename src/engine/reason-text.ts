@@ -1,8 +1,17 @@
 import { bindingOf } from "../domain/approval.js";
-import { decide, floorReason, namingNotToPay, NO_FLOOR_CLAUSE, NO_FLOOR_REASON } from "../domain/decide.js";
+import { decide, floorReason } from "../domain/decide.js";
 import type { Decision, Incident } from "../domain/incident.js";
+import {
+  floorClause,
+  NOT_TO_PAY,
+  policyReason,
+  secondBillPaid,
+  withClause,
+  type Clause,
+  type Reason,
+} from "../domain/reasons.js";
 import { isExpired, type Approval, type LedgerEvent, type Obligation } from "../store/ledger.js";
-import type { Assessment, Engine } from "./engine.js";
+import type { Assessment, Decided, Engine } from "./engine.js";
 import { note } from "./lines.js";
 import { termsOf } from "./terms.js";
 
@@ -10,25 +19,38 @@ import { termsOf } from "./terms.js";
 // only with payments no person approved. A fixed string, which why-facts reads.
 export const PAID_ONLY_BY_ITSELF: string = "PayOnce has never paid this beneficiary on a person's approval";
 
-export function secondBillReason(invoiceId: string): string {
-  return `it looks like a second bill for ${invoiceId}, which is paid`;
+// The policy's decision with its reason as codes.
+export function decided(decision: Decision, incident: Incident): Decided {
+  return { action: decision.action, reason: policyReason(decision.reason, incident.sourceCurrency) };
 }
 
 // A replacement for what looks like a second bill of a paid invoice goes to a
 // person.
-export function secondBill(decision: Decision, paid: string | null): Decision {
+export function secondBill(decision: Decided, paid: string | null): Decided {
   return paid !== null && decision.action === "replace"
-    ? { action: "escalate", reason: secondBillReason(paid) }
+    ? { action: "escalate", reason: secondBillPaid(paid) }
     : decision;
+}
+
+// The reason with the ask not to pay added, last, while that finding is on file
+// and the reason does not already name it. A person can still approve paying the
+// invoice. Without the finding the reason is returned as it is, so the approval
+// terms of every other invoice keep their binding.
+export function namingNotToPay(reason: Reason, asksNotToPay: boolean): Reason {
+  return asksNotToPay ? withClause(reason, NOT_TO_PAY) : reason;
+}
+
+function adding(reason: Reason, clause: Clause): Reason {
+  return { ...reason, clauses: [...reason.clauses, clause] };
 }
 
 // A replacement that takes cash below its floor, or that no floor can be checked
 // for, is paid only on an approval whose request said so. The policy checks some
 // reasons before the cash, such as a payment sent outside PayOnce, so when one of
-// those sent the invoice to a person the floor reason is added to it. The request
+// those sent the invoice to a person the floor clause is added to it. The request
 // then names both, and an approval of terms that did not is void.
 function namingFloor(assessment: Assessment): Assessment {
-  const decision: Decision = assessment.decision;
+  const decision: Decided = assessment.decision;
   const incident: Incident = assessment.incident;
   if (
     decision.action !== "escalate" ||
@@ -38,13 +60,17 @@ function namingFloor(assessment: Assessment): Assessment {
     return assessment;
   }
   const floor: string | null = floorReason(incident);
-  if (floor === null || floor === decision.reason) {
+  if (floor === null) {
     return assessment;
   }
-  const clause: string = floor === NO_FLOOR_REASON ? NO_FLOOR_CLAUSE : floor;
+  const clause: Clause = floorClause(floor);
+  // The policy gave the floor as the reason itself.
+  if (decision.reason.code === clause.code && decision.reason.clauses.length === 0) {
+    return assessment;
+  }
   return {
     ...assessment,
-    decision: { action: "escalate", reason: `${decision.reason}, and ${clause}` },
+    decision: { action: "escalate", reason: adding(decision.reason, clause) },
     floor: clause,
   };
 }
@@ -54,7 +80,7 @@ function namingFloor(assessment: Assessment): Assessment {
 // approval given without it is void. It comes after the floor, so the policy's
 // reason and the floor read as they do without one.
 function namingPaidDuplicate(assessment: Assessment): Assessment {
-  const decision: Decision = assessment.decision;
+  const decision: Decided = assessment.decision;
   const incident: Incident = assessment.incident;
   const paid: string | null = assessment.paidDuplicate;
   if (
@@ -62,13 +88,15 @@ function namingPaidDuplicate(assessment: Assessment): Assessment {
     decision.action !== "escalate" ||
     incident.originalState !== "failed" ||
     incident.outsidePayoutLive ||
-    decision.reason === secondBillReason(paid)
+    (decision.reason.code === "second-bill-paid" &&
+      decision.reason.slots.invoice === paid &&
+      decision.reason.clauses.length === 0)
   ) {
     return assessment;
   }
   return {
     ...assessment,
-    decision: { action: "escalate", reason: `${decision.reason}, and ${secondBillReason(paid)}` },
+    decision: { action: "escalate", reason: adding(decision.reason, { code: "second-bill-paid", slots: { invoice: paid } }) },
   };
 }
 
@@ -77,11 +105,11 @@ function namingPaidDuplicate(assessment: Assessment): Assessment {
 // as well, last, so the request, the alert and the card say it. Nothing is added
 // without the finding, so every other invoice keeps its terms and its binding.
 function namingNotToPayIn(assessment: Assessment): Assessment {
-  const decision: Decision = assessment.decision;
+  const decision: Decided = assessment.decision;
   if (decision.action !== "escalate") {
     return assessment;
   }
-  const reason: string = namingNotToPay(decision.reason, assessment.incident.supplierAsksNotToPay);
+  const reason: Reason = namingNotToPay(decision.reason, assessment.incident.supplierAsksNotToPay);
   return reason === decision.reason ? assessment : { ...assessment, decision: { action: "escalate", reason } };
 }
 
@@ -117,12 +145,14 @@ export function withFloorReason(
 // The decision an open request or approval was made under, when the floor applied
 // then and does not now: cash was below it, could not be read, or no floor was
 // set. Only the floor is changed, so the policy gives the reason it gave then.
-// Undefined when no open request or approval named the floor.
+// Undefined when no open request or approval named the floor. The request's
+// terms keep their reason as text, and the invoice's codes may name a later
+// decision, so the decision is rebuilt with each floor and matched by binding.
 function requestedDecision(
   obligation: Obligation,
   assessment: Assessment,
   approval: Approval | undefined,
-): Decision | undefined {
+): Decided | undefined {
   if (
     approval === undefined ||
     (approval.state !== "requested" && approval.state !== "approved") ||
@@ -135,7 +165,11 @@ function requestedDecision(
     const incident: Incident = { ...assessment.incident, reserveFloorMinor: floorMinor };
     const requested: Assessment = namingNotToPayIn(
       namingPaidDuplicate(
-        namingFloor({ ...assessment, incident, decision: secondBill(decide(incident), assessment.paidDuplicate) }),
+        namingFloor({
+          ...assessment,
+          incident,
+          decision: secondBill(decided(decide(incident), incident), assessment.paidDuplicate),
+        }),
       ),
     );
     if (bindingOf(termsOf(obligation, requested)) === approval.binding) {
@@ -153,6 +187,6 @@ export function asRequested(
   assessment: Assessment,
   approval: Approval | undefined,
 ): Assessment {
-  const decision: Decision | undefined = requestedDecision(obligation, assessment, approval);
+  const decision: Decided | undefined = requestedDecision(obligation, assessment, approval);
   return decision === undefined ? assessment : { ...assessment, decision };
 }
