@@ -1,0 +1,450 @@
+/* New payment (ia.md section 4): the form on the left, "What happens next" on
+   the right. On a phone the preview comes after the fields and before the
+   Start button, so the outcome is read before starting. */
+
+.np-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 400px);
+  grid-template-areas:
+    "form next"
+    "actions next";
+  column-gap: 24px;
+  align-items: start;
+}
+
+.np-form {
+  grid-area: form;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  border-bottom: 0;
+  border-radius: var(--radius-card) var(--radius-card) 0 0;
+}
+
+.np-actions {
+  grid-area: actions;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 22px 22px;
+  border: 1px solid var(--line);
+  border-top: 0;
+  border-radius: 0 0 var(--radius-card) var(--radius-card);
+  background: var(--surface);
+}
+
+.np-actions::before {
+  content: "";
+  flex: 0 0 100%;
+  height: 1px;
+  margin-bottom: 6px;
+  background: var(--line-soft);
+}
+
+.np-next {
+  grid-area: next;
+  position: sticky;
+  top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ---------- the fields ---------- */
+
+.np-fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.np-legend {
+  margin-bottom: 4px;
+  padding: 0;
+  font-weight: 600;
+}
+
+.np-legend__aside {
+  font-weight: 400;
+  color: var(--text-3);
+}
+
+.np-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 18px;
+}
+
+.np-pair .field--name {
+  max-width: none;
+}
+
+.np-radios {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+}
+
+.np-radios--stack {
+  flex-direction: column;
+}
+
+.np-radio {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: var(--target);
+  cursor: pointer;
+}
+
+.np-radio input,
+.np-option__radio {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.np-only {
+  min-height: 24px;
+}
+
+.np-amount {
+  display: flex;
+  align-items: stretch;
+  min-height: var(--target);
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.np-amount:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.np-amount.is-invalid {
+  border-color: var(--danger);
+}
+
+.np-amount__input,
+.np-amount__currency {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  font-weight: 500;
+  text-align: right;
+}
+
+.np-amount__input:focus-visible,
+.np-amount__currency:focus-visible {
+  outline: none;
+}
+
+.np-amount__currency {
+  flex: 0 0 72px;
+  border-left: 1px solid var(--line);
+  background: var(--page);
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.np-amount__suffix {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 12px;
+  border-left: 1px solid var(--line);
+  background: var(--page);
+  color: var(--text-2);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.np-contact {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: var(--sunk);
+  color: var(--text-body);
+}
+
+.np-contact__title {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.np-contact__warn {
+  color: var(--warn-text);
+}
+
+.np-contact__link {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  min-height: var(--target);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+/* ---------- the beneficiary picker ---------- */
+
+.np-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.np-search {
+  position: relative;
+}
+
+.np-search__icon {
+  position: absolute;
+  top: 14px;
+  left: 12px;
+  color: var(--text-3);
+  pointer-events: none;
+}
+
+.np-search .np-search__input {
+  padding-left: 36px;
+}
+
+.np-picker__count {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.np-picker__count:empty {
+  display: none;
+}
+
+.np-picker__none {
+  padding: 12px;
+  border-radius: var(--radius);
+  background: var(--sunk);
+  color: var(--text-2);
+}
+
+.np-problem {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.np-problem__when {
+  font-weight: 400;
+}
+
+.np-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.np-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.np-option:hover {
+  border-color: var(--text-3);
+}
+
+.np-option.is-picked {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  background: var(--accent-soft);
+}
+
+.np-option:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.np-option__radio {
+  margin-top: 2px;
+}
+
+.np-option__radio:focus-visible {
+  outline: none;
+}
+
+.np-option__body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.np-option__name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.np-option__facts {
+  font-size: 13px;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.np-option__paid {
+  font-size: 13px;
+  color: var(--text-3);
+  overflow-wrap: anywhere;
+}
+
+.np-option__caution {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--warn-text);
+}
+
+.np-option__caution .icon {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+/* ---------- what happens next ---------- */
+
+.np-next__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.np-next__checking {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.np-next__list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.np-next__line {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: var(--text-body);
+}
+
+.np-next__icon {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.np-next__line--amber {
+  padding: 10px 12px;
+  border: 1px solid var(--warn-line);
+  border-radius: var(--radius);
+  background: var(--warn-fill);
+  color: var(--warn-text);
+}
+
+.np-next__line--muted {
+  color: var(--text-3);
+}
+
+/* The simulator's line: dashed, grey and labelled, so it never reads as part of
+   the payment. */
+.np-sandbox {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 10px 12px;
+  border: 1px dashed #a35200;
+  border-radius: var(--radius);
+  background: var(--sunk);
+}
+
+.np-sandbox__tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 7px;
+  border-radius: 5px;
+  background: #1f2430;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.np-sandbox__text {
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.np-sandbox__text a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+}
+
+@media (max-width: 899px) {
+  .np-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "form"
+      "next"
+      "actions";
+  }
+
+  .np-form {
+    gap: 18px;
+    border-bottom: 1px solid var(--line);
+    border-radius: var(--radius-card);
+  }
+
+  .np-next {
+    position: static;
+    margin-top: 16px;
+  }
+
+  .np-actions {
+    margin-top: 16px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+
+  .np-actions::before {
+    display: none;
+  }
+
+  .np-actions .action,
+  .np-actions .btn {
+    width: 100%;
+  }
+}
