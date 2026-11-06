@@ -33,6 +33,7 @@ import { outboxRoutes } from "./routes/outbox.js";
 import { reconcileRoutes } from "./routes/reconcile.js";
 import { reportRoutes } from "./routes/reports.js";
 import { runRoutes } from "./routes/runs.js";
+import { viewRoutes } from "./routes/views.js";
 import { whyRoutes } from "./routes/why.js";
 import { CHECK_EVERY_MS, startUp, type StartUp } from "./start.js";
 
@@ -176,6 +177,7 @@ function main(): void {
     ...incidentRoutes(app),
     ...whyRoutes(app),
     ...outboxRoutes(app),
+    ...viewRoutes(app, SWEEP_EVERY_MS),
   ];
   const start: StartUp = startUp(app);
   const server: Server = createServer(requestListener(routes, port));
