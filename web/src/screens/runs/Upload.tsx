@@ -14,9 +14,8 @@ import { keep } from "../inbox/kept";
 // Upload pay run (ia.md section 6): the CSV's text and a name go to POST
 // /api/runs, which checks every row against Airwallex (GETs only) before it
 // answers. A refusal shows under the button: the file's problems by line, the
-// run already waiting (only one waits at a time), or every row skipped. The 422
-// for that still carries the store's rows, not RunRowView, so they are read here
-// by the few fields they share.
+// run already waiting (only one waits at a time), the same file uploaded before,
+// or every row skipped, with each row as RunRowView.
 
 interface Problem {
   line: number | null;
@@ -51,11 +50,10 @@ function lineOf(value: unknown): number | null {
   return typeof value === "number" && Number.isInteger(value) ? value : null;
 }
 
-// The server sends { line, message } today; the contract says { line, text }.
 function problemsOf(value: unknown): Problem[] {
   return (Array.isArray(value) ? value : []).flatMap((item: unknown): Problem[] => {
     const found: Record<string, unknown> | null = record(item);
-    const text: string | null = textOr(found?.["text"]) ?? textOr(found?.["message"]);
+    const text: string | null = textOr(found?.["text"]);
     return found === null || text === null ? [] : [{ line: lineOf(found["line"]), text }];
   });
 }
@@ -66,14 +64,14 @@ function skippedOf(value: unknown): SkippedRow[] {
     if (row === null) {
       return [];
     }
-    const reasons: unknown = row["reasons"] ?? row["skipReasons"];
+    const reasons: unknown = row["skipReasons"];
     return [
       {
         line: lineOf(row["line"]),
         invoiceId: textOr(row["invoiceId"]),
         supplier: textOr(row["supplier"]),
         reasons: (Array.isArray(reasons) ? reasons : []).flatMap((reason: unknown): string[] => {
-          const text: string | null = textOr(reason) ?? textOr(record(reason)?.["text"]);
+          const text: string | null = textOr(record(reason)?.["text"]);
           return text === null ? [] : [text];
         }),
       },
@@ -81,14 +79,14 @@ function skippedOf(value: unknown): SkippedRow[] {
   });
 }
 
-function refusalOf(error: ApiError, waiting: number | null): Refusal {
+function refusalOf(error: ApiError): Refusal {
   const body: Record<string, unknown> | null = error.body;
   const runId: number | null = lineOf(body?.["runId"]);
   if (error.status === 400 && Array.isArray(body?.["problems"])) {
     return { kind: "problems", problems: problemsOf(body?.["problems"]) };
   }
   if (error.status === 409 && runId !== null) {
-    return runId === waiting ? { kind: "waiting", runId } : { kind: "same-file", runId };
+    return body?.["code"] === "same-file" ? { kind: "same-file", runId } : { kind: "waiting", runId };
   }
   if (error.status === 422 && Array.isArray(body?.["rows"])) {
     return { kind: "skipped", rows: skippedOf(body?.["rows"]) };
@@ -167,7 +165,7 @@ export function RunUpload(props: { runs: RunsView | null; id: string }): JSX.Ele
   const [checking, setChecking] = useState<number>(0);
   const [refusal, setRefusal] = useState<Refusal | null>(null);
   const upload: RunsView["upload"] | null = props.runs?.upload ?? null;
-  const waiting: number | null = props.runs?.waiting ?? null;
+
   const maxChars: number = upload?.maxChars ?? 40_000;
   const required: RunsView["upload"]["columns"] = upload?.columns.filter((column: RunsView["upload"]["columns"][number]): boolean => column.required) ?? [];
   const optional: RunsView["upload"]["columns"] = upload?.columns.filter((column: RunsView["upload"]["columns"][number]): boolean => !column.required) ?? [];
@@ -263,7 +261,7 @@ export function RunUpload(props: { runs: RunsView | null; id: string }): JSX.Ele
           busyLabel={busy}
           kind="primary"
           onAction={check}
-          onError={(error: ApiError): void => setRefusal(refusalOf(error, waiting))}
+          onError={(error: ApiError): void => setRefusal(refusalOf(error))}
         />
       </div>
       {refusal === null ? null : <RefusalDetail refusal={refusal} />}

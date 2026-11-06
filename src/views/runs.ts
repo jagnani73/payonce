@@ -14,7 +14,7 @@ import {
 import { MAX_RUN_FILE_CHARS, MAX_RUN_ROWS, RUN_COLUMNS, type RunColumn } from "../runs/run-file.js";
 import { runCounts, type RunCash, type RunCounts } from "../runs/runs.js";
 import type { Settings } from "../settings.js";
-import { readingSoft, storedList, type Ledger, type Outage, type Run, type RunRow } from "../store/ledger.js";
+import { readingSoft, storedList, type CheckedRow, type Ledger, type Outage, type Run, type RunRow } from "../store/ledger.js";
 import type {
   Activity,
   ApproverChoice,
@@ -121,7 +121,15 @@ function skipCode(text: string): { code: string; label: string } {
   return found === undefined ? { code: "other", label: "Other" } : { code: found[0], label: found[1] };
 }
 
-function rowView(ledger: Ledger, run: Run, row: RunRow, released: Map<string, { situation: Situation; snapshot: InvoiceSnapshot }>, live: Live | null, now: number): RunRowView {
+// waiting: the run waits for approval, so an arrival estimate is still advice.
+function rowView(
+  ledger: Ledger,
+  waiting: boolean,
+  row: CheckedRow & Pick<RunRow, "state">,
+  released: Map<string, { situation: Situation; snapshot: InvoiceSnapshot }>,
+  live: Live | null,
+  now: number,
+): RunRowView {
   const payment: { situation: Situation; snapshot: InvoiceSnapshot } | undefined =
     row.invoiceId === null ? undefined : released.get(row.invoiceId);
   const state: RunRowStateView = runRowStateOf(row, payment?.situation ?? null);
@@ -135,7 +143,7 @@ function rowView(ledger: Ledger, run: Run, row: RunRow, released: Map<string, { 
     method: row.transferMethod,
     account: accountView(row.payTo),
     dueDate: row.dueDate,
-    arrival: row.arrival === null ? null : arrivalView(row.arrival, run.state === "waiting", now),
+    arrival: row.arrival === null ? null : arrivalView(row.arrival, waiting, now),
     feeSeen:
       arrival === null || row.currency === null || !CURRENCY_PATTERN.test(row.currency)
         ? null
@@ -154,6 +162,14 @@ function rowView(ledger: Ledger, run: Run, row: RunRow, released: Map<string, { 
             activity: activityOf(isBusy(live, payment.snapshot.obligation.invoiceId), watching(payment.snapshot.attempts, payment.snapshot.payouts)),
           },
   };
+}
+
+// The rows of a file PayOnce checked and did not store, as a run's rows show
+// them: an upload refused because every row is skipped.
+export function checkedRowViews(ledger: Ledger, rows: CheckedRow[], now: number): RunRowView[] {
+  return readingSoft((): RunRowView[] =>
+    rows.map((row: CheckedRow): RunRowView => rowView(ledger, true, { ...row, state: "waiting" }, new Map(), null, now)),
+  );
 }
 
 function cashView(cash: RunCash): RunCashView {
@@ -280,7 +296,7 @@ export function runView(ledger: Ledger, settings: Settings, now: number, runId: 
       situation,
       counts: { pay: counts.pay, held: counts.held, skip: counts.skip },
       decision: decisionOf(ledger, snapshot, situation, request, now),
-      rows: snapshot.rows.map((row: RunRow): RunRowView => rowView(ledger, run, row, released, live, now)),
+      rows: snapshot.rows.map((row: RunRow): RunRowView => rowView(ledger, run.state === "waiting", row, released, live, now)),
       skippedSummary: [...skipped.values()],
       cash: { checkedAt: run.checkedAt, currencies: storedList<RunCash>(run.cash).map(cashView) },
       timeline: timelineView(ledger.runEvents(run.id)),

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { airwallexAdvice, AirwallexError, AirwallexUnreachableError, withAdvice } from "../../../airwallex/client.js";
-import { cleanFileName, MAX_RUN_FILE_CHARS, parseRunFile, type ParsedRunFile } from "../../../runs/run-file.js";
+import { cleanFileName, MAX_RUN_FILE_CHARS, parseRunFile, type FileProblem, type ParsedRunFile } from "../../../runs/run-file.js";
 import { approveRun, cancelRun, recheckRun, runKey, uploadRun } from "../../../runs/runs.js";
 import { auditCsv, runAuditExport, type RunAuditExport } from "../../../store/audit-trail.js";
 import {
@@ -12,7 +12,7 @@ import {
   type RunApproval,
 } from "../../../store/ledger.js";
 import type { Acted, Notice, RunsView, RunView } from "../../../views/contract.js";
-import { runsView, runView } from "../../../views/runs.js";
+import { checkedRowViews, runsView, runView } from "../../../views/runs.js";
 import type { HttpApp } from "../app.js";
 import { HttpError, MAX_FINDING_LENGTH, name, readJson, RUN_ID_PATTERN, sendJson, text, UPLOAD_BODY_MS } from "../http.js";
 import type { Route } from "../router.js";
@@ -120,17 +120,22 @@ export function runRoutes(app: HttpApp): Route[] {
       csv,
     );
     if (!parsed.ok) {
-      throw new HttpError(400, "PayOnce cannot read this file", { problems: parsed.problems });
+      throw new HttpError(400, "PayOnce cannot read this file", {
+        problems: parsed.problems.map((problem: FileProblem) => ({ line: problem.line, text: problem.message })),
+      });
     }
     let runId: number;
     try {
       runId = await uploadRun(engine, parsed.file, uploadedBy);
     } catch (error: unknown) {
-      if (error instanceof WaitingRunError || error instanceof SameFileError) {
-        throw new HttpError(409, error.message, { runId: error.runId });
+      if (error instanceof WaitingRunError) {
+        throw new HttpError(409, error.message, { code: "run-waiting", runId: error.runId });
+      }
+      if (error instanceof SameFileError) {
+        throw new HttpError(409, error.message, { code: "same-file", runId: error.runId });
       }
       if (error instanceof NothingToPayError) {
-        throw new HttpError(422, error.message, { rows: error.rows });
+        throw new HttpError(422, error.message, { code: "nothing-to-pay", rows: checkedRowViews(engine.ledger, error.rows, Date.now()) });
       }
       throw airwallexDown(error) ?? error;
     }

@@ -1462,7 +1462,10 @@ export function runSituationOf(snapshot: RunSnapshot, now: number): RunSituation
   );
 }
 
-export function runRowStateOf(row: RunRow, payment: Situation | null): RunRowStateView {
+export function runRowStateOf(
+  row: Pick<RunRow, "action" | "state" | "reasons" | "heldFor" | "newPayee" | "bankChangeId">,
+  payment: Situation | null,
+): RunRowStateView {
   const flags = { newPayee: row.newPayee, callbackVerified: row.bankChangeId !== null };
   if (row.action === "skip") {
     return { state: "skipped", label: `Skipped (${plural(row.reasons.length, "1 reason", "reasons")})`, ...flags };

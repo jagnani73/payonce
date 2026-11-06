@@ -1458,8 +1458,12 @@ export interface UploadRunInput {
   uploadedBy: string;
 }
 
+// 400: problems, the file's lines PayOnce cannot read (text quotes its cells).
+// 409 code "run-waiting" or "same-file": runId, the run waiting or the one
+// uploaded from the same file. 422 code "nothing-to-pay": rows, every row as
+// checked, each skipped.
 export interface UploadRunRefusal extends ApiError {
-  problems?: { line: number | null; text: string }[];
+  problems?: { line: number | null; text: Theirs }[];
   runId?: RunId;
   rows?: RunRowView[];
 }
