@@ -67,6 +67,9 @@ This file holds the commands, the file map and the rules that hold everywhere. T
 | `webhooks.md` | `surfaces/http/webhooks.ts`, `surfaces/http/tunnel.ts`, `surfaces/http/start.ts`, `airwallex/webhooks.ts` |
 | `sandbox-behaviour.md` | anything that relies on what Airwallex or its simulator does, and before any run against the sandbox |
 | `structure.md` | any file, since it has the full note on each and the map below is its short form. It is the main note for `src/airwallex/` (the host allowlist, secret redaction, error shapes, `airwallexAdvice`), `engine/sandbox-bank.ts`, `engine/scenario.ts`, `text/`, `surfaces/cli/terms-shape.ts`, `env-file.ts` and the CLI commands |
+| `docs/architecture.md` | anything that crosses a layer, or changes the order of a look's steps, the payment gate, the leases, the Dispatcher, the watcher or the sweep |
+| `docs/invariants.md` | anything that sends, holds, approves or closes a payment: check every guarantee it touches still holds, and keep its entry's "Where" true |
+| `docs/glossary.md` | a word a person reads, or a new name in the code for a product idea |
 
 ## Files
 
