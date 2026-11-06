@@ -106,7 +106,7 @@ function outcomeOf(
   checked: PayeeCheck | null,
 ): PaymentCheckView["outcome"] {
   if (Object.keys(fields).length > 0) {
-    return { kind: "unknown", text: "PayOnce can't start it until the problems in the form are fixed." };
+    return { kind: "unknown", text: "PayOnce can't start it until you fix the problems in the form." };
   }
   if (input.record?.kind !== "read" || checked === null || !checked.ok) {
     return {

@@ -93,7 +93,7 @@ export function contactRoutes(app: HttpApp): Route[] {
         }),
       (change: ContactChange): Notice => ({
         tone: "success",
-        text: `${change.contact.value === "" ? "The phone number is off file. Nobody can record a callback for this supplier until a new one is on file." : "The phone number is on file."}${
+        text: `${change.contact.value === "" ? "The phone number is no longer on file. Nobody can record a callback for this supplier until a new one is on file." : "The phone number is on file."}${
           change.contact.withdrawnRequests === 0
             ? ""
             : ` ${change.contact.withdrawnRequests === 1 ? "One approval request" : `${change.contact.withdrawnRequests} approval requests`} that relied on a callback on the old number ${change.contact.withdrawnRequests === 1 ? "was" : "were"} withdrawn.`
