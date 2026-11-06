@@ -97,7 +97,10 @@ This file holds the commands, the file map and the rules that hold everywhere. T
   - `audit-trail.ts`: chain reports and exports for invoice, pay run and reconciliation timelines.
   - `recon-store.ts`: reconciliation's tables, on the shared `Db`.
 - `src/engine/`:
-  - `engine.ts`: the agent, shared by the CLI and the server. `resumeIncident` is one look at an invoice. Also `startPayment`, `startFirst`, `replaceUnderLock`, `approvePayment`, `closeIncident`, `payAgain`, `note` and `noteError`, tying payouts sent outside PayOnce, and FX rates.
+  - The agent, shared by the CLI and the server, one module per phase:
+    - `engine.ts`: the shared types (`Engine`, `NextLook`, `LookOptions`, `StepResult`, `Assessment`).
+    - `look.ts`: `resumeIncident`, one look at an invoice. Its reads run inline, then the named steps (`SENT_STEPS`), then `act`. Every `await` of a look stays in `look()` in its order, and a step awaits nothing: an extra microtask turn reorders a look against other looks and the sweep.
+    - `first-payment.ts` (`startPayment`, its holds, `startFirst`), `held.ts` (`continueHeld`), `escalated.ts` (`escalate` with `EscalateAs`), `requests.ts` (`barredFrom`, `awaitApproval`), `replacement.ts` (`replaceUnderLock`), `retry.ts` (`retryUnderLock`, `Retried`, `NeverSentCause`), `outside.ts`, `late-mismatched.ts`, `emails.ts`, `rates.ts`, `terms.ts`, `assessment.ts` (`assess`), `send.ts`, `close.ts` (the agent's own close), `person.ts` (`approvePayment`, `closeIncident`, `payAgain`, `pendingApproval`, `pendingClose`), `facts.ts`, `lines.ts` (`note`, `noteError`) and `reason-text.ts` (the clause builders).
   - `create.ts`: `createEngine(settings, ledger?)`, the one place an `Engine` is built: the Airwallex client first, then the ledger, then the reader. It returns the client's problem instead of throwing it. `pnpm ui` and `pnpm recover` add their sandbox bank to what it builds.
   - `dispatcher.ts`: runs steps one invoice at a time. `wake(id, true)` gives a look the pay run's turn.
   - `watcher.ts`: the fallback for webhooks. Reads payments in flight, wakes due invoices and runs the sweep. In the server it also releases approved pay runs and sends their unsent rows by waking them with the run's turn.
