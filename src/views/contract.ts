@@ -295,13 +295,14 @@ export interface SummaryBullet {
   refs: { invoiceId?: InvoiceId; reference?: Reference }[];
 }
 
+// An unrecognised transfer a close covers. The close names it by transferId.
 export interface CoveredTransferView {
   transferId: string;
   reference: Reference;
+  // Airwallex's status, such as PAID. Null when not read, or not in its own form.
   status: string | null;
+  // Whose request id it is listed under.
   kind: "original" | "replacement";
-  // coveredText
-  text: string;
 }
 
 export interface NamingPayoutView {

@@ -298,7 +298,6 @@ const OPTION = {
   ...under("can", CAN),
   ...under("approvers[]", APPROVER),
   formPath: BANK_DETAILS_LINK,
-  "covers[].text": "plain",
   "namesOnly[].text": "quoted",
   "withdraws.approvedBy[]": "person",
   rail: RAIL,

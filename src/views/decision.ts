@@ -1,10 +1,9 @@
-import { railWords } from "../domain/patterns.js";
+import { railWords, STATUS_PATTERN } from "../domain/patterns.js";
 import { currencyFloor, debitCurrency, type CurrencyFloor } from "../domain/reserve.js";
 import { payoutNamesOnly, unrecognisedPaid, unrecognisedUncleared } from "../domain/live.js";
 import { aboutBankDetails, closeKindOf, type CloseKind, type InvoiceSnapshot, type Situation } from "../domain/situation.js";
 import { WAITING_KINDS, type CashLine, type CashReport, type CurrencyCash } from "../engine/cash-position.js";
-import type { CoveredTransfer } from "../engine/facts.js";
-import { coveredText, namingText, type NamingPayout } from "../engine/person.js";
+import { namingText, type NamingPayout } from "../engine/person.js";
 import { sendsText, type OutageSend } from "../outages/outages.js";
 import type { Outbox } from "../outbox/drafts.js";
 import type { Settings } from "../settings.js";
@@ -26,15 +25,14 @@ import { allowed, listOf, money, onceSignedOff, refused } from "./parts.js";
 // when it cannot. The situation's can says what is allowed; this only words it.
 
 export function coveredOf(snapshot: InvoiceSnapshot): CoveredTransferView[] {
-  return snapshot.attempts.filter(unrecognisedUncleared).map((attempt: Attempt): CoveredTransferView => {
-    const covered: CoveredTransfer = {
+  return snapshot.attempts.filter(unrecognisedUncleared).map(
+    (attempt: Attempt): CoveredTransferView => ({
       transferId: attempt.mismatchedTransferId ?? "",
-      reference: attempt.mismatchedReference ?? attempt.mismatchedTransferId ?? "",
-      status: attempt.mismatchedStatus,
+      reference: shownReference(attempt.mismatchedReference ?? attempt.mismatchedTransferId ?? ""),
+      status: attempt.mismatchedStatus !== null && STATUS_PATTERN.test(attempt.mismatchedStatus) ? attempt.mismatchedStatus : null,
       kind: attempt.kind,
-    };
-    return { ...covered, reference: shownReference(covered.reference), text: coveredText(covered) };
-  });
+    }),
+  );
 }
 
 function namesOnlyOf(snapshot: InvoiceSnapshot): NamingPayoutView[] {

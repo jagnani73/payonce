@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { loadSettings, type Settings } from "../../settings.js";
 import type { CoveredTransfer } from "../../engine/facts.js";
-import { closeIncident, pendingClose, type CloseReview } from "../../engine/person.js";
+import { closeIncident, coveredText, pendingClose, type CloseReview } from "../../engine/person.js";
 import { personName } from "../../domain/approvers.js";
 import { Ledger, LEDGER_PATH } from "../../store/ledger.js";
 import { say, shownReference } from "../../text/printable.js";
@@ -56,7 +56,7 @@ function show(view: IncidentView, unpaid: boolean): void {
   }
   if (option.covers.length > 0) {
     put("This close covers these unrecognised transfers, listed under its request ids:", 1);
-    putAll(option.covers.map((transfer: CoveredTransferView): string => transfer.text), 2);
+    putAll(option.covers.map((transfer: CoveredTransferView): string => coveredText(transfer)), 2);
   }
 }
 
