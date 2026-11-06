@@ -1259,12 +1259,6 @@ function countryOf(facts: RecordFacts): string | null {
   );
 }
 
-// A time in a caution's text, to the minute and labelled UTC as pnpm supplier
-// prints times, so it never contradicts the page's local Since line.
-function utcMinute(at: string | null): string | null {
-  const known: string | null = iso(at);
-  return known === null ? null : `${known.slice(0, 10)} ${known.slice(11, 16)} UTC`;
-}
 
 function cautionsOf(
   ledger: Ledger,
@@ -1335,10 +1329,10 @@ function cautionsOf(
   if (appliedKey !== null && stored?.key === appliedKey && appliedKey !== lastPaid?.accountKey) {
     const shown: string[] = label(appliedKey);
     const view: AccountView | undefined = accounts.views.find((account: AccountView): boolean => account.accountKey === appliedKey);
-    const when: string | null = utcMinute(latestApplied?.recordedAt ?? null);
+    // When it was recorded is since, which the page shows in the viewer's zone.
     found.push({
       code: "callback-verified",
-      text: `A callback${when === null ? "" : ` recorded at ${when}`} verified account ${shown[0] ?? "on file"}${view?.ending === null || view === undefined ? "" : `, ending ${view.ending}`}. Paying a held invoice or a pay run row to that account needs two approvers, and nobody who recorded a callback for it may approve the payment.`,
+      text: `A callback verified account ${shown[0] ?? "on file"}${view?.ending === null || view === undefined ? "" : `, ending ${view.ending}`}. Paying a held invoice or a pay run row to that account needs two approvers, and nobody who recorded a callback for it may approve the payment.`,
       invoices: latestApplied === undefined ? [] : [latestApplied.invoiceId],
       accounts: shown,
       since: iso(latestApplied?.recordedAt ?? null),

@@ -79,7 +79,11 @@ function section(title: string, lines: string[], indent: number = 1): void {
 
 function cautionLines(caution: SupplierCaution): string[] {
   const links: string[] = [...caution.invoices, ...caution.accounts.map((letter: string): string => `account ${letter}`)];
-  return [`${caution.level === "caution" ? "!" : "i"} ${caution.text}`, ...(links.length === 0 ? [] : [`  ${links.join(", ")}`])];
+  return [
+    `${caution.level === "caution" ? "!" : "i"} ${caution.text}`,
+    ...(caution.since === null ? [] : [`  Since ${utc(caution.since)}`]),
+    ...(links.length === 0 ? [] : [`  ${links.join(", ")}`]),
+  ];
 }
 
 function accountLines(account: SupplierAccountView): string[] {
@@ -120,10 +124,9 @@ function contactLines(contact: SupplierContactView): string[] {
       phone.originText !== ""
         ? phone.originText
         : `proposed by ${setBy(phone.proposedBy, phone.proposedSource)}, confirmed by ${setBy(phone.confirmedBy, phone.confirmedSource)}`;
+    const since: string = phone.since === null ? "" : ` since ${utc(phone.since)}`;
     lines.push(
-      phone.removed
-        ? `None on file since ${utc(phone.since)}: ${who}`
-        : `Ending ${phone.ending ?? "not known"}, on file since ${utc(phone.since)}, ${who}`,
+      phone.removed ? `None on file${since}: ${who}` : `Ending ${phone.ending ?? "not known"}, on file${since}, ${who}`,
       ...(phone.changed === null ? [] : [phone.changed.text]),
       ...(contact.callbackBarred.length === 0 ? [] : [`${listOf(contact.callbackBarred)} cannot record a callback on it`]),
     );
