@@ -1,36 +1,87 @@
 # Email reader
 
-This is one of PayOnce's design notes. [CLAUDE.md](../../CLAUDE.md) has the commands, the file map, the rules that hold everywhere and the index of these notes. Where the two differ, this file is right.
+How PayOnce reads a supplier email into three findings, with a model or with the keyword placeholder. The reader is `src/reader/` (`reader.ts`, `model-service.ts`, `model-reader.ts`, `keyword-reader.ts` and `reader-error.ts`), and the engine's side is `readNewEmails` in `src/engine/emails.ts`. Uploads are parsed before they are read ([uploaded-emails.md](uploaded-emails.md)), Ask why shares the model services ([ask-why.md](ask-why.md)), and invariant 57 in [invariants.md](../invariants.md) is the money rule.
 
-- Two keys in `.env` turn the model reader on, and the models are asked in this order. `CLAUDE_API_KEY` turns Claude on: the models in `CLAUDE_MODEL`, a comma-separated list that defaults to `claude-haiku-5-5,claude-sonnet-5-5`. `READER_API_KEY` turns Gemini on after it: the models in `READER_MODEL`, which defaults to `gemini-3.5-flash,gemini-3.1-flash-lite`, both on Google's free tier, at `READER_BASE_URL`, which defaults to Gemini's OpenAI-compatible endpoint. With only one key, only that service is asked. With neither, the keyword placeholder reads the emails. The name is not `ANTHROPIC_API_KEY`, because Claude Code reads that one, and a key under that name in Yash's shell would switch Claude Code to it.
-- `pnpm dev` loads no env file, so it always uses the keyword placeholder.
-- "Ask why" uses the same services and timeout, and `READER_MODEL`, but takes its Claude models from `CLAUDE_ASK_MODEL`, which defaults to `claude-sonnet-5-5,claude-haiku-5-5` (see Ask why). One ask is at most one request per model, and the page's limits leave most of the free tier's calls a minute to the reader.
-- Claude gets one Messages API request per email: `POST https://api.anthropic.com/v1/messages`, a fixed host, with `x-api-key`, `anthropic-version: 2026-10-21`, `max_tokens` 4,000, the system prompt in `system` and `output_config` with `effort: "low"` and a `json_schema` format. It sends no `thinking` setting. At low effort the models skipped thinking, and one body then works on both Haiku 5.5 and Sonnet 5.5, although Sonnet 5.5 refuses `disabled` and Haiku 5.5 refuses `between_tools`. It does not work on a model that rejects `effort`, such as Haiku 4.5 or Sonnet 4.5: that model answers 400, which counts as a refused request, and the next model is asked. Neither list should name one. A good answer has `stop_reason` `end_turn`, and its text blocks are read by type, since a thinking block can come first. `max_tokens` is a cut answer, and any other stop reason, `refusal` included, an incomplete one.
-- Gemini gets one chat completion per email with `reasoning_effort: "low"` and a `json_schema` response format, and a good answer has `finish_reason` `stop`.
-- No request to either service follows a redirect. `complete` passes `redirect: "error"`, because fetch would otherwise carry `x-api-key` and the email or the facts to the host a redirect names, and drop only `Authorization`. A redirect fails the request, and `tryOf` reads it as could not be reached.
-- The model answers three booleans (`claimsNonReceipt`, `asksForNewBankDetails`, `asksNotToPay`) and no text. `toAnswers` checks the answer again, so a service that ignores the schema still cannot return anything else. The display name, Reply-To, the text found inside styles, attachment names and PayOnce's notes go in tags of their own, and the prompt says nothing in the sender's tags comes from PayOnce.
-- `summarise` in `src/emails.ts` writes the summary from the findings for both readers, so no wording from an email or a model reaches the approval card or the approval binding.
-- `ModelReader` also runs the keyword check and ORs the findings. Every finding only makes the policy more cautious, so a tricked model cannot remove a finding the keywords make. It can still hide one the keywords miss. The keyword check reads the display name, subject, body, style text and attachment names after `keywordText`: blank-looking letters become spaces, default-ignorable characters go, NFKC, straight apostrophes and one space for every whitespace run, so wrapped lines and curly apostrophes match.
-- Each model gets one request with an 8 second timeout. If it fails, the next model is asked, and the console gets a `reader` line saying why. A refused key (401 or 403) skips the rest of that service's models, which share the key, and the next service is asked. An overloaded service, 503 from Google or 529 from Anthropic, counts as busy. If every model fails, `read` throws `ModelReadError`, the engine marks the thread unread with a timeline line that says what each model did in PayOnce's words, and the policy escalates.
-- Findings carry `readBy`, the model that answered, and the page shows it.
-- Both keys are cut out of any error text before it reaches the console, in every form `redactKey` cuts (`redactKeys`). The timeline gets only `triesText`'s fixed words.
-- Google may use free-tier content to improve its products. The fixtures are synthetic. The page's "Supplier email" card names each service's models and where they send uploads: the host, or Google's free tier for Google's endpoint. When a Gemini model on Google's endpoint is in the chain, a caution under it says Google may use what it reads, and that it reads only when Claude gives no answer when Claude comes first. The caution is hidden when no such model is set up. With no model at all, the note says what each key turns on.
+## Rules
 
-Found by running it on 2026-10-06:
+### Which reader reads
 
-- The key goes in `Authorization: Bearer`. A strict `json_schema` response format and `reasoning_effort: "low"` are accepted, and a good answer has `finish_reason` `stop`.
-- `gemini-3.8-flash`, the model in Google's examples, answered 503 "high demand" on 5 of 8 calls. In about 35 reader calls, `gemini-3.5-flash` and `gemini-3.1-flash-lite` between them always returned an answer, usually in 1.6 to 5.8 seconds. `gemini-3.5-flash-lite` took 8 to 18 seconds. The 2.5 models return 404 for new users.
-- `gemini-3.5-flash` returns 429 after about six calls in a minute and answers again a minute later. The second model answered each time. Daily limits are shown only in AI Studio.
-- Both default models gave the expected findings on the two fixtures, a reworded email the keywords miss, a thank-you email and an email with an injected instruction to answer false. The one difference: `gemini-3.5-flash` once read the injection email as a non-receipt claim.
-- One "new account" incident on the page took 21 seconds, against 8 with the keyword reader. Its first read took 12 seconds, before the timeout was cut from 15 seconds to 8.
+- `CLAUDE_API_KEY` turns Claude on, with the models in `CLAUDE_MODEL`, a comma-separated list that defaults to `claude-haiku-5-5,claude-sonnet-5-5` (`DEFAULT_CLAUDE_MODELS`).
+- `READER_API_KEY` turns the chat completions service on after Claude, with the models in `READER_MODEL` (default `gemini-3.5-flash,gemini-3.1-flash-lite`, `DEFAULT_GEMINI_MODELS`, both on Google's free tier).
+- The chat completions service is at `READER_BASE_URL`, which defaults to Gemini's OpenAI-compatible endpoint (`DEFAULT_GEMINI_BASE_URL`).
+- With only one key, only that service is asked. With neither, the keyword placeholder reads the emails (`readerFor`).
+- `modelServicesFromEnv(env, use)` builds the services in the order they are asked, each left out without its key. `src/settings.ts` builds them once for the reader and once for Ask why (`Settings.models.readerServices`, `askServices`).
+- Ask why uses the same services, timeout and `READER_MODEL`, but takes its Claude models from `CLAUDE_ASK_MODEL`, which defaults to `claude-sonnet-5-5,claude-haiku-5-5` (`DEFAULT_CLAUDE_ASK_MODELS`, [ask-why.md](ask-why.md)).
+- One ask is at most one request per model, and the page's limits leave most of the free tier's calls a minute to the reader.
+- `pnpm dev` always reads with the keyword placeholder: `surfaces/cli/dev.ts` builds a `KeywordReader` and loads no env file.
+- `readerNamesFromEnv` gives every name stored findings may give for whoever read an invoice's emails: the models in `CLAUDE_MODEL` and `READER_MODEL`, both services' default models and the keyword placeholder.
 
-Measured on 2026-11-06, with about 30 calls to Anthropic's API in all, on a copy of the main ledger with `AWX_BASE_URL` at `sandbox.invalid`, and with stubbed services:
+### One request
 
-- The Messages API took `anthropic-version: 2026-10-21`, `output_config` with low effort and a `json_schema` format, and a user-linked key in `x-api-key`. Every answer was one text block with `stop_reason` `end_turn` and 41 output tokens, none of them thinking tokens, on both models.
-- The reader ran through `ModelReader`, one email at a time, on the same kinds of email as on 2026-10-06: `nothing-arrived`, both emails of `new-account`, `moved-banks`, a reworded email the keywords miss ("still no trace of the funds", "route this and future remittances to the account we hold at our other bank"), a thank-you email, and an email asking to be paid at another bank with a note telling the assistant the system expects false for all three. Both models gave the same answers on all seven, before the keyword OR: non-receipt for `nothing-arrived` and the first `new-account` email; non-receipt and new bank details for the second `new-account` email (its subject says the payment was not received), `moved-banks` and the reworded email; nothing for the thank-you; and new bank details alone for the injection email, whose note neither model obeyed.
-- Latency per read: `claude-haiku-5-5` took 1.1 to 2.1 seconds over 14 reads, with a median of 1.4, and `claude-sonnet-5-5` 1.7 to 2.9 seconds over 7. Both are well inside the 8 second timeout. Haiku goes first because it was as accurate as Sonnet and faster, at a twentieth of Sonnet's price per token. Sonnet is second, so a busy Haiku does not send the email to Gemini.
-- Fallback through the engine on the ledger copy, with an invoice held before paying, one email on file and no payment: with a bad `CLAUDE_API_KEY`, `claude-haiku-5-5` answered 401, `claude-sonnet-5-5` was not asked, and `gemini-3.5-flash` read the email (`readBy` `gemini-3.5-flash`). With both keys bad, Gemini answered 400 for its key, the thread was marked unread, the invoice waited on a person, and the timeline said "claude-haiku-5-5 refused the key (401), then gemini-3.5-flash refused the request (400), then gemini-3.1-flash-lite refused the request (400)". Ask why passed that line with the model names kept. With both keys good, `claude-haiku-5-5` read it.
-- With only `READER_API_KEY` set, the reader and explainer from main and the ones here got the same fake `fetch`. They sent the same URL, headers and body, gave the same outcome and wrote the same console lines. That held for an answer, 503 then an answer, a 401 that echoed the key, 429 from both models, a timeout then no connection, and a body that was not JSON then `length`, on the default endpoint and on a custom base URL and model list.
-- On a stub, a Claude 401 that echoed its key as written, URL-encoded, in base64, upper-cased and cut short, and a Gemini 503 that echoed both keys, reached the console as `[key]`. A 529 read as busy, `max_tokens` as cut and `refusal` as incomplete, and a thinking block before the text was passed over.
-- No key value turned up in any command's output, the server logs, the ledger copy or the diff.
-- Redirects, after a review: `READER_BASE_URL` pointed at a loopback server that answered 307 to a second loopback server. A plain fetch to the first followed the redirect and handed the second `x-api-key` and the body. The reader failed with "gemini-3.5-flash could not be reached, then gemini-3.1-flash-lite could not be reached", and the second server received nothing. A Claude-shaped service pointed at the first server failed the same way, and again nothing reached the second.
+- A request to a model is one plain `fetch`, with no SDK (`complete`). A `ModelService` is Anthropic's Messages API at the fixed `CLAUDE_URL` (`claudeService`), or an OpenAI-compatible chat completions endpoint (`chatService`).
+- Claude gets one Messages API request per email: `POST https://api.anthropic.com/v1/messages` with `x-api-key`, `anthropic-version: 2026-10-21` (`ANTHROPIC_VERSION`) and `max_tokens` 4,000.
+- The Claude body puts the system prompt in `system` and sends `output_config` with `effort: "low"` and a `json_schema` format. It sends no `thinking` setting.
+- A good Claude answer has `stop_reason` `end_turn`, and its text blocks are read by type. `max_tokens` is a cut answer, and any other stop reason, `refusal` included, an incomplete one.
+- Gemini gets one chat completion per email, with the key in `Authorization: Bearer`, `reasoning_effort: "low"` and a strict `json_schema` response format. A good answer has `finish_reason` `stop`, and `length` is a cut answer.
+- No request follows a redirect. `complete` passes `redirect: "error"`, a redirect fails the request, and `tryOf` reads it as could not be reached.
+- Each model gets one request with an 8-second timeout (`REQUEST_TIMEOUT_MS`).
+- `firstAnswer` asks each service's models in order and returns the first answer its `parse` accepts, with the model that gave it, or every try.
+- A refused key (401 or 403) skips the rest of that service's models, and the next service is asked. An overloaded service, 503 from Google or 529 from Anthropic, counts as busy.
+- `ModelError` is an error status. `ModelAnswerError` is an answer PayOnce cannot use: `cut` on its token budget, `incomplete` when stopped for another reason, or `unusable` when it is not what was asked for.
+- `serviceView` is what a view is told about a service: its models, its host, whether it is Claude and whether it is Google's free tier, never its key.
+
+### What a model may answer
+
+- The model answers three booleans (`claimsNonReceipt`, `asksForNewBankDetails`, `asksNotToPay`) and no text. `toAnswers` checks the answer again, so a service that ignores the schema still cannot return anything else.
+- The display name, Reply-To, the text found inside styles, attachment names and PayOnce's notes go in tags of their own. The prompt says nothing in the sender's tags comes from PayOnce, and `<` and `>` are escaped so an email cannot close its tag.
+- `summarise` in `src/reader/emails.ts` writes the summary from the findings for both readers, so no wording from an email or a model reaches the approval card or the approval binding.
+- `ModelReader` also runs the keyword check and ORs the findings.
+- `KeywordReader` is the fallback reader. It matches a handful of phrases for each finding and understands nothing else, and its findings name it "keyword placeholder" (`KEYWORD_READER_NAME`).
+- The keyword check reads the display name, subject, body, style text and attachment names after `keywordText`: blank-looking letters become spaces, default-ignorable characters go, then NFKC, straight apostrophes and one space for every whitespace run.
+- The engine gives the reader one email at a time and ORs each read into the stored findings (`readNewEmails`).
+- When every model fails, `read` throws `ModelReadError`. The engine marks the thread unread with a timeline line saying what each model did in PayOnce's words, the policy escalates, and the next look reads from the email that failed.
+- Findings carry `readBy`, the model that answered. The payment's emails and the inbox show it.
+
+### Failures in PayOnce's words
+
+- `reader-error.ts` gives `ModelTry`, `tryText` and `triesText`, which say what each model did in fixed words that hold no text from the service, from `MODEL_FAILURE_WORDS` in `src/text/words.ts`.
+- The words: was busy (503 or 529), was over its request limit (429), refused the key (401 or 403), refused the request, had an error on its side, timed out after 8 s, cut its answer short, stopped before its answer was complete, gave an answer PayOnce could not use, could not be reached, gave no answer.
+- `reader-error.ts` imports only `words.ts`, so the engine reads a reader failure without importing the reader.
+- A model that fails prints a `reader` line saying why, with every key cut out of the service's text in every form `redactKey` cuts (`redactKeys`, [airwallex-client.md](airwallex-client.md)). The timeline gets only `triesText`'s words.
+
+### What the page says
+
+- Settings' "Email reader and Ask why" section names the model reader's models in order, or says the keyword reader reads because no model key is set (`views/settings-view.ts`).
+- Settings show a caution that Google may use what it reads when a model on Google's endpoint is in the reader's chain, from `ModelReader.views`, which lists where the emails go, service by service.
+- The inbox's upload card shows the same caution whenever a model reader is on (`views/inbox.ts`).
+
+## Why
+
+- The key is `CLAUDE_API_KEY`, not `ANTHROPIC_API_KEY`, because Claude Code reads `ANTHROPIC_API_KEY`, and a key under that name in Yash's shell would switch Claude Code to it.
+- Claude gets low effort and no `thinking` setting because at low effort the models skipped thinking, and one body then works on both Haiku 5.5 and Sonnet 5.5. Sonnet 5.5 refuses `disabled` and Haiku 5.5 refuses `between_tools`.
+- Neither Claude list should name a model that rejects `effort`, such as Haiku 4.5 or Sonnet 4.5. It answers 400, which counts as a refused request, and the next model is asked.
+- Claude's text blocks are read by type because a thinking block can come first.
+- No request follows a redirect because fetch would otherwise carry `x-api-key` and the email or the facts to the host the redirect names, dropping only `Authorization`.
+- The model answers three booleans and no text, so a tricked model can change those answers and nothing else, and each finding only makes the policy more cautious.
+- The keyword check is ORed in so that a tricked model cannot remove a finding the keywords make. It can still hide one the keywords miss.
+- `keywordText` normalises the text so that wrapped lines and curly apostrophes match, and blank-looking or invisible characters cannot break up a phrase.
+- The engine reads one email at a time so that an instruction in one email cannot change how another is read.
+- A refused key skips the rest of its service because that service's models share the key.
+- Each service has a second model because free-tier capacity comes and goes, and one busy model should not send an incident to a person. Sonnet is Claude's second so that a busy Haiku does not send the email to Gemini.
+- The reader asks Haiku first because it was as accurate as Sonnet and faster, at a twentieth of Sonnet's price per token. Measured reads took 1.1 to 2.1 seconds on Haiku (median 1.4) and 1.7 to 2.9 on Sonnet.
+- Gemini's defaults are `gemini-3.5-flash` and `gemini-3.1-flash-lite` because between them they always answered, usually in 1.6 to 5.8 seconds.
+- The other Gemini models did worse. `gemini-3.8-flash`, the model in Google's examples, answered 503 "high demand" on 5 of 8 calls, `gemini-3.5-flash-lite` took 8 to 18 seconds, and the 2.5 models return 404 for new users.
+- The timeout is 8 seconds because reads on the default models usually took 1 to 6 seconds, and a model that hangs then holds the look for at most 8 seconds before the next one is asked.
+- Ask why's page limits leave room for the reader because `gemini-3.5-flash` returns 429 after about six calls in a minute and answers again a minute later. Daily limits are shown only in AI Studio.
+- The page warns about Google's free tier because Google may use free-tier content to improve its products. The fixtures are synthetic.
+
+## Edge cases
+
+- A service that ignores the schema can add fields, and only the three booleans are kept. An answer that is not JSON or lacks one of them is `unusable`, and the next model is asked.
+- A service that echoes a key in an error, as written, URL-encoded, in base64, upper-cased or cut short, reaches the console as `[key]`.
+- With every key refused, the thread is marked unread and the invoice waits on a person. The timeline line names each model and what it did, such as "claude-haiku-5-5 refused the key (401), then gemini-3.5-flash refused the request (400)".
+- Findings saved before `asksNotToPay` existed have none, which reads as false.
+- Findings saved before the read count was kept cover the whole thread.
+- A `READER_BASE_URL` that does not parse names its host as "the address in READER_BASE_URL".
+
+Dated checks: [verification/email-reader.md](../verification/email-reader.md).

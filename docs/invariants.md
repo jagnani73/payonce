@@ -208,7 +208,7 @@ A guarantee enforced "in SQL" is a condition inside the statement that writes, r
     Where: the engine imports none of them; the MCP server, `pnpm ask` and `pnpm metrics` open the ledger read-only (`new Ledger(path, true)`). Details: [reconciliation.md](design/reconciliation.md), [mcp-server.md](design/mcp-server.md).
 
 64. PayOnce's Airwallex client talks only to the sandbox.\
-    Where: the host check in `src/airwallex/client.ts` accepts only `SANDBOX_HOSTS` and `sandbox.invalid` (`ALLOWED_HOSTS`). Details: [structure.md](design/structure.md).
+    Where: the host check in `src/airwallex/client.ts` accepts only `SANDBOX_HOSTS` and `sandbox.invalid` (`ALLOWED_HOSTS`). Details: [airwallex-client.md](design/airwallex-client.md).
 
 65. The Airwallex client id and API key, and the model services' keys, are cut out of Airwallex errors, model service errors and Ask why answers before any of them is printed or stored.\
-    Where: `withoutSecrets` in `src/airwallex/client.ts`; `redactKeys` in `src/reader/model-service.ts` and `src/explain/explainer.ts`; both use `src/text/redact.ts`. Details: [structure.md](design/structure.md), [email-reader.md](design/email-reader.md).
+    Where: `withoutSecrets` in `src/airwallex/client.ts`; `redactKeys` in `src/reader/model-service.ts` and `src/explain/explainer.ts`; both use `src/text/redact.ts`. Details: [airwallex-client.md](design/airwallex-client.md), [email-reader.md](design/email-reader.md).

@@ -1,0 +1,32 @@
+# Ask why: dated checks
+
+How the rules in [design/ask-why.md](../design/ask-why.md) were checked, as written at the time. Only paths have been updated to the current layout, so a note may describe behaviour that has changed since.
+
+## 2026-11-02: the facts, a mock model and real calls
+
+Checked on 2026-11-02 on copies of the main ledger, with no Airwallex call:
+
+- Coverage: the facts for every invoice in a copy of the main ledger passed every decision, waiting, cost, bank-details, lock and closed line, kept or rewritten, with no unrecognised reason. Only two raw error lines (a missing fixture file, a simulator 500) became stand-ins.
+- Four seeded incidents (a held invoice paid from USD with an open request on a quote, an escalated replacement with an uploaded email and an open two-approver request after a callback, a released pay run row, and a replacement an active outage holds beside an ended one) carried `INJECT-ME-1234` in every free-text field: names, the supplier, the email's sender, subject, body, display name, style text, attachment and Reply-To, the upload, the callback, `payTo`, `accountKey`, the quote id, the run's file name, the outage's ender and note, a close note, a draft's creator, payout references and error text, with phone +1 555 0199 and account 000555997319. A mock chat completions server on 127.0.0.1 recorded every body: none held the marker, the phone, the account or routing digits, or any staff name.
+- On the mock: a 503 then a good answer gave the second model; a 401 echoing the key stopped after one request with `[key]` in the error; a hang aborted at 8 seconds per model; not JSON, an extra field and `length` each failed over; both failing gave 502. Bidi and zero-width characters were dropped, `<img onerror>` came back as text, an answer over the caps was cut. The guard gave 403 without Origin or with `text/plain`, and GET gave 404. A second ask on the same facts was cached with one request in all, a concurrent ask got 409, the third in a minute got 429 with `Retry-After`, a line added to the timeline made the next ask a new request, and after 429 from both models the next ask was refused for 60 seconds and then went through. With no key, `explainer.on` was false, the route gave 503, the CLI exited 1 and `facts` still printed.
+- Real calls on a copy of the main ledger. The closed automatic replacement (INV-577330, 6,454 characters of facts): `gemini-3.5-flash` explained the channel timeout, the replacement and the close, and put the failure's cause in `notInFacts`. The bank-details escalation (INV-528160): `gemini-3.5-flash` timed out at 8 seconds and `gemini-3.1-flash-lite` answered in 3.3 seconds, `finish_reason` `stop`, 4,267 prompt and 150 completion tokens, 572 characters, with the callback and the two approvers named after the swap. Neither body held a name, the supplier, an address, a phone or an account.
+
+## 2026-11-02: seeded hostile cases after a review
+
+Checked again on 2026-11-02 after a review, on ledger copies, with a loopback mock model and no call to Airwallex:
+
+- Seeded hostile cases. The "only X can approve it" waiting line, whose reason named another invoice and went out raw, now gives `[invoice 1]` and `[person 2]`. An error line that reads like a decision, a bank line or a close became a stand-in, as did a callback whose typed name reads like a close and a decision line with no topic. A reader name made of plain words in the findings became "the email reader". A found payout's wallet and method that were not codes went in PayOnce's words. No user message held the marker, the phone or the account digits.
+- On eleven ledger copies (the main ledger and others from earlier runs, 1,425 lines), every line that passed before still passes, with the same text.
+- When a service answered 500 with the key cut short, URL-encoded, inside the base64 of its header and as base64url, none of it reached the reader's or the explainer's error.
+- `pnpm ask` ran PayOnce's script, while pnpm's own `why` printed nothing and exited 0. The CLI dropped an ESC and a U+202E from a typed starter name, refused a ledger with 52 gaps without changing it, and aliased a starter who is not in `APPROVERS`.
+- In headless Chrome the cached hint read "Nothing has changed since 22:33", and a cached answer that had gone stale showed only the stale notice. The minute limit's error went away when the button came back. The hint named 127.0.0.1:4396 for the mock and Google's free tier for Google's endpoint.
+
+## 2026-11-06: Claude added
+
+Checked on 2026-11-06 with Claude added, on a copy of the main ledger that `pnpm board` upgraded, with `AWX_BASE_URL` at `sandbox.invalid`:
+
+- `pnpm ask` with each Claude model alone as the Claude list, timed from the command's start, tsx included: INV-528160 (32 lines) took 4.6 seconds on `claude-haiku-5-5` and 5.1 on `claude-sonnet-5-5`, and INV-577330 (12 lines) 3.1 and 4.3. All four answers explained the failure, the replacement and the close, and put the cause behind the failure code in `notInFacts`. Haiku's explanation ran past the 1,000-character cap both times and was cut at a sentence end, and once it called the replacement's bank deadline something still pending after the replacement was paid. Sonnet's fit the cap. So Ask why got its own Claude list, `CLAUDE_ASK_MODEL`, with Sonnet first: 4 to 5 seconds is fine for a button press, and the reader keeps Haiku first.
+- Through the route with both keys, `claude-haiku-5-5` answered in 2.9 seconds. With a bad `CLAUDE_API_KEY`, Haiku answered 401, Sonnet was not asked and `gemini-3.5-flash` answered in 2.0 seconds. With neither key the route gave 503 naming both keys, and `pnpm ask` exited 1 pointing to `facts`.
+- In headless Chrome with both keys, the idle hint read "Sends this invoice's PayOnce records to claude-haiku-5-5, then claude-sonnet-5-5 at api.anthropic.com, then gemini-3.5-flash, then gemini-3.1-flash-lite on Google's free tier." With Claude alone it named only `api.anthropic.com`, and with Gemini alone it read as it did before Claude was added.
+- With `CLAUDE_ASK_MODEL` at its default and no Claude list in `.env`, `pnpm ask INV-577330` was answered by `claude-sonnet-5-5` in 5.1 seconds, while the reader's chain still started with `claude-haiku-5-5`. Setting `CLAUDE_ASK_MODEL` changed only Ask why's chain.
+- On a stub, 429 from all four models paused the page for a minute, and so did a Claude 401 followed by 429 from both Gemini models. An answer that echoed either key came back with `[key]` in its place.
