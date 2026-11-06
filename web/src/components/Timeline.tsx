@@ -28,6 +28,7 @@ const FILTER_OF: Partial<Record<EventKind, Filter>> = {
   email: "emails",
   approval: "approvals",
   callback: "approvals",
+  contact: "approvals",
   outbox: "messages",
 };
 
@@ -41,6 +42,7 @@ const ICONS: Record<EventKind, IconName> = {
   lock: "lock",
   closed: "closed",
   callback: "callback",
+  contact: "callback",
   error: "error",
   outbox: "message",
   outage: "outage",
