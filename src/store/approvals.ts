@@ -120,6 +120,212 @@ export interface RunApprovalRow {
   needed_why: string;
 }
 
+function toRunApproval(row: RunApprovalRow, signoffs: Signoff[]): RunApproval {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    binding: row.binding,
+    terms: row.terms,
+    state: row.state,
+    approver: row.approver,
+    requestedAt: row.requested_at,
+    expiresAt: row.expires_at,
+    needed: row.needed,
+    neededWhy: row.needed_why,
+    signoffs,
+  };
+}
+
+// What a request row holds that signing off reads.
+interface RequestRow {
+  id: number;
+  binding: string;
+  state: ApprovalState;
+  expires_at: string | null;
+  needed: number;
+}
+
+// What tells the invoices' requests from the pay runs'. Run approvals are kept
+// apart from invoice approvals because a run has no invoice until it is
+// released, so each has its tables, the column naming what a request is for,
+// and open, the test a request opens only while, on the owner bound as its one
+// parameter. kept are the columns a request keeps beside its terms, outside the
+// binding. approved runs in the write transaction once a request has every
+// signoff it needs.
+interface RequestShape<Row extends RequestRow, Request> {
+  requests: string;
+  signoffs: string;
+  owner: string;
+  open: string;
+  kept: { column: string; of: (request: ApprovalRequest) => string | null }[];
+  expired: string;
+  toRequest: (row: Row, signoffs: Signoff[]) => Request;
+  approved?: (db: Db, row: Row) => void;
+}
+
+const INVOICE_REQUESTS: RequestShape<ApprovalRow, Approval> = {
+  requests: "approvals",
+  signoffs: "signoffs",
+  owner: "invoice_id",
+  // Only an invoice with a person gets one, so a request cannot land on an
+  // invoice another process has just closed.
+  open: "SELECT 1 FROM obligations WHERE invoice_id = ? AND state = 'escalated'",
+  kept: [{ column: "route_key", of: (request: ApprovalRequest): string | null => request.routeKey ?? null }],
+  expired: "This approval request has expired. PayOnce opens a new one on its next look",
+  toRequest: toApproval,
+  // The next look is due now, so a watcher in another process uses the
+  // approval on its next check and not when the look it had planned comes.
+  approved: (db: Db, row: ApprovalRow): void => {
+    db.prepare("UPDATE obligations SET look_at = ? WHERE invoice_id = ?").run(new Date().toISOString(), row.invoice_id);
+  },
+};
+
+const RUN_REQUESTS: RequestShape<RunApprovalRow, RunApproval> = {
+  requests: "run_approvals",
+  signoffs: "run_signoffs",
+  owner: "run_id",
+  // Only a run still waiting gets one.
+  open: "SELECT 1 FROM runs WHERE id = ? AND state = 'waiting'",
+  kept: [],
+  expired: "This approval request has expired. Check the run again to open a new one",
+  toRequest: toRunApproval,
+};
+
+// One owner's approval requests and their signoffs, for invoices and pay runs
+// alike.
+class RequestBook<Owner extends string | number, Row extends RequestRow, Request> {
+  private readonly db: Db;
+  private readonly shape: RequestShape<Row, Request>;
+
+  constructor(db: Db, shape: RequestShape<Row, Request>) {
+    this.db = db;
+    this.shape = shape;
+  }
+
+  // Voids a request or approval that is still open. False when there was none.
+  void(owner: Owner): boolean {
+    const result: { changes: number | bigint } = this.db
+      .prepare(
+        `UPDATE ${this.shape.requests} SET state = 'void'
+          WHERE ${this.shape.owner} = ? AND state IN ('requested', 'approved')`,
+      )
+      .run(owner);
+    return Number(result.changes) > 0;
+  }
+
+  // A new request voids any earlier one that is still open. The caller holds the
+  // write transaction. False when none was opened.
+  add(owner: Owner, request: ApprovalRequest): boolean {
+    this.void(owner);
+    const columns: string[] = [
+      this.shape.owner,
+      "binding",
+      "terms",
+      "requested_at",
+      "expires_at",
+      "needed",
+      "needed_why",
+      ...this.shape.kept.map((kept: { column: string }): string => kept.column),
+    ];
+    const result: { changes: number | bigint } = this.db
+      .prepare(
+        `INSERT INTO ${this.shape.requests}
+           (${columns.join(", ")})
+         SELECT ${columns.map((): string => "?").join(", ")}
+          WHERE EXISTS (${this.shape.open})`,
+      )
+      .run(
+        owner,
+        request.binding,
+        request.terms,
+        new Date().toISOString(),
+        new Date(request.expiresAt).toISOString(),
+        request.needed,
+        request.neededWhy,
+        ...this.shape.kept.map((kept: { of: (request: ApprovalRequest) => string | null }): string | null =>
+          kept.of(request),
+        ),
+        owner,
+      );
+    return Number(result.changes) === 1;
+  }
+
+  latest(owner: Owner): Request | undefined {
+    const row: Row | undefined = this.db
+      .prepare(`SELECT * FROM ${this.shape.requests} WHERE ${this.shape.owner} = ? ORDER BY id DESC LIMIT 1`)
+      .get(owner) as unknown as Row | undefined;
+    return row === undefined ? undefined : this.shape.toRequest(row, this.signoffs(row.id));
+  }
+
+  // Oldest first.
+  all(owner: Owner): Request[] {
+    return (
+      this.db
+        .prepare(`SELECT * FROM ${this.shape.requests} WHERE ${this.shape.owner} = ? ORDER BY id`)
+        .all(owner) as unknown as Row[]
+    ).map((row: Row): Request => this.shape.toRequest(row, this.signoffs(row.id)));
+  }
+
+  byId(id: number): Request | undefined {
+    const row: Row | undefined = this.db
+      .prepare(`SELECT * FROM ${this.shape.requests} WHERE id = ?`)
+      .get(id) as unknown as Row | undefined;
+    return row === undefined ? undefined : this.shape.toRequest(row, this.signoffs(row.id));
+  }
+
+  private signoffs(approvalId: number): Signoff[] {
+    return this.db
+      .prepare(`SELECT approver, binding, at FROM ${this.shape.signoffs} WHERE approval_id = ? ORDER BY rowid`)
+      .all(approvalId) as unknown as Signoff[];
+  }
+
+  // Records one approver's approval of a request that is still waiting and has
+  // not expired, for the binding they were shown. The request becomes approved
+  // once it has as many as it needs, and then has useWithinMs to be used, so a
+  // request completed just before it expired is not lost to a slow look. Both
+  // happen in one transaction, so approvals arriving together from the page and
+  // the CLI are each counted once. Returns the request as it now stands.
+  signOff(approvalId: number, approver: string, binding: string, useWithinMs: number): Request {
+    this.db.transaction((): void => {
+      const row: Row | undefined = this.db
+        .prepare(`SELECT * FROM ${this.shape.requests} WHERE id = ?`)
+        .get(approvalId) as unknown as Row | undefined;
+      if (row === undefined || row.state !== "requested") {
+        throw new Error("This approval request is no longer waiting for approval");
+      }
+      if (row.binding !== binding) {
+        throw new Error("These are not the terms of the approval request");
+      }
+      const expiresAt: number = row.expires_at === null ? 0 : Date.parse(row.expires_at);
+      if (!(expiresAt > Date.now())) {
+        throw new Error(this.shape.expired);
+      }
+      try {
+        this.db
+          .prepare(`INSERT INTO ${this.shape.signoffs} (approval_id, approver, binding, at) VALUES (?, ?, ?, ?)`)
+          .run(approvalId, approver, binding, new Date().toISOString());
+      } catch (error: unknown) {
+        if (isUniqueViolation(error)) {
+          throw new Error(`${approver} has approved this already`);
+        }
+        throw error;
+      }
+      const signoffs: Signoff[] = this.signoffs(approvalId);
+      if (signoffs.length >= row.needed) {
+        const useBy: number = Math.max(expiresAt, Date.now() + useWithinMs);
+        this.db
+          .prepare(`UPDATE ${this.shape.requests} SET state = 'approved', approver = ?, expires_at = ? WHERE id = ?`)
+          .run(signersOf(signoffs), new Date(useBy).toISOString(), approvalId);
+        this.shape.approved?.(this.db, row);
+      }
+    });
+    const row: Row = this.db
+      .prepare(`SELECT * FROM ${this.shape.requests} WHERE id = ?`)
+      .get(approvalId) as unknown as Row;
+    return this.shape.toRequest(row, this.signoffs(approvalId));
+  }
+}
+
 // Spending an approval is kept only when it opened the payment's attempt, and
 // rolled back otherwise.
 function opened(attempt: Attempt | undefined): boolean {
@@ -131,10 +337,14 @@ function opened(attempt: Attempt | undefined): boolean {
 export class ApprovalStore {
   private readonly db: Db;
   private readonly attempts: AttemptStore;
+  private readonly invoiceRequests: RequestBook<string, ApprovalRow, Approval>;
+  private readonly runRequests: RequestBook<number, RunApprovalRow, RunApproval>;
 
   constructor(db: Db, attempts: AttemptStore) {
     this.db = db;
     this.attempts = attempts;
+    this.invoiceRequests = new RequestBook<string, ApprovalRow, Approval>(db, INVOICE_REQUESTS);
+    this.runRequests = new RequestBook<number, RunApprovalRow, RunApproval>(db, RUN_REQUESTS);
   }
 
   // Spends the approval to pay a held invoice, hands the invoice back to the
@@ -180,66 +390,27 @@ export class ApprovalStore {
   // Voids a request or approval for the invoice that is still open. False when
   // there was none.
   voidOpenApprovals(invoiceId: string): boolean {
-    const result: { changes: number | bigint } = this.db
-      .prepare(
-        `UPDATE approvals SET state = 'void'
-          WHERE invoice_id = ? AND state IN ('requested', 'approved')`,
-      )
-      .run(invoiceId);
-    return Number(result.changes) > 0;
+    return this.invoiceRequests.void(invoiceId);
   }
 
   // A new request voids any earlier one for the invoice that is still open. Only
   // an invoice with a person gets one, so a request cannot land on an invoice
   // another process has just closed. False when none was opened.
   requestApproval(invoiceId: string, request: ApprovalRequest): boolean {
-    return this.db.transaction((): boolean => {
-      this.voidOpenApprovals(invoiceId);
-      const result: { changes: number | bigint } = this.db
-        .prepare(
-          `INSERT INTO approvals
-             (invoice_id, binding, terms, requested_at, expires_at, needed, needed_why, route_key)
-           SELECT ?, ?, ?, ?, ?, ?, ?, ?
-            WHERE EXISTS (SELECT 1 FROM obligations WHERE invoice_id = ? AND state = 'escalated')`,
-        )
-        .run(
-          invoiceId,
-          request.binding,
-          request.terms,
-          new Date().toISOString(),
-          new Date(request.expiresAt).toISOString(),
-          request.needed,
-          request.neededWhy,
-          request.routeKey ?? null,
-          invoiceId,
-        );
-      return Number(result.changes) === 1;
-    });
+    return this.db.transaction((): boolean => this.invoiceRequests.add(invoiceId, request));
   }
 
   latestApproval(invoiceId: string): Approval | undefined {
-    const row: ApprovalRow | undefined = this.db
-      .prepare(
-        "SELECT * FROM approvals WHERE invoice_id = ? ORDER BY id DESC LIMIT 1",
-      )
-      .get(invoiceId) as unknown as ApprovalRow | undefined;
-    return row === undefined ? undefined : toApproval(row, this.signoffs(row.id));
+    return this.invoiceRequests.latest(invoiceId);
   }
 
   // Every approval request for the invoice, oldest first.
   approvalsFor(invoiceId: string): Approval[] {
-    return (
-      this.db
-        .prepare("SELECT * FROM approvals WHERE invoice_id = ? ORDER BY id")
-        .all(invoiceId) as unknown as ApprovalRow[]
-    ).map((row: ApprovalRow): Approval => toApproval(row, this.signoffs(row.id)));
+    return this.invoiceRequests.all(invoiceId);
   }
 
   approval(id: number): Approval | undefined {
-    const row: ApprovalRow | undefined = this.db
-      .prepare("SELECT * FROM approvals WHERE id = ?")
-      .get(id) as unknown as ApprovalRow | undefined;
-    return row === undefined ? undefined : toApproval(row, this.signoffs(row.id));
+    return this.invoiceRequests.byId(id);
   }
 
   // The approval an attempt was opened on. An attempt no approval released, or one
@@ -250,71 +421,15 @@ export class ApprovalStore {
       : this.approval(attempt.approvalId);
   }
 
-  private signoffs(approvalId: number): Signoff[] {
-    return this.db
-      .prepare(
-        "SELECT approver, binding, at FROM signoffs WHERE approval_id = ? ORDER BY rowid",
-      )
-      .all(approvalId) as unknown as Signoff[];
-  }
-
-  // Records one approver's approval of a request that is still waiting and has
-  // not expired, for the binding they were shown. The request becomes approved
-  // once it has as many as it needs, and then has useWithinMs to be used, so a
-  // request completed just before it expired is not lost to a slow look. Both
-  // happen in one transaction, so approvals arriving together from the page and
-  // the CLI are each counted once. Returns the request as it now stands.
+  // Once the request has every signoff it needs, the invoice's next look is due
+  // now (RequestBook.signOff).
   signOff(
     approvalId: number,
     approver: string,
     binding: string,
     useWithinMs: number,
   ): Approval {
-    this.db.transaction((): void => {
-      const row: ApprovalRow | undefined = this.db
-        .prepare("SELECT * FROM approvals WHERE id = ?")
-        .get(approvalId) as unknown as ApprovalRow | undefined;
-      if (row === undefined || row.state !== "requested") {
-        throw new Error("This approval request is no longer waiting for approval");
-      }
-      if (row.binding !== binding) {
-        throw new Error("These are not the terms of the approval request");
-      }
-      const expiresAt: number = row.expires_at === null ? 0 : Date.parse(row.expires_at);
-      if (!(expiresAt > Date.now())) {
-        throw new Error("This approval request has expired. PayOnce opens a new one on its next look");
-      }
-      try {
-        this.db
-          .prepare(
-            "INSERT INTO signoffs (approval_id, approver, binding, at) VALUES (?, ?, ?, ?)",
-          )
-          .run(approvalId, approver, binding, new Date().toISOString());
-      } catch (error: unknown) {
-        if (isUniqueViolation(error)) {
-          throw new Error(`${approver} has approved this already`);
-        }
-        throw error;
-      }
-      const signoffs: Signoff[] = this.signoffs(approvalId);
-      if (signoffs.length >= row.needed) {
-        const useBy: number = Math.max(expiresAt, Date.now() + useWithinMs);
-        this.db
-          .prepare(
-            "UPDATE approvals SET state = 'approved', approver = ?, expires_at = ? WHERE id = ?",
-          )
-          .run(signersOf(signoffs), new Date(useBy).toISOString(), approvalId);
-        // The next look is due now, so a watcher in another process uses the
-        // approval on its next check and not when the look it had planned comes.
-        this.db
-          .prepare("UPDATE obligations SET look_at = ? WHERE invoice_id = ?")
-          .run(new Date().toISOString(), row.invoice_id);
-      }
-    });
-    const row: ApprovalRow = this.db
-      .prepare("SELECT * FROM approvals WHERE id = ?")
-      .get(approvalId) as unknown as ApprovalRow;
-    return toApproval(row, this.signoffs(approvalId));
+    return this.invoiceRequests.signOff(approvalId, approver, binding, useWithinMs);
   }
 
   // Spends an approval on one replacement and opens its attempt, in one
@@ -368,13 +483,7 @@ export class ApprovalStore {
   }
 
   voidOpenRunApprovals(runId: number): boolean {
-    const result: { changes: number | bigint } = this.db
-      .prepare(
-        `UPDATE run_approvals SET state = 'void'
-          WHERE run_id = ? AND state IN ('requested', 'approved')`,
-      )
-      .run(runId);
-    return Number(result.changes) > 0;
+    return this.runRequests.void(runId);
   }
 
   // A new request voids any earlier one for the run that is still open. Only a
@@ -389,106 +498,19 @@ export class ApprovalStore {
     if (!this.db.isTransaction) {
       throw new Error("A run's request is opened only inside a ledger transaction");
     }
-    this.voidOpenRunApprovals(runId);
-    const result: { changes: number | bigint } = this.db
-      .prepare(
-        `INSERT INTO run_approvals
-           (run_id, binding, terms, requested_at, expires_at, needed, needed_why)
-         SELECT ?, ?, ?, ?, ?, ?, ?
-          WHERE EXISTS (SELECT 1 FROM runs WHERE id = ? AND state = 'waiting')`,
-      )
-      .run(
-        runId,
-        request.binding,
-        request.terms,
-        new Date().toISOString(),
-        new Date(request.expiresAt).toISOString(),
-        request.needed,
-        request.neededWhy,
-        runId,
-      );
-    return Number(result.changes) === 1;
-  }
-
-  private runSignoffs(approvalId: number): Signoff[] {
-    return this.db
-      .prepare(
-        "SELECT approver, binding, at FROM run_signoffs WHERE approval_id = ? ORDER BY rowid",
-      )
-      .all(approvalId) as unknown as Signoff[];
-  }
-
-  private toRunApproval(row: RunApprovalRow): RunApproval {
-    return {
-      id: row.id,
-      runId: row.run_id,
-      binding: row.binding,
-      terms: row.terms,
-      state: row.state,
-      approver: row.approver,
-      requestedAt: row.requested_at,
-      expiresAt: row.expires_at,
-      needed: row.needed,
-      neededWhy: row.needed_why,
-      signoffs: this.runSignoffs(row.id),
-    };
+    return this.runRequests.add(runId, request);
   }
 
   latestRunApproval(runId: number): RunApproval | undefined {
-    const row: RunApprovalRow | undefined = this.db
-      .prepare("SELECT * FROM run_approvals WHERE run_id = ? ORDER BY id DESC LIMIT 1")
-      .get(runId) as unknown as RunApprovalRow | undefined;
-    return row === undefined ? undefined : this.toRunApproval(row);
+    return this.runRequests.latest(runId);
   }
 
-  // Records one approver's approval of a run request that is still waiting and
-  // has not expired, for the binding they were shown, as signOff does for an
-  // invoice. Returns the request as it now stands.
   signOffRun(
     approvalId: number,
     approver: string,
     binding: string,
     useWithinMs: number,
   ): RunApproval {
-    this.db.transaction((): void => {
-      const row: RunApprovalRow | undefined = this.db
-        .prepare("SELECT * FROM run_approvals WHERE id = ?")
-        .get(approvalId) as unknown as RunApprovalRow | undefined;
-      if (row === undefined || row.state !== "requested") {
-        throw new Error("This approval request is no longer waiting for approval");
-      }
-      if (row.binding !== binding) {
-        throw new Error("These are not the terms of the approval request");
-      }
-      const expiresAt: number = Date.parse(row.expires_at);
-      if (!(expiresAt > Date.now())) {
-        throw new Error("This approval request has expired. Check the run again to open a new one");
-      }
-      try {
-        this.db
-          .prepare(
-            "INSERT INTO run_signoffs (approval_id, approver, binding, at) VALUES (?, ?, ?, ?)",
-          )
-          .run(approvalId, approver, binding, new Date().toISOString());
-      } catch (error: unknown) {
-        if (isUniqueViolation(error)) {
-          throw new Error(`${approver} has approved this already`);
-        }
-        throw error;
-      }
-      const signoffs: Signoff[] = this.runSignoffs(approvalId);
-      if (signoffs.length >= row.needed) {
-        const useBy: number = Math.max(expiresAt, Date.now() + useWithinMs);
-        this.db
-          .prepare(
-            "UPDATE run_approvals SET state = 'approved', approver = ?, expires_at = ? WHERE id = ?",
-          )
-          .run(signersOf(signoffs), new Date(useBy).toISOString(), approvalId);
-      }
-    });
-    const row: RunApprovalRow = this.db
-      .prepare("SELECT * FROM run_approvals WHERE id = ?")
-      .get(approvalId) as unknown as RunApprovalRow;
-    return this.toRunApproval(row);
+    return this.runRequests.signOff(approvalId, approver, binding, useWithinMs);
   }
 }
