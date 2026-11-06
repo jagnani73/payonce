@@ -49,6 +49,7 @@ import {
 } from "./outages.js";
 import { PayoutStore, type FoundPayout, type OutsidePayout, type PayoutMoney, type PayoutState } from "./payouts.js";
 import { MetricsReads, type MetricsRead } from "./read/metrics.js";
+import { SearchReads, type SearchRead } from "./read/search.js";
 import { SupplierReads, type SupplierLinks, type SupplierListRead, type SupplierRead } from "./read/suppliers.js";
 import { ReconStore } from "./recon-store.js";
 import {
@@ -129,6 +130,7 @@ export type {
   MetricsRead,
   MetricsRequest,
 } from "./read/metrics.js";
+export type { SearchRead } from "./read/search.js";
 export type {
   SupplierApproval,
   SupplierAttempt,
@@ -182,6 +184,7 @@ interface Repositories {
   webhookEvents: WebhookEventStore;
   suppliers: SupplierReads;
   metrics: MetricsReads;
+  search: SearchReads;
 }
 
 // The ledger as the rest of PayOnce sees it. Each method hands over to the
@@ -213,6 +216,7 @@ export class Ledger {
     const webhookEvents: WebhookEventStore = new WebhookEventStore(db);
     const suppliers: SupplierReads = new SupplierReads(db, invoices, bankChanges);
     const metrics: MetricsReads = new MetricsReads(db);
+    const search: SearchReads = new SearchReads(db);
     this.repos = {
       db,
       bankChanges,
@@ -233,6 +237,7 @@ export class Ledger {
       webhookEvents,
       suppliers,
       metrics,
+      search,
     };
     if (readOnly) {
       return;
@@ -505,6 +510,10 @@ export class Ledger {
 
   postponeDueLook(invoiceId: string, now: number, until: number): void {
     this.repos.invoices.postponeDueLook(invoiceId, now, until);
+  }
+
+  nextCheckAt(invoiceId: string): string | null {
+    return this.repos.invoices.nextCheckAt(invoiceId);
   }
 
   lookPlanned(invoiceId: string, now: number): boolean {
@@ -828,6 +837,14 @@ export class Ledger {
     return this.repos.suppliers.supplierLinks(except);
   }
 
+  search(q: string, limit: number): SearchRead {
+    return this.repos.search.search(q, limit);
+  }
+
+  knownNames(limit: number): string[] {
+    return this.repos.search.knownNames(limit);
+  }
+
   run(id: number): Run | undefined {
     return this.repos.runs.run(id);
   }
@@ -919,6 +936,10 @@ export class Ledger {
 
   latestRunApproval(runId: number): RunApproval | undefined {
     return this.repos.approvals.latestRunApproval(runId);
+  }
+
+  runApprovalsFor(runId: number): RunApproval[] {
+    return this.repos.approvals.runApprovalsFor(runId);
   }
 
   signOffRun(

@@ -296,6 +296,15 @@ export class InvoiceStore {
       .run(new Date(until).toISOString(), invoiceId, new Date(now).toISOString());
   }
 
+  // When the agent's next look at the invoice is planned, as stored, or null
+  // when it waits for news.
+  nextCheckAt(invoiceId: string): string | null {
+    const row: { look_at: string | null } | undefined = this.db
+      .prepare("SELECT look_at FROM obligations WHERE invoice_id = ?")
+      .get(invoiceId) as unknown as { look_at: string | null } | undefined;
+    return row?.look_at ?? null;
+  }
+
   // True when the agent has a look at the invoice planned for later than now.
   lookPlanned(invoiceId: string, now: number): boolean {
     return (

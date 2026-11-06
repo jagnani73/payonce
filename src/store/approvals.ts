@@ -505,6 +505,11 @@ export class ApprovalStore {
     return this.runRequests.latest(runId);
   }
 
+  // Every request for the run, oldest first.
+  runApprovalsFor(runId: number): RunApproval[] {
+    return this.runRequests.all(runId);
+  }
+
   signOffRun(
     approvalId: number,
     approver: string,
