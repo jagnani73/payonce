@@ -118,6 +118,8 @@ export function statusView(
         needsPerson: recon.open.filter((item: BreakView): boolean => !item.clearsByItself).length,
       },
       reader: readerOf(settings).name,
+      pace:
+        server === null ? null : { checksEverySeconds: server.checksEverySeconds, listingEverySeconds: server.listingEverySeconds },
       inbox: { waiting: ledger.inboxWaiting().waiting },
       runs: {
         needsApproval: request !== undefined && request.state === "requested" && !isExpired(request, now) ? 1 : 0,

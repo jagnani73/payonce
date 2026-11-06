@@ -65,14 +65,17 @@ function readiness(settings: Settings, airwallex: AirwallexHealth | null): Readi
   ];
 }
 
-// Uploads waiting in the inbox that suggest an invoice.
-function suggestedUploads(ledger: Ledger): number {
+// The invoice each upload waiting in the inbox suggests, for those that suggest one.
+function suggestedInvoices(ledger: Ledger): string[] {
   const waiting: Upload[] = ledger.uploads(0).filter((upload: Upload): boolean => upload.state === "waiting");
   if (waiting.length === 0) {
-    return 0;
+    return [];
   }
   const index: InvoiceIndex = invoiceIndex(ledger);
-  return waiting.filter((upload: Upload): boolean => candidatesFor(ledger, upload, index).suggested !== null).length;
+  return waiting.flatMap((upload: Upload): string[] => {
+    const suggested: string | null = candidatesFor(ledger, upload, index).suggested;
+    return suggested === null ? [] : [suggested];
+  });
 }
 
 function paidTile(report: MetricsReport): Tile {
@@ -157,6 +160,7 @@ export function homeView(
   const handling: IncidentRow[] = inGroup("payonce");
   const blocked: IncidentRow[] = handling.filter((row: IncidentRow): boolean => row.situation.blockers.length > 0);
   const inbox: InboxWaiting = ledger.inboxWaiting();
+  const suggested: string[] = suggestedInvoices(ledger);
   const closedAt: number[] = inGroup("closed")
     .map((row: IncidentRow): number => (row.situation.since === null ? Number.NaN : Date.parse(row.situation.since)))
     .filter((at: number): boolean => Number.isFinite(at));
@@ -185,7 +189,7 @@ export function homeView(
     ],
     waitingForMe: me === null ? null : waitingOn(queues, me),
     needsYou: asItems(needsYou, runsNeedingYou),
-    inbox: { waiting: inbox.waiting, suggested: suggestedUploads(ledger) },
+    inbox: { waiting: inbox.waiting, suggested: suggested.length, invoices: [...new Set<string>(suggested)] },
     handling: {
       count: handling.length,
       blocked: blocked.length,

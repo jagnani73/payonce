@@ -685,7 +685,9 @@ export interface HomeView {
   // Set when ?me= names someone: requests that person can sign now.
   waitingForMe: QueueItem[] | null;
   needsYou: QueueItem[];
-  inbox: { waiting: number; suggested: number };
+  // suggested: the waiting uploads that suggest a payment; invoices: the payments
+  // they suggest, each once.
+  inbox: { waiting: number; suggested: number; invoices: InvoiceId[] };
   handling: { count: number; blocked: number; rows: IncidentRow[] };
   // Ledger empty: the readiness checklist and first actions.
   firstRun: { readiness: ReadinessItem[] } | null;
@@ -1405,6 +1407,9 @@ export interface StatusView {
   audit: { intact: boolean; checkedAt: Iso | null };
   recon: { lastCheckAt: Iso | null; needsPerson: number };
   reader: string;
+  // How often pnpm ui checks the payments with the bank, and lists Airwallex's
+  // transfers. Null outside pnpm ui.
+  pace: { checksEverySeconds: number; listingEverySeconds: number } | null;
   inbox: { waiting: number };
   runs: { needsApproval: number };
 }
