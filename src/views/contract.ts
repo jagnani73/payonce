@@ -770,7 +770,8 @@ export interface PaymentCheckView {
   // The invoice number checked: the one given, or the one PayOnce made for an
   // empty field, which the form can send to start the payment under it.
   invoiceId: InvoiceId;
-  // The contact on file the payment would start with, once the record is read.
+  // The contact the payment would have: the record's phone on file, by its last
+  // four digits, and the payee's email domain. Null until a beneficiary is picked.
   contact: { phoneEnding: string | null; emailDomain: Theirs | null } | null;
 }
 

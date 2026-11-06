@@ -1,5 +1,6 @@
 import { findBeneficiary, type BeneficiaryRecord } from "../airwallex/beneficiaries.js";
 import { AirwallexError, AirwallexUnreachableError, type AirwallexClient } from "../airwallex/client.js";
+import { phoneEnding } from "../domain/contacts.js";
 import { formatMoney } from "../domain/money.js";
 import { reasonText, reasonView } from "../domain/reasons.js";
 import { currencyFloor, type CurrencyFloor } from "../domain/reserve.js";
@@ -11,7 +12,7 @@ import type { Settings } from "../settings.js";
 import { readingSoft, type Ledger, type Obligation, type Outage, type TransferMethod } from "../store/ledger.js";
 import { PAID_OUTCOME, STAYS_IN_FLIGHT } from "../text/words.js";
 import type { HeadroomLine, PaymentCheckView } from "./contract.js";
-import { lastFour, money } from "./parts.js";
+import { money } from "./parts.js";
 
 // The New payment form's "What happens next": what PayOnce would do with the
 // payment if it started now, from the ledger, the beneficiary record as last
@@ -75,12 +76,13 @@ function headroomAfter(ledger: Ledger, settings: Settings, payment: NewPayment, 
   };
 }
 
-// The phone and email domain the payment would carry, as the payment page shows
-// them: the last four digits and the domain, never more.
-function contactOf(payee: Payee): PaymentCheckView["contact"] {
+// The contact the payment would have, as the payment page shows it: the last
+// four digits of the record's phone on file, which a callback for it dials, and
+// the email domain the payee carries, once the record is read.
+function contactOf(ledger: Ledger, beneficiaryId: string, payee: Payee | null): PaymentCheckView["contact"] {
   return {
-    phoneEnding: lastFour(payee.supplierPhone),
-    emailDomain: payee.supplierDomain === "" ? null : payee.supplierDomain,
+    phoneEnding: phoneEnding(ledger.contactOnFile(beneficiaryId, "phone")?.value ?? null),
+    emailDomain: payee === null || payee.supplierDomain === "" ? null : payee.supplierDomain,
   };
 }
 
@@ -167,7 +169,10 @@ export function paymentCheckView(
         : [],
       sandbox: sandboxLine(payment, input.bankOutcome ?? PAID_OUTCOME),
       invoiceId: payment.invoiceId,
-      contact: checked?.ok === true ? contactOf(checked.payee) : null,
+      contact:
+        input.fields["supplierKey"] === undefined
+          ? contactOf(ledger, input.beneficiaryId, checked?.ok === true ? checked.payee : null)
+          : null,
     };
   });
 }
