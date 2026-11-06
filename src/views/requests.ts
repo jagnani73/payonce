@@ -29,6 +29,7 @@ import {
 import type { Approval, Ledger, RunApproval, RunRow, Signoff } from "../store/ledger.js";
 import type {
   ApproverChoice,
+  ArrivalView,
   Barred,
   CallbackEvidenceView,
   DuplicateView,
@@ -218,9 +219,10 @@ export function runTermsView(ledger: Ledger, terms: RunTerms, live: boolean, now
       caution: check.caution,
       text: domainText(check),
     })),
-    arrivals: terms.rows.flatMap((row: RunRowTerms) =>
-      row.arrival === undefined ? [] : [{ line: row.line, invoiceId: row.invoiceId, advice: arrivalView(row.arrival, live, now) }],
-    ),
+    arrivals: terms.rows.flatMap((row: RunRowTerms) => {
+      const advice: ArrivalView | null = row.arrival === undefined ? null : arrivalView(row.arrival, live, now);
+      return advice === null ? [] : [{ line: row.line, invoiceId: row.invoiceId, advice }];
+    }),
   };
 }
 

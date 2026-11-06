@@ -1,5 +1,6 @@
-import { feeSeenText } from "../domain/arrival.js";
+import { feeSeenText, type ArrivalTerms } from "../domain/arrival.js";
 import { watching } from "../domain/live.js";
+import { CURRENCY_PATTERN } from "../domain/patterns.js";
 import {
   runRowStateOf,
   runSituationOf,
@@ -28,7 +29,7 @@ import type {
   RunView,
 } from "./contract.js";
 import { isBusy, isRunBusy, snapshotOptions, type Live } from "./context.js";
-import { accountView, activityOf, allowed, arrivalView, money, refused, runAuditLine, timelineView } from "./parts.js";
+import { accountView, activityOf, allowed, arrivalView, money, refused, runAuditLine, timelineView, vouchedArrival } from "./parts.js";
 import { runRequestView } from "./requests.js";
 import { readRunSnapshot, readRunSnapshots } from "./snapshot.js";
 import { sendsText, type OutageSend } from "../outages/outages.js";
@@ -112,6 +113,7 @@ function rowView(ledger: Ledger, run: Run, row: RunRow, released: Map<string, { 
   const payment: { situation: Situation; snapshot: InvoiceSnapshot } | undefined =
     row.invoiceId === null ? undefined : released.get(row.invoiceId);
   const state: RunRowStateView = runRowStateOf(row, payment?.situation ?? null);
+  const arrival: ArrivalTerms | null = row.arrival === null ? null : vouchedArrival(row.arrival);
   return {
     line: row.line,
     invoiceId: row.invoiceId,
@@ -122,7 +124,10 @@ function rowView(ledger: Ledger, run: Run, row: RunRow, released: Map<string, { 
     account: accountView(row.payTo),
     dueDate: row.dueDate,
     arrival: row.arrival === null ? null : arrivalView(row.arrival, run.state === "waiting", now),
-    feeSeen: row.arrival === null || row.currency === null ? null : feeSeenText(ledger, row.currency, row.arrival.method),
+    feeSeen:
+      arrival === null || row.currency === null || !CURRENCY_PATTERN.test(row.currency)
+        ? null
+        : feeSeenText(ledger, row.currency, arrival.method),
     state: state.state,
     label: state.label,
     newPayee: state.newPayee,

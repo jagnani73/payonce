@@ -1,8 +1,8 @@
 import { describeRate, markupOf, type FxTerms } from "../domain/approval.js";
-import { arrivalAdvice, HOLIDAYS_NOTE, today, type ArrivalAdvice, type ArrivalTerms } from "../domain/arrival.js";
+import { arrivalAdvice, HOLIDAYS_NOTE, ROUTES, today, type ArrivalAdvice, type ArrivalTerms } from "../domain/arrival.js";
 import { FAILURE_CODES, type FailureCode } from "../domain/failure-codes.js";
 import { formatMoney } from "../domain/money.js";
-import { FAILURE_CODE_PATTERN } from "../domain/patterns.js";
+import { FAILURE_CODE_PATTERN, TRANSFER_METHODS } from "../domain/patterns.js";
 import type { Can, Why } from "../domain/situation.js";
 import {
   chainReport,
@@ -111,9 +111,44 @@ export function fxView(fx: FxTerms): FxView {
   };
 }
 
-// The route advisory's words for an estimate. live: the payment can still be
-// sent, so "if sent today" applies.
-export function arrivalView(arrival: ArrivalTerms, live: boolean, now: number): ArrivalView {
+// Airwallex's bank_country_code, as an estimate carries it.
+const COUNTRY_CODE: RegExp = /^[A-Z]{2}$/;
+const DAY: RegExp = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
+
+function isDay(value: unknown): boolean {
+  return typeof value === "string" && DAY.test(value);
+}
+
+function isDayCount(value: unknown): boolean {
+  return value === null || (typeof value === "number" && Number.isSafeInteger(value) && value >= 0);
+}
+
+// A stored estimate in PayOnce's own forms: a method, a route PayOnce knows or
+// none, and days and day counts as PayOnce writes them. Null for anything else,
+// so the advice never repeats text PayOnce did not write there. The country
+// comes from the beneficiary record in Airwallex, so one that is not two capital
+// letters is left out instead.
+export function vouchedArrival(arrival: ArrivalTerms): ArrivalTerms | null {
+  const fits: boolean =
+    TRANSFER_METHODS.includes(arrival.method) &&
+    (arrival.route === null || ROUTES.includes(arrival.route)) &&
+    isDay(arrival.from) &&
+    [arrival.earliest, arrival.latest, arrival.dueDate].every((day: string | null): boolean => day === null || isDay(day)) &&
+    isDayCount(arrival.minDays) &&
+    isDayCount(arrival.maxDays);
+  if (!fits) {
+    return null;
+  }
+  return arrival.country === null || COUNTRY_CODE.test(arrival.country) ? arrival : { ...arrival, country: null };
+}
+
+// The route advisory's words for an estimate, or null for one vouchedArrival
+// refuses. live: the payment can still be sent, so "if sent today" applies.
+export function arrivalView(stored: ArrivalTerms, live: boolean, now: number): ArrivalView | null {
+  const arrival: ArrivalTerms | null = vouchedArrival(stored);
+  if (arrival === null) {
+    return null;
+  }
   const advice: ArrivalAdvice = arrivalAdvice(arrival, today(new Date(now)));
   return {
     text: advice.text,
