@@ -54,7 +54,7 @@ This file holds the commands, the file map and the rules that hold everywhere. T
 | `pay-runs.md` | `run-file.ts`, `runs.ts`, `payrun.ts`, and the run's turn in `watcher.ts` and `dispatcher.ts` |
 | `rail-outages.md` | `outages.ts`, `outage.ts` and the outage gate in `openAttempt` |
 | `uploaded-emails.md` | `eml.ts`, `html-text.ts`, `css-text.ts`, `intake.ts`, `parse-worker.ts` |
-| `email-reader.md` | `model-reader.ts`, `keyword-reader.ts`, `reader.ts`, `reader-error.ts`, `emails.ts` |
+| `email-reader.md` | `model-service.ts`, `model-reader.ts`, `keyword-reader.ts`, `reader.ts`, `reader-error.ts`, `emails.ts` |
 | `ask-why.md` | `why-facts.ts`, `explainer.ts`, `ask.ts`, and any new reason or timeline line, since Ask why passes only the ones it knows |
 | `reconciliation.md` | `recon-match.ts`, `recon-store.ts`, `reconcile.ts`, `recon-cli.ts`, `airwallex/history.ts`, and reconciliation's chain in `audit-trail.ts` |
 | `metrics.md` | `metrics.ts`, `metrics-cli.ts` and the time triggers in `ledger.ts` |
@@ -100,6 +100,7 @@ This file holds the commands, the file map and the rules that hold everywhere. T
 - `src/eml.ts`, `src/html-text.ts`, `src/css-text.ts`: the raw email parser and its HTML and CSS scanners.
 - `src/intake.ts`, `src/parse-worker.ts`: the upload queue, the parse worker, matching an upload to invoices and delivering it.
 - `src/model-reader.ts`, `src/keyword-reader.ts`, `src/reader.ts`, `src/reader-error.ts`: the two email readers, their settings and their failures.
+- `src/model-service.ts`: the model services the reader and Ask why ask in order, Claude's Messages API then Gemini's chat completions, and one request to a model over `fetch`.
 - `src/why-facts.ts`, `src/explainer.ts`: Ask why: the facts with their aliases and reason grammar, and the model call.
 - `src/redact.ts`: `redactKey`, which cuts a key out of error text in every form.
 - `src/words.ts`: fixed words the read-only code shares without importing the reader or the sandbox bank.
@@ -157,7 +158,7 @@ These are short forms of rules the topic files give in full, with their exceptio
 - Alerts are built from ledger fields, never from timeline lines, and never name an approver or an account. Text from the model service never reaches a timeline line, which uses `triesText`'s fixed words, and neither does `airwallexAdvice`. The Ask why answer is never stored.
 - Every PayOnce name a person types goes through `personName`, and two names are compared with `sameName`. The supplier's contact on a callback is not a PayOnce name.
 - Timeline lines are one line each, hash-chained and never edited. They are written through `note` or `runNote`, or by the Ledger methods that append a line inside their own transaction, never with plain SQL.
-- `AWX_CLIENT_ID`, `AWX_API_KEY` and `READER_API_KEY` are never printed. Airwallex errors go through `withoutSecrets`, which cuts the client id, the key and the token in every form `redactKey` cuts, and through `cleanLine`. The Airwallex client accepts only the two sandbox hosts and `sandbox.invalid`.
+- `AWX_CLIENT_ID`, `AWX_API_KEY`, `CLAUDE_API_KEY` and `READER_API_KEY` are never printed. The model reader and Ask why cut both model keys out of every error and answer with `redactKeys`. Airwallex errors go through `withoutSecrets`, which cuts the client id, the key and the token in every form `redactKey` cuts, and through `cleanLine`. The Airwallex client accepts only the two sandbox hosts and `sandbox.invalid`.
 
 ### Ledger
 
