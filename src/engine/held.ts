@@ -101,42 +101,105 @@ async function duplicateEvidence(
   return evidence;
 }
 
-// An invoice held before paying waits for a person. Once the approvers approve
+/// An invoice held before paying waits for a person. Once the approvers approve
 // paying it, the agent sends the original and the invoice carries on like any
 // other. A person can instead close it without paying. A payout for it sent
-// outside PayOnce holds everything, as it does on any invoice.
+// outside PayOnce holds everything, as it does on any invoice. Its awaits stay in
+// this function, as a look's do (see StepResult), and the sub-steps between them
+// await nothing.
 export async function continueHeld(engine: Engine, obligation: Obligation): Promise<NextLook> {
   const invoiceId: string = obligation.invoiceId;
   if (anyLive(await syncOutsidePayouts(engine, invoiceId))) {
     return holdForOutsidePayout(engine, invoiceId);
   }
-  // A person decided not to pay it, and a payout sent outside PayOnce reopened it.
-  // That payout has failed, so it is closed again and nobody is asked to pay it.
-  // A transfer found under one of its request ids that does not match it leaves
-  // that to a person, on the close card.
   if (obligation.rejectedBy !== null) {
-    if (engine.ledger.rejectAgain(invoiceId)) {
-      note(
-        engine.ledger,
-        invoiceId,
-        "closed",
-        `Closed without paying again. The payout sent outside PayOnce failed, and ${obligation.rejectedBy} had already closed this invoice without paying`,
-      );
-    } else {
-      note(
-        engine.ledger,
-        invoiceId,
-        "approval",
-        `Waiting on a person to close it again. ${obligation.rejectedBy} closed this invoice without paying, and PayOnce asks nobody to approve paying it`,
-        "waiting",
-      );
-    }
-    return null;
+    return closeAgain(engine, invoiceId, obligation.rejectedBy);
   }
-  // A held invoice reads its emails like any other, and its terms carry what
-  // they say. Until every email is read, nothing is offered for approval, and
-  // the look comes again a minute later.
   await readNewEmails(engine, obligation, true);
+  const read: HeldEmails = heldEmails(engine, obligation);
+  if (read.kind === "next") {
+    return read.at;
+  }
+  const held: Obligation = withNewDuplicates(engine, obligation, read.reason);
+  const record: BeneficiaryRecord | undefined = await findBeneficiary(
+    engine.client,
+    obligation.beneficiaryId,
+  );
+  const account: HeldAccount = heldAccount(engine, obligation, record?.beneficiary?.bank_details);
+  if (account.kind === "next") {
+    return account.at;
+  }
+  const onFile: string = duplicatesOnFile(engine.ledger, held);
+  const duplicates: DuplicateEvidence[] = await duplicateEvidence(engine, held, account.accountKey);
+  // Paid from another currency's wallet, it is approved at a quote. Nothing has
+  // been sent, so no fee is known yet.
+  const rate: Rate | null = crossCurrency(obligation) ? await rateFor(engine, obligation, null) : null;
+  const terms: HeldPaymentTerms = heldTermsFor(
+    held,
+    account.bankDetails,
+    duplicates,
+    rate?.fx ?? null,
+    read.evidence,
+    arrivalOf(engine.ledger, obligation, account.bankDetails),
+    account.bankChange,
+  );
+  const rule: SignoffRule = heldRule(engine, obligation, account.bankDetails, duplicates, terms);
+  const approval: Approval | undefined = engine.ledger.latestApproval(invoiceId);
+  if (approval?.state !== "approved" || voidIfStale(engine, held, approval, terms, rule)) {
+    return awaitApproval(engine, held, terms, rule, rate, routeKeyOf(account.bankDetails));
+  }
+  // Paying it waits for the end of an outage on its rail, with the approval kept.
+  // releaseFor refuses it too.
+  const outage: Outage | undefined = engine.ledger.activeOutage(obligation.currency, obligation.transferMethod);
+  if (outage !== undefined) {
+    throw new RailOutageError(outage, "approved");
+  }
+
+  if (
+    (await linkUnseenPayouts(engine, invoiceId)) ||
+    anyLive(engine.ledger.outsidePayouts(invoiceId))
+  ) {
+    return Date.now();
+  }
+  return releaseHeld(engine, obligation, held, { approval, terms, onFile, emails: read.emails });
+}
+
+// A person decided not to pay it, and a payout sent outside PayOnce reopened it.
+// That payout has failed, so it is closed again and nobody is asked to pay it.
+// A transfer found under one of its request ids that does not match it leaves
+// that to a person, on the close card.
+function closeAgain(engine: Engine, invoiceId: string, rejectedBy: string): NextLook {
+  if (engine.ledger.rejectAgain(invoiceId)) {
+    note(
+      engine.ledger,
+      invoiceId,
+      "closed",
+      `Closed without paying again. The payout sent outside PayOnce failed, and ${rejectedBy} had already closed this invoice without paying`,
+    );
+  } else {
+    note(
+      engine.ledger,
+      invoiceId,
+      "approval",
+      `Waiting on a person to close it again. ${rejectedBy} closed this invoice without paying, and PayOnce asks nobody to approve paying it`,
+      "waiting",
+    );
+  }
+  return null;
+}
+
+// What a held invoice's emails, read just now, come to: the look ends, or it goes
+// on with the reason the invoice is held for, the emails on file and what the
+// terms say of them (evidence, null with none).
+type HeldEmails =
+  | { kind: "next"; at: NextLook }
+  | { kind: "read"; reason: string; emails: SupplierEmail[]; evidence: string | null };
+
+// A held invoice reads its emails like any other, and its terms carry what they
+// say. Until every email is read, nothing is offered for approval, and the look
+// comes again a minute later.
+function heldEmails(engine: Engine, obligation: Obligation): HeldEmails {
+  const invoiceId: string = obligation.invoiceId;
   const emails: SupplierEmail[] = engine.ledger.emails(invoiceId);
   const { findings, stored }: { findings: StoredFindings; stored: boolean } = storedFindings(
     engine.ledger,
@@ -151,7 +214,7 @@ export async function continueHeld(engine: Engine, obligation: Obligation): Prom
     // Terms built on the reason read would open a request the next look voids, so
     // the look comes again at once and reads the invoice as it is then.
     if (!engine.ledger.rewordEscalation(invoiceId, obligation.escalationReason, reason)) {
-      return Date.now();
+      return { kind: "next", at: Date.now() };
     }
     note(engine.ledger, invoiceId, "decision", `Escalate: ${reason}`, "decision");
   }
@@ -167,12 +230,20 @@ export async function continueHeld(engine: Engine, obligation: Obligation): Prom
         ? "Waiting on a person. Supplier emails are on file that PayOnce could not read yet, so it asks nobody to approve paying this invoice. It tries reading them again in a minute"
         : "Waiting on a person. A supplier email arrived while PayOnce read the others, so it asks nobody to approve paying this invoice until it has read that one too",
     );
-    return failed ? Date.now() + RETRY_FAILED_LOOK_MS : Date.now();
+    return { kind: "next", at: failed ? Date.now() + RETRY_FAILED_LOOK_MS : Date.now() };
   }
-  const evidence: string | null =
-    emails.length === 0 ? null : emailEvidence(findings.summary, emails, obligation.supplierDomain);
-  // The invoices it was held for, and any that match it now: one started after
-  // it, or one that came first while this one was held for another reason.
+  return {
+    kind: "read",
+    reason,
+    emails,
+    evidence: emails.length === 0 ? null : emailEvidence(findings.summary, emails, obligation.supplierDomain),
+  };
+}
+
+// The held invoice as its terms see it: the reason it is held for, and the
+// invoices it was held for and any that match it now: one started after it, or
+// one that came first while this one was held for another reason.
+function withNewDuplicates(engine: Engine, obligation: Obligation, reason: string): Obligation {
   const added: string[] = likelyDuplicates(engine.ledger, obligation)
     .map((other: ScannedObligation): string => other.invoiceId)
     .filter((other: string): boolean => !obligation.duplicateOf.includes(other));
@@ -182,26 +253,41 @@ export async function continueHeld(engine: Engine, obligation: Obligation): Prom
     duplicateOf: [...obligation.duplicateOf, ...added],
   };
   if (added.length > 0) {
-    engine.ledger.setDuplicateOf(invoiceId, held.duplicateOf);
+    engine.ledger.setDuplicateOf(obligation.invoiceId, held.duplicateOf);
     note(
       engine.ledger,
-      invoiceId,
+      obligation.invoiceId,
       "warning",
       `This invoice also looks like a second bill for ${listOf(added)}: the same supplier and amount, and the same invoice number apart from case, spacing, leading zeros or letters added at the end`,
     );
   }
-  const record: BeneficiaryRecord | undefined = await findBeneficiary(
-    engine.client,
-    obligation.beneficiaryId,
-  );
-  const bankDetails: TransferBankDetails | undefined = record?.beneficiary?.bank_details;
+  return held;
+}
+
+// The account a held invoice would be paid to, as the beneficiary record holds it
+// now, and the callback that verified it when PayOnce last paid this supplier
+// another; or the end of the look, when it is not one a person could approve
+// paying.
+type HeldAccount =
+  | { kind: "next"; at: NextLook }
+  | { kind: "account"; bankDetails: TransferBankDetails; accountKey: string; bankChange: BankChange | null };
+
+function heldAccount(
+  engine: Engine,
+  obligation: Obligation,
+  bankDetails: TransferBankDetails | undefined,
+): HeldAccount {
+  const invoiceId: string = obligation.invoiceId;
   if (bankDetails === undefined) {
-    return waitWithoutPaying(
-      engine,
-      invoiceId,
-      "the beneficiary is no longer in Airwallex",
-      "Waiting on a person. The beneficiary is no longer in Airwallex, so there is nothing to pay it to. Close the invoice without paying",
-    );
+    return {
+      kind: "next",
+      at: waitWithoutPaying(
+        engine,
+        invoiceId,
+        "the beneficiary is no longer in Airwallex",
+        "Waiting on a person. The beneficiary is no longer in Airwallex, so there is nothing to pay it to. Close the invoice without paying",
+      ),
+    };
   }
   const accountKey: string = accountKeyOf(bankDetails);
   // A pay run approved one account, every detail of it. Another is paid only once
@@ -213,12 +299,15 @@ export async function continueHeld(engine: Engine, obligation: Obligation): Prom
     row.accountKey !== accountKey &&
     engine.ledger.verifiedBankChange(obligation.beneficiaryId, bankDetails) === undefined
   ) {
-    return waitWithoutPaying(
-      engine,
-      invoiceId,
-      "the bank details on file are not the ones the pay run approved",
-      "Waiting on a person. The bank details on file are not the ones the pay run approved, so PayOnce does not pay this invoice. Close it without paying, or restore the approved details in Airwallex and check again",
-    );
+    return {
+      kind: "next",
+      at: waitWithoutPaying(
+        engine,
+        invoiceId,
+        "the bank details on file are not the ones the pay run approved",
+        "Waiting on a person. The bank details on file are not the ones the pay run approved, so PayOnce does not pay this invoice. Close it without paying, or restore the approved details in Airwallex and check again",
+      ),
+    };
   }
   // Any other held invoice: an account PayOnce has not paid this supplier, when it
   // has paid them another, is paid only once a person has called the supplier on
@@ -240,69 +329,67 @@ export async function continueHeld(engine: Engine, obligation: Obligation): Prom
       "last-paid",
     );
     if (bankChange === null) {
-      return waitWithoutPaying(
-        engine,
-        invoiceId,
-        "the bank details on file have not been verified by a callback",
-        obligation.supplierPhone === null
-          ? "Waiting on a person. The bank details on file are not the ones PayOnce last paid this supplier, and no phone number is on file to verify them by calling the supplier back. Close the invoice without paying, or restore the details PayOnce last paid in Airwallex and check again"
-          : `Waiting on a person to call the supplier on ${obligation.supplierPhone}, the number on file, and record the callback. PayOnce pays an account it has not paid this supplier before only after that`,
-      );
+      return {
+        kind: "next",
+        at: waitWithoutPaying(
+          engine,
+          invoiceId,
+          "the bank details on file have not been verified by a callback",
+          obligation.supplierPhone === null
+            ? "Waiting on a person. The bank details on file are not the ones PayOnce last paid this supplier, and no phone number is on file to verify them by calling the supplier back. Close the invoice without paying, or restore the details PayOnce last paid in Airwallex and check again"
+            : `Waiting on a person to call the supplier on ${obligation.supplierPhone}, the number on file, and record the callback. PayOnce pays an account it has not paid this supplier before only after that`,
+        ),
+      };
     }
   }
-  const onFile: string = duplicatesOnFile(engine.ledger, held);
-  const duplicates: DuplicateEvidence[] = await duplicateEvidence(engine, held, accountKey);
-  // Paid from another currency's wallet, it is approved at a quote. Nothing has
-  // been sent, so no fee is known yet.
-  const rate: Rate | null = crossCurrency(obligation) ? await rateFor(engine, obligation, null) : null;
-  const terms: HeldPaymentTerms = heldTermsFor(
-    held,
-    bankDetails,
-    duplicates,
-    rate?.fx ?? null,
-    evidence,
-    arrivalOf(engine.ledger, obligation, bankDetails),
-    bankChange,
-  );
-  // A second bill paid to a different account from the first is the pattern of an
-  // invoice resent with new bank details, so it needs two approvers.
+  return { kind: "account", bankDetails, accountKey, bankChange };
+}
+
+// How many approvers paying a held invoice needs. A second bill paid to a
+// different account from the first is the pattern of an invoice resent with new
+// bank details, so it needs two approvers. So do a payee PayOnce has never paid
+// on a person's approval, and an account it has not paid this supplier before,
+// as for a pay run's row.
+function heldRule(
+  engine: Engine,
+  obligation: Obligation,
+  bankDetails: TransferBankDetails,
+  duplicates: DuplicateEvidence[],
+  terms: HeldPaymentTerms,
+): SignoffRule {
   const elsewhere: DuplicateEvidence | undefined = duplicates.find(
     (duplicate: DuplicateEvidence): boolean => duplicate.sameAccount === false,
   );
   if (elsewhere !== undefined) {
     note(
       engine.ledger,
-      invoiceId,
+      obligation.invoiceId,
       "warning",
       `The account on file for this invoice is not the one ${elsewhere.invoiceId} was sent to`,
       "bank-details",
     );
   }
-  // Two approvers for a payee PayOnce has never paid on a person's approval, and
-  // for an account it has not paid this supplier before, as for a pay run's row.
   const payee: SignoffRule | null = payeeRule(engine, obligation, bankDetails);
-  const rule: SignoffRule =
-    elsewhere !== undefined
-      ? { needed: 2, why: `it pays a different account from the one ${elsewhere.invoiceId} was sent to` }
-      : (payee ??
-        signoffsNeeded(engine.approvals, paymentAmount(terms), false, obligation.startedBy));
-  const approval: Approval | undefined = engine.ledger.latestApproval(invoiceId);
-  if (approval?.state !== "approved" || voidIfStale(engine, held, approval, terms, rule)) {
-    return awaitApproval(engine, held, terms, rule, rate, routeKeyOf(bankDetails));
-  }
-  // Paying it waits for the end of an outage on its rail, with the approval kept.
-  // releaseFor refuses it too.
-  const outage: Outage | undefined = engine.ledger.activeOutage(obligation.currency, obligation.transferMethod);
-  if (outage !== undefined) {
-    throw new RailOutageError(outage, "approved");
-  }
+  return elsewhere !== undefined
+    ? { needed: 2, why: `it pays a different account from the one ${elsewhere.invoiceId} was sent to` }
+    : (payee ?? signoffsNeeded(engine.approvals, paymentAmount(terms), false, obligation.startedBy));
+}
 
-  if (
-    (await linkUnseenPayouts(engine, invoiceId)) ||
-    anyLive(engine.ledger.outsidePayouts(invoiceId))
-  ) {
-    return Date.now();
-  }
+// The approval a held invoice is paid on, and what the look read when it matched
+// it: the terms, the duplicatesOnFile it took them from (onFile) and the emails
+// on file.
+interface HeldRelease {
+  approval: Approval;
+  terms: HeldPaymentTerms;
+  onFile: string;
+  emails: SupplierEmail[];
+}
+
+// Pays a held invoice on its approval, holding the currency lock of the wallet
+// the money leaves.
+function releaseHeld(engine: Engine, obligation: Obligation, held: Obligation, release: HeldRelease): Promise<NextLook> {
+  const invoiceId: string = obligation.invoiceId;
+  const { approval, terms, onFile, emails }: HeldRelease = release;
   return withCurrencyLock(engine.ledger, debitCurrency(obligation), async (lease: Lease): Promise<NextLook> => {
     // Checked before the invoice is released, so a failed check leaves it held
     // with its approval unspent.

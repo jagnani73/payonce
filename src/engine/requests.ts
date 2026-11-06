@@ -132,7 +132,7 @@ export function voidIfStale(
   return true;
 }
 
-// Asks the approvers to approve a payment under the approval policy, and says
+/// Asks the approvers to approve a payment under the approval policy, and says
 // what the invoice is waiting on. A request still open for the same terms is kept.
 // Returns when the request expires, so the look then can open a new one. rate is
 // the quote a payment from another currency's wallet is offered at, and a new
@@ -146,90 +146,136 @@ export function awaitApproval(
   routeKey: string,
 ): NextLook {
   const invoiceId: string = obligation.invoiceId;
-  let terms: ApprovalTerms = given;
-  let binding: string = bindingOf(terms);
-
   // A request nobody on the list could approve would only expire and be opened
   // again, so none is opened until the approver list changes.
   const eligible: Approver[] = eligibleApprovers(
     engine.approvals,
-    paymentAmount(terms),
-    barredFrom(engine.ledger, obligation, terms.accountKey, routeKey),
+    paymentAmount(given),
+    barredFrom(engine.ledger, obligation, given.accountKey, routeKey),
   );
   if (engine.approvals.problem !== null || eligible.length < rule.needed) {
-    if (engine.ledger.voidOpenApprovals(invoiceId)) {
-      note(
-        engine.ledger,
-        invoiceId,
-        "approval",
-        "Approval request withdrawn: nobody on the approver list can approve it",
-      );
+    return waitForApproverList(engine, obligation, given, rule, eligible);
+  }
+  let latest: Approval | undefined = engine.ledger.latestApproval(invoiceId);
+  let terms: ApprovalTerms = given;
+  let request: RequestMatch = requestMatch(latest, bindingOf(terms), rule);
+  // Terms built on an open request's quote that now need a new request: that one
+  // is withdrawn, and the next look, at once, takes a fresh quote for its own.
+  if (request.opening && terms.fx !== undefined && rate?.fresh !== true) {
+    return withdrawForNewQuote(engine, invoiceId, latest);
+  }
+  if (request.opening) {
+    terms = countedFromToday(terms);
+    // Another process may have opened today's request on these terms after the
+    // look read the day an open request kept, so it is compared again.
+    request = requestMatch(latest, bindingOf(terms), rule);
+  }
+  const previous: FxTerms | undefined =
+    latest === undefined ? undefined : (JSON.parse(latest.terms) as ApprovalTerms).fx;
+  noteReplacedRequest(engine, invoiceId, latest, terms, request);
+  if (request.opening) {
+    // Another process closed the invoice meanwhile.
+    if (!openRequest(engine, obligation, terms, request, rule, rate, routeKey, previous)) {
+      return null;
     }
-    const able: string =
-      eligible.length === 0
-        ? "nobody on the approver list can"
-        : `only ${eligible.map((approver: Approver): string => approver.name).join(" and ")} can`;
-    // No request opens, so no rate is named: only about what the payment takes
-    // from its wallet, which the limits are compared with.
-    const fx: string =
-      terms.fx === undefined
-        ? ""
-        : `, about ${formatMoney(terms.fx.sellAmountMinor, terms.fx.sellCurrency)},`;
-    const payment: string =
-      terms.action === "replace"
-        ? `A replacement of ${invoiceMoney(obligation)}${fx}`
-        : `Paying ${invoiceMoney(obligation)} for this invoice${fx}`;
+    latest = engine.ledger.latestApproval(invoiceId);
+  }
+  return latest === undefined ? null : waitOnRequest(engine, obligation, terms, latest);
+}
+
+// The latest request held against the terms a look builds: whether it is still
+// requested on them (binding) for at least the approvers the rule needs (same),
+// and whether a new request opens (opening): when it is not, or it has expired.
+interface RequestMatch {
+  binding: string;
+  same: boolean;
+  opening: boolean;
+}
+
+function requestMatch(latest: Approval | undefined, binding: string, rule: SignoffRule): RequestMatch {
+  const same: boolean =
+    latest?.state === "requested" && latest.binding === binding && latest.needed >= rule.needed;
+  return { binding, same, opening: !same || latest === undefined || isExpired(latest) };
+}
+
+// No request opens while too few people on the approver list could approve it,
+// or approvals are refused, and any open one is withdrawn. The invoice waits for
+// the list to change.
+function waitForApproverList(
+  engine: Engine,
+  obligation: Obligation,
+  terms: ApprovalTerms,
+  rule: SignoffRule,
+  eligible: Approver[],
+): NextLook {
+  const invoiceId: string = obligation.invoiceId;
+  if (engine.ledger.voidOpenApprovals(invoiceId)) {
     note(
       engine.ledger,
       invoiceId,
       "approval",
-      engine.approvals.problem !== null
-        ? `Waiting on a person. Approvals are refused: ${engine.approvals.problem}`
-        : `Waiting on a person. ${payment} needs ${rule.needed === 1 ? "one approver" : `${rule.needed} approvers, because ${rule.why},`} and ${able} approve it. Change APPROVERS, restart and check again`,
-      "waiting",
+      "Approval request withdrawn: nobody on the approver list can approve it",
     );
-    return null;
   }
+  const able: string =
+    eligible.length === 0
+      ? "nobody on the approver list can"
+      : `only ${eligible.map((approver: Approver): string => approver.name).join(" and ")} can`;
+  // No request opens, so no rate is named: only about what the payment takes
+  // from its wallet, which the limits are compared with.
+  const fx: string =
+    terms.fx === undefined
+      ? ""
+      : `, about ${formatMoney(terms.fx.sellAmountMinor, terms.fx.sellCurrency)},`;
+  const payment: string =
+    terms.action === "replace"
+      ? `A replacement of ${invoiceMoney(obligation)}${fx}`
+      : `Paying ${invoiceMoney(obligation)} for this invoice${fx}`;
+  note(
+    engine.ledger,
+    invoiceId,
+    "approval",
+    engine.approvals.problem !== null
+      ? `Waiting on a person. Approvals are refused: ${engine.approvals.problem}`
+      : `Waiting on a person. ${payment} needs ${rule.needed === 1 ? "one approver" : `${rule.needed} approvers, because ${rule.why},`} and ${able} approve it. Change APPROVERS, restart and check again`,
+    "waiting",
+  );
+  return null;
+}
 
-  let latest: Approval | undefined = engine.ledger.latestApproval(invoiceId);
-  let sameRequest: boolean =
-    latest?.state === "requested" && latest.binding === binding && latest.needed >= rule.needed;
-  let opening: boolean = !sameRequest || latest === undefined || isExpired(latest);
-  // Terms built on an open request's quote that now need a new request: that one
-  // is withdrawn, and the next look, at once, takes a fresh quote for its own.
-  if (opening && terms.fx !== undefined && rate?.fresh !== true) {
-    const signed: Signoff[] = latest?.state === "requested" ? latest.signoffs : [];
-    if (engine.ledger.voidOpenApprovals(invoiceId)) {
-      note(
-        engine.ledger,
-        invoiceId,
-        "approval",
-        signed.length > 0
-          ? `Approval by ${signersOf(signed)} no longer counts: the terms changed, so PayOnce takes a new exchange rate quote and opens a new request`
-          : "Approval request withdrawn: the terms changed, so PayOnce takes a new exchange rate quote and opens a new request",
-      );
-    }
-    return Date.now();
+// Withdraws a request on a quote whose terms need a new request, so the next
+// look, at once, takes a fresh quote and opens one on it.
+function withdrawForNewQuote(engine: Engine, invoiceId: string, latest: Approval | undefined): NextLook {
+  const signed: Signoff[] = latest?.state === "requested" ? latest.signoffs : [];
+  if (engine.ledger.voidOpenApprovals(invoiceId)) {
+    note(
+      engine.ledger,
+      invoiceId,
+      "approval",
+      signed.length > 0
+        ? `Approval by ${signersOf(signed)} no longer counts: the terms changed, so PayOnce takes a new exchange rate quote and opens a new request`
+        : "Approval request withdrawn: the terms changed, so PayOnce takes a new exchange rate quote and opens a new request",
+    );
   }
-  if (opening) {
-    terms = countedFromToday(terms);
-    binding = bindingOf(terms);
-    // Another process may have opened today's request on these terms after the
-    // look read the day an open request kept, so it is compared again.
-    sameRequest =
-      latest?.state === "requested" && latest.binding === binding && latest.needed >= rule.needed;
-    opening = !sameRequest || latest === undefined || isExpired(latest);
-  }
-  const previous: FxTerms | undefined =
-    latest === undefined ? undefined : (JSON.parse(latest.terms) as ApprovalTerms).fx;
-  // A partly signed request that expired is reported as expired, even when the
-  // terms have changed since. So is a request on a quote, which is replaced on a
-  // fresh quote once it expires, so its terms differ even when nothing else
-  // changed, and one with an arrival estimate, which may count from a new day.
+  return Date.now();
+}
+
+// Says what became of the latest request when a new one replaces it. A partly
+// signed request that expired is reported as expired, even when the terms have
+// changed since. So is a request on a quote, which is replaced on a fresh quote
+// once it expires, so its terms differ even when nothing else changed, and one
+// with an arrival estimate, which may count from a new day.
+function noteReplacedRequest(
+  engine: Engine,
+  invoiceId: string,
+  latest: Approval | undefined,
+  terms: ApprovalTerms,
+  request: RequestMatch,
+): void {
   const expiredRequest: boolean =
     latest?.state === "requested" &&
     isExpired(latest) &&
-    (sameRequest ||
+    (request.same ||
       latest.signoffs.length > 0 ||
       terms.fx !== undefined ||
       terms.arrival !== undefined);
@@ -240,7 +286,7 @@ export function awaitApproval(
       "approval",
       `Approval request expired before ${latest.signoffs.length === 0 ? "anyone approved it" : "enough people approved it"}, so PayOnce opened a new one`,
     );
-  } else if (!sameRequest && latest?.state === "requested" && latest.signoffs.length > 0) {
+  } else if (!request.same && latest?.state === "requested" && latest.signoffs.length > 0) {
     note(
       engine.ledger,
       invoiceId,
@@ -248,34 +294,46 @@ export function awaitApproval(
       `Approval by ${signersOf(latest.signoffs)} no longer counts: the terms changed, so PayOnce opened a new request`,
     );
   }
-  if (opening) {
-    const opened: boolean = engine.ledger.requestApproval(invoiceId, {
-      binding,
-      terms: JSON.stringify(terms),
-      needed: rule.needed,
-      neededWhy: rule.why,
-      expiresAt: requestExpiry(engine, terms.fx === undefined ? null : rate, Date.now()),
-      routeKey,
-    });
-    // Another process closed the invoice meanwhile.
-    if (!opened) {
-      return null;
-    }
-    // Written only for a quote a request opens on, so the timeline names no rate
-    // nothing could be paid at.
-    if (terms.fx !== undefined) {
-      note(engine.ledger, invoiceId, "payment", quoteLine(obligation, terms.fx, previous));
-    }
-    latest = engine.ledger.latestApproval(invoiceId);
+}
+
+// Opens a request on the terms. False when the ledger refuses it, because
+// another process closed the invoice. previous is the last request's quote.
+function openRequest(
+  engine: Engine,
+  obligation: Obligation,
+  terms: ApprovalTerms,
+  request: RequestMatch,
+  rule: SignoffRule,
+  rate: Rate | null,
+  routeKey: string,
+  previous: FxTerms | undefined,
+): boolean {
+  const opened: boolean = engine.ledger.requestApproval(obligation.invoiceId, {
+    binding: request.binding,
+    terms: JSON.stringify(terms),
+    needed: rule.needed,
+    neededWhy: rule.why,
+    expiresAt: requestExpiry(engine, terms.fx === undefined ? null : rate, Date.now()),
+    routeKey,
+  });
+  if (!opened) {
+    return false;
   }
-  if (latest === undefined) {
-    return null;
+  // Written only for a quote a request opens on, so the timeline names no rate
+  // nothing could be paid at.
+  if (terms.fx !== undefined) {
+    note(engine.ledger, obligation.invoiceId, "payment", quoteLine(obligation, terms.fx, previous));
   }
-  // A held invoice can be closed without paying instead.
+  return true;
+}
+
+// Says who the open request waits on, and looks again when it expires. A held
+// invoice can be closed without paying instead.
+function waitOnRequest(engine: Engine, obligation: Obligation, terms: ApprovalTerms, latest: Approval): NextLook {
   const payment: string = `${invoiceMoney(obligation)} to ${terms.payTo} (the account on file)${paidWith(terms.fx)}`;
   note(
     engine.ledger,
-    invoiceId,
+    obligation.invoiceId,
     "approval",
     terms.action === "replace"
       ? latest.needed === 1
