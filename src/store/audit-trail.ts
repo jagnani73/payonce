@@ -150,22 +150,6 @@ export interface RunLedgerReport {
   intact: boolean;
 }
 
-// SQLite keeps text as UTF-8, which cannot hold half of a surrogate pair, such as
-// an emoji cut in two, so it reads back as U+FFFD. A line is hashed as it will
-// read back, or its own text would no longer match its hash.
-const LONE_SURROGATE: RegExp = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
-
-export function storable(text: string): string {
-  return text.replace(LONE_SURROGATE, "�");
-}
-
-// Reconciliation's record is one chain over every break, with a running hash of
-// its own, so a line removed from its end is caught too.
-export const RECON_HASH_METHOD: string =
-  "SHA-256, in hex, of prevHash followed by the JSON object {at, break_id, kind, message} as UTF-8, with the keys in that order and no spaces. break_id is the break's number, written as a JSON number. Every reconciliation line is one chain in id order, so prevHash is the hash of the line before it, whatever break that line is about. Only quotes, backslashes and control characters are escaped, as JavaScript's JSON.stringify does";
-export const RECON_LEDGER_HEAD_METHOD: string =
-  "SHA-256, in hex, of the running hash followed by a reconciliation line's hash, over every reconciliation line in id order, starting from the genesis. It is kept apart from the running hashes of invoice and pay run lines";
-
 export interface ReconEventFields {
   breakId: number;
   at: string;

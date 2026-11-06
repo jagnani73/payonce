@@ -1,8 +1,8 @@
+import { summarise } from "../domain/emails.js";
 import { keptFailedLive } from "../domain/live.js";
 import { reasonText } from "../domain/reasons.js";
 import type { InvoiceSnapshot, Situation } from "../domain/situation.js";
 import { timeAt, timed, type Timed, type TimePart } from "../domain/timed.js";
-import { summarise } from "../reader/emails.js";
 import type { Attempt, Obligation, OutsidePayout } from "../store/ledger.js";
 import { shownReference } from "../text/printable.js";
 import type { FailureView, HeadroomLine, SummaryBullet } from "./contract.js";

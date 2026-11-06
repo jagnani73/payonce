@@ -1,8 +1,10 @@
+import { liveAtBank, mismatchedLive } from "../domain/live.js";
 import { reasonFor, type Reason } from "../domain/reasons.js";
-import { liveAtBank, mismatchedLive, type Attempt, type Ledger, type ObligationState } from "../store/ledger.js";
+import type { Attempt, Ledger, ObligationState } from "../store/ledger.js";
+import { anyLive, coveredByClose, type CoveredTransfer } from "../store/read/facts.js";
+import { listOf } from "../text/printable.js";
 import type { Engine, NextLook } from "./engine.js";
-import { anyLive, coveredByClose, type CoveredTransfer } from "./facts.js";
-import { listOf, note } from "./lines.js";
+import { note } from "./lines.js";
 
 // Closes the incident on the state the look read the invoice in. False, with
 // nothing changed, when the ledger refuses (see settle).

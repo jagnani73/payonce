@@ -9,11 +9,12 @@ import {
   type BeneficiarySpec,
 } from "../airwallex/beneficiaries.js";
 import type { Transfer } from "../airwallex/transfers.js";
+import type { SupplierEmail } from "../domain/emails.js";
+import { heldBeforePaying } from "../store/read/facts.js";
 import type { Dispatcher } from "./dispatcher.js";
-import { loadEmails, type SupplierEmail } from "../reader/emails.js";
+import { loadEmails } from "../reader/emails.js";
 import { deliver } from "./emails.js";
 import type { Engine } from "./engine.js";
-import { heldBeforePaying } from "./facts.js";
 import { startPayment } from "./first-payment.js";
 import { waitOnOutage } from "./look.js";
 import { openPayment, type Payee } from "./new-payment.js";

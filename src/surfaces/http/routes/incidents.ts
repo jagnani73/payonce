@@ -1,9 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { CURRENCY_PATTERN } from "../../../domain/patterns.js";
 import { bankChangeForm, recordBankChange, type BankChangeForm, type CallbackInput } from "../../../engine/bank-change.js";
-import { approvePayment, closeIncident, pendingClose, type CloseReview } from "../../../engine/person.js";
+import { approvePayment, closeIncident } from "../../../engine/person.js";
 import { auditCsv, auditExport, type AuditExport } from "../../../store/audit-trail.js";
 import type { Approval, Obligation } from "../../../store/ledger.js";
+import { pendingClose, type CloseReview } from "../../../store/read/reviews.js";
 import type { Acted, IncidentScope, IncidentsQuery, IncidentsView, IncidentView, Notice } from "../../../views/contract.js";
 import { isBoardGroup, isBoardOrigin, type BoardGroup } from "../../../views/incident-board.js";
 import { incidentsView, isScope } from "../../../views/incidents.js";

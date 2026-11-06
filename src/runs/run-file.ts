@@ -4,7 +4,8 @@ import { validDomain } from "../intake/eml.js";
 import { INVOICE_ID_PATTERN, type TransferMethod } from "../store/ledger.js";
 import { printable } from "../text/printable.js";
 import { PAID_OUTCOME, SANDBOX_OUTCOMES } from "../text/words.js";
-import { TRANSFER_METHODS } from "../domain/patterns.js";
+import { BENEFICIARY_ID_PATTERN, TRANSFER_METHODS } from "../domain/patterns.js";
+import { MINOR_DIGITS, twoDecimals } from "../domain/money.js";
 
 // A column a pay run file can have. Nothing else is read from a file: no bank
 // details and no phone number. supplier_domain is the domain the supplier's
@@ -53,10 +54,8 @@ const NAME_JOINERS: RegExp = /[\u{200c}\u{200d}\u{fe00}-\u{fe0f}]/gu;
 const UNSAFE_NAME: RegExp =
   /[\u0000-\u001f\u007f-\u009f\u2028\u2029\p{Cf}\p{Default_Ignorable_Code_Point}\u{e0000}-\u{e007f}]/gu;
 
-export const BENEFICIARY_ID_PATTERN: RegExp = /^[A-Za-z0-9-]{1,64}$/;
 const CURRENCY_PATTERN: RegExp = /^[A-Za-z]{3}$/;
 const AMOUNT_PATTERN: RegExp = /^(0|[1-9][0-9]{0,11})(?:\.([0-9]{1,2}))?$/;
-const MINOR_DIGITS: number = 2;
 
 // One data row as read, with what its cells say and every problem in them.
 export interface RunFileRow {
@@ -198,17 +197,6 @@ export function amountMinorOf(raw: string): number {
     return Number.NaN;
   }
   return Number(match[1]) * 10 ** MINOR_DIGITS + Number((match[2] ?? "").padEnd(MINOR_DIGITS, "0"));
-}
-
-export function twoDecimals(currency: string): boolean {
-  try {
-    return (
-      new Intl.NumberFormat("en", { style: "currency", currency }).resolvedOptions()
-        .maximumFractionDigits === MINOR_DIGITS
-    );
-  } catch {
-    return false;
-  }
 }
 
 // A row read from its cells and the header. The same rules run at upload and on

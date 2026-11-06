@@ -2,9 +2,10 @@ import type { TransferBankDetails } from "../airwallex/transfers.js";
 import { endingOf, keyHash } from "../domain/approval.js";
 import { knownRoute, routeKeyOf, routeOfDetailsKey } from "../domain/assess.js";
 import { knownName, policyFromEnv } from "../domain/approvers.js";
+import { summarise, unverifiedSenders, type SupplierEmail } from "../domain/emails.js";
+import { liveAtBank } from "../domain/live.js";
 import { templateLabel } from "../outbox/drafts.js";
 import { numberOf, numbersOf, sameInvoiceNumber, supplierNameKey } from "../domain/duplicates.js";
-import { summarise, unverifiedSenders, type SupplierEmail } from "../reader/emails.js";
 import { accountChangedReason } from "../domain/reasons.js";
 import {
   CHANGED_RECENTLY_MS,
@@ -18,6 +19,7 @@ import {
   type ContactState,
 } from "../domain/contacts.js";
 import { situationOf, type InvoiceSnapshot, type PaymentState, type Situation } from "../domain/situation.js";
+import { UNNAMED_PAYEE } from "../text/words.js";
 import {
   boardEntriesFor,
   GROUP_LABELS,
@@ -29,7 +31,6 @@ import {
 import { invoiceSnapshotsWithin } from "./snapshot.js";
 import { candidatesFor, invoiceIndex, type InvoiceIndex, type Match } from "../intake/intake.js";
 import {
-  liveAtBank,
   readingSoft,
   type Ledger,
   type Obligation,
@@ -59,9 +60,8 @@ import {
 } from "../store/ledger.js";
 import { railOf } from "../outages/outages.js";
 import { debitCurrency } from "../domain/reserve.js";
-import { BENEFICIARY_ID_PATTERN } from "../runs/run-file.js";
-import { UNNAMED_PAYEE } from "../engine/sweep.js";
 import {
+  BENEFICIARY_ID_PATTERN,
   CURRENCY_PATTERN,
   FAILURE_CODE_PATTERN,
   METHOD_PATTERN,

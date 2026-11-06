@@ -72,6 +72,8 @@ async function main(): Promise<void> {
     approvals: settings.approvals,
     reserve: settings.reserve,
     readers: settings.models.readerNames,
+    bankDeadlineMinutes: settings.bankDeadlineMinutes,
+    fxQuotes: settings.fxQuotes,
   });
   if (build === undefined) {
     fail(`${shownId} is not in the ledger`);

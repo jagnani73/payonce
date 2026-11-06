@@ -1,13 +1,37 @@
-import type { ApprovalTerms, FxTerms, LastQuote } from "../domain/approval.js";
+import type { ApprovalTerms, FxTerms, LastQuote, RunTerms } from "../domain/approval.js";
 import type { ArrivalTerms } from "../domain/arrival.js";
-import { checkedObject, type Approval } from "../store/ledger.js";
-import type { StoredFindings } from "./engine.js";
+import type { EmailAttachment, EmailFindings, SupplierEmail } from "../domain/emails.js";
+import type { Approval, RunApproval } from "./approvals.js";
+import { checkedObject, storedShape } from "./db.js";
+import type { Ledger } from "./ledger.js";
 
 // Stored JSON the engine acts on, checked field by field against every shape
 // PayOnce has written it in, before any field is read. A row in another shape was
 // changed outside PayOnce, and the look fails closed on it as on one that does
 // not parse. A field later versions added is optional only where earlier rows
 // lack it.
+
+// What the reader found. unverifiedSenders is kept for display; the policy works
+// the sender check out again from the stored emails. unread marks a thread the
+// reader failed on. emailsRead is how many emails of the thread were read.
+export interface StoredFindings extends EmailFindings {
+  unverifiedSenders?: string[];
+  unread?: boolean;
+  emailsRead?: number;
+}
+
+const NO_FINDINGS: StoredFindings = {
+  claimsNonReceipt: false,
+  asksForNewBankDetails: false,
+  asksNotToPay: false,
+  summary: "no emails on file",
+};
+
+// Emails on file that no look has read yet.
+const NOT_READ_FINDINGS: StoredFindings = {
+  ...NO_FINDINGS,
+  summary: "the emails have not been read yet",
+};
 
 type Fields = Record<string, unknown>;
 
@@ -116,6 +140,64 @@ export function isApprovalTerms(terms: unknown): terms is ApprovalTerms {
   return terms["action"] === "pay" && isText(terms["accountKey"]) && isHeldEvidence(terms["evidence"]);
 }
 
+// One pay row of a run's terms. Rows from before PayOnce kept a row's supplier
+// domain or its arrival estimate have neither.
+function isRunRow(row: unknown): boolean {
+  return (
+    isFields(row) &&
+    isCount(row["line"]) &&
+    isText(row["invoiceId"]) &&
+    isMinor(row["amountMinor"]) &&
+    isText(row["currency"]) &&
+    isText(row["beneficiaryId"]) &&
+    isText(row["transferMethod"]) &&
+    isText(row["payTo"]) &&
+    isText(row["accountKey"]) &&
+    isTextList(row["heldFor"]) &&
+    (row["bankChange"] === null || isCount(row["bankChange"])) &&
+    isOptionalText(row["supplierDomain"]) &&
+    (row["arrival"] === undefined || isArrival(row["arrival"]))
+  );
+}
+
+function isRunTotal(total: unknown): boolean {
+  return (
+    isFields(total) &&
+    isText(total["currency"]) &&
+    isMinor(total["amountMinor"]) &&
+    isCount(total["payments"]) &&
+    (total["reserveFloorMinor"] === null || isMinor(total["reserveFloorMinor"]))
+  );
+}
+
+export function isRunTerms(terms: unknown): terms is RunTerms {
+  return (
+    isFields(terms) &&
+    terms["action"] === "run" &&
+    isCount(terms["runId"]) &&
+    isText(terms["fileHash"]) &&
+    isText(terms["uploadedBy"]) &&
+    Array.isArray(terms["rows"]) &&
+    terms["rows"].every(isRunRow) &&
+    Array.isArray(terms["totals"]) &&
+    terms["totals"].every(isRunTotal)
+  );
+}
+
+export function isTextList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(isText);
+}
+
+export function isAttachmentList(value: unknown): value is EmailAttachment[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (attachment: unknown): boolean =>
+        isFields(attachment) && isText(attachment["name"]) && isText(attachment["type"]) && isCount(attachment["bytes"]),
+    )
+  );
+}
+
 export function isLastQuote(quote: unknown): quote is LastQuote {
   return isFields(quote) && isFx(quote["fx"]) && isNumber(quote["endsAt"]);
 }
@@ -151,7 +233,35 @@ export function findingsOnFile(invoiceId: string): string {
   return `the email findings for ${invoiceId}`;
 }
 
+export function runTermsOnFile(approval: Pick<RunApproval, "id" | "runId">): string {
+  return `the terms of approval request ${approval.id} for pay run ${approval.runId}`;
+}
+
+export function emailsOnFile(invoiceId: string): string {
+  return `the emails on file for ${invoiceId}`;
+}
+
 // The terms a request was opened on, read strict wherever it is read.
 export function requestTerms(approval: Pick<Approval, "id" | "invoiceId" | "terms">): ApprovalTerms {
   return checkedObject(approval.terms, isApprovalTerms, termsOnFile(approval));
+}
+
+// The terms a pay run's request was opened on, read the same way.
+export function runRequestTerms(approval: Pick<RunApproval, "id" | "runId" | "terms">): RunTerms {
+  return checkedObject(approval.terms, isRunTerms, runTermsOnFile(approval));
+}
+
+// The stored findings, or what stands for them before anything was read. They are
+// read strict, so a look on findings that do not parse, or are not in the shape
+// PayOnce writes, throws and pays nothing. Only a view, such as the board's
+// pendingClose, reads them soft (readingSoft), and there such findings stand as
+// not read.
+export function storedFindings(ledger: Ledger, invoiceId: string, emails: SupplierEmail[]): { findings: StoredFindings; stored: boolean } {
+  const stored: string | undefined = ledger.findings(invoiceId);
+  const findings: StoredFindings | null =
+    stored === undefined ? null : storedShape(stored, isStoredFindings, findingsOnFile(invoiceId));
+  if (findings !== null) {
+    return { findings, stored: true };
+  }
+  return { findings: emails.length === 0 ? NO_FINDINGS : NOT_READ_FINDINGS, stored: false };
 }

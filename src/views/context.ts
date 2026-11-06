@@ -4,8 +4,7 @@ import { KEYWORD_READER_NAME, KeywordReader } from "../reader/keyword-reader.js"
 import type { EmailReader } from "../reader/emails.js";
 import { ModelReader } from "../reader/model-reader.js";
 import type { ServiceView } from "../reader/model-service.js";
-import { BENEFICIARY_ID_PATTERN } from "../runs/run-file.js";
-import { runKey } from "../runs/runs.js";
+import { BENEFICIARY_ID_PATTERN, runKey } from "../domain/patterns.js";
 import type { Settings } from "../settings.js";
 import type { BoardMoney } from "./incident-board.js";
 import { money } from "./parts.js";

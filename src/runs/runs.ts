@@ -26,7 +26,7 @@ import {
 } from "../domain/approvers.js";
 import { arrivalFor, ifSentOn, today } from "../domain/arrival.js";
 import { routeKeyOf } from "../domain/assess.js";
-import { committedAcross, committedByInvoice, type CommittedExcept } from "../engine/cash-position.js";
+import { isExpired } from "../domain/live.js";
 import { withCurrencyLocks } from "../engine/currency-lock.js";
 import type { Dispatcher } from "../engine/dispatcher.js";
 import { likelyDuplicates, sameBillAndNumber, sameNumberExactly, sameSupplier, type Bill } from "../domain/duplicates.js";
@@ -34,7 +34,6 @@ import type { Engine } from "../engine/engine.js";
 import { lineWanted } from "../engine/lines.js";
 import {
   alreadyInLedger,
-  isExpired,
   NothingToPayError,
   RailOutageError,
   SameFileError,
@@ -60,16 +59,12 @@ import {
 } from "../store/ledger.js";
 import { formatAmount, formatMoney } from "../domain/money.js";
 import { runHoldLine, runWaitingLine } from "../outages/outages.js";
+import { committedAcross, committedByInvoice, type CommittedExcept } from "../store/read/cash.js";
+import { runRequestTerms } from "../store/stored.js";
 import { oneLine, printable, say, sayError } from "../text/printable.js";
 import { currencyFloor, type CurrencyFloor, type FloorSource } from "../domain/reserve.js";
 import { rowFromCells, type RunFile, type RunFileRow } from "./run-file.js";
 import { TRANSFER_METHODS } from "../domain/patterns.js";
-
-// The Dispatcher key for a run's steps. A colon cannot be in an invoice number, so
-// it never names an invoice.
-export function runKey(runId: number): string {
-  return `run:${runId}`;
-}
 
 // What the CLI says for an invoice number the ledger has no invoice for: that it
 // is a pay row of the run waiting for approval, which is no invoice until the run
@@ -632,7 +627,7 @@ function checkDay(ledger: Ledger, runId: number): string {
   return latest !== undefined &&
     (latest.state === "requested" || latest.state === "approved") &&
     !isExpired(latest)
-    ? (termsDay(JSON.parse(latest.terms) as RunTerms) ?? today())
+    ? (termsDay(runRequestTerms(latest)) ?? today())
     : today();
 }
 
@@ -1068,7 +1063,7 @@ export function pendingRunApproval(ledger: Ledger, runId: number): PendingRunApp
   if (approval?.state !== "requested" || ledger.run(runId)?.state !== "waiting") {
     return undefined;
   }
-  const terms: RunTerms = JSON.parse(approval.terms) as RunTerms;
+  const terms: RunTerms = runRequestTerms(approval);
   return {
     approval,
     terms,
@@ -1153,7 +1148,7 @@ export async function releaseRun(engine: Engine, agent: Dispatcher, runId: numbe
   if (run?.state !== "waiting" || approval?.state !== "approved") {
     return;
   }
-  const approved: RunTerms = JSON.parse(approval.terms) as RunTerms;
+  const approved: RunTerms = runRequestTerms(approval);
   // Read first, so a run held by an outage costs a ledger read and no Airwallex
   // call each time the watcher tries it.
   const outage: Outage | undefined = runOutage(ledger, approved);

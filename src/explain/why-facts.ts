@@ -11,12 +11,10 @@ import {
 import { knownName, sameName, type ApprovalPolicy, type Barred } from "../domain/approvers.js";
 import { HOLIDAYS_NOTE, type ArrivalTerms } from "../domain/arrival.js";
 import { setterBarWhy } from "../domain/contacts.js";
-import { committedMinor } from "../engine/cash-position.js";
-import { deadlineMinutes } from "../domain/deadlines.js";
+import { emailEvidence, type SupplierEmail } from "../domain/emails.js";
+import { isExpired } from "../domain/live.js";
+import { deadlineMinutes, type BankDeadlineMinutes } from "../domain/deadlines.js";
 import { EMAILS_UNREAD_REASON } from "../domain/decide.js";
-import { emailEvidence, type SupplierEmail } from "../reader/emails.js";
-import { heldBeforePaying } from "../engine/facts.js";
-import { pendingApproval, pendingClose, type CloseReview, type PendingApproval } from "../engine/person.js";
 import {
   clauseText,
   parseClause,
@@ -26,12 +24,10 @@ import {
   type Slots,
   type StoredReason,
 } from "../domain/reasons.js";
-import { quoteValidity } from "../domain/fx.js";
-import { currentSettings } from "../settings.js";
+import { quoteValidity, type QuoteSetting } from "../domain/fx.js";
 import {
   crossCurrency,
   INVOICE_ID_PATTERN,
-  isExpired,
   type Approval,
   type Attempt,
   type Ledger,
@@ -44,6 +40,9 @@ import {
 } from "../store/ledger.js";
 import { formatAmount, formatMoney } from "../domain/money.js";
 import { currencyFloor, debitCurrency, floorFor, type ReservePolicy } from "../domain/reserve.js";
+import { committedMinor } from "../store/read/cash.js";
+import { heldBeforePaying } from "../store/read/facts.js";
+import { pendingApproval, pendingClose, type CloseReview, type PendingApproval } from "../store/read/reviews.js";
 import { SANDBOX_BANK_AFTER, SANDBOX_BANK_RECOVER, SANDBOX_BANK_STOPPED, TRY_WORDS_SOURCE } from "../text/words.js";
 import { CURRENCY_PATTERN, CURRENCY_SOURCE, FAILURE_CODE_SOURCE, METHOD_PATTERN, METHOD_SOURCE, REFERENCE_PATTERN, REFERENCE_SOURCE, STATUS_PATTERN, STATUS_SOURCE } from "../domain/patterns.js";
 import { FAILURE_WORDS, RAIL_FAILURE_CODES, RESENDABLE_FAILURE_CODES } from "../domain/failure-codes.js";
@@ -73,6 +72,8 @@ export interface WhySettings {
   approvals: ApprovalPolicy;
   reserve: ReservePolicy;
   readers: readonly string[];
+  bankDeadlineMinutes: BankDeadlineMinutes;
+  fxQuotes: QuoteSetting;
 }
 
 export interface LegendEntry {
@@ -1400,11 +1401,17 @@ function standIn(kind: string): string {
   return `(${/^[aeiou]/.test(kind) ? "an" : "a"} ${kind} line PayOnce does not pass on)`;
 }
 
-function paymentFacts(ledger: Ledger, obligation: Obligation, attempt: Attempt, now: number): PaymentFacts {
+function paymentFacts(
+  ledger: Ledger,
+  obligation: Obligation,
+  attempt: Attempt,
+  deadlines: BankDeadlineMinutes,
+  now: number,
+): PaymentFacts {
   const createdAt: string | null = isoTime(attempt.bankCreatedAt);
   const live: boolean = attempt.state === "in_flight" || attempt.state === "pending";
   const deadlineAt: number | null =
-    createdAt === null ? null : Date.parse(createdAt) + deadlineMinutes(obligation.transferMethod) * 60_000;
+    createdAt === null ? null : Date.parse(createdAt) + deadlineMinutes(obligation.transferMethod, deadlines) * 60_000;
   const code: string | null = attempt.failureCode;
   const approval: Approval | undefined = attempt.quoteId === null ? undefined : ledger.approvalOf(attempt);
   const fx: FxTerms | undefined =
@@ -1597,7 +1604,7 @@ function policyFacts(obligation: Obligation, settings: WhySettings, builder: Fac
   let validity: string | null = null;
   if (crossCurrency(obligation)) {
     try {
-      validity = quoteValidity(currentSettings().fxQuotes);
+      validity = quoteValidity(settings.fxQuotes);
     } catch {
       validity = "the setting could not be read";
     }
@@ -1611,7 +1618,7 @@ function policyFacts(obligation: Obligation, settings: WhySettings, builder: Fac
     twoApproversAbove: formatAmount(settings.approvals.twoApproversAboveMinor),
     approvalRequestExpiresAfterMinutes: settings.approvals.expiresAfterMs / 60_000,
     approvalsRefused: settings.approvals.problem !== null,
-    bankDeadlineMinutes: deadlineMinutes(obligation.transferMethod),
+    bankDeadlineMinutes: deadlineMinutes(obligation.transferMethod, settings.bankDeadlineMinutes),
     fxQuoteValidity: validity,
   };
 }
@@ -1735,7 +1742,7 @@ export function whyFacts(
     const facts: WhyFacts = {
       question: WHY_QUESTION,
       invoice,
-      payments: ledger.attempts(invoiceId).map((attempt: Attempt): PaymentFacts => paymentFacts(ledger, obligation, attempt, now)),
+      payments: ledger.attempts(invoiceId).map((attempt: Attempt): PaymentFacts => paymentFacts(ledger, obligation, attempt, settings.bankDeadlineMinutes, now)),
       outsidePayouts: ledger.outsidePayouts(invoiceId).map(payoutFacts),
       emails: emailFacts(ledger, obligation, builder, settings.readers),
       approval: approvalFacts(ledger, obligation, builder),

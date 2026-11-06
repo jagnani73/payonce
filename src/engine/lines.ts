@@ -104,9 +104,3 @@ export function payoutSummary(transfer: Transfer): string {
     transfer.beneficiary?.bank_details?.account_name ?? "an unnamed payee";
   return `${formatMoney(toMinor(transfer.transfer_amount), transfer.transfer_currency)} to ${payee}, ${transfer.status}${failure}`;
 }
-
-export function listOf(invoiceIds: string[]): string {
-  return invoiceIds.length <= 1
-    ? (invoiceIds[0] ?? "")
-    : `${invoiceIds.slice(0, -1).join(", ")} and ${invoiceIds.at(-1)}`;
-}

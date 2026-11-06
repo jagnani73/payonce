@@ -37,6 +37,8 @@ export function whyRoutes(app: HttpApp): Route[] {
         approvals: engine.approvals,
         reserve: engine.reserve,
         readers: READER_NAMES,
+        bankDeadlineMinutes: engine.bankDeadlineMinutes,
+        fxQuotes: engine.fxQuotes,
       });
     } catch (error: unknown) {
       throw new HttpError(

@@ -2,6 +2,7 @@ import { listTransfersSince, type Transfer } from "../airwallex/transfers.js";
 import { sentToOf } from "../domain/approval.js";
 import { debitOf, feeOf, originalStateOf, type Debit, type Fee } from "../domain/assess.js";
 import { isOverdue } from "../domain/deadlines.js";
+import { UNNAMED_PAYEE } from "../text/words.js";
 import type { Dispatcher } from "./dispatcher.js";
 import { invoiceForPayout, type PayoutMatch } from "../domain/duplicates.js";
 import type { Engine } from "./engine.js";
@@ -40,10 +41,6 @@ function reportOnce(transfer: Transfer, problem: string): void {
   reported.add(transfer.id);
   sayWarning(`  sweep    ${transfer.short_reference_id ?? transfer.id}: ${problem}`);
 }
-
-// The supplier name of a found payout whose bank details carry no account name.
-// The supplier view never links records by it.
-export const UNNAMED_PAYEE: string = "Unnamed payee";
 
 // Takes a payout someone else sent on as a new invoice, so the agent runs the
 // incident as it would its own. Its reference is the invoice number when it can
@@ -168,7 +165,7 @@ async function sweepOne(engine: Engine, agent: Dispatcher, transfer: Transfer): 
     }
     return;
   }
-  if (state === "failed" || (state === "in_flight" && isOverdue(transfer))) {
+  if (state === "failed" || (state === "in_flight" && isOverdue(transfer, engine.bankDeadlineMinutes))) {
     const invoiceId: string | undefined = adopt(engine, transfer, state);
     if (invoiceId !== undefined) {
       if (nearClosed && match !== undefined) {
@@ -205,6 +202,6 @@ export async function sweep(engine: Engine, agent: Dispatcher): Promise<void> {
     }
     // After the payout was tied or taken on, so the failure names its invoice.
     // PayOnce's own failures count here too, when no look has seen them yet.
-    railFailureSeen(engine.ledger, transfer, "sweep");
+    railFailureSeen(engine.ledger, transfer, "sweep", engine.outageRule, engine.bankDeadlineMinutes);
   }
 }

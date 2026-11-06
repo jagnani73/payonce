@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { storable } from "../store/audit-trail.js";
-import type { EmailAttachment } from "../reader/emails.js";
+import type { EmailAttachment } from "../domain/emails.js";
+import { storable } from "../text/printable.js";
 import { htmlToText, type HtmlText } from "./html-text.js";
 
 // Reads a raw email (an .eml file, or the source a mail client shows) into the

@@ -1,6 +1,5 @@
-import { utcText } from "../../alerts/alert-payloads.js";
 import { timedText, type Timed } from "../../domain/timed.js";
-import { printable, say } from "../../text/printable.js";
+import { printable, say, utcText } from "../../text/printable.js";
 import type {
   ApproverChoice,
   Barred,

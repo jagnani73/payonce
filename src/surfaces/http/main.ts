@@ -4,8 +4,9 @@ import { describeAirwallex, type AirwallexClient } from "../../airwallex/client.
 import { Alerts, describeAlerts, type AlertCash, type AlertSetting } from "../../alerts/alerts.js";
 import { describePolicy } from "../../domain/approvers.js";
 import { describeQuotes } from "../../domain/fx.js";
+import { runKey } from "../../domain/patterns.js";
 import { describeFloors } from "../../domain/reserve.js";
-import { cashReport, payRunLines, type CashReport } from "../../engine/cash-position.js";
+import type { InvoiceSnapshot } from "../../domain/situation.js";
 import { createEngine, type EngineBuild } from "../../engine/create.js";
 import { CurrencyBusyError } from "../../engine/currency-lock.js";
 import { Dispatcher } from "../../engine/dispatcher.js";
@@ -18,10 +19,12 @@ import { loadEnvIfPresent } from "../../env-file.js";
 import { explainerFor, ExplainLimiter, type Explainer } from "../../explain/explainer.js";
 import { describeOutageRule } from "../../outages/outages.js";
 import { describeReconSetting, ReconRunner, type ReconSetting } from "../../recon/reconcile.js";
-import { releaseRun, runKey, runNoteError } from "../../runs/runs.js";
+import { releaseRun, runNoteError } from "../../runs/runs.js";
 import { loadSettings, type Settings } from "../../settings.js";
 import { LeaseLostError, type Ledger } from "../../store/ledger.js";
+import { cashReport, payRunLines, type CashReport } from "../../store/read/cash.js";
 import { printableError, say, sayError } from "../../text/printable.js";
+import { readInvoiceSnapshots } from "../../views/snapshot.js";
 import { httpApp, type HttpApp } from "./app.js";
 import { HOST, requestListener, type Route } from "./router.js";
 import { alertRoutes } from "./routes/alerts.js";
@@ -69,6 +72,7 @@ function main(): void {
   // A pay run row's original gets the row's sandbox outcome, kept in the ledger.
   const bank: SandboxBank = new SandboxBank(
     client,
+    built.engine.bankDeadlineMinutes,
     (invoiceId: string, error: unknown): void => noteError(ledger, invoiceId, error),
     (invoiceId: string): string | null => ledger.runRowOf(invoiceId)?.sandboxOutcome ?? null,
   );
@@ -103,7 +107,7 @@ function main(): void {
   // Reconciliation reads Airwallex on its own timer, never in an invoice's turn,
   // and takes no currency lease, because it moves no money and changes no invoice.
   const reconSetting: ReconSetting = settings.recon;
-  const reconRunner: ReconRunner = new ReconRunner(client, ledger, reconSetting.everyMs);
+  const reconRunner: ReconRunner = new ReconRunner(client, ledger, settings.bankDeadlineMinutes, reconSetting.everyMs);
   // After each read it fills in the fees of failed transfers the ledger has none for.
   // That writes only fee columns, so it runs outside the invoices' turns.
   const balances: BalanceCache = new BalanceCache(
@@ -151,7 +155,14 @@ function main(): void {
   const alerts: Alerts | null =
     alertSetting.target === null
       ? null
-      : new Alerts(engine.ledger, engine.approvals, alertSetting.target, `http://${HOST}:${port}`, alertCash);
+      : new Alerts(
+          engine.ledger,
+          (invoiceIds: string[], now: number): InvoiceSnapshot[] =>
+            readInvoiceSnapshots(engine.ledger, { policy: engine.approvals, askWhy: false }, now, invoiceIds),
+          alertSetting.target,
+          `http://${HOST}:${port}`,
+          alertCash,
+        );
 
   const app: HttpApp = httpApp({
     settings,

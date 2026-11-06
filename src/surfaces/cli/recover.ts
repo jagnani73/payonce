@@ -47,6 +47,7 @@ async function main(): Promise<void> {
   // is to read the transfer while it runs.
   const bank: SandboxBank = new SandboxBank(
     built.engine.client,
+    built.engine.bankDeadlineMinutes,
     (invoiceId: string, error: unknown): void =>
       noteError(
         ledger,

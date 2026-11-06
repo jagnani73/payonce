@@ -1,7 +1,7 @@
 import { AirwallexError, AirwallexUnreachableError, type AirwallexClient } from "../airwallex/client.js";
 import { isAmbiguous, simulateTransfer, type SimulatedStatus } from "../airwallex/simulation.js";
 import { getTransfer, TransferWaitError, waitForTransfer, type Transfer } from "../airwallex/transfers.js";
-import { isOverdue } from "../domain/deadlines.js";
+import { isOverdue, type BankDeadlineMinutes } from "../domain/deadlines.js";
 import type { Bank } from "./engine.js";
 import type { AttemptKind } from "../store/ledger.js";
 import { LineError } from "../text/line-error.js";
@@ -97,13 +97,18 @@ export class SandboxBank implements Bank {
   private readonly outcomeOf: (invoiceId: string) => string | null;
   // Transfers that convert, which the simulator will not move, already reported.
   private readonly converting: Set<string> = new Set<string>();
+  // The deadlines the agent goes by, so a converting transfer past its own is
+  // left to the agent.
+  private readonly deadlines: BankDeadlineMinutes;
 
   constructor(
     client: AirwallexClient,
+    deadlines: BankDeadlineMinutes,
     onError: (invoiceId: string, error: unknown) => void,
     outcomeOf: (invoiceId: string) => string | null = (): string | null => null,
   ) {
     this.client = client;
+    this.deadlines = deadlines;
     this.onError = onError;
     this.outcomeOf = outcomeOf;
   }
@@ -227,7 +232,7 @@ export class SandboxBank implements Bank {
       const transfer: Transfer = await reading((): Promise<Transfer> => this.read(transferId), reference);
       if (transfer.source_currency !== undefined && transfer.source_currency !== transfer.transfer_currency) {
         // Past its deadline the agent has said so already.
-        if (!this.converting.has(transferId) && !isOverdue(transfer)) {
+        if (!this.converting.has(transferId) && !isOverdue(transfer, this.deadlines)) {
           this.converting.add(transferId);
           throw new SandboxBankError("converts", transfer.short_reference_id, null);
         }

@@ -11,9 +11,9 @@ import { signoffsNeeded, type SignoffRule } from "../domain/approvers.js";
 import { routeKeyOf } from "../domain/assess.js";
 import { namingNotToPay as namingNotToPayText } from "../domain/decide.js";
 import { likelyDuplicates } from "../domain/duplicates.js";
+import { emailEvidence, type SupplierEmail } from "../domain/emails.js";
 import { reasonText, type StoredReason } from "../domain/reasons.js";
 import { debitCurrency } from "../domain/reserve.js";
-import { emailEvidence, type SupplierEmail } from "../reader/emails.js";
 import {
   crossCurrency,
   holdsAccount,
@@ -29,11 +29,13 @@ import {
   type RunRow,
   type ScannedObligation,
 } from "../store/ledger.js";
+import { anyLive } from "../store/read/facts.js";
+import { storedFindings, type StoredFindings } from "../store/stored.js";
+import { listOf } from "../text/printable.js";
 import { withCurrencyLock } from "./currency-lock.js";
-import { emailsNotRead, readNewEmails, storedFindings } from "./emails.js";
-import { RETRY_FAILED_LOOK_MS, type Engine, type NextLook, type Rate, type StoredFindings } from "./engine.js";
-import { anyLive } from "./facts.js";
-import { listOf, note } from "./lines.js";
+import { emailsNotRead, readNewEmails } from "./emails.js";
+import { RETRY_FAILED_LOOK_MS, type Engine, type NextLook, type Rate } from "./engine.js";
+import { note } from "./lines.js";
 import { holdForOutsidePayout, linkUnseenPayouts, syncOutsidePayouts } from "./outside.js";
 import { rateFor } from "./rates.js";
 import { namingNotToPay, PAID_ONLY_BY_ITSELF } from "./reason-text.js";

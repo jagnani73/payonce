@@ -27,7 +27,8 @@
     "ui": "tsx src/surfaces/http/main.ts",
     "mcp": "tsx src/surfaces/mcp/main.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p web",
-    "build:web": "node scripts/build-web.mjs"
+    "build:web": "node scripts/build-web.mjs",
+    "check:layers": "node scripts/check-layers.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.3.1",

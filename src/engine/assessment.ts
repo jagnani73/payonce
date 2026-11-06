@@ -5,17 +5,19 @@ import type { ArrivalTerms } from "../domain/arrival.js";
 import { originalStateOf, resendCanFix, sameBankDetails } from "../domain/assess.js";
 import { isOverdue } from "../domain/deadlines.js";
 import { decide } from "../domain/decide.js";
+import type { SupplierEmail } from "../domain/emails.js";
 import type { Incident, OriginalTransferState } from "../domain/incident.js";
+import { liveAtBank } from "../domain/live.js";
 import { formatMoney, invoiceMoney, toMinor } from "../domain/money.js";
 import { reasonText, type Reason } from "../domain/reasons.js";
 import { debitCurrency, floorFor } from "../domain/reserve.js";
-import type { SupplierEmail } from "../reader/emails.js";
-import { crossCurrency, liveAtBank, type Attempt, type BankChange, type Obligation } from "../store/ledger.js";
+import { crossCurrency, type Attempt, type BankChange, type Obligation } from "../store/ledger.js";
+import { committedMinor } from "../store/read/cash.js";
+import { anyLive, paidDuplicate } from "../store/read/facts.js";
+import { storedFindings, type StoredFindings } from "../store/stored.js";
 import { capitalise } from "../text/printable.js";
-import { committedMinor } from "./cash-position.js";
-import { emailsNotRead, sendersNotOnFile, storedFindings } from "./emails.js";
-import type { Assessment, Decided, Engine, Rate, StoredFindings } from "./engine.js";
-import { anyLive, paidDuplicate } from "./facts.js";
+import { emailsNotRead, sendersNotOnFile } from "./emails.js";
+import type { Assessment, Decided, Engine, Rate } from "./engine.js";
 import { note } from "./lines.js";
 import { rateFor } from "./rates.js";
 import { decided, namingNotToPay, secondBill } from "./reason-text.js";
@@ -83,7 +85,7 @@ export async function assess(
     sourceAmountMinor: converts ? (rate?.fx.sellAmountMinor ?? Number.NaN) : obligation.amountMinor,
     transferFeeMinor: feeMinor,
     originalState,
-    bankOverdue: originalState === "in_flight" && isOverdue(original),
+    bankOverdue: originalState === "in_flight" && isOverdue(original, engine.bankDeadlineMinutes),
     resendCanFix: resendCanFix(original),
     sentOutsidePayOnce: obligation.origin === "outside",
     // The look that called this has just read them from Airwallex.

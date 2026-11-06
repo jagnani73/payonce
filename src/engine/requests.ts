@@ -11,45 +11,17 @@ import {
   signoffProblem,
   signoffsNeeded,
   type Approver,
-  type Barred,
   type SignoffRule,
 } from "../domain/approvers.js";
-import { knownRoute } from "../domain/assess.js";
-import { barredFrom } from "../domain/barred.js";
+import { expiryOf, isExpired } from "../domain/live.js";
 import { formatMoney, invoiceMoney } from "../domain/money.js";
-import {
-  expiryOf,
-  isExpired,
-  signersOf,
-  type Approval,
-  type Ledger,
-  type Obligation,
-  type Signoff,
-} from "../store/ledger.js";
+import { signersOf, type Approval, type Obligation, type Signoff } from "../store/ledger.js";
+import { barredOnFile } from "../store/read/reviews.js";
+import { requestTerms } from "../store/stored.js";
 import type { Engine, NextLook, Rate } from "./engine.js";
 import { note } from "./lines.js";
 import { quoteLine, requestExpiry } from "./rates.js";
-import { requestTerms } from "./stored.js";
 import { countedFromToday } from "./terms.js";
-
-// barredFrom, on the ledger as it is now. The account's routeKey is the one given
-// or, without one, the one the ledger keeps with a request.
-export function barredOnFile(
-  ledger: Ledger,
-  obligation: Obligation,
-  accountKey: string | undefined,
-  routeKey: string | null = null,
-): Barred[] {
-  return barredFrom(
-    {
-      startedBy: obligation.startedBy,
-      fromRun: obligation.runRowId !== null,
-      callbacks: ledger.callbacksFor(obligation.beneficiaryId),
-    },
-    accountKey,
-    knownRoute(routeKey ?? (accountKey === undefined ? undefined : ledger.accountRoutes().get(accountKey))),
-  );
-}
 
 export function ruleFor(
   engine: Engine,

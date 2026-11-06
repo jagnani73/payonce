@@ -4,6 +4,7 @@ import { QUOTE_VALIDITIES, type QuoteValidity } from "./airwallex/fx.js";
 import type { AlertFormat } from "./alerts/alert-payloads.js";
 import type { AlertSetting } from "./alerts/alerts.js";
 import { policyFromEnv, type ApprovalPolicy } from "./domain/approvers.js";
+import { deadlineMinutes as minutesFor, type BankDeadlineMinutes } from "./domain/deadlines.js";
 import type { QuoteSetting } from "./domain/fx.js";
 import { reserveFromEnv, type ReservePolicy } from "./domain/reserve.js";
 import type { OutageRule } from "./outages/outages.js";
@@ -25,13 +26,6 @@ export interface AirwallexSetting {
   client: () => AirwallexClient;
   // Whether each credential is set, never its value.
   keys: { clientId: boolean; apiKey: boolean };
-}
-
-export interface BankDeadlineMinutes {
-  // BANK_DEADLINE_LOCAL_MINUTES and BANK_DEADLINE_SWIFT_MINUTES, or null when one
-  // is not a positive number, so the method's default applies.
-  LOCAL: number | null;
-  SWIFT: number | null;
 }
 
 export interface ModelSettings {
@@ -98,13 +92,19 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
   return loaded;
 }
 
-// The settings the running command loaded, for the code that cannot be handed
-// them yet: the bank deadlines, the outage rule and the quote validity.
+// The settings the running command loaded, for the code whose callers do not
+// hand it them yet: the bank deadlines the views and the outbox read, and the
+// outage rule the outage report shows.
 export function currentSettings(): Settings {
   if (loaded === null) {
     throw new Error("PayOnce read a setting before it loaded its settings");
   }
   return loaded;
+}
+
+// The bank deadline for a method under the loaded settings, for those callers.
+export function deadlineMinutes(method: string): number {
+  return minutesFor(method, currentSettings().bankDeadlineMinutes);
 }
 
 function readSettings(env: NodeJS.ProcessEnv): Settings {
@@ -116,8 +116,8 @@ function readSettings(env: NodeJS.ProcessEnv): Settings {
     reserve: reserveFromEnv(env),
     fxQuotes: quoteSetting(env),
     bankDeadlineMinutes: {
-      LOCAL: deadlineMinutes(env["BANK_DEADLINE_LOCAL_MINUTES"]),
-      SWIFT: deadlineMinutes(env["BANK_DEADLINE_SWIFT_MINUTES"]),
+      LOCAL: positiveMinutes(env["BANK_DEADLINE_LOCAL_MINUTES"]),
+      SWIFT: positiveMinutes(env["BANK_DEADLINE_SWIFT_MINUTES"]),
     },
     outageRule: outageRule(env),
     recon: reconSetting(env),
@@ -169,7 +169,7 @@ function airwallexSetting(env: NodeJS.ProcessEnv): AirwallexSetting {
 
 // How long the bank has to pay or fail a transfer, in minutes. Real rails take
 // days. The sandbox moves in seconds, so the defaults are minutes.
-function deadlineMinutes(raw: string | undefined): number | null {
+function positiveMinutes(raw: string | undefined): number | null {
   const configured: number = Number(raw);
   return Number.isFinite(configured) && configured > 0 ? configured : null;
 }

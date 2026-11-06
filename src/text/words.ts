@@ -2,6 +2,10 @@
 // code that reads lines back (why-facts.ts) and the read-only views take them
 // without importing the email reader or the sandbox bank. It imports nothing.
 
+// The supplier name of a found payout whose bank details carry no account name.
+// The supplier view never links records by it.
+export const UNNAMED_PAYEE: string = "Unnamed payee";
+
 // The bank outcome that pays a transfer. Any other outcome is the failure type
 // the simulator fails it with.
 export const PAID_OUTCOME: string = "PAID";

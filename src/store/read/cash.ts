@@ -1,33 +1,21 @@
-import type { Balance, BalanceState } from "../airwallex/balances.js";
-import type { FxTerms, LastQuote } from "../domain/approval.js";
-import {
-  crossCurrency,
-  isExpired,
-  liveAtBank,
-  mismatchedLive,
-  storedShape,
-  withBank,
-  type Approval,
-  type Attempt,
-  type CashAttempt,
-  type CashObligation,
-  type Ledger,
-  type LiveTested,
-  type Obligation,
-  type OutsidePayout,
-  type PayRunRow,
-  type Run,
-  type RunApproval,
-  type RunRow,
-} from "../store/ledger.js";
+import type { Balance, BalanceState } from "../../airwallex/balances.js";
+import type { FxTerms, LastQuote } from "../../domain/approval.js";
+import { couldStillPay, isExpired, liveAtBank, mismatchedLive, withBank, type LiveTested } from "../../domain/live.js";
 import {
   currencyFloor,
   debitCurrency,
   type CurrencyFloor,
   type FloorSource,
   type ReservePolicy,
-} from "../domain/reserve.js";
-import { isApprovalTerms, isLastQuote, quoteOnFile, termsOnFile } from "./stored.js";
+} from "../../domain/reserve.js";
+import type { Approval, RunApproval } from "../approvals.js";
+import type { Attempt, CashAttempt } from "../attempts.js";
+import { storedShape } from "../db.js";
+import { crossCurrency, type CashObligation, type Obligation } from "../invoices.js";
+import type { Ledger } from "../ledger.js";
+import type { OutsidePayout } from "../payouts.js";
+import type { PayRunRow, Run, RunRow } from "../runs.js";
+import { isApprovalTerms, isLastQuote, quoteOnFile, termsOnFile } from "../stored.js";
 
 // What a line of money is. sending, approved and pay-run are promised and still in
 // the available balance, so headroom takes them off. awaiting-approval and
@@ -153,21 +141,6 @@ function feeEstimate(ledger: Ledger, obligation: CashObligation, attempts: CashA
   }
   const latest: number | null = ledger.latestFee(debitCurrency(obligation), obligation.transferMethod);
   return latest === null ? { feeMinor: 0, feeKnown: false } : { feeMinor: latest, feeKnown: true };
-}
-
-// An escalated invoice with nothing live or paid, PayOnce's or sent outside it, so
-// a person can still release a payment for it: one held before paying, or one
-// whose payments all failed.
-function couldStillPay(
-  obligation: CashObligation,
-  attempts: CashAttempt[],
-  payouts: OutsidePayout[],
-): boolean {
-  return (
-    obligation.state === "escalated" &&
-    attempts.every((attempt: CashAttempt): boolean => !liveAtBank(attempt)) &&
-    payouts.every((payout: OutsidePayout): boolean => payout.state === "failed")
-  );
 }
 
 // A transfer that kept its fee: one the bank does not have live whose fee is not

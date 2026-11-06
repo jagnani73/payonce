@@ -25,7 +25,6 @@ import {
 } from "./invoices.js";
 import type { Lease, LockStore } from "./locks.js";
 import { RailOutageError, type Outage, type OutageStore } from "./outages.js";
-import type { OutsidePayout } from "./payouts.js";
 
 // An attempt for the invoice bound as the parameter that became a transfer or may
 // still become one. An invoice with none has sent nothing.
@@ -212,84 +211,6 @@ export class DuplicatePaymentError extends Error {
     this.name = "DuplicatePaymentError";
     this.invoiceId = invoiceId;
   }
-}
-
-// A transfer the bank has live counts as live everywhere, whatever state its
-// attempt is in. The duplicate lock holds one attempt that is not failed, so a
-// transfer found late beside another live payment is kept failed (see record),
-// and only its bank_status says the bank has it. This is LIVE_ATTEMPT's test, for
-// an attempt in hand.
-// A transfer under the attempt's request id that does not match its invoice
-// counts too, while the bank has not failed it.
-export function liveAtBank(attempt: LiveTested): boolean {
-  return ownLive(attempt) || mismatchedLive(attempt);
-}
-
-// What liveAtBank reads of an attempt.
-export type LiveTested = Pick<
-  Attempt,
-  "state" | "transferId" | "bankStatus" | "foundLateAt" | "mismatchedTransferId" | "mismatchedStatus"
->;
-
-// The attempt's own payment: not failed, or a transfer the ledger keeps failed
-// that the bank has live.
-export function ownLive(attempt: LiveTested): boolean {
-  if (attempt.state !== "failed") {
-    return true;
-  }
-  if (attempt.transferId === null) {
-    return false;
-  }
-  return attempt.bankStatus === null ? attempt.foundLateAt !== null : !failedStatus(attempt.bankStatus);
-}
-
-// A transfer under the attempt's request id that does not match its invoice, which
-// the bank has not failed.
-export function mismatchedLive(attempt: LiveTested): boolean {
-  return (
-    attempt.mismatchedTransferId !== null &&
-    (attempt.mismatchedStatus === null || !failedStatus(attempt.mismatchedStatus))
-  );
-}
-
-// A payment of the attempt's own live at the bank that the bank has not paid yet:
-// one being sent, one in flight, or one in a status PayOnce does not know.
-export function withBank(attempt: LiveTested): boolean {
-  return ownLive(attempt) && attempt.state !== "paid" && attempt.bankStatus !== "PAID";
-}
-
-// Anything under the attempt's request id that the bank has live and not paid:
-// its own payment, or a transfer that does not match its invoice.
-export function stillWithBank(attempt: Attempt): boolean {
-  return withBank(attempt) || (mismatchedLive(attempt) && attempt.mismatchedStatus !== "PAID");
-}
-
-// The attempt's own payment has failed at the bank, and nothing under its request
-// id is still with it. A transfer there that does not match the invoice may be
-// paid.
-export function nothingWithBank(attempt: Attempt): boolean {
-  return !ownLive(attempt) && !stillWithBank(attempt);
-}
-
-// A transfer found late, or one the ledger keeps failed, that the bank has live,
-// while another payment for the invoice, PayOnce's or one sent outside it, is live
-// at the bank too: the supplier may have been paid twice. paidTwice gives it to
-// the look, and settle refuses to close the invoice by itself while there is one.
-export function lateBesideLive(attempts: Attempt[], payouts: OutsidePayout[]): Attempt | undefined {
-  const late: Attempt | undefined = attempts.find(
-    (attempt: Attempt): boolean =>
-      attempt.transferId !== null &&
-      liveAtBank(attempt) &&
-      (attempt.state === "failed" || attempt.foundLateAt !== null),
-  );
-  if (late === undefined) {
-    return undefined;
-  }
-  const other: boolean =
-    attempts.some(
-      (attempt: Attempt): boolean => attempt.requestId !== late.requestId && liveAtBank(attempt),
-    ) || payouts.some((payout: OutsidePayout): boolean => payout.state !== "failed");
-  return other ? late : undefined;
 }
 
 function toAttempt(row: AttemptRow): Attempt {

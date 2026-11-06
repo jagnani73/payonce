@@ -29,10 +29,10 @@ import {
   type RunRow,
   type ScannedObligation,
 } from "../store/ledger.js";
-import { committedAcross, committedByInvoice } from "./cash-position.js";
+import { committedAcross, committedByInvoice } from "../store/read/cash.js";
+import { anyLive } from "../store/read/facts.js";
 import { withCurrencyLock } from "./currency-lock.js";
 import { RETRY_FAILED_LOOK_MS, type Engine, type LookOptions, type NextLook } from "./engine.js";
-import { anyLive } from "./facts.js";
 import { messageOf, note } from "./lines.js";
 import { linkUnseenPayouts } from "./outside.js";
 import { deadlineLook, send, waitForBank } from "./send.js";
@@ -336,7 +336,7 @@ export async function startPayment(
         // The look at its deadline is planned as soon as it is with the bank, so it
         // comes even if nothing wakes the invoice before, for example when the
         // sandbox bank's script fails.
-        engine.ledger.lookAt(invoiceId, deadlineLook(original));
+        engine.ledger.lookAt(invoiceId, deadlineLook(original, engine.bankDeadlineMinutes));
         return original;
       } catch (error: unknown) {
         const refused: Attempt | undefined = engine.ledger.attempts(invoiceId).at(-1);

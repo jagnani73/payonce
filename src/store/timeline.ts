@@ -1,7 +1,6 @@
-import { oneLine } from "../text/printable.js";
+import { oneLine, storable } from "../text/printable.js";
 import {
   restartOf,
-  storable,
   type AuditSnapshot,
   type ChainedEvent,
   type ChainedRunEvent,

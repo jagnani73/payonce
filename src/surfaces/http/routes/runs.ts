@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { airwallexAdvice, AirwallexError, AirwallexUnreachableError, withAdvice } from "../../../airwallex/client.js";
+import { runKey } from "../../../domain/patterns.js";
 import { cleanFileName, MAX_RUN_FILE_CHARS, parseRunFile, type FileProblem, type ParsedRunFile } from "../../../runs/run-file.js";
-import { approveRun, cancelRun, recheckRun, runKey, uploadRun } from "../../../runs/runs.js";
+import { approveRun, cancelRun, recheckRun, uploadRun } from "../../../runs/runs.js";
 import { auditCsv, runAuditExport, type RunAuditExport } from "../../../store/audit-trail.js";
 import {
   NothingToPayError,

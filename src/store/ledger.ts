@@ -1,8 +1,8 @@
 import type { TransferBankDetails } from "../airwallex/transfers.js";
 import type { ArrivalTerms } from "../domain/arrival.js";
 import type { Debit } from "../domain/assess.js";
+import type { SupplierEmail } from "../domain/emails.js";
 import type { Reason, StoredReason } from "../domain/reasons.js";
-import type { SupplierEmail } from "../reader/emails.js";
 import { AlertStore, type Alert, type AlertFinish, type FoundCondition, type RecordedConditions } from "./alerts.js";
 import {
   ApprovalStore,
@@ -83,17 +83,9 @@ import { Timelines, type EventKind, type LedgerEvent } from "./timeline.js";
 import { WebhookEventStore } from "./webhook-events.js";
 
 export type { Alert, AlertFinish, AlertState, FoundCondition, RecordedConditions } from "./alerts.js";
-export { expiryOf, isExpired, signersOf } from "./approvals.js";
+export { signersOf } from "./approvals.js";
 export type { Approval, ApprovalRequest, ApprovalState, RunApproval, Signoff } from "./approvals.js";
-export {
-  DuplicatePaymentError,
-  holdsAccount,
-  lateBesideLive,
-  liveAtBank,
-  mismatchedLive,
-  ownLive,
-  withBank,
-} from "./attempts.js";
+export { DuplicatePaymentError, holdsAccount } from "./attempts.js";
 export type {
   AccountRef,
   Attempt,
@@ -102,7 +94,6 @@ export type {
   AttemptState,
   CashAttempt,
   LastPaid,
-  LiveTested,
 } from "./attempts.js";
 export type { AppliedCallback, BankChange, BankChangeState, NewBankChange, PhoneSetter } from "./bank-changes.js";
 export type { ConfirmedContact, ContactChange, ProposedContact } from "./contacts.js";
@@ -145,7 +136,7 @@ export type {
   RailFailure,
   StandingLine,
 } from "./outages.js";
-export { payoutPays, payoutVerdict } from "./payouts.js";
+export { payoutVerdict } from "./payouts.js";
 export type { FoundPayout, OutsidePayout, PayoutMoney, PayoutState } from "./payouts.js";
 export type {
   MetricsAttempt,
@@ -834,10 +825,6 @@ export class Ledger {
     return this.repos.contactReads.proposal(beneficiaryId, field);
   }
 
-  contact(id: number): Contact | undefined {
-    return this.repos.contactReads.byId(id);
-  }
-
   // Every version of the record's contacts, oldest first, or of every record's.
   contactsOf(beneficiaryId: string | null): Contact[] {
     return this.repos.contactReads.of(beneficiaryId);
@@ -1007,10 +994,6 @@ export class Ledger {
 
   voidOpenRunApprovals(runId: number): boolean {
     return this.repos.approvals.voidOpenRunApprovals(runId);
-  }
-
-  requestRunApproval(runId: number, request: ApprovalRequest): boolean {
-    return this.repos.approvals.requestRunApproval(runId, request);
   }
 
   addRunApproval(runId: number, request: ApprovalRequest): boolean {

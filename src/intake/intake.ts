@@ -1,8 +1,8 @@
 import { Worker } from "node:worker_threads";
 import { personName } from "../domain/approvers.js";
 import { numberOf, numbersOf, type InvoiceNumber } from "../domain/duplicates.js";
+import { unverifiedSenders, type SupplierEmail } from "../domain/emails.js";
 import { noteTexts, PARTIAL_NOTES, type EmailNote, type ParsedEmail, type ParsedUpload, type UploadSource } from "./eml.js";
-import { unverifiedSenders, type SupplierEmail } from "../reader/emails.js";
 import { noteSenders } from "../engine/emails.js";
 import { note } from "../engine/lines.js";
 import {

@@ -72,18 +72,6 @@ function toApproval(row: ApprovalRow, signoffs: Signoff[]): Approval {
   };
 }
 
-// When a request stops covering a payment, in epoch milliseconds. One recorded
-// before requests expired counts as expired already. Works for invoice and run
-// requests alike.
-export function expiryOf(approval: { expiresAt: string | null }): number {
-  const at: number = approval.expiresAt === null ? Number.NaN : Date.parse(approval.expiresAt);
-  return Number.isFinite(at) ? at : 0;
-}
-
-export function isExpired(approval: { expiresAt: string | null }, now: number = Date.now()): boolean {
-  return expiryOf(approval) <= now;
-}
-
 // Everyone who approved, as the timeline names them.
 export function signersOf(signoffs: Signoff[]): string {
   const names: string[] = signoffs.map((signoff: Signoff): string => signoff.approver);
@@ -486,14 +474,10 @@ export class ApprovalStore {
     return this.runRequests.void(runId);
   }
 
-  // A new request voids any earlier one for the run that is still open. Only a
-  // run still waiting gets one. False when none was opened.
-  requestRunApproval(runId: number, request: ApprovalRequest): boolean {
-    return this.db.transaction((): boolean => this.addRunApproval(runId, request));
-  }
-
-  // requestRunApproval inside a transaction the caller holds, such as the one
-  // setRunRows opens, so a check's rows and its request are written together.
+  // Opens a run's request inside a transaction the caller holds, such as the one
+  // setRunRows opens, so a check's rows and its request are written together. A
+  // new request voids any earlier one for the run that is still open. Only a run
+  // still waiting gets one. False when none was opened.
   addRunApproval(runId: number, request: ApprovalRequest): boolean {
     if (!this.db.isTransaction) {
       throw new Error("A run's request is opened only inside a ledger transaction");

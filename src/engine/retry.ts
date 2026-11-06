@@ -1,11 +1,10 @@
 import { findTransferByRequestId, type Transfer, type TransferBankDetails } from "../airwallex/transfers.js";
 import { accountKeyOf, type ApprovalTerms } from "../domain/approval.js";
-import { deadlineMinutes } from "../domain/deadlines.js";
+import { deadlineMinutes, type BankDeadlineMinutes } from "../domain/deadlines.js";
+import { liveAtBank, mismatchedLive } from "../domain/live.js";
 import { reasonFor, type Reason } from "../domain/reasons.js";
 import { debitCurrency } from "../domain/reserve.js";
 import {
-  liveAtBank,
-  mismatchedLive,
   payoutVerdict,
   type Approval,
   type Attempt,
@@ -14,23 +13,25 @@ import {
   type OutsidePayout,
   type RunRow,
 } from "../store/ledger.js";
+import { anyLive, paidTwice } from "../store/read/facts.js";
+import { requestTerms } from "../store/stored.js";
 import { capitalise } from "../text/printable.js";
 import { withCurrencyLock } from "./currency-lock.js";
 import { CONTINUE, nextLookAt, type Engine, type NextLook, type StepResult } from "./engine.js";
-import { anyLive, paidTwice } from "./facts.js";
 import { holdMismatched, holdPaidTwice } from "./late-mismatched.js";
 import { note } from "./lines.js";
 import { holdForOutsidePayout } from "./outside.js";
 import { sendAttempt, wasRejected } from "./payments.js";
 import { AccountChangedError, requireAccount, type TransferChecks } from "./send.js";
-import { requestTerms } from "./stored.js";
 
 // A pending attempt is not sent again while a payout for the invoice sent outside
 // PayOnce is live. It stays pending under its request id, which keeps the
 // duplicate lock, so PayOnce opens no other payment for the invoice either. It is
-// tried again on a look after that payout has failed.
+// tried again on a look after that payout has failed. The invoice is escalated
+// for the payout on every such look, and the row is written only when that
+// changes it.
 function holdRetryForOutsidePayout(engine: Engine, invoiceId: string, attempt: Attempt): NextLook {
-  engine.ledger.escalate(invoiceId, reasonFor("outside-payout"));
+  engine.ledger.escalateIfChanged(invoiceId, reasonFor("outside-payout"));
   note(
     engine.ledger,
     invoiceId,
@@ -51,7 +52,7 @@ function neverSentAt(engine: Engine, obligation: Obligation, attempt: Attempt): 
     from = Date.now();
     engine.ledger.tried(attempt.requestId, from);
   }
-  return from + deadlineMinutes(obligation.transferMethod) * 60_000;
+  return from + deadlineMinutes(obligation.transferMethod, engine.bankDeadlineMinutes) * 60_000;
 }
 
 // Why a pending attempt with no transfer may never be sent: something else pays
@@ -331,12 +332,12 @@ export function holdPending(
 // True for an attempt sent on a quote that ran out a bank deadline ago. Airwallex
 // refuses to create a transfer on a quote that has run out, and a transfer
 // created before then has had that long to show.
-function quoteLapsed(obligation: Obligation, attempt: Attempt): boolean {
+function quoteLapsed(obligation: Obligation, attempt: Attempt, deadlines: BankDeadlineMinutes): boolean {
   if (attempt.quoteValidTo === null) {
     return false;
   }
   const deadline: number =
-    Date.parse(attempt.quoteValidTo) + deadlineMinutes(obligation.transferMethod) * 60_000;
+    Date.parse(attempt.quoteValidTo) + deadlineMinutes(obligation.transferMethod, deadlines) * 60_000;
   return !(Date.now() < deadline);
 }
 
@@ -419,7 +420,12 @@ async function retry(
       if (decidedFor === undefined) {
         return { kind: "account-unknown" };
       }
-      await requireAccount(engine, obligation, decidedFor, "replacement was approved");
+      await requireAccount(
+        engine,
+        obligation,
+        decidedFor,
+        approved?.action === "replace" ? "replacement was approved" : "replacement was decided",
+      );
     } else if (approved?.action === "pay") {
       await requireAccount(engine, obligation, approved.accountKey, "payment was approved");
     } else if (row?.accountKey !== undefined && row.accountKey !== null) {
@@ -431,7 +437,7 @@ async function retry(
     }
     throw error;
   }
-  const lapsed: boolean = quoteLapsed(obligation, attempt);
+  const lapsed: boolean = quoteLapsed(obligation, attempt, engine.bankDeadlineMinutes);
   const invoiceId: string = obligation.invoiceId;
   const state: ObligationState | undefined = engine.ledger.obligation(invoiceId)?.state;
   const attempts: Attempt[] = engine.ledger.attempts(invoiceId);

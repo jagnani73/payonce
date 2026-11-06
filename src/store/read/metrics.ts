@@ -1,6 +1,7 @@
+import type { LiveTested } from "../../domain/live.js";
 import { storedReason, type StoredReason } from "../../domain/reasons.js";
 import type { ApprovalState } from "../approvals.js";
-import type { AttemptKind, LiveTested } from "../attempts.js";
+import type { AttemptKind } from "../attempts.js";
 import type { Db } from "../db.js";
 import type { ObligationOrigin, ObligationState } from "../invoices.js";
 import type { PayoutState } from "../payouts.js";

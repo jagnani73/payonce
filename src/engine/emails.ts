@@ -1,45 +1,18 @@
 import type { ApprovalTerms } from "../domain/approval.js";
-import { summarise, unverifiedSenders, type EmailFindings, type SupplierEmail } from "../reader/emails.js";
+import { summarise, unverifiedSenders, type EmailFindings, type SupplierEmail } from "../domain/emails.js";
+import { isExpired } from "../domain/live.js";
 import { ModelReadError, triesText } from "../reader/reader-error.js";
-import { checkedObject, isExpired, storedShape, type Approval, type Ledger, type Obligation } from "../store/ledger.js";
+import { checkedObject, type Approval, type Ledger, type Obligation } from "../store/ledger.js";
+import { findingsOnFile, isStoredFindings, requestTerms, type StoredFindings } from "../store/stored.js";
 import { sayWarning } from "../text/printable.js";
-import type { Engine, StoredFindings } from "./engine.js";
+import type { Engine } from "./engine.js";
 import { messageOf, note } from "./lines.js";
-import { findingsOnFile, isStoredFindings, requestTerms } from "./stored.js";
-
-const NO_FINDINGS: StoredFindings = {
-  claimsNonReceipt: false,
-  asksForNewBankDetails: false,
-  asksNotToPay: false,
-  summary: "no emails on file",
-};
-
-// Emails on file that no look has read yet.
-const NOT_READ_FINDINGS: StoredFindings = {
-  ...NO_FINDINGS,
-  summary: "the emails have not been read yet",
-};
 
 const UNREAD_SUMMARY: string = "the emails could not be read";
 
 // With no domain on file every sender is flagged, since nothing can vouch for it.
 export function sendersNotOnFile(obligation: Obligation, emails: SupplierEmail[]): string[] {
   return unverifiedSenders(emails, obligation.supplierDomain);
-}
-
-// The stored findings, or what stands for them before anything was read. They are
-// read strict, so a look on findings that do not parse, or are not in the shape
-// PayOnce writes, throws and pays nothing. Only a view, such as the board's
-// pendingClose, reads them soft (readingSoft), and there such findings stand as
-// not read.
-export function storedFindings(ledger: Ledger, invoiceId: string, emails: SupplierEmail[]): { findings: StoredFindings; stored: boolean } {
-  const stored: string | undefined = ledger.findings(invoiceId);
-  const findings: StoredFindings | null =
-    stored === undefined ? null : storedShape(stored, isStoredFindings, findingsOnFile(invoiceId));
-  if (findings !== null) {
-    return { findings, stored: true };
-  }
-  return { findings: emails.length === 0 ? NO_FINDINGS : NOT_READ_FINDINGS, stored: false };
 }
 
 // True while an email on file has not been read: the reader failed on it, or it

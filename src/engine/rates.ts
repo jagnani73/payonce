@@ -9,11 +9,11 @@ import {
 } from "../domain/approval.js";
 import { APPROVED_USE_WITHIN_MS } from "../domain/approvers.js";
 import { quoteValidity } from "../domain/fx.js";
+import { isExpired } from "../domain/live.js";
 import { formatMoney, invoiceMoney, toMajor } from "../domain/money.js";
-import { currentSettings } from "../settings.js";
-import { checkedObject, isExpired, type Approval, type Obligation } from "../store/ledger.js";
+import { checkedObject, type Approval, type Obligation } from "../store/ledger.js";
+import { isLastQuote, quoteOnFile, requestTerms } from "../store/stored.js";
 import type { Engine, Rate } from "./engine.js";
-import { isLastQuote, quoteOnFile, requestTerms } from "./stored.js";
 
 // An approval request ends this long before its quote does, after the time an
 // approval given at the last moment has to be used, so a slow look or a clock
@@ -71,7 +71,7 @@ export async function rateFor(
     obligation.sourceCurrency,
     obligation.currency,
     toMajor(obligation.amountMinor),
-    quoteValidity(currentSettings().fxQuotes),
+    quoteValidity(engine.fxQuotes),
   );
   const receivedAt: number = Date.now();
   const fx: FxTerms = fxTermsOf(quote, obligation, feeEstimateMinor);

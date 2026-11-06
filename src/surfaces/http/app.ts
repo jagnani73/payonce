@@ -1,7 +1,7 @@
 import { readdirSync } from "node:fs";
 import type { BalanceCache } from "../../airwallex/balances.js";
 import type { Alerts, AlertSetting, AlertsStatus } from "../../alerts/alerts.js";
-import type { CashReport } from "../../engine/cash-position.js";
+import { withBank } from "../../domain/live.js";
 import type { Dispatcher } from "../../engine/dispatcher.js";
 import type { Engine } from "../../engine/engine.js";
 import type { SandboxBank } from "../../engine/sandbox-bank.js";
@@ -13,11 +13,11 @@ import type { Settings } from "../../settings.js";
 import {
   INVOICE_ID_PATTERN,
   readingSoft,
-  withBank,
   type Attempt,
   type Obligation,
   type OutsidePayout,
 } from "../../store/ledger.js";
+import type { CashReport } from "../../store/read/cash.js";
 import { liveFrom, type Live } from "../../views/context.js";
 import type { IncidentView } from "../../views/contract.js";
 import { incidentView } from "../../views/incident.js";

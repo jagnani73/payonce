@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { deadlineMinutes } from "../domain/deadlines.js";
+import { deadlineMinutes, type BankDeadlineMinutes } from "../domain/deadlines.js";
 import { INVOICE_ID_PATTERN } from "../store/ledger.js";
 import { formatMoney } from "../domain/money.js";
 import { CURRENCY_PATTERN, REFERENCE_PATTERN, STATUS_PATTERN } from "../domain/patterns.js";
@@ -211,6 +211,8 @@ export interface MatchInput {
   // Facts of the pending, open or explained break on each key, for the ones that
   // carry something over.
   prior: Map<string, string>;
+  // The bank deadlines, which give a transfer its window.
+  deadlines: BankDeadlineMinutes;
 }
 
 export interface DebitMissingFacts {
@@ -548,8 +550,8 @@ export function failedBy(transfer: ReconTransfer): number | null {
   return times.length === 0 ? null : Math.min(...times);
 }
 
-function windowMs(transfer: ReconTransfer): number {
-  return deadlineMinutes(transfer.method ?? "") * MS_PER_MINUTE;
+function windowMs(transfer: ReconTransfer, deadlines: BankDeadlineMinutes): number {
+  return deadlineMinutes(transfer.method ?? "", deadlines) * MS_PER_MINUTE;
 }
 
 export function match(input: MatchInput): MatchResult {
@@ -677,7 +679,7 @@ export function match(input: MatchInput): MatchResult {
     if (before) {
       continue;
     }
-    const due: number | null = transfer.createdMs === null ? null : transfer.createdMs + windowMs(transfer);
+    const due: number | null = transfer.createdMs === null ? null : transfer.createdMs + windowMs(transfer, input.deadlines);
     if (tie === undefined && movements.length > 0) {
       if (due !== null && input.now < due) {
         waiting.push({ kind: "untied", currency: wallet, reference, amountMinor: -sum(debits), status: null, dueAt: iso(due) });
@@ -780,7 +782,7 @@ export function match(input: MatchInput): MatchResult {
     if (failed) {
       if (credits.length === 0) {
         const since: number | null = failedBy(transfer);
-        const refundDue: number | null = since === null ? null : since + windowMs(transfer);
+        const refundDue: number | null = since === null ? null : since + windowMs(transfer, input.deadlines);
         if (refundDue !== null && input.now < refundDue) {
           waiting.push({ kind: "refund", currency: debitCurrency, reference, amountMinor: debited, status: null, dueAt: iso(refundDue) });
         } else {

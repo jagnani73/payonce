@@ -1,24 +1,16 @@
-import type { ApprovalStore } from "./approvals.js";
 import {
   lateBesideLive,
-  LIVE_ATTEMPT,
   liveAtBank,
   mismatchedLive,
   nothingWithBank,
+  payoutPays,
   stillWithBank,
-  UNCLEARED_MISMATCH,
-  type Attempt,
-  type AttemptStore,
-} from "./attempts.js";
+} from "../domain/live.js";
+import type { ApprovalStore } from "./approvals.js";
+import { LIVE_ATTEMPT, UNCLEARED_MISMATCH, type Attempt, type AttemptStore } from "./attempts.js";
 import type { Db } from "./db.js";
 import type { ObligationState } from "./invoices.js";
-import {
-  BLOCKING_OUTSIDE_PAYOUT,
-  LIVE_OUTSIDE_PAYOUT,
-  payoutPays,
-  type OutsidePayout,
-  type PayoutStore,
-} from "./payouts.js";
+import { BLOCKING_OUTSIDE_PAYOUT, LIVE_OUTSIDE_PAYOUT, type OutsidePayout, type PayoutStore } from "./payouts.js";
 
 // Closing an invoice: paid once, paid outside, paid by a mismatched transfer, or
 // closed without paying.

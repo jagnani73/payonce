@@ -1,9 +1,10 @@
 import { existsSync } from "node:fs";
-import { approvePayment, pendingApproval, type PendingApproval } from "../../engine/person.js";
+import { approvePayment } from "../../engine/person.js";
 import { loadEnvIfPresent } from "../../env-file.js";
 import { notAnInvoiceText } from "../../runs/runs.js";
 import { loadSettings, type Settings } from "../../settings.js";
 import { Ledger, LEDGER_PATH, type Approval, type Obligation } from "../../store/ledger.js";
+import { pendingApproval, type PendingApproval } from "../../store/read/reviews.js";
 import { say, shownReference } from "../../text/printable.js";
 import type { DecisionOption, DuplicateView, IncidentView, RequestView, TermsView } from "../../views/contract.js";
 import { incidentView } from "../../views/incident.js";

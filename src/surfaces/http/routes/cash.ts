@@ -1,5 +1,5 @@
-import type { CashReport } from "../../../engine/cash-position.js";
 import { readingSoft } from "../../../store/ledger.js";
+import type { CashReport } from "../../../store/read/cash.js";
 import type { CashView } from "../../../views/contract.js";
 import { cashView } from "../../../views/treasury.js";
 import type { HttpApp } from "../app.js";

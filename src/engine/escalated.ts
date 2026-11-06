@@ -4,10 +4,10 @@ import type { SignoffRule } from "../domain/approvers.js";
 import { originalStateOf, routeKeyOf } from "../domain/assess.js";
 import { decide } from "../domain/decide.js";
 import type { OriginalTransferState } from "../domain/incident.js";
+import { isExpired } from "../domain/live.js";
 import { clauseText, reasonFor, reasonText, secondBillPaid } from "../domain/reasons.js";
 import { debitCurrency } from "../domain/reserve.js";
 import {
-  isExpired,
   RailOutageError,
   type Approval,
   type Attempt,
@@ -15,12 +15,12 @@ import {
   type Obligation,
   type Outage,
 } from "../store/ledger.js";
+import { anyLive, paidDuplicate } from "../store/read/facts.js";
 import { assess } from "./assessment.js";
 import { closeWaitingLine } from "./close.js";
 import { withCurrencyLock } from "./currency-lock.js";
 import { noteEvidenceUpgrade } from "./emails.js";
 import type { Assessment, Engine, NextLook } from "./engine.js";
-import { anyLive, paidDuplicate } from "./facts.js";
 import { note } from "./lines.js";
 import { holdForOutsidePayout, linkUnseenPayouts } from "./outside.js";
 import { asRequested, withFloorReason } from "./reason-text.js";

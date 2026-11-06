@@ -3,11 +3,16 @@ import type { Transfer, TransferBankDetails } from "../airwallex/transfers.js";
 import type { FxTerms } from "../domain/approval.js";
 import type { ApprovalPolicy } from "../domain/approvers.js";
 import type { ArrivalTerms } from "../domain/arrival.js";
+import type { BankDeadlineMinutes } from "../domain/deadlines.js";
+import type { SupplierEmail } from "../domain/emails.js";
+import type { QuoteSetting } from "../domain/fx.js";
 import type { Decision, Incident } from "../domain/incident.js";
 import type { Clause, Reason } from "../domain/reasons.js";
 import type { ReservePolicy } from "../domain/reserve.js";
-import type { EmailFindings, EmailReader, SupplierEmail } from "../reader/emails.js";
+import type { OutageRule } from "../outages/outages.js";
+import type { EmailReader } from "../reader/emails.js";
 import type { AttemptKind, BankChange, Ledger } from "../store/ledger.js";
+import type { StoredFindings } from "../store/stored.js";
 
 // Told about each payment PayOnce sends. In the sandbox it plays the bank, so the
 // payment moves on. In production there is none, because the bank moves it.
@@ -23,6 +28,9 @@ export interface Engine {
   reader: EmailReader;
   approvals: ApprovalPolicy;
   reserve: ReservePolicy;
+  bankDeadlineMinutes: BankDeadlineMinutes;
+  fxQuotes: QuoteSetting;
+  outageRule: OutageRule;
   bank?: Bank;
 }
 
@@ -52,15 +60,6 @@ export function nextLookAt(at: NextLook | Promise<NextLook>): StepResult {
 
 // How long after a look that failed the agent tries again.
 export const RETRY_FAILED_LOOK_MS: number = 60_000;
-
-// What the reader found. unverifiedSenders is kept for display; the policy works
-// the sender check out again from the stored emails. unread marks a thread the
-// reader failed on. emailsRead is how many emails of the thread were read.
-export interface StoredFindings extends EmailFindings {
-  unverifiedSenders?: string[];
-  unread?: boolean;
-  emailsRead?: number;
-}
 
 // The quote a payment from another currency's wallet is approved at. fresh is
 // true for one no request has shown, which a new request may open on. endsAt is

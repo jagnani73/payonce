@@ -1,17 +1,6 @@
 import type { BalanceState } from "../airwallex/balances.js";
+import type { BankDeadlineMinutes } from "../domain/deadlines.js";
 import { formatMoney } from "../domain/money.js";
-import {
-  cashReport,
-  CASH_KINDS,
-  FIRM_KINDS,
-  payRunLines,
-  WAITING_KINDS,
-  type CashKind,
-  type CashLine,
-  type CashReport,
-  type CurrencyCash,
-  type InvoiceFloor,
-} from "../engine/cash-position.js";
 import { railWords } from "../domain/patterns.js";
 import {
   outageRuleText,
@@ -34,6 +23,18 @@ import {
   type WaitingView,
 } from "../recon/reconcile.js";
 import { WALLET_STATUS_TEXT, type BreakKind, type MovementHow, type WalletSummary } from "../recon/recon-match.js";
+import {
+  CASH_KINDS,
+  cashReport,
+  FIRM_KINDS,
+  payRunLines,
+  WAITING_KINDS,
+  type CashKind,
+  type CashLine,
+  type CashReport,
+  type CurrencyCash,
+  type InvoiceFloor,
+} from "../store/read/cash.js";
 import { capitalise } from "../text/printable.js";
 import type { Settings } from "../settings.js";
 import { readingSoft, type Ledger, type OutageHoldKind } from "../store/ledger.js";
@@ -281,12 +282,17 @@ const HOW_WORDS: Record<MovementHow, string> = {
 
 // One wallet's stored movements, newest first, with their money and what
 // explains each in PayOnce's words.
-export function reconMovementsView(ledger: Ledger, currency: string, now: number): ReconMovementsView {
+export function reconMovementsView(
+  ledger: Ledger,
+  currency: string,
+  deadlines: BankDeadlineMinutes,
+  now: number,
+): ReconMovementsView {
   return readingSoft((): ReconMovementsView => {
     const of = (minor: number | null): Money | null => (minor === null ? null : money(minor, currency));
     return {
       currency,
-      movements: movementsView(ledger, currency, now).map((movement: MovementView) => ({
+      movements: movementsView(ledger, currency, deadlines, now).map((movement: MovementView) => ({
         id: movement.id,
         postedAt: movement.postedAt,
         typeText: movement.typeText,

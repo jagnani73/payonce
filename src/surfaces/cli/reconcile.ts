@@ -247,7 +247,7 @@ async function runLive(): Promise<void> {
   if (ledger === null) {
     return;
   }
-  const outcome: RunOutcome = await reconcileOnce(client, ledger, "terminal");
+  const outcome: RunOutcome = await reconcileOnce(client, ledger, settings.bankDeadlineMinutes, "terminal");
   sayOutcome(outcome);
   say("");
   const report: ReconReport = reconReport(ledger);
@@ -257,12 +257,12 @@ async function runLive(): Promise<void> {
 
 function runOffline(): void {
   loadEnvIfPresent();
-  loadSettings();
+  const settings: Settings = loadSettings();
   const ledger: Ledger | null = existingLedger();
   if (ledger === null) {
     return;
   }
-  const outcome: RunOutcome = reconcileOffline(ledger, "terminal");
+  const outcome: RunOutcome = reconcileOffline(ledger, settings.bankDeadlineMinutes, "terminal");
   sayOutcome(outcome);
   say("");
   const report: ReconReport = reconReport(ledger);
