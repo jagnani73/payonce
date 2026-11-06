@@ -609,6 +609,10 @@ export class Ledger {
     this.repos.invoices.escalate(invoiceId, reason);
   }
 
+  escalateIfChanged(invoiceId: string, reason: StoredReason | null): void {
+    this.repos.invoices.escalateIfChanged(invoiceId, reason);
+  }
+
   rewordEscalation(invoiceId: string, from: StoredReason | null, to: StoredReason): boolean {
     return this.repos.invoices.rewordEscalation(invoiceId, from, to);
   }

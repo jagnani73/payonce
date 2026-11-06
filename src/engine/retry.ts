@@ -185,6 +185,8 @@ function afterFail(engine: Engine, invoiceId: string, attempt: Attempt, cause: N
 // under way meanwhile, and a try another process made since this look read it
 // moves the deadline on. failAttempt changes only an attempt still pending with no
 // transfer. A transfer listed by then is recorded by the next look, due at once.
+// The invoice is escalated with the cause's reason on every look, and the row is
+// written only when that changes it.
 export async function failNeverSent(
   engine: Engine,
   obligation: Obligation,
@@ -194,7 +196,7 @@ export async function failNeverSent(
   const invoiceId: string = obligation.invoiceId;
   const kind: string = capitalise(attempt.kind);
   const text: CauseText = causeText(obligation, cause);
-  engine.ledger.escalate(invoiceId, text.reason);
+  engine.ledger.escalateIfChanged(invoiceId, text.reason);
   let deadline: number = neverSentAt(engine, obligation, attempt);
   if (Date.now() >= deadline) {
     const failed: boolean | number = await withCurrencyLock(

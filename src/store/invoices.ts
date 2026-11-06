@@ -380,6 +380,30 @@ export class InvoiceStore {
       .run(columns.text, columns.code, columns.clauses, columns.slots, invoiceId);
   }
 
+  // escalate, unless the invoice is escalated already with this reason in every
+  // column, so a look that finds it as it left it writes nothing.
+  escalateIfChanged(invoiceId: string, reason: StoredReason | null): void {
+    const columns: ReasonColumns = reasonColumns(reason);
+    this.db
+      .prepare(
+        `UPDATE obligations SET state = 'escalated', ${SET_REASON}
+          WHERE invoice_id = ?
+            AND NOT (state = 'escalated' AND escalation_reason IS ? AND escalation_code IS ?
+                     AND escalation_clauses IS ? AND escalation_slots IS ?)`,
+      )
+      .run(
+        columns.text,
+        columns.code,
+        columns.clauses,
+        columns.slots,
+        invoiceId,
+        columns.text,
+        columns.code,
+        columns.clauses,
+        columns.slots,
+      );
+  }
+
   // Rewords the reason of an invoice that is still escalated with the reason it
   // was read with, so a close or another change from another process meanwhile
   // is left alone. True when it changed it.
