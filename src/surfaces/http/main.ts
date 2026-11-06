@@ -30,6 +30,7 @@ import { incidentRoutes } from "./routes/incidents.js";
 import { optionsRoutes } from "./routes/options.js";
 import { outageRoutes } from "./routes/outages.js";
 import { outboxRoutes } from "./routes/outbox.js";
+import { paymentRoutes } from "./routes/payments.js";
 import { reconcileRoutes } from "./routes/reconcile.js";
 import { reportRoutes } from "./routes/reports.js";
 import { runRoutes } from "./routes/runs.js";
@@ -178,6 +179,7 @@ function main(): void {
     ...whyRoutes(app),
     ...outboxRoutes(app),
     ...viewRoutes(app, SWEEP_EVERY_MS),
+    ...paymentRoutes(app),
   ];
   const start: StartUp = startUp(app);
   const server: Server = createServer(requestListener(routes, port));
