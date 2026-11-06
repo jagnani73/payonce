@@ -220,6 +220,8 @@ export interface BoardTotal {
   outageMinor: number;
   // Rows of a pay run waiting for approval, which the cash panel does not count.
   runWaitingMinor: number;
+  // The pay runs those rows are in.
+  runsWaiting: number[];
   // With the bank and payouts sent outside PayOnce.
   withBankMinor: number;
   entries: number;
@@ -943,6 +945,7 @@ function blankTotal(currency: string): BoardTotal {
     waitingMinor: 0,
     outageMinor: 0,
     runWaitingMinor: 0,
+    runsWaiting: [],
     withBankMinor: 0,
     entries: 0,
     estimated: false,
@@ -973,6 +976,9 @@ function totalsOf(ranked: Ranked[], currency: string | null): BoardTotal[] {
         total.waitingMinor += minor;
       } else {
         total.runWaitingMinor += minor;
+        if (!total.runsWaiting.includes(line.runId)) {
+          total.runsWaiting.push(line.runId);
+        }
       }
       total.estimated = total.estimated || line.estimated;
       total.feeUnknown += line.feeKnown ? 0 : 1;
@@ -1019,11 +1025,13 @@ export function boardEntriesFor(
   return { entries: ranked.map((item: Ranked): BoardEntry => item.entry), totals: totalsOf(ranked, null) };
 }
 
-// The board as the page and pnpm board show it, with the filters applied.
+// The board as the page and pnpm board show it, with the filters applied. keep
+// narrows the totals further, to the entries a list shows.
 export function boardReport(
   ledger: Ledger,
   filters: BoardFilters,
   now: number = Date.now(),
+  keep: (entry: BoardEntry) => boolean = (): boolean => true,
 ): BoardReport {
   const { ranked, invoices, outages }: Board = rankedBoard(ledger, now);
   const others: Ranked[] = ranked.filter(
@@ -1055,7 +1063,10 @@ export function boardReport(
     ),
     origins: BOARD_ORIGINS.map((origin: BoardOrigin) => ({ origin, label: ORIGIN_LABELS[origin] })),
     currencies: [...currencies].sort((a: string, b: string): number => a.localeCompare(b)),
-    totals: totalsOf(shown, filters.currency),
+    totals: totalsOf(
+      shown.filter((item: Ranked): boolean => keep(item.entry)),
+      filters.currency,
+    ),
     entries: shown.map((item: Ranked): BoardEntry => item.entry),
     all: ranked.length,
     invoices,

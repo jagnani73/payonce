@@ -639,6 +639,8 @@ export interface WalletTotals {
   waitingOnPeople: Money;
   pausedByOutage: Money;
   runWaiting: Money;
+  // The pay runs whose rows are in runWaiting.
+  runsWaiting: RunId[];
   withBank: Money;
   estimated: boolean;
   feeUnknown: number;
@@ -699,8 +701,10 @@ export interface IncidentsView {
   generatedAt: Iso;
   query: IncidentsQuery;
   scopes: { scope: IncidentScope; label: string; count: number }[];
+  // Every wallet a payment in the ledger is paid from, closed ones included.
   wallets: string[];
   outages: OutageStrip[];
+  // Over the payments and the waiting run's rows the filters keep, scope included.
   totals: WalletTotals[];
   // Ranked: group order, the most money first, then the oldest.
   rows: IncidentRow[];
