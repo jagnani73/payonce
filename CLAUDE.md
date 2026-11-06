@@ -42,81 +42,79 @@ Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-loc
 
 ## Where the details are
 
-This file holds the commands, the file map and the rules that hold everywhere. The rest is in `docs/design/`, one file per topic, with the dated notes on what was checked and how. Read the topic file before changing the code it covers. Where this file and a topic file differ, the topic file is right.
+This file holds the commands, the file map and the rules that hold everywhere. The rest is in `docs/design/`, one file per topic, with the dated notes on what was checked and how. Read the topic file before changing the code it covers. Where this file and a topic file differ, the topic file is right, except for paths: the topic files still name files by their old flat paths (`src/engine.ts`, `src/server.ts`) until they are rewritten, and the file map below has the current ones.
 
 | Topic file | Read it before changing |
 |---|---|
-| `engine-rules.md` | anything that sends, holds, approves or closes a payment: `engine.ts`, `decide.ts`, `payments.ts`, `approval.ts`, `approvers.ts`, `bank-change.ts`, `duplicates.ts`, `reserve.ts`, `cash-position.ts`, `currency-lock.ts`, `assess.ts`, `fx.ts`, `sweep.ts`, `watcher.ts`, `dispatcher.ts` |
-| `ledger.md` | `ledger.ts` and `audit-trail.ts`: a table, column, index, trigger, transaction or the hash chain |
+| `engine-rules.md` | anything that sends, holds, approves or closes a payment: `engine/engine.ts`, `engine/create.ts`, `engine/payments.ts`, `engine/bank-change.ts`, `engine/cash-position.ts`, `engine/currency-lock.ts`, `engine/sweep.ts`, `engine/watcher.ts`, `engine/dispatcher.ts`, and `decide.ts`, `approval.ts`, `approvers.ts`, `duplicates.ts`, `reserve.ts`, `assess.ts` and `fx.ts` in `domain/` |
+| `ledger.md` | `store/ledger.ts` and `store/audit-trail.ts`: a table, column, index, trigger, transaction or the hash chain |
 | `accounts.md` | `accountKeyOf`, `routeKeyOf`, `NOT_ROUTING_FIELDS`, or any test of whether two sets of bank details are one account |
 | `names.md` | anything that records or compares a person's name |
-| `route-advisory.md` | `arrival.ts`, due dates and arrival estimates |
-| `pay-runs.md` | `run-file.ts`, `runs.ts`, `payrun.ts`, and the run's turn in `watcher.ts` and `dispatcher.ts` |
-| `rail-outages.md` | `outages.ts`, `outage.ts` and the outage gate in `openAttempt` |
-| `uploaded-emails.md` | `eml.ts`, `html-text.ts`, `css-text.ts`, `intake.ts`, `parse-worker.ts` |
-| `email-reader.md` | `model-service.ts`, `model-reader.ts`, `keyword-reader.ts`, `reader.ts`, `reader-error.ts`, `emails.ts` |
-| `ask-why.md` | `why-facts.ts`, `explainer.ts`, `ask.ts`, and any new reason or timeline line, since Ask why passes only the ones it knows |
-| `reconciliation.md` | `recon-match.ts`, `recon-store.ts`, `reconcile.ts`, `recon-cli.ts`, `airwallex/history.ts`, and reconciliation's chain in `audit-trail.ts` |
-| `metrics.md` | `metrics.ts`, `metrics-cli.ts` and the time triggers in `ledger.ts` |
-| `incident-board.md` | `incident-board.ts`, `board.ts`, and the cash line kinds the board totals (`FIRM_KINDS`, `WAITING_KINDS`, `waitingRunLines` in `cash-position.ts`) |
-| `supplier-view.md` | `suppliers.ts`, `supplier.ts`, and how the page shows text PayOnce did not write (`whyText`) |
-| `outbox.md` | `drafts.ts`, `outbox.ts` |
-| `alerts.md` | `alerts.ts`, `alert-payloads.ts`, and anything written to `escalation_reason` |
-| `web-server.md` | `server.ts` and `web/` |
-| `mcp-server.md` | `mcp.ts`, `mcp-views.ts`, `mcp-text.ts` |
-| `webhooks.md` | `webhooks.ts`, `tunnel.ts`, `airwallex/webhooks.ts` |
+| `route-advisory.md` | `domain/arrival.ts`, due dates and arrival estimates |
+| `pay-runs.md` | `runs/run-file.ts`, `runs/runs.ts`, `surfaces/cli/payrun.ts`, and the run's turn in `engine/watcher.ts` and `engine/dispatcher.ts` |
+| `rail-outages.md` | `outages/outages.ts`, `surfaces/cli/outage.ts` and the outage gate in `openAttempt` |
+| `uploaded-emails.md` | `intake/`: `eml.ts`, `html-text.ts`, `css-text.ts`, `intake.ts`, `parse-worker.ts` |
+| `email-reader.md` | `reader/`: `model-service.ts`, `model-reader.ts`, `keyword-reader.ts`, `reader.ts`, `reader-error.ts`, `emails.ts` |
+| `ask-why.md` | `explain/why-facts.ts`, `explain/explainer.ts`, `surfaces/cli/ask.ts`, `surfaces/http/routes/why.ts`, and any new reason or timeline line, since Ask why passes only the ones it knows |
+| `reconciliation.md` | `recon/recon-match.ts`, `store/recon-store.ts`, `recon/reconcile.ts`, `surfaces/cli/reconcile.ts`, `airwallex/history.ts`, and reconciliation's chain in `store/audit-trail.ts` |
+| `metrics.md` | `views/metrics.ts`, `surfaces/cli/metrics.ts` and the time triggers in `store/ledger.ts` |
+| `incident-board.md` | `views/incident-board.ts`, `surfaces/cli/board.ts`, and the cash line kinds the board totals (`FIRM_KINDS`, `WAITING_KINDS`, `waitingRunLines` in `engine/cash-position.ts`) |
+| `supplier-view.md` | `views/suppliers.ts`, `surfaces/cli/supplier.ts`, and how the page shows text PayOnce did not write (`whyText`) |
+| `outbox.md` | `outbox/drafts.ts`, `surfaces/cli/outbox.ts` |
+| `alerts.md` | `alerts/alerts.ts`, `alerts/alert-payloads.ts`, and anything written to `escalation_reason` |
+| `web-server.md` | `surfaces/http/` and `web/` |
+| `mcp-server.md` | `surfaces/mcp/main.ts`, `surfaces/mcp/mcp-text.ts`, `views/mcp-views.ts` |
+| `webhooks.md` | `surfaces/http/webhooks.ts`, `surfaces/http/tunnel.ts`, `surfaces/http/start.ts`, `airwallex/webhooks.ts` |
 | `sandbox-behaviour.md` | anything that relies on what Airwallex or its simulator does, and before any run against the sandbox |
-| `structure.md` | any file, since it has the full note on each and the map below is its short form. It is the main note for `src/airwallex/` (the host allowlist, secret redaction, error shapes, `airwallexAdvice`), `sandbox-bank.ts`, `scenario.ts`, `printable.ts`, `redact.ts`, `terms-shape.ts`, `words.ts`, `line-error.ts`, `env-file.ts` and the CLI commands |
+| `structure.md` | any file, since it has the full note on each and the map below is its short form. It is the main note for `src/airwallex/` (the host allowlist, secret redaction, error shapes, `airwallexAdvice`), `engine/sandbox-bank.ts`, `engine/scenario.ts`, `text/`, `surfaces/cli/terms-shape.ts`, `env-file.ts` and the CLI commands |
 
 ## Files
 
-- `src/decide.ts`: the pure policy (wait, replace, escalate, close) and `floorReason`. Every reason it gives is an exported constant, apart from the one that names the source currency.
-- `src/incident.ts`: the `Incident` and `Decision` types. Amounts are minor units.
-- `src/money.ts`: `toMinor`, `readMinor`, `toMajor`, `formatMoney`, for two-decimal currencies only.
-- `src/engine.ts`: the agent, shared by the CLI and the server. `resumeIncident` is one look at an invoice. Also `startPayment`, `startFirst`, `replaceUnderLock`, `approvePayment`, `closeIncident`, `payAgain`, `note` and `noteError`, tying payouts sent outside PayOnce, and FX rates.
-- `src/dispatcher.ts`: runs steps one invoice at a time. `wake(id, true)` gives a look the pay run's turn.
-- `src/watcher.ts`: the fallback for webhooks. Reads payments in flight, wakes due invoices and runs the sweep. In the server it also releases approved pay runs and sends their unsent rows by waking them with the run's turn.
-- `src/sweep.ts`: lists transfers since the ledger started and handles the ones PayOnce did not send, late transfers and mismatched ones.
-- `src/payments.ts`: idempotent send and status sync, and `recordMissingFees`.
-- `src/assess.ts`: reads an Airwallex transfer: its state, whether a resend can fix it, its account and route keys, fee and debit.
-- `src/deadlines.ts`: how long the bank has to pay or fail a transfer, by method.
-- `src/arrival.ts`: the route advisory: usual arrival days by corridor, due-date risk and its wording.
-- `src/duplicates.ts`: supplier and invoice-number matching, `likelyDuplicates` and the payout-to-invoice match.
-- `src/approval.ts`: approval terms (`termsFor`, `heldTermsFor`, `runTermsFor`), `bindingOf`, `paymentAmount`, `runAmount` and the FX helpers.
-- `src/approvers.ts`: the approval policy from the environment, signer checks, `personName` and `sameName`.
-- `src/bank-change.ts`: recording a callback that confirms new bank details.
-- `src/reserve.ts`: reserve floors from `RESERVE_FLOORS`, and `debitCurrency`.
-- `src/cash-position.ts`: the cash panel: `cashLines`, `committedMinor`, `lineAmount`, `cashReport`.
-- `src/currency-lock.ts`: a lease per wallet with a fair queue (`withCurrencyLock`).
-- `src/fx.ts`: reads `FX_QUOTE_VALIDITY`.
-- `src/outages.ts`: rail outages: the failure codes, the rule, recording failures, ending one, the views.
-- `src/run-file.ts`, `src/runs.ts`: the pay run CSV parser, and pay runs from upload to release.
-- `src/ledger.ts`: the SQLite ledger (`node:sqlite`): tables, transactions, the duplicate lock, the hash chain, `readSnapshot`, `readingSoft`.
-- `src/audit-trail.ts`: hashing, chain checks and exports for invoice, pay run and reconciliation timelines.
-- `src/sandbox-bank.ts`: plays the bank in the sandbox through the simulator.
-- `src/scenario.ts`: the demo payments (`SCENARIOS`) and the scripted incident.
-- `src/webhooks.ts`, `src/tunnel.ts`: the webhook receiver and its cloudflared quick tunnel.
-- `src/emails.ts`: the `EmailReader` interface, findings, `summarise`, the sender check and the fixture loader.
-- `src/eml.ts`, `src/html-text.ts`, `src/css-text.ts`: the raw email parser and its HTML and CSS scanners.
-- `src/intake.ts`, `src/parse-worker.ts`: the upload queue, the parse worker, matching an upload to invoices and delivering it.
-- `src/model-reader.ts`, `src/keyword-reader.ts`, `src/reader.ts`, `src/reader-error.ts`: the two email readers, their settings and their failures.
-- `src/model-service.ts`: the model services the reader and Ask why ask in order, Claude's Messages API then Gemini's chat completions, and one request to a model over `fetch`.
-- `src/why-facts.ts`, `src/explainer.ts`: Ask why: the facts with their aliases and reason grammar, and the model call.
-- `src/redact.ts`: `redactKey`, which cuts a key out of error text in every form.
-- `src/words.ts`: fixed words the read-only code shares without importing the reader or the sandbox bank.
-- `src/line-error.ts`: `LineError`, an error whose message is a timeline line.
-- `src/printable.ts`: everything printed to a terminal goes through it (`say`, `printable`, `printableJson`, `shownReference`).
-- `src/terms-shape.ts`: checks stored terms before a CLI command prints or approves them.
+`src/` is in layers: `domain/` is pure and does no I/O, `store/` is the ledger, and `engine/` is the agent and what runs it. The subsystems (`runs/`, `outages/`, `recon/`, `intake/`, `reader/`, `outbox/`, `alerts/`, `explain/`) sit beside the engine. `views/` builds what people and other programs read, and `surfaces/` are the ways in: the HTTP server, the MCP server and the CLI. Nothing enforces the layers yet.
+
+- `src/settings.ts`: every environment setting PayOnce reads, with its default, its parsing and its error text, read once by `loadSettings` right after `.env` loads. A setting PayOnce cannot use carries its problem instead of throwing, so each refusal comes when it always did. `currentSettings()` serves the code not yet handed them: the bank deadlines, the outage rule, the quote validity and the MCP server's cash floors.
 - `src/env-file.ts`: `loadEnvIfPresent`.
-- `src/server.ts`: the HTTP server for `web/` and the JSON API. It also starts the watcher, webhooks, alerts and the reconciliation timer.
-- `src/alerts.ts`, `src/alert-payloads.ts`: alert conditions, and the Slack and Discord posts.
-- `src/drafts.ts`: the outbox: its message templates, `outboxOf`, `createDraft` and `markDraft`.
-- `src/recon-match.ts`, `src/recon-store.ts`, `src/reconcile.ts`: reconciliation's matcher, its tables and its checks.
-- `src/incident-board.ts`: the incident board.
-- `src/suppliers.ts`: the supplier view.
-- `src/metrics.ts`: the ops metrics.
-- `src/mcp.ts`, `src/mcp-views.ts`, `src/mcp-text.ts`: the read-only MCP server, its views, and the marking of text PayOnce did not write.
-- CLI entry points: `recover.ts`, `approve.ts`, `close.ts`, `audit.ts`, `cash.ts`, `board.ts`, `payrun.ts`, `outbox.ts`, `outage.ts`, `ask.ts`, `supplier.ts`, `recon-cli.ts`, `metrics-cli.ts`, `reset.ts` and `index.ts` (`pnpm dev`).
+- `src/domain/`:
+  - `decide.ts`: the pure policy (wait, replace, escalate, close) and `floorReason`. Every reason it gives is an exported constant, apart from the one that names the source currency.
+  - `incident.ts`: the `Incident` and `Decision` types. Amounts are minor units.
+  - `money.ts`: `toMinor`, `readMinor`, `toMajor`, `formatMoney`, for two-decimal currencies only.
+  - `assess.ts`: reads an Airwallex transfer: its state, whether a resend can fix it, its account and route keys, fee and debit.
+  - `deadlines.ts`: how long the bank has to pay or fail a transfer, by method.
+  - `arrival.ts`: the route advisory: usual arrival days by corridor, due-date risk and its wording.
+  - `duplicates.ts`: supplier and invoice-number matching, `likelyDuplicates` and the payout-to-invoice match.
+  - `approval.ts`: approval terms (`termsFor`, `heldTermsFor`, `runTermsFor`), `bindingOf`, `paymentAmount`, `runAmount` and the FX helpers.
+  - `approvers.ts`: the approval policy (`policyFromEnv`, which `settings.ts` calls), signer checks, `personName` and `sameName`.
+  - `reserve.ts`: reserve floors from `RESERVE_FLOORS`, and `debitCurrency`.
+  - `fx.ts`: `quoteValidity` and `describeQuotes`, on the `FX_QUOTE_VALIDITY` setting.
+- `src/store/`:
+  - `ledger.ts`: the SQLite ledger (`node:sqlite`): tables, transactions, the duplicate lock, the hash chain, `readSnapshot`, `readingSoft`.
+  - `audit-trail.ts`: hashing, chain checks and exports for invoice, pay run and reconciliation timelines.
+  - `recon-store.ts`: reconciliation's tables.
+- `src/engine/`:
+  - `engine.ts`: the agent, shared by the CLI and the server. `resumeIncident` is one look at an invoice. Also `startPayment`, `startFirst`, `replaceUnderLock`, `approvePayment`, `closeIncident`, `payAgain`, `note` and `noteError`, tying payouts sent outside PayOnce, and FX rates.
+  - `create.ts`: `createEngine(settings, ledger?)`, the one place an `Engine` is built: the Airwallex client first, then the ledger, then the reader. It returns the client's problem instead of throwing it. `pnpm ui` and `pnpm recover` add their sandbox bank to what it builds.
+  - `dispatcher.ts`: runs steps one invoice at a time. `wake(id, true)` gives a look the pay run's turn.
+  - `watcher.ts`: the fallback for webhooks. Reads payments in flight, wakes due invoices and runs the sweep. In the server it also releases approved pay runs and sends their unsent rows by waking them with the run's turn.
+  - `sweep.ts`: lists transfers since the ledger started and handles the ones PayOnce did not send, late transfers and mismatched ones.
+  - `payments.ts`: idempotent send and status sync, and `recordMissingFees`.
+  - `bank-change.ts`: recording a callback that confirms new bank details.
+  - `cash-position.ts`: the cash panel: `cashLines`, `committedMinor`, `lineAmount`, `cashReport`.
+  - `currency-lock.ts`: a lease per wallet with a fair queue (`withCurrencyLock`).
+  - `sandbox-bank.ts`: plays the bank in the sandbox through the simulator.
+  - `scenario.ts`: the demo payments (`SCENARIOS`) and the scripted incident.
+- `src/runs/run-file.ts`, `src/runs/runs.ts`: the pay run CSV parser, and pay runs from upload to release.
+- `src/outages/outages.ts`: rail outages: the failure codes, recording failures, ending one, the views.
+- `src/recon/recon-match.ts`, `src/recon/reconcile.ts`: reconciliation's matcher and its checks.
+- `src/intake/`: `eml.ts`, `html-text.ts`, `css-text.ts`, the raw email parser and its HTML and CSS scanners, and `intake.ts`, `parse-worker.ts`, the upload queue, the parse worker, matching an upload to invoices and delivering it.
+- `src/reader/`: `emails.ts` (the `EmailReader` interface, findings, `summarise`, the sender check and the fixture loader), `model-reader.ts`, `keyword-reader.ts`, `reader.ts`, `reader-error.ts` (the two email readers, their services from the settings and their failures), and `model-service.ts` (the model services the reader and Ask why ask in order, Claude's Messages API then Gemini's chat completions, and one request to a model over `fetch`).
+- `src/outbox/drafts.ts`: the outbox: its message templates, `outboxOf`, `createDraft` and `markDraft`.
+- `src/alerts/alerts.ts`, `src/alerts/alert-payloads.ts`: alert conditions, and the Slack and Discord posts.
+- `src/explain/why-facts.ts`, `src/explain/explainer.ts`: Ask why: the facts with their aliases and reason grammar, and the model call.
+- `src/views/`: `incident-board.ts` (the incident board), `suppliers.ts` (the supplier view), `metrics.ts` (the ops metrics) and `mcp-views.ts` (what the MCP tools answer).
+- `src/text/`: `printable.ts` (everything printed to a terminal goes through it: `say`, `printable`, `printableJson`, `shownReference`), `redact.ts` (`redactKey`, which cuts a key out of error text in every form), `words.ts` (fixed words the read-only code shares without importing the reader or the sandbox bank) and `line-error.ts` (`LineError`, an error whose message is a timeline line).
+- `src/surfaces/http/`: `pnpm ui`. `main.ts` builds the engine, the watcher, alerts and the reconciliation timer and starts them in order. `router.ts` holds the route table's types, the Host and Origin guard, the static files and the request handler. `routes/*.ts` hold the handlers by area, each a function of the `HttpApp` in `app.ts`, which also has the helpers more than one area uses. `http.ts` reads bodies and writes answers. `start.ts` picks up interrupted payments and connects webhooks. `webhooks.ts` and `tunnel.ts` are the webhook receiver and its cloudflared quick tunnel.
+- `src/surfaces/mcp/main.ts`, `src/surfaces/mcp/mcp-text.ts`: the read-only MCP server, and the marking of text PayOnce did not write.
+- `src/surfaces/cli/`: one file per command: `recover.ts`, `approve.ts`, `close.ts`, `audit.ts`, `cash.ts`, `board.ts`, `payrun.ts`, `outbox.ts`, `outage.ts`, `ask.ts`, `supplier.ts`, `reconcile.ts`, `metrics.ts`, `reset.ts` and `dev.ts` (`pnpm dev`). `terms-shape.ts` checks stored terms before a command prints or approves them.
 - `src/airwallex/`: `client.ts` (sandbox hosts only, errors, secret redaction, advice), `transfers.ts`, `fx.ts`, `beneficiaries.ts`, `balances.ts`, `webhooks.ts`, `simulation.ts` (sandbox-only calls) and `history.ts`.
 - `web/`: the static page (`index.html`, `styles.css`, `app.js`), with no build step and no external requests.
 - `fixtures/emails/`, `fixtures/pay-run-example.csv`: sample supplier threads and a sample pay run file.
@@ -160,6 +158,12 @@ These are short forms of rules the topic files give in full, with their exceptio
 - Timeline lines are one line each, hash-chained and never edited. They are written through `note` or `runNote`, or by the Ledger methods that append a line inside their own transaction, never with plain SQL.
 - `AWX_CLIENT_ID`, `AWX_API_KEY`, `CLAUDE_API_KEY` and `READER_API_KEY` are never printed. The model reader and Ask why cut both model keys out of every error and answer with `redactKeys`. Airwallex errors go through `withoutSecrets`, which cuts the client id, the key and the token in every form `redactKey` cuts, and through `cleanLine`. The Airwallex client accepts only the two sandbox hosts and `sandbox.invalid`.
 
+### Settings
+
+- Every environment variable is read in `settings.ts`, with its default, parsing and error text, and nowhere else. A new setting goes there, and reading it never throws: a value PayOnce cannot use carries its problem, and the code that needs it refuses at the moment it always did.
+- Each entry point calls `loadSettings()` right after it loads `.env`, and again after any `.env` it loads on one path only. The MCP server reads its settings only from the keys it allows and `PAYONCE_LEDGER`.
+- The settings keep the Airwallex credentials and the model keys inside functions (`airwallex.client()`, `models.readerServices()`, `models.askServices()`), so printing or sending the settings object cannot show a key. Still, never send or print it whole.
+
 ### Ledger
 
 - `Ledger.transaction` cannot nest. Nothing that opens its own transaction runs inside one, and timeline lines are written after the commit, except those a Ledger method appends inside its own.
@@ -182,4 +186,4 @@ These are short forms of rules the topic files give in full, with their exceptio
 - The code uses explicit type annotations and few comments.
 - TypeScript 7 needs `"types": ["node"]` in `tsconfig.json`.
 - pnpm 12 blocks install scripts; `esbuild` is allowed in `pnpm-workspace.yaml`.
-- The only direct runtime dependencies are `@modelcontextprotocol/server` and `zod`, pinned exactly and imported only by `src/mcp.ts`. The SDK brings `@modelcontextprotocol/core` 2.3.1. None of the three has install scripts.
+- The only direct runtime dependencies are `@modelcontextprotocol/server` and `zod`, pinned exactly and imported only by `src/surfaces/mcp/main.ts`. The SDK brings `@modelcontextprotocol/core` 2.3.1. None of the three has install scripts.

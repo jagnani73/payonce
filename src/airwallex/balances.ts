@@ -1,5 +1,5 @@
-import { readMinor, toMinor } from "../money.js";
-import { sayWarning } from "../printable.js";
+import { readMinor, toMinor } from "../domain/money.js";
+import { sayWarning } from "../text/printable.js";
 import type { AirwallexClient } from "./client.js";
 
 interface BalanceRow {

@@ -1,0 +1,713 @@
+import type { Balance, BalanceState } from "../airwallex/balances.js";
+import type { ApprovalTerms, FxTerms, LastQuote } from "../domain/approval.js";
+import {
+  crossCurrency,
+  isExpired,
+  liveAtBank,
+  mismatchedLive,
+  storedObject,
+  withBank,
+  type Approval,
+  type Attempt,
+  type CashAttempt,
+  type CashObligation,
+  type Ledger,
+  type LiveTested,
+  type Obligation,
+  type OutsidePayout,
+  type PayRunRow,
+  type Run,
+  type RunApproval,
+  type RunRow,
+} from "../store/ledger.js";
+import {
+  currencyFloor,
+  debitCurrency,
+  type CurrencyFloor,
+  type FloorSource,
+  type ReservePolicy,
+} from "../domain/reserve.js";
+
+// What a line of money is. sending, approved and pay-run are promised and still in
+// the available balance, so headroom takes them off. awaiting-approval and
+// awaiting-person wait on a person and only the second headroom figure takes them
+// off. waiting-outage is a single incident's first payment held by an outage,
+// which goes out by itself once a person ends it: only the second figure takes
+// it off too, because originals are not checked against the floor. with-bank,
+// outside and fee-lost have already left the available balance.
+export type CashKind =
+  | "sending"
+  | "approved"
+  | "pay-run"
+  | "awaiting-approval"
+  | "awaiting-person"
+  | "waiting-outage"
+  | "with-bank"
+  | "outside"
+  | "fee-lost";
+
+export const CASH_KINDS: CashKind[] = [
+  "sending",
+  "approved",
+  "pay-run",
+  "awaiting-approval",
+  "awaiting-person",
+  "waiting-outage",
+  "with-bank",
+  "outside",
+  "fee-lost",
+];
+
+export const FIRM_KINDS: ReadonlySet<CashKind> = new Set<CashKind>(["sending", "approved", "pay-run"]);
+export const WAITING_KINDS: ReadonlySet<CashKind> = new Set<CashKind>([
+  "awaiting-approval",
+  "awaiting-person",
+  "waiting-outage",
+]);
+
+export interface CashLine {
+  kind: CashKind;
+  invoiceId: string;
+  // The wallet the money leaves.
+  currency: string;
+  // For fee-lost, the fee.
+  amountMinor: number;
+  // 0 when not known, and for fee-lost.
+  feeMinor: number;
+  feeKnown: boolean;
+  // The bank's short reference, when the money is a transfer.
+  reference: string | null;
+  // The amount is not exact: the invoice's, because the transfer's was never
+  // read, or for a payment from another currency's wallet, one from a quote no
+  // request or attempt is on, or none at all.
+  estimated: boolean;
+  // The pay run a pay-run line belongs to. Null on every other line.
+  runId: number | null;
+  // The amount is an exchange rate quote's sell amount, not yet a transfer's.
+  fromQuote?: boolean;
+}
+
+interface FeeEstimate {
+  feeMinor: number;
+  feeKnown: boolean;
+}
+
+interface LineAmount {
+  amountMinor: number;
+  estimated: boolean;
+  fromQuote: boolean;
+}
+
+// What a payment takes from its wallet, before the fee. Once its transfer has
+// been read it is what debitOf read from it, kept on the attempt. Before then a
+// found payout is about the invoice amount, and a payment from the invoice's own
+// currency takes that amount exactly. One from another currency's wallet takes
+// what its quote sells, so until its transfer has been read only a quote knows
+// it: exactly the quote an attempt was sent with or a request still open is on,
+// and otherwise about the invoice's last quote, which may be on no request, as
+// when nobody on the list can approve it. Before any quote it is 0, estimated.
+// attempt is null for a payment not opened yet.
+function lineAmount(ledger: Ledger, obligation: CashObligation, attempt: CashAttempt | null, now: number): LineAmount {
+  if (attempt !== null && attempt.amountMinor !== null) {
+    return { amountMinor: attempt.amountMinor, estimated: false, fromQuote: false };
+  }
+  if (attempt !== null && obligation.origin === "outside" && attempt.kind === "original") {
+    return { amountMinor: obligation.amountMinor, estimated: true, fromQuote: false };
+  }
+  if (!crossCurrency(obligation)) {
+    return { amountMinor: obligation.amountMinor, estimated: false, fromQuote: false };
+  }
+  const approval: Approval | undefined =
+    attempt === null ? ledger.latestApproval(obligation.invoiceId) : ledger.approvalOf(attempt);
+  // Read strict, so committedMinor fails closed for the policy and the run checks.
+  // Only the panel, the board and other views (readingSoft) read terms or a kept
+  // quote that do not parse as no quote, as before one was taken.
+  const fx: FxTerms | undefined =
+    approval === undefined ? undefined : storedObject<ApprovalTerms>(approval.terms)?.fx;
+  const open: boolean =
+    approval !== undefined &&
+    (approval.state === "requested" || approval.state === "approved") &&
+    !isExpired(approval, now);
+  if (fx !== undefined && (attempt !== null ? attempt.quoteId === fx.quoteId : open)) {
+    return { amountMinor: fx.sellAmountMinor, estimated: false, fromQuote: true };
+  }
+  const kept: string | undefined = ledger.lastQuote(obligation.invoiceId);
+  const lastQuote: LastQuote | null = kept === undefined ? null : storedObject<LastQuote>(kept);
+  const last: FxTerms | undefined = lastQuote === null ? fx : lastQuote.fx;
+  return last === undefined
+    ? { amountMinor: 0, estimated: true, fromQuote: false }
+    : { amountMinor: last.sellAmountMinor, estimated: true, fromQuote: true };
+}
+
+// The fee a payment not sent yet should cost: the invoice's latest fee recorded in
+// the wallet the payment leaves, else the latest the ledger recorded in that
+// currency by the same transfer method, else 0 and not known.
+function feeEstimate(ledger: Ledger, obligation: CashObligation, attempts: CashAttempt[]): FeeEstimate {
+  for (const attempt of [...attempts].reverse()) {
+    if (attempt.feeMinor !== null && attempt.feeCurrency === debitCurrency(obligation)) {
+      return { feeMinor: attempt.feeMinor, feeKnown: true };
+    }
+  }
+  const latest: number | null = ledger.latestFee(debitCurrency(obligation), obligation.transferMethod);
+  return latest === null ? { feeMinor: 0, feeKnown: false } : { feeMinor: latest, feeKnown: true };
+}
+
+// An escalated invoice with nothing live or paid, PayOnce's or sent outside it, so
+// a person can still release a payment for it: one held before paying, or one
+// whose payments all failed.
+function couldStillPay(
+  obligation: CashObligation,
+  attempts: CashAttempt[],
+  payouts: OutsidePayout[],
+): boolean {
+  return (
+    obligation.state === "escalated" &&
+    attempts.every((attempt: CashAttempt): boolean => !liveAtBank(attempt)) &&
+    payouts.every((payout: OutsidePayout): boolean => payout.state === "failed")
+  );
+}
+
+// A transfer that kept its fee: one the bank does not have live whose fee is not
+// 0. A fee not recorded yet counts, as not known. A transfer the ledger keeps
+// failed that the bank has live lost no fee. The cash panel's fee-lost lines and
+// the metrics' fees lost both use these.
+export function attemptLostFee(attempt: LiveTested & { feeMinor: number | null }): boolean {
+  return !liveAtBank(attempt) && attempt.transferId !== null && attempt.feeMinor !== 0;
+}
+
+export function payoutLostFee(payout: { state: string; feeMinor: number | null }): boolean {
+  return payout.state === "failed" && payout.feeMinor !== 0;
+}
+
+function feeLost(
+  invoiceId: string,
+  currency: string,
+  feeMinor: number | null,
+  reference: string | null,
+): CashLine {
+  return {
+    kind: "fee-lost",
+    invoiceId,
+    currency,
+    amountMinor: feeMinor ?? 0,
+    feeMinor: 0,
+    feeKnown: feeMinor !== null,
+    reference,
+    estimated: false,
+    runId: null,
+  };
+}
+
+// A transfer's money, booked to the wallet it left. Its fee is added only when it
+// was taken in that currency. A fee in another currency gets a line of its own in
+// that currency, so no figure adds two currencies together.
+function sentLines(line: CashLine, feeMinor: number | null, feeCurrency: string | null): CashLine[] {
+  if (feeMinor === null || feeCurrency === null || feeCurrency === line.currency) {
+    return [{ ...line, feeMinor: feeMinor ?? 0, feeKnown: feeMinor !== null }];
+  }
+  return [
+    { ...line, feeMinor: 0, feeKnown: true },
+    { ...line, currency: feeCurrency, amountMinor: 0, feeMinor, feeKnown: true, estimated: false, fromQuote: false },
+  ];
+}
+
+// Every line of money the ledger knows about, in every currency. Closed invoices
+// add only the fees their failed transfers kept, and with openOnly they are not
+// read at all, for a caller that needs only the money still at risk. Given
+// obligations, only those invoices' lines, for a caller that has read them.
+export function cashLines(
+  ledger: Ledger,
+  now: number = Date.now(),
+  { openOnly = false, obligations }: { openOnly?: boolean; obligations?: Obligation[] } = {},
+): CashLine[] {
+  const lines: CashLine[] = [];
+  for (const obligation of obligations ?? ledger.obligations()) {
+    if (openOnly && (obligation.state === "settled" || obligation.state === "rejected")) {
+      continue;
+    }
+    const invoiceId: string = obligation.invoiceId;
+    const wallet: string = debitCurrency(obligation);
+    const attempts: Attempt[] = ledger.attempts(invoiceId);
+    const payouts: OutsidePayout[] = ledger.outsidePayouts(invoiceId);
+
+    for (const attempt of attempts) {
+      if (attemptLostFee(attempt)) {
+        lines.push(feeLost(invoiceId, attempt.feeCurrency ?? wallet, attempt.feeMinor, attempt.reference));
+      }
+    }
+    for (const payout of payouts) {
+      if (payoutLostFee(payout)) {
+        lines.push(feeLost(invoiceId, payout.feeCurrency ?? wallet, payout.feeMinor, payout.reference));
+      }
+    }
+    if (obligation.state === "settled" || obligation.state === "rejected") {
+      continue;
+    }
+
+    for (const attempt of attempts) {
+      if (attempt.state === "pending" && attempt.transferId === null) {
+        lines.push(sendingLine(ledger, obligation, attempt, attempts, now));
+      } else if (withBank(attempt)) {
+        // A found invoice's original is a payout someone sent outside PayOnce. The
+        // money is booked where the transfer took it, which for a payout paid from
+        // another currency is not the invoice's. A transfer the ledger keeps failed
+        // while the bank has it in flight is with the bank like any other.
+        const amount: LineAmount = lineAmount(ledger, obligation, attempt, now);
+        lines.push(
+          ...sentLines(
+            {
+              kind: obligation.origin === "outside" && attempt.kind === "original" ? "outside" : "with-bank",
+              invoiceId,
+              currency: attempt.currency ?? wallet,
+              amountMinor: amount.amountMinor,
+              feeMinor: 0,
+              feeKnown: false,
+              reference: attempt.reference,
+              estimated: amount.estimated,
+              fromQuote: amount.fromQuote,
+              runId: null,
+            },
+            attempt.feeMinor,
+            attempt.feeCurrency,
+          ),
+        );
+      }
+      // A transfer under the attempt's request id that does not match the invoice
+      // left the wallet it was sent from like any payment with the bank, until the
+      // bank pays or fails it. Before its amount was read, what the attempt would
+      // take from that wallet stands in, estimated: the invoice's amount, or for a
+      // payment from another currency's wallet its quote's, or 0 with none.
+      if (mismatchedLive(attempt) && attempt.mismatchedStatus !== "PAID") {
+        const stand: LineAmount | null =
+          attempt.mismatchedAmountMinor === null ? lineAmount(ledger, obligation, attempt, now) : null;
+        lines.push({
+          kind: "with-bank",
+          invoiceId,
+          currency: attempt.mismatchedCurrency ?? wallet,
+          amountMinor: attempt.mismatchedAmountMinor ?? stand?.amountMinor ?? 0,
+          feeMinor: 0,
+          feeKnown: false,
+          reference: attempt.mismatchedReference,
+          estimated: stand !== null,
+          fromQuote: stand?.fromQuote ?? false,
+          runId: null,
+        });
+      }
+    }
+    for (const payout of payouts) {
+      if (payout.state === "in_flight" || payout.state === "unknown") {
+        lines.push(
+          ...sentLines(
+            {
+              kind: "outside",
+              invoiceId,
+              currency: payout.currency ?? wallet,
+              amountMinor: payout.amountMinor ?? obligation.amountMinor,
+              feeMinor: 0,
+              feeKnown: false,
+              reference: payout.reference === "" ? null : payout.reference,
+              estimated: payout.amountMinor === null,
+              runId: null,
+            },
+            payout.feeMinor,
+            payout.feeCurrency,
+          ),
+        );
+      }
+    }
+
+    // A pay run's row waiting for its first payment is a pay-run line already.
+    if (
+      obligation.state === "open" &&
+      obligation.runRowId === null &&
+      attempts.length === 0 &&
+      ledger.activeOutage(obligation.currency, obligation.transferMethod) !== undefined
+    ) {
+      const amount: LineAmount = lineAmount(ledger, obligation, null, now);
+      lines.push({
+        kind: "waiting-outage",
+        invoiceId,
+        currency: wallet,
+        amountMinor: amount.amountMinor,
+        ...feeEstimate(ledger, obligation, attempts),
+        reference: null,
+        estimated: amount.estimated,
+        fromQuote: amount.fromQuote,
+        runId: null,
+      });
+    }
+    if (couldStillPay(obligation, attempts, payouts)) {
+      lines.push(personLine(ledger, obligation, attempts, now));
+    }
+  }
+  return lines;
+}
+
+// A payment being sent with no transfer yet.
+function sendingLine(
+  ledger: Ledger,
+  obligation: CashObligation,
+  attempt: CashAttempt,
+  attempts: CashAttempt[],
+  now: number,
+): CashLine {
+  const amount: LineAmount = lineAmount(ledger, obligation, attempt, now);
+  return {
+    kind: "sending",
+    invoiceId: obligation.invoiceId,
+    currency: debitCurrency(obligation),
+    amountMinor: amount.amountMinor,
+    ...feeEstimate(ledger, obligation, attempts),
+    reference: null,
+    estimated: amount.estimated,
+    fromQuote: amount.fromQuote,
+    runId: null,
+  };
+}
+
+// The payment an escalated invoice with nothing live could still make, by where
+// its latest request stands: approved, waiting for approval, or waiting on a
+// person.
+function personLine(ledger: Ledger, obligation: CashObligation, attempts: CashAttempt[], now: number): CashLine {
+  const approval: Approval | undefined = ledger.latestApproval(obligation.invoiceId);
+  const open: boolean = approval !== undefined && !isExpired(approval, now);
+  const amount: LineAmount = lineAmount(ledger, obligation, null, now);
+  return {
+    kind:
+      open && approval?.state === "approved"
+        ? "approved"
+        : open && approval?.state === "requested"
+          ? "awaiting-approval"
+          : "awaiting-person",
+    invoiceId: obligation.invoiceId,
+    currency: debitCurrency(obligation),
+    amountMinor: amount.amountMinor,
+    ...feeEstimate(ledger, obligation, attempts),
+    reference: null,
+    estimated: amount.estimated,
+    fromQuote: amount.fromQuote,
+    runId: null,
+  };
+}
+
+// The sending and approved lines of every invoice that is not closed, from the
+// narrow read committedMinor makes (Ledger.committedRead): what cashLines gives of
+// those kinds, without reading anything they do not need.
+function committedLines(ledger: Ledger, now: number): CashLine[] {
+  const read: { obligations: CashObligation[]; attempts: Map<string, CashAttempt[]> } = ledger.committedRead();
+  const lines: CashLine[] = [];
+  for (const obligation of read.obligations) {
+    const attempts: CashAttempt[] = read.attempts.get(obligation.invoiceId) ?? [];
+    for (const attempt of attempts) {
+      if (attempt.state === "pending" && attempt.transferId === null) {
+        lines.push(sendingLine(ledger, obligation, attempt, attempts, now));
+      }
+    }
+    if (couldStillPay(obligation, attempts, ledger.outsidePayouts(obligation.invoiceId))) {
+      const line: CashLine = personLine(ledger, obligation, attempts, now);
+      if (line.kind === "approved") {
+        lines.push(line);
+      }
+    }
+  }
+  return lines;
+}
+
+// Pay-run rows whose payment has not been opened yet, one line each with kind
+// pay-run: the pay rows of a waiting run whose approval is approved and not
+// expired, and released rows whose invoice is open with no attempt. Both come from
+// the state of the rows, so a row drops out in the transaction that opens its
+// attempt and is never counted twice. The fee is the latest the ledger recorded in
+// the currency by the row's transfer method.
+export function payRunLines(ledger: Ledger, now: number = Date.now()): CashLine[] {
+  return ledger.payRunRows(now).map((row: PayRunRow): CashLine => runRowLine(ledger, row, "pay-run"));
+}
+
+function runRowLine(ledger: Ledger, row: PayRunRow, kind: CashKind): CashLine {
+  const fee: number | null = ledger.latestFee(row.currency, row.transferMethod);
+  return {
+    kind,
+    invoiceId: row.invoiceId,
+    currency: row.currency,
+    amountMinor: row.amountMinor,
+    feeMinor: fee ?? 0,
+    feeKnown: fee !== null,
+    reference: null,
+    estimated: false,
+    runId: row.runId,
+  };
+}
+
+// The pay rows of the waiting run that payRunLines leaves out, because its latest
+// request is not approved or has expired: what the run would take from each
+// wallet once a person approves it, worked out as payRunLines does.
+// awaiting-approval while the request is open, awaiting-person otherwise, as for
+// an invoice. cashReport never takes these lines, so neither headroom counts a run
+// before its approval. The incident board shows them as money waiting on a person.
+export function waitingRunLines(ledger: Ledger, now: number = Date.now()): CashLine[] {
+  const run: Run | undefined = ledger.waitingRun();
+  const approval: RunApproval | undefined = run === undefined ? undefined : ledger.latestRunApproval(run.id);
+  const open: boolean = approval !== undefined && !isExpired(approval, now);
+  if (run === undefined || (open && approval?.state === "approved")) {
+    return [];
+  }
+  const kind: CashKind = open && approval?.state === "requested" ? "awaiting-approval" : "awaiting-person";
+  return ledger.runRows(run.id).flatMap((row: RunRow): CashLine[] =>
+    row.action !== "pay" ||
+    row.state !== "waiting" ||
+    row.invoiceId === null ||
+    row.beneficiaryId === null ||
+    row.currency === null ||
+    row.amountMinor === null ||
+    row.transferMethod === null
+      ? []
+      : [
+          runRowLine(
+            ledger,
+            {
+              runId: run.id,
+              invoiceId: row.invoiceId,
+              beneficiaryId: row.beneficiaryId,
+              currency: row.currency,
+              amountMinor: row.amountMinor,
+              transferMethod: row.transferMethod,
+            },
+            kind,
+          ),
+        ],
+  );
+}
+
+// What committedMinor leaves out: the invoice being paid, or the run being
+// released, whose own money is the payment in question.
+export interface CommittedExcept {
+  invoiceId?: string;
+  runId?: number;
+}
+
+// Money promised to payments from this wallet that has not left its available
+// balance yet, on every invoice and run but the one excepted: payments being sent
+// with no transfer yet, approvals not used or expired, and pay-run rows approved or
+// released and not sent. The policy takes it off before an automatic replacement
+// and a pay run's checks do the same, and the panel's headroom takes off the same
+// lines. The two can still differ: the panel's balance is cached, its floor is the
+// currency's, and it counts every invoice and run.
+export function committedMinor(
+  ledger: Ledger,
+  currency: string,
+  except: CommittedExcept,
+): number {
+  return [...committedByInvoice(ledger, currency, except).values()].reduce(
+    (sum: number, minor: number): number => sum + minor,
+    0,
+  );
+}
+
+// committedMinor's money, by invoice.
+export function committedByInvoice(
+  ledger: Ledger,
+  currency: string,
+  except: CommittedExcept,
+): Map<string, number> {
+  const byInvoice: Map<string, number> = new Map<string, number>();
+  const now: number = Date.now();
+  for (const line of [...committedLines(ledger, now), ...payRunLines(ledger, now)]) {
+    if (
+      FIRM_KINDS.has(line.kind) &&
+      line.currency === currency &&
+      line.invoiceId !== except.invoiceId &&
+      (except.runId === undefined || line.runId !== except.runId)
+    ) {
+      byInvoice.set(line.invoiceId, (byInvoice.get(line.invoiceId) ?? 0) + line.amountMinor + line.feeMinor);
+    }
+  }
+  return byInvoice;
+}
+
+// The money committed in either of two counts, one taken before a balance read
+// and one after it, each invoice at the larger of its two amounts. A payment that
+// got its transfer in between is counted twice, as committed and as debited, and
+// one promised in between is counted too, so neither is missed.
+export function committedAcross(before: Map<string, number>, after: Map<string, number>): number {
+  let total: number = 0;
+  for (const invoiceId of new Set<string>([...before.keys(), ...after.keys()])) {
+    total += Math.max(before.get(invoiceId) ?? 0, after.get(invoiceId) ?? 0);
+  }
+  return total;
+}
+
+export interface KindTotal {
+  minor: number;
+  count: number;
+  // Lines whose fee is not known, and so is not in minor.
+  feeUnknown: number;
+}
+
+export interface InvoiceFloor {
+  invoiceId: string;
+  floorMinor: number;
+}
+
+export interface CurrencyCash {
+  currency: string;
+  // Null when the last good read had no balance in this currency, or there has
+  // been no good read.
+  airwallex: Omit<Balance, "currency"> | null;
+  floor: {
+    minor: number | null;
+    source: FloorSource;
+    // Open invoices held to a stricter floor of their own.
+    invoiceFloors: InvoiceFloor[];
+  };
+  totals: Record<CashKind, KindTotal>;
+  lines: CashLine[];
+  // available - floor - promised. Null when available or the floor setting
+  // cannot be read.
+  headroomMinor: number | null;
+  // headroom less every payment waiting on a person.
+  headroomIfApprovedMinor: number | null;
+}
+
+export interface CashReport {
+  generatedAt: string;
+  airwallex: {
+    readAt: string | null;
+    ageSeconds: number | null;
+    maxAgeSeconds: number;
+    refreshing: boolean;
+    error: { message: string; at: string } | null;
+  };
+  // When the watcher last checked the payments the ledger shows with the bank.
+  // Null where no watcher runs.
+  ledger: { statesCheckedAt: string | null };
+  floors: { problem: string | null };
+  // Null where pay runs are not counted.
+  payRuns: { built: true } | null;
+  currencies: CurrencyCash[];
+}
+
+export interface CashInput {
+  ledger: Ledger;
+  reserve: ReservePolicy;
+  balances: BalanceState;
+  statesCheckedAt: number | null;
+  payRunLines: CashLine[] | null;
+  now?: number;
+}
+
+function iso(at: number | null): string | null {
+  return at === null ? null : new Date(at).toISOString();
+}
+
+function totalsOf(lines: CashLine[]): Record<CashKind, KindTotal> {
+  const totals: Record<CashKind, KindTotal> = Object.fromEntries(
+    CASH_KINDS.map((kind: CashKind): [CashKind, KindTotal] => [
+      kind,
+      { minor: 0, count: 0, feeUnknown: 0 },
+    ]),
+  ) as Record<CashKind, KindTotal>;
+  for (const line of lines) {
+    const total: KindTotal = totals[line.kind];
+    total.minor += line.amountMinor + line.feeMinor;
+    total.count += 1;
+    total.feeUnknown += line.feeKnown ? 0 : 1;
+  }
+  return totals;
+}
+
+function sumOf(totals: Record<CashKind, KindTotal>, kinds: ReadonlySet<CashKind>): number {
+  return [...kinds].reduce((sum: number, kind: CashKind): number => sum + totals[kind].minor, 0);
+}
+
+// Per currency: what Airwallex holds, the floor, and what the ledger has promised,
+// sent or lost, worked out to the headroom left above the floor. A currency is
+// listed when it has a floor set, a line in the ledger, an invoice floor, or a
+// balance that is not zero.
+export function cashReport(input: CashInput): CashReport {
+  const now: number = input.now ?? Date.now();
+  const state: BalanceState = input.balances;
+  const lines: CashLine[] = [...cashLines(input.ledger, now), ...(input.payRunLines ?? [])];
+  const open: Obligation[] = input.ledger
+    .obligations()
+    .filter(
+      (obligation: Obligation): boolean =>
+        obligation.state !== "settled" &&
+        obligation.state !== "rejected" &&
+        obligation.invoiceFloorMinor > 0,
+    );
+
+  const codes: Set<string> = new Set<string>([
+    ...input.reserve.floors.keys(),
+    ...lines.map((line: CashLine): string => line.currency),
+    ...open.map(debitCurrency),
+  ]);
+  for (const balance of state.balances) {
+    if ((balance.totalMinor ?? balance.availableMinor ?? 0) !== 0) {
+      codes.add(balance.currency);
+    }
+  }
+
+  const currencies: CurrencyCash[] = [...codes]
+    .sort((a: string, b: string): number => a.localeCompare(b))
+    .map((currency: string): CurrencyCash => {
+      const own: CashLine[] = lines.filter((line: CashLine): boolean => line.currency === currency);
+      const totals: Record<CashKind, KindTotal> = totalsOf(own);
+      const balance: Balance | undefined = state.balances.find(
+        (entry: Balance): boolean => entry.currency === currency,
+      );
+      const floor: CurrencyFloor = currencyFloor(input.reserve, currency);
+      const available: number | null = balance?.availableMinor ?? null;
+      const headroom: number | null =
+        available === null || floor.source === "unreadable"
+          ? null
+          : available - (floor.minor ?? 0) - sumOf(totals, FIRM_KINDS);
+      return {
+        currency,
+        airwallex:
+          balance === undefined
+            ? null
+            : {
+                availableMinor: balance.availableMinor,
+                reservedMinor: balance.reservedMinor,
+                pendingMinor: balance.pendingMinor,
+                prepaymentMinor: balance.prepaymentMinor,
+                totalMinor: balance.totalMinor,
+              },
+        floor: {
+          minor: floor.minor,
+          source: floor.source,
+          invoiceFloors: open
+            .filter(
+              (obligation: Obligation): boolean =>
+                debitCurrency(obligation) === currency &&
+                obligation.invoiceFloorMinor > (floor.minor ?? 0),
+            )
+            .map(
+              (obligation: Obligation): InvoiceFloor => ({
+                invoiceId: obligation.invoiceId,
+                floorMinor: obligation.invoiceFloorMinor,
+              }),
+            ),
+        },
+        totals,
+        lines: own,
+        headroomMinor: headroom,
+        headroomIfApprovedMinor: headroom === null ? null : headroom - sumOf(totals, WAITING_KINDS),
+      };
+    });
+
+  return {
+    generatedAt: new Date(now).toISOString(),
+    airwallex: {
+      readAt: iso(state.readAt),
+      ageSeconds: state.readAt === null ? null : Math.max(0, Math.round((now - state.readAt) / 1000)),
+      maxAgeSeconds: Math.round(state.maxAgeMs / 1000),
+      refreshing: state.refreshing,
+      error: state.error === null ? null : { message: state.error.message, at: new Date(state.error.at).toISOString() },
+    },
+    ledger: { statesCheckedAt: iso(input.statesCheckedAt) },
+    floors: { problem: input.reserve.problem },
+    payRuns: input.payRunLines === null ? null : { built: true },
+    currencies,
+  };
+}
