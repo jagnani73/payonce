@@ -72,18 +72,6 @@ function toApproval(row: ApprovalRow, signoffs: Signoff[]): Approval {
   };
 }
 
-// When a request stops covering a payment, in epoch milliseconds. One recorded
-// before requests expired counts as expired already. Works for invoice and run
-// requests alike.
-export function expiryOf(approval: { expiresAt: string | null }): number {
-  const at: number = approval.expiresAt === null ? Number.NaN : Date.parse(approval.expiresAt);
-  return Number.isFinite(at) ? at : 0;
-}
-
-export function isExpired(approval: { expiresAt: string | null }, now: number = Date.now()): boolean {
-  return expiryOf(approval) <= now;
-}
-
 // Everyone who approved, as the timeline names them.
 export function signersOf(signoffs: Signoff[]): string {
   const names: string[] = signoffs.map((signoff: Signoff): string => signoff.approver);

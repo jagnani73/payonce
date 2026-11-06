@@ -1,11 +1,10 @@
 import { findTransferByRequestId, type Transfer, type TransferBankDetails } from "../airwallex/transfers.js";
 import { accountKeyOf, type ApprovalTerms } from "../domain/approval.js";
 import { deadlineMinutes } from "../domain/deadlines.js";
+import { liveAtBank, mismatchedLive } from "../domain/live.js";
 import { reasonFor, type Reason } from "../domain/reasons.js";
 import { debitCurrency } from "../domain/reserve.js";
 import {
-  liveAtBank,
-  mismatchedLive,
   payoutVerdict,
   type Approval,
   type Attempt,

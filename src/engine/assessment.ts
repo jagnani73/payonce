@@ -6,11 +6,12 @@ import { originalStateOf, resendCanFix, sameBankDetails } from "../domain/assess
 import { isOverdue } from "../domain/deadlines.js";
 import { decide } from "../domain/decide.js";
 import type { Incident, OriginalTransferState } from "../domain/incident.js";
+import { liveAtBank } from "../domain/live.js";
 import { formatMoney, invoiceMoney, toMinor } from "../domain/money.js";
 import { reasonText, type Reason } from "../domain/reasons.js";
 import { debitCurrency, floorFor } from "../domain/reserve.js";
 import type { SupplierEmail } from "../reader/emails.js";
-import { crossCurrency, liveAtBank, type Attempt, type BankChange, type Obligation } from "../store/ledger.js";
+import { crossCurrency, type Attempt, type BankChange, type Obligation } from "../store/ledger.js";
 import { capitalise } from "../text/printable.js";
 import { committedMinor } from "./cash-position.js";
 import { emailsNotRead, sendersNotOnFile, storedFindings } from "./emails.js";

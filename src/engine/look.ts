@@ -1,11 +1,10 @@
 import { findTransferByRequestId, getTransfer, type Transfer } from "../airwallex/transfers.js";
 import { attemptStateOf, originalStateOf } from "../domain/assess.js";
 import { isOverdue } from "../domain/deadlines.js";
-import { paidByReplacement } from "../domain/live.js";
+import { keptFailedLive, mismatchedLive, paidByReplacement } from "../domain/live.js";
 import { debitCurrency } from "../domain/reserve.js";
 import { holdLine, railFailureSeen, waitingLine } from "../outages/outages.js";
 import {
-  mismatchedLive,
   RailOutageError,
   type Approval,
   type Attempt,
@@ -32,7 +31,7 @@ import {
   type StepResult,
 } from "./engine.js";
 import { continueEscalated, escalate } from "./escalated.js";
-import { heldBeforePaying, keptFailed, paidTwice } from "./facts.js";
+import { heldBeforePaying, paidTwice } from "./facts.js";
 import { holdRefused, startFirst } from "./first-payment.js";
 import { continueHeld } from "./held.js";
 import { holdMismatched, holdPaidTwice, syncMismatched } from "./late-mismatched.js";
@@ -223,7 +222,7 @@ async function look(engine: Engine, invoiceId: string, options: LookOptions): Pr
   }
   // A transfer kept failed beside a payment that has failed since, in this look
   // or another, takes its own state now that the duplicate lock is free.
-  for (const kept of engine.ledger.attempts(invoiceId).filter(keptFailed)) {
+  for (const kept of engine.ledger.attempts(invoiceId).filter(keptFailedLive)) {
     if (kept.transferId === null) {
       continue;
     }
@@ -344,7 +343,7 @@ function holdIfPaidTwice(look: SentLook): StepResult {
 // meanwhile: nothing is decided around a payment the bank has live, and the
 // next look, at once, records it again.
 function waitOnKeptFailed(look: SentLook): StepResult {
-  return look.engine.ledger.attempts(look.invoiceId).some(keptFailed) ? nextLookAt(Date.now()) : CONTINUE;
+  return look.engine.ledger.attempts(look.invoiceId).some(keptFailedLive) ? nextLookAt(Date.now()) : CONTINUE;
 }
 
 // A paid replacement was sent on a decision already made, so it closes the

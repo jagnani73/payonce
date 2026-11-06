@@ -45,7 +45,9 @@ export function mismatchedLive(attempt: LiveTested): boolean {
 }
 
 // The duplicate lock's truth: anything under the attempt's request id the bank
-// has live.
+// has live, whatever state the attempt is in. The lock holds one attempt that
+// is not failed, so a transfer found late beside another live payment is kept
+// failed, and only its bank_status says the bank has it.
 export function liveAtBank(attempt: LiveTested): boolean {
   return ownLive(attempt) || mismatchedLive(attempt);
 }
@@ -270,7 +272,7 @@ export function expiryOf(request: Pick<Approval, "expiresAt">): number {
   return Number.isFinite(at) ? at : 0;
 }
 
-export function isExpired(request: Pick<Approval, "expiresAt">, now: number): boolean {
+export function isExpired(request: Pick<Approval, "expiresAt">, now: number = Date.now()): boolean {
   return expiryOf(request) <= now;
 }
 

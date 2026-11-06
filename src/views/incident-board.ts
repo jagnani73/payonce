@@ -1,4 +1,5 @@
 import type { ApprovalTerms } from "../domain/approval.js";
+import { isExpired, withBank } from "../domain/live.js";
 import {
   cashLines,
   FIRM_KINDS,
@@ -21,10 +22,8 @@ import { pendingClose } from "../engine/person.js";
 import { REPLACEMENT_DEADLINE_REASON } from "../domain/reasons.js";
 import { candidatesFor, invoiceIndex, type InvoiceIndex, type Match } from "../intake/intake.js";
 import {
-  isExpired,
   readingSoft,
   storedObject,
-  withBank,
   type Approval,
   type Attempt,
   type Ledger,

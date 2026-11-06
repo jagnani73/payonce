@@ -1,3 +1,4 @@
+import { payoutPays } from "../../domain/live.js";
 import type { ApprovalState } from "../approvals.js";
 import type { AttemptKind, AttemptState } from "../attempts.js";
 import type { Contact } from "../../domain/contacts.js";
@@ -14,7 +15,7 @@ import {
   type RailFailure,
   type RailFailureRow,
 } from "../outages.js";
-import { payoutPays, toOutsidePayout, type OutsidePayout, type OutsideRow, type PayoutState } from "../payouts.js";
+import { toOutsidePayout, type OutsidePayout, type OutsideRow, type PayoutState } from "../payouts.js";
 import type { RunRowAction, RunRowState, RunState } from "../runs.js";
 
 interface SupplierObligationRow {

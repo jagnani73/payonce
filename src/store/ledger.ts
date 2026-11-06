@@ -83,17 +83,9 @@ import { Timelines, type EventKind, type LedgerEvent } from "./timeline.js";
 import { WebhookEventStore } from "./webhook-events.js";
 
 export type { Alert, AlertFinish, AlertState, FoundCondition, RecordedConditions } from "./alerts.js";
-export { expiryOf, isExpired, signersOf } from "./approvals.js";
+export { signersOf } from "./approvals.js";
 export type { Approval, ApprovalRequest, ApprovalState, RunApproval, Signoff } from "./approvals.js";
-export {
-  DuplicatePaymentError,
-  holdsAccount,
-  lateBesideLive,
-  liveAtBank,
-  mismatchedLive,
-  ownLive,
-  withBank,
-} from "./attempts.js";
+export { DuplicatePaymentError, holdsAccount } from "./attempts.js";
 export type {
   AccountRef,
   Attempt,
@@ -102,7 +94,6 @@ export type {
   AttemptState,
   CashAttempt,
   LastPaid,
-  LiveTested,
 } from "./attempts.js";
 export type { AppliedCallback, BankChange, BankChangeState, NewBankChange, PhoneSetter } from "./bank-changes.js";
 export type { ConfirmedContact, ContactChange, ProposedContact } from "./contacts.js";
@@ -145,7 +136,7 @@ export type {
   RailFailure,
   StandingLine,
 } from "./outages.js";
-export { payoutPays, payoutVerdict } from "./payouts.js";
+export { payoutVerdict } from "./payouts.js";
 export type { FoundPayout, OutsidePayout, PayoutMoney, PayoutState } from "./payouts.js";
 export type {
   MetricsAttempt,

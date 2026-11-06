@@ -9,9 +9,10 @@ import {
 } from "../domain/approval.js";
 import { APPROVED_USE_WITHIN_MS } from "../domain/approvers.js";
 import { quoteValidity } from "../domain/fx.js";
+import { isExpired } from "../domain/live.js";
 import { formatMoney, invoiceMoney, toMajor } from "../domain/money.js";
 import { currentSettings } from "../settings.js";
-import { checkedObject, isExpired, type Approval, type Obligation } from "../store/ledger.js";
+import { checkedObject, type Approval, type Obligation } from "../store/ledger.js";
 import type { Engine, Rate } from "./engine.js";
 import { isLastQuote, quoteOnFile, requestTerms } from "./stored.js";
 

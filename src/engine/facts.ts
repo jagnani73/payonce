@@ -1,18 +1,10 @@
 import { likelyDuplicates } from "../domain/duplicates.js";
-import {
-  lateBesideLive,
-  liveAtBank,
-  type Attempt,
-  type AttemptKind,
-  type Ledger,
-  type Obligation,
-  type OutsidePayout,
-  type ScannedObligation,
-} from "../store/ledger.js";
+import { lateBesideLive, neverSent, payoutNotFailed } from "../domain/live.js";
+import type { Attempt, AttemptKind, Ledger, Obligation, OutsidePayout, ScannedObligation } from "../store/ledger.js";
 
 // A status PayOnce does not recognise counts as live.
 export function anyLive(payouts: OutsidePayout[]): boolean {
-  return payouts.some((payout: OutsidePayout): boolean => payout.state !== "failed");
+  return payouts.some(payoutNotFailed);
 }
 
 // True when a payment for the invoice, PayOnce's or one sent outside it, is paid.
@@ -44,21 +36,12 @@ export function paidTwice(ledger: Ledger, invoiceId: string): Attempt | undefine
   return lateBesideLive(ledger.attempts(invoiceId), ledger.outsidePayouts(invoiceId));
 }
 
-// A transfer the ledger keeps failed while the bank shows it live. It holds the
-// duplicate lock once another payment has failed, which the next record of it
-// does, so a look records it again after reading the others.
-export function keptFailed(attempt: Attempt): boolean {
-  return attempt.state === "failed" && attempt.transferId !== null && liveAtBank(attempt);
-}
-
 // True for an invoice with a person that has sent nothing: PayOnce held it before
 // paying, or Airwallex refused every payment it was sent with.
 export function heldBeforePaying(ledger: Ledger, obligation: Obligation): boolean {
   return (
     obligation.state === "escalated" &&
-    ledger
-      .attempts(obligation.invoiceId)
-      .every((attempt: Attempt): boolean => attempt.transferId === null && attempt.state === "failed")
+    ledger.attempts(obligation.invoiceId).every(neverSent)
   );
 }
 

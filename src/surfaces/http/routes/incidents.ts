@@ -3,6 +3,7 @@ import { airwallexAdvice, AirwallexError, AirwallexUnreachableError } from "../.
 import type { ApprovalTerms } from "../../../domain/approval.js";
 import { dueDateProblem } from "../../../domain/arrival.js";
 import type { Barred } from "../../../domain/approvers.js";
+import { isExpired } from "../../../domain/live.js";
 import { bankChangeForm, recordBankChange, type BankChangeForm, type CallbackInput } from "../../../engine/bank-change.js";
 import { noteError } from "../../../engine/lines.js";
 import {
@@ -30,7 +31,6 @@ import {
 } from "../../../store/audit-trail.js";
 import {
   INVOICE_ID_PATTERN,
-  isExpired,
   readingSoft,
   type Approval,
   type Obligation,

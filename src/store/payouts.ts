@@ -1,4 +1,5 @@
 import { knownRoute } from "../domain/assess.js";
+import { payoutPays } from "../domain/live.js";
 import { reasonColumns, type Reason, type ReasonColumns } from "../domain/reasons.js";
 import { DuplicatePaymentError, type AttemptState, type AttemptStore } from "./attempts.js";
 import { isUniqueViolation, type Db } from "./db.js";
@@ -147,17 +148,6 @@ export function payoutVerdict(
   }
   const sent: string | null = knownRoute(payout.sentRoute);
   return sent === null ? null : route !== null && sent === route;
-}
-
-// True when a payout sent outside PayOnce is paid and pays its invoice, as the
-// last look found (payoutVerdict). Only such a payout counts as paying the
-// invoice: paidOutside, a person's close as paid outside, the close card's kind,
-// the alert's close need and the board's group. One that only names the
-// invoice, or that no look could check, still holds PayOnce's own payments
-// while it is not failed, and a person may close the invoice without paying.
-// BLOCKING_OUTSIDE_PAYOUT is the same test in SQL.
-export function payoutPays(payout: OutsidePayout): boolean {
-  return payout.state === "paid" && payout.pays === true;
 }
 
 // Payouts sent outside PayOnce (outside_payouts), and a found payout taken on as a

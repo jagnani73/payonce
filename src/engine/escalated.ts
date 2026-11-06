@@ -4,10 +4,10 @@ import type { SignoffRule } from "../domain/approvers.js";
 import { originalStateOf, routeKeyOf } from "../domain/assess.js";
 import { decide } from "../domain/decide.js";
 import type { OriginalTransferState } from "../domain/incident.js";
+import { isExpired } from "../domain/live.js";
 import { clauseText, reasonFor, reasonText, secondBillPaid } from "../domain/reasons.js";
 import { debitCurrency } from "../domain/reserve.js";
 import {
-  isExpired,
   RailOutageError,
   type Approval,
   type Attempt,

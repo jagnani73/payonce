@@ -1,6 +1,7 @@
 import { bindingOf } from "../domain/approval.js";
 import { decide, floorReason } from "../domain/decide.js";
 import type { Decision, Incident } from "../domain/incident.js";
+import { isExpired } from "../domain/live.js";
 import {
   floorClause,
   NOT_TO_PAY,
@@ -10,7 +11,7 @@ import {
   type Clause,
   type Reason,
 } from "../domain/reasons.js";
-import { isExpired, type Approval, type LedgerEvent, type Obligation } from "../store/ledger.js";
+import type { Approval, LedgerEvent, Obligation } from "../store/ledger.js";
 import type { Assessment, Decided, Engine } from "./engine.js";
 import { note } from "./lines.js";
 import { termsOf } from "./terms.js";

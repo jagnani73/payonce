@@ -26,6 +26,7 @@ import {
 } from "../domain/approvers.js";
 import { arrivalFor, ifSentOn, today } from "../domain/arrival.js";
 import { routeKeyOf } from "../domain/assess.js";
+import { isExpired } from "../domain/live.js";
 import { committedAcross, committedByInvoice, type CommittedExcept } from "../engine/cash-position.js";
 import { withCurrencyLocks } from "../engine/currency-lock.js";
 import type { Dispatcher } from "../engine/dispatcher.js";
@@ -34,7 +35,6 @@ import type { Engine } from "../engine/engine.js";
 import { lineWanted } from "../engine/lines.js";
 import {
   alreadyInLedger,
-  isExpired,
   NothingToPayError,
   RailOutageError,
   SameFileError,

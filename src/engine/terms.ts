@@ -1,9 +1,10 @@
 import type { TransferBankDetails } from "../airwallex/transfers.js";
 import { termsFor, withArrival, type ApprovalTerms, type ReplacementTerms } from "../domain/approval.js";
 import { arrivalFor, ifSentOn, replacementArrivalText, today, type ArrivalTerms } from "../domain/arrival.js";
+import { isExpired } from "../domain/live.js";
 import { reasonText } from "../domain/reasons.js";
 import { emailEvidence } from "../reader/emails.js";
-import { isExpired, type Approval, type Ledger, type Obligation } from "../store/ledger.js";
+import type { Approval, Ledger, Obligation } from "../store/ledger.js";
 import type { Assessment } from "./engine.js";
 import { requestTerms } from "./stored.js";
 

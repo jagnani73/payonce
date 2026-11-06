@@ -1,5 +1,6 @@
+import { liveAtBank, mismatchedLive } from "../domain/live.js";
 import { reasonFor, type Reason } from "../domain/reasons.js";
-import { liveAtBank, mismatchedLive, type Attempt, type Ledger, type ObligationState } from "../store/ledger.js";
+import type { Attempt, Ledger, ObligationState } from "../store/ledger.js";
 import type { Engine, NextLook } from "./engine.js";
 import { anyLive, coveredByClose, type CoveredTransfer } from "./facts.js";
 import { listOf, note } from "./lines.js";

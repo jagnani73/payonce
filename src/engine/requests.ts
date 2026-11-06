@@ -16,16 +16,9 @@ import {
 } from "../domain/approvers.js";
 import { knownRoute } from "../domain/assess.js";
 import { barredFrom } from "../domain/barred.js";
+import { expiryOf, isExpired } from "../domain/live.js";
 import { formatMoney, invoiceMoney } from "../domain/money.js";
-import {
-  expiryOf,
-  isExpired,
-  signersOf,
-  type Approval,
-  type Ledger,
-  type Obligation,
-  type Signoff,
-} from "../store/ledger.js";
+import { signersOf, type Approval, type Ledger, type Obligation, type Signoff } from "../store/ledger.js";
 import type { Engine, NextLook, Rate } from "./engine.js";
 import { note } from "./lines.js";
 import { quoteLine, requestExpiry } from "./rates.js";

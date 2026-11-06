@@ -11,6 +11,7 @@ import {
 import { knownName, sameName, type ApprovalPolicy, type Barred } from "../domain/approvers.js";
 import { HOLIDAYS_NOTE, type ArrivalTerms } from "../domain/arrival.js";
 import { setterBarWhy } from "../domain/contacts.js";
+import { isExpired } from "../domain/live.js";
 import { committedMinor } from "../engine/cash-position.js";
 import { deadlineMinutes } from "../domain/deadlines.js";
 import { EMAILS_UNREAD_REASON } from "../domain/decide.js";
@@ -31,7 +32,6 @@ import { currentSettings } from "../settings.js";
 import {
   crossCurrency,
   INVOICE_ID_PATTERN,
-  isExpired,
   type Approval,
   type Attempt,
   type Ledger,

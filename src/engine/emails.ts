@@ -1,7 +1,8 @@
 import type { ApprovalTerms } from "../domain/approval.js";
+import { isExpired } from "../domain/live.js";
 import { summarise, unverifiedSenders, type EmailFindings, type SupplierEmail } from "../reader/emails.js";
 import { ModelReadError, triesText } from "../reader/reader-error.js";
-import { checkedObject, isExpired, storedShape, type Approval, type Ledger, type Obligation } from "../store/ledger.js";
+import { checkedObject, storedShape, type Approval, type Ledger, type Obligation } from "../store/ledger.js";
 import { sayWarning } from "../text/printable.js";
 import type { Engine, StoredFindings } from "./engine.js";
 import { messageOf, note } from "./lines.js";

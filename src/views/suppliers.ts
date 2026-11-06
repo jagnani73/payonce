@@ -2,6 +2,7 @@ import type { TransferBankDetails } from "../airwallex/transfers.js";
 import { endingOf, keyHash } from "../domain/approval.js";
 import { knownRoute, routeKeyOf, routeOfDetailsKey } from "../domain/assess.js";
 import { knownName, policyFromEnv } from "../domain/approvers.js";
+import { liveAtBank } from "../domain/live.js";
 import { templateLabel } from "../outbox/drafts.js";
 import { numberOf, numbersOf, sameInvoiceNumber, supplierNameKey } from "../domain/duplicates.js";
 import { summarise, unverifiedSenders, type SupplierEmail } from "../reader/emails.js";
@@ -29,7 +30,6 @@ import {
 import { invoiceSnapshotsWithin } from "./snapshot.js";
 import { candidatesFor, invoiceIndex, type InvoiceIndex, type Match } from "../intake/intake.js";
 import {
-  liveAtBank,
   readingSoft,
   type Ledger,
   type Obligation,

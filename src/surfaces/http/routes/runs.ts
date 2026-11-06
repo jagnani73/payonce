@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { airwallexAdvice, AirwallexError, AirwallexUnreachableError, withAdvice } from "../../../airwallex/client.js";
 import type { RunRowTerms, RunTerms } from "../../../domain/approval.js";
 import { feeSeenText } from "../../../domain/arrival.js";
+import { isExpired } from "../../../domain/live.js";
 import { runKey } from "../../../domain/patterns.js";
 import { outageView, type OutageView } from "../../../outages/outages.js";
 import { cleanFileName, MAX_RUN_FILE_CHARS, parseRunFile, type ParsedRunFile } from "../../../runs/run-file.js";
@@ -32,7 +33,6 @@ import {
   type RunLedgerReport,
 } from "../../../store/audit-trail.js";
 import {
-  isExpired,
   NothingToPayError,
   readingSoft,
   SameFileError,
