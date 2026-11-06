@@ -1,4 +1,4 @@
-import type { ApprovalTerms, FxTerms } from "../domain/approval.js";
+import type { ApprovalTerms, FxTerms, LastQuote } from "../domain/approval.js";
 import type { ArrivalTerms } from "../domain/arrival.js";
 import { checkedObject, type Approval } from "../store/ledger.js";
 import type { StoredFindings } from "./engine.js";
@@ -116,6 +116,10 @@ export function isApprovalTerms(terms: unknown): terms is ApprovalTerms {
   return terms["action"] === "pay" && isText(terms["accountKey"]) && isHeldEvidence(terms["evidence"]);
 }
 
+export function isLastQuote(quote: unknown): quote is LastQuote {
+  return isFields(quote) && isFx(quote["fx"]) && isNumber(quote["endsAt"]);
+}
+
 // Findings saved before PayOnce read a request not to pay have no asksNotToPay,
 // and before it counted the emails read, no emailsRead.
 export function isStoredFindings(findings: unknown): findings is StoredFindings {
@@ -135,8 +139,12 @@ export function isStoredFindings(findings: unknown): findings is StoredFindings 
 
 // What each read names when it fails. Invoice numbers and request ids are
 // PayOnce's own, so they may go on a timeline line.
-function termsOnFile(approval: Pick<Approval, "id" | "invoiceId">): string {
+export function termsOnFile(approval: Pick<Approval, "id" | "invoiceId">): string {
   return `the terms of approval request ${approval.id} for ${approval.invoiceId}`;
+}
+
+export function quoteOnFile(invoiceId: string): string {
+  return `the last exchange rate quote for ${invoiceId}`;
 }
 
 export function findingsOnFile(invoiceId: string): string {

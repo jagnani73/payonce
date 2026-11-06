@@ -1,11 +1,11 @@
 import type { Balance, BalanceState } from "../airwallex/balances.js";
-import type { ApprovalTerms, FxTerms, LastQuote } from "../domain/approval.js";
+import type { FxTerms, LastQuote } from "../domain/approval.js";
 import {
   crossCurrency,
   isExpired,
   liveAtBank,
   mismatchedLive,
-  storedObject,
+  storedShape,
   withBank,
   type Approval,
   type Attempt,
@@ -27,6 +27,7 @@ import {
   type FloorSource,
   type ReservePolicy,
 } from "../domain/reserve.js";
+import { isApprovalTerms, isLastQuote, quoteOnFile, termsOnFile } from "./stored.js";
 
 // What a line of money is. sending, approved and pay-run are promised and still in
 // the available balance, so headroom takes them off. awaiting-approval and
@@ -121,9 +122,10 @@ function lineAmount(ledger: Ledger, obligation: CashObligation, attempt: CashAtt
     attempt === null ? ledger.latestApproval(obligation.invoiceId) : ledger.approvalOf(attempt);
   // Read strict, so committedMinor fails closed for the policy and the run checks.
   // Only the panel, the board and other views (readingSoft) read terms or a kept
-  // quote that do not parse as no quote, as before one was taken.
+  // quote that do not parse, or are not in the shape PayOnce writes, as no quote,
+  // as before one was taken.
   const fx: FxTerms | undefined =
-    approval === undefined ? undefined : storedObject<ApprovalTerms>(approval.terms)?.fx;
+    approval === undefined ? undefined : storedShape(approval.terms, isApprovalTerms, termsOnFile(approval))?.fx;
   const open: boolean =
     approval !== undefined &&
     (approval.state === "requested" || approval.state === "approved") &&
@@ -132,7 +134,8 @@ function lineAmount(ledger: Ledger, obligation: CashObligation, attempt: CashAtt
     return { amountMinor: fx.sellAmountMinor, estimated: false, fromQuote: true };
   }
   const kept: string | undefined = ledger.lastQuote(obligation.invoiceId);
-  const lastQuote: LastQuote | null = kept === undefined ? null : storedObject<LastQuote>(kept);
+  const lastQuote: LastQuote | null =
+    kept === undefined ? null : storedShape(kept, isLastQuote, quoteOnFile(obligation.invoiceId));
   const last: FxTerms | undefined = lastQuote === null ? fx : lastQuote.fx;
   return last === undefined
     ? { amountMinor: 0, estimated: true, fromQuote: false }

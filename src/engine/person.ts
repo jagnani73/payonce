@@ -32,6 +32,7 @@ import { storedFindings } from "./emails.js";
 import { anyLive, coveredByClose, heldBeforePaying, type CoveredTransfer } from "./facts.js";
 import { listOf, note } from "./lines.js";
 import { barredOnFile } from "./requests.js";
+import { requestTerms } from "./stored.js";
 
 const ATTEMPT_STATE_WORDS: Record<AttemptState, string> = {
   pending: "pending",
@@ -311,7 +312,7 @@ export function pendingApproval(
   ) {
     return undefined;
   }
-  const terms: ApprovalTerms = JSON.parse(approval.terms) as ApprovalTerms;
+  const terms: ApprovalTerms = requestTerms(approval);
   return {
     approval,
     terms,

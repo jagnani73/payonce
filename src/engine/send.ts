@@ -1,6 +1,6 @@
 import { getBankDetails } from "../airwallex/beneficiaries.js";
 import type { Transfer, TransferBankDetails } from "../airwallex/transfers.js";
-import { accountKeyOf, conversionText, type ApprovalTerms, type FxTerms } from "../domain/approval.js";
+import { accountKeyOf, conversionText, type FxTerms } from "../domain/approval.js";
 import { arrivalFor, atRisk, sentArrivalText, today, type ArrivalTerms } from "../domain/arrival.js";
 import { routeKeyOf } from "../domain/assess.js";
 import { deadlineOf, describeDeadline } from "../domain/deadlines.js";
@@ -11,6 +11,7 @@ import { capitalise } from "../text/printable.js";
 import type { Engine, NextLook } from "./engine.js";
 import { messageOf, note } from "./lines.js";
 import { sendAttempt, wasRejected, type Decide } from "./payments.js";
+import { requestTerms } from "./stored.js";
 
 // The beneficiary record no longer holds the account a payment was decided or
 // approved for.
@@ -54,7 +55,7 @@ function rateProblem(engine: Engine, attempt: Attempt, transfer: Transfer): Reas
   // since does not count.
   const approval: Approval | undefined = engine.ledger.approvalOf(attempt);
   const approved: FxTerms | undefined =
-    approval?.state === "used" ? (JSON.parse(approval.terms) as ApprovalTerms).fx : undefined;
+    approval?.state === "used" ? requestTerms(approval).fx : undefined;
   return rateMismatchOf(attempt.kind, approved?.quoteId === attempt.quoteId ? approved : undefined, transfer);
 }
 

@@ -5,6 +5,7 @@ import { reasonText } from "../domain/reasons.js";
 import { emailEvidence } from "../reader/emails.js";
 import { isExpired, type Approval, type Ledger, type Obligation } from "../store/ledger.js";
 import type { Assessment } from "./engine.js";
+import { requestTerms } from "./stored.js";
 
 // The day an invoice's arrival estimate counts from. While an approval request is
 // requested or approved and has not expired, it is that request's day, so its
@@ -16,7 +17,7 @@ function arrivalFrom(ledger: Ledger, invoiceId: string): string {
     latest !== undefined &&
     (latest.state === "requested" || latest.state === "approved") &&
     !isExpired(latest)
-      ? (JSON.parse(latest.terms) as ApprovalTerms).arrival
+      ? requestTerms(latest).arrival
       : undefined;
   return open?.from ?? today();
 }

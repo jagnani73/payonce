@@ -4,7 +4,6 @@ import {
   fxTermsOf,
   markupOf,
   withFeeEstimate,
-  type ApprovalTerms,
   type FxTerms,
   type LastQuote,
 } from "../domain/approval.js";
@@ -12,8 +11,9 @@ import { APPROVED_USE_WITHIN_MS } from "../domain/approvers.js";
 import { quoteValidity } from "../domain/fx.js";
 import { formatMoney, invoiceMoney, toMajor } from "../domain/money.js";
 import { currentSettings } from "../settings.js";
-import { isExpired, type Approval, type Obligation } from "../store/ledger.js";
+import { checkedObject, isExpired, type Approval, type Obligation } from "../store/ledger.js";
 import type { Engine, Rate } from "./engine.js";
+import { isLastQuote, quoteOnFile, requestTerms } from "./stored.js";
 
 // An approval request ends this long before its quote does, after the time an
 // approval given at the last moment has to be used, so a slow look or a clock
@@ -42,7 +42,7 @@ export async function rateFor(
 ): Promise<Rate> {
   const latest: Approval | undefined = engine.ledger.latestApproval(obligation.invoiceId);
   const shown: FxTerms | undefined =
-    latest === undefined ? undefined : (JSON.parse(latest.terms) as ApprovalTerms).fx;
+    latest === undefined ? undefined : requestTerms(latest).fx;
   const open: FxTerms | undefined =
     latest !== undefined &&
     (latest.state === "requested" || latest.state === "approved") &&
@@ -57,7 +57,7 @@ export async function rateFor(
   // as an approval has to be used.
   const kept: string | undefined = engine.ledger.lastQuote(obligation.invoiceId);
   const last: LastQuote | undefined =
-    kept === undefined ? undefined : (JSON.parse(kept) as LastQuote);
+    kept === undefined ? undefined : checkedObject(kept, isLastQuote, quoteOnFile(obligation.invoiceId));
   if (
     last !== undefined &&
     last.fx.quoteId !== shown?.quoteId &&
