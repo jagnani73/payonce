@@ -71,7 +71,7 @@ function Line(props: { label?: string; children: ComponentChildren; vars: readon
 function Row(props: { row: SettingRow }): JSX.Element {
   const row: SettingRow = props.row;
   return (
-    <Line label={row.label} vars={row.variable === null ? null : [row.variable]} problem={row.problem}>
+    <Line label={row.label} vars={row.variables} problem={row.problem}>
       {row.value}
     </Line>
   );
@@ -109,7 +109,7 @@ function Approvals(props: { view: SettingsView["approvals"] }): JSX.Element {
       </div>
       <p class="muted set-note">A limit applies in the currency a payment is paid from.</p>
       {a.rows
-        .filter((row: SettingRow): boolean => row.variable !== "APPROVERS")
+        .filter((row: SettingRow): boolean => !row.variables.includes("APPROVERS"))
         .map(
           (row: SettingRow): JSX.Element => (
             <Row key={row.label} row={row} />
@@ -131,7 +131,7 @@ function Cash(props: { view: SettingsView["cash"] }): JSX.Element {
   return (
     <Section id="cash" title="Cash">
       {floors === undefined ? null : (
-        <Line label={floors.label} vars={floors.variable === null ? null : [floors.variable]} problem={floors.problem}>
+        <Line label={floors.label} vars={floors.variables} problem={floors.problem}>
           {c.floors.length === 0 ? (
             floors.value
           ) : (
@@ -206,10 +206,13 @@ function Reader(props: { view: SettingsView["reader"] }): JSX.Element {
       </Line>
       {r.notice === null ? null : <Callout tone="warning">{r.notice}</Callout>}
       <Line label="Ask why" vars={ask.variables} tone={ask.on ? undefined : "off"}>
-        {ask.on
-          ? `On · ${ask.models} · up to ${ask.perMinute} a minute, ${ask.perDay} a day`
-          : "Off: Ask why needs a model key"}
+        {ask.on ? `On · ${ask.models}` : "Off: Ask why needs a model key"}
       </Line>
+      {ask.on
+        ? ask.limits.map(
+            (limit: SettingRow): JSX.Element => <Row key={limit.label} row={limit} />,
+          )
+        : null}
     </Section>
   );
 }

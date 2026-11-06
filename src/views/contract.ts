@@ -1335,8 +1335,9 @@ export interface AuditCheckView {
 export interface SettingRow {
   label: string;
   value: string;
-  // The .env variable, shown small. Never a secret's value.
-  variable: string | null;
+  // The .env variables behind it, shown small: none for a limit fixed in
+  // PayOnce. Never a secret's value.
+  variables: string[];
   problem: string | null;
 }
 
@@ -1366,8 +1367,11 @@ export interface SettingsView {
   reader: {
     name: string;
     isModel: boolean;
+    // The hosts the model services are at; none for the keyword reader.
+    hosts: string[];
     notice: string | null;
-    askWhy: { on: boolean; models: string; perMinute: number; perDay: number; variables: string[] };
+    // limits: fixed in PayOnce, so no setting changes them.
+    askWhy: { on: boolean; models: string; hosts: string[]; limits: SettingRow[]; variables: string[] };
     variables: string[];
   };
   // Null outside pnpm ui, which alone holds the client and its timers.
@@ -1379,7 +1383,9 @@ export interface SettingsView {
     checksEverySeconds: number;
     listingEverySeconds: number;
     reconEveryMinutes: number | null;
-    variables: { host: string[]; webhooks: string[]; recon: string[] };
+    // Whether AWX_CLIENT_ID and AWX_API_KEY are set, never their values.
+    keys: { clientId: boolean; apiKey: boolean };
+    variables: { host: string[]; keys: string[]; webhooks: string[]; recon: string[] };
   } | null;
   people: { noLogin: string; names: string[] };
   // The one failure-code table, for any client that needs words for a code.

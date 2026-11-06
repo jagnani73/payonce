@@ -23,6 +23,8 @@ export interface AirwallexSetting {
   // in PayOnce's words when a credential is missing or the address is not the
   // sandbox. The credentials stay inside it, so no copy of the settings holds them.
   client: () => AirwallexClient;
+  // Whether each credential is set, never its value.
+  keys: { clientId: boolean; apiKey: boolean };
 }
 
 export interface BankDeadlineMinutes {
@@ -161,6 +163,7 @@ function airwallexSetting(env: NodeJS.ProcessEnv): AirwallexSetting {
   return {
     client: (): AirwallexClient =>
       new AirwallexClient(baseUrl, required("AWX_CLIENT_ID", clientId), required("AWX_API_KEY", apiKey)),
+    keys: { clientId: Boolean(clientId), apiKey: Boolean(apiKey) },
   };
 }
 

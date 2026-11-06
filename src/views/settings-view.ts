@@ -9,15 +9,12 @@ import { formatAmount, formatMoney } from "../domain/money.js";
 import { ASKS_PER_DAY, ASKS_PER_MINUTE, explainerFor, type Explainer } from "../explain/explainer.js";
 import { MAX_EMAIL_BYTES } from "../intake/eml.js";
 import { outageRuleText } from "../outages/outages.js";
-import { ModelReader } from "../reader/model-reader.js";
-import { readerFor } from "../reader/reader.js";
-import type { EmailReader } from "../reader/emails.js";
-import type { ServiceView } from "../reader/model-service.js";
+import { serviceView, type ModelService } from "../reader/model-service.js";
 import { MAX_RUN_FILE_CHARS, MAX_RUN_ROWS } from "../runs/run-file.js";
 import type { Settings } from "../settings.js";
 import type { Alert, Ledger } from "../store/ledger.js";
 import type { Money, SettingRow, SettingsView } from "./contract.js";
-import { readerLabel } from "./context.js";
+import { readerOf } from "./context.js";
 import { airwallexHealth, type ServerFacts } from "./health.js";
 import { money } from "./parts.js";
 
@@ -39,8 +36,9 @@ function limitOf(minor: number): Money {
   return { minor, currency: "", text: formatAmount(minor) };
 }
 
-function row(label: string, value: string, variable: string | null, problem: string | null = null): SettingRow {
-  return { label, value, variable, problem };
+// variables: the .env variables behind it, none for a limit fixed in PayOnce.
+function row(label: string, value: string, variables: string[], problem: string | null = null): SettingRow {
+  return { label, value, variables, problem };
 }
 
 function alertTitle(alert: Alert): string {
@@ -52,18 +50,23 @@ function alertTitle(alert: Alert): string {
 }
 
 function readerSection(settings: Settings): SettingsView["reader"] {
-  const reader: EmailReader = readerFor(settings.models.readerServices());
-  const explainer: Explainer | null = explainerFor(settings.models.askServices());
-  const free: boolean = reader instanceof ModelReader && reader.views.some((view: ServiceView): boolean => view.googleFreeTier);
+  const reader: { name: string; isModel: boolean; hosts: string[]; notice: string | null } = readerOf(settings);
+  const services: ModelService[] = settings.models.askServices();
+  const explainer: Explainer | null = explainerFor(services);
   return {
-    name: readerLabel(reader.name),
-    isModel: reader instanceof ModelReader,
-    notice: free ? "A model on Google's free tier reads uploaded emails. Don't upload anything you can't share with Google." : null,
+    name: reader.name,
+    isModel: reader.isModel,
+    hosts: reader.hosts,
+    notice: reader.notice,
     askWhy: {
       on: explainer !== null,
       models: explainer?.name ?? "",
-      perMinute: ASKS_PER_MINUTE,
-      perDay: ASKS_PER_DAY,
+      hosts: explainer === null ? [] : [...new Set<string>(services.map((service: ModelService): string => serviceView(service).host))],
+      limits: [
+        row("Asks a minute", String(ASKS_PER_MINUTE), []),
+        row("Asks a day (UTC)", String(ASKS_PER_DAY), []),
+        ...(explainer === null ? [] : [row("Waits for an answer", `up to ${explainer.maxSeconds} s`, [])]),
+      ],
       variables: ["CLAUDE_API_KEY", "CLAUDE_ASK_MODEL", "READER_API_KEY", "READER_MODEL"],
     },
     variables: ["CLAUDE_API_KEY", "CLAUDE_MODEL", "READER_API_KEY", "READER_MODEL", "READER_BASE_URL"],
@@ -83,12 +86,12 @@ export function settingsView(ledger: Ledger, settings: Settings, _now: number, s
         row(
           "Approvers",
           policy.approvers.length === 0 ? "None" : `${policy.approvers.length}`,
-          "APPROVERS",
+          ["APPROVERS"],
           policy.problem,
         ),
-        row("Two approvers above", formatAmount(policy.twoApproversAboveMinor), "TWO_APPROVERS_ABOVE"),
-        row("Requests expire after", `${policy.expiresAfterMs / MINUTE_MS} minutes`, "APPROVAL_TTL_MINUTES"),
-        row("An approved request has at least", `${APPROVED_USE_WITHIN_MS / MINUTE_MS} more minutes to be used`, null),
+        row("Two approvers above", formatAmount(policy.twoApproversAboveMinor), ["TWO_APPROVERS_ABOVE"]),
+        row("Requests expire after", `${policy.expiresAfterMs / MINUTE_MS} minutes`, ["APPROVAL_TTL_MINUTES"]),
+        row("An approved request has at least", `${APPROVED_USE_WITHIN_MS / MINUTE_MS} more minutes to be used`, []),
       ],
       barredRule: BARRED_RULE,
       closeRule: CLOSE_RULE,
@@ -102,17 +105,19 @@ export function settingsView(ledger: Ledger, settings: Settings, _now: number, s
         row(
           "Reserve floors",
           settings.reserve.floors.size === 0 ? "Not set: every automatic replacement goes to a person" : `${settings.reserve.floors.size} set`,
-          "RESERVE_FLOORS",
+          ["RESERVE_FLOORS"],
           settings.reserve.problem,
         ),
-        row("Exchange-rate quotes", describeQuotes(settings.fxQuotes), "FX_QUOTE_VALIDITY", settings.fxQuotes.problem),
+        row("Exchange-rate quotes", describeQuotes(settings.fxQuotes), ["FX_QUOTE_VALIDITY"], settings.fxQuotes.problem),
       ],
     },
     bankDeadlines: [
-      row("Local transfers", `${deadlineMinutes("LOCAL")} minutes, then PayOnce says the bank is late`, "BANK_DEADLINE_LOCAL_MINUTES"),
-      row("SWIFT transfers", `${deadlineMinutes("SWIFT")} minutes, then PayOnce says the bank is late`, "BANK_DEADLINE_SWIFT_MINUTES"),
+      row("Local transfers", `${deadlineMinutes("LOCAL")} minutes, then PayOnce says the bank is late`, ["BANK_DEADLINE_LOCAL_MINUTES"]),
+      row("SWIFT transfers", `${deadlineMinutes("SWIFT")} minutes, then PayOnce says the bank is late`, ["BANK_DEADLINE_SWIFT_MINUTES"]),
     ],
-    outages: [row("Rule", outageRuleText(settings.outageRule), "OUTAGE_FAILURES", settings.outageRule.problem)],
+    outages: [
+      row("Rule", outageRuleText(settings.outageRule), ["OUTAGE_FAILURES", "OUTAGE_WINDOW_MINUTES"], settings.outageRule.problem),
+    ],
     alerts: {
       on: target !== null,
       format: target?.format ?? null,
@@ -147,7 +152,13 @@ export function settingsView(ledger: Ledger, settings: Settings, _now: number, s
             checksEverySeconds: server.checksEverySeconds,
             listingEverySeconds: server.listingEverySeconds,
             reconEveryMinutes: settings.recon.everyMs === null ? null : settings.recon.everyMs / MINUTE_MS,
-            variables: { host: ["AWX_BASE_URL"], webhooks: ["WEBHOOKS", "WEBHOOK_URL"], recon: ["RECON_EVERY_MINUTES"] },
+            keys: settings.airwallex.keys,
+            variables: {
+              host: ["AWX_BASE_URL"],
+              keys: ["AWX_CLIENT_ID", "AWX_API_KEY"],
+              webhooks: ["WEBHOOKS", "WEBHOOK_URL"],
+              recon: ["RECON_EVERY_MINUTES"],
+            },
           },
     people: { noLogin: NO_LOGIN, names: ledger.knownNames(NAMES_SHOWN) },
     failureCodes: Object.entries(FAILURE_CODES).map(([code, failure]: [string, FailureCode]) => ({
