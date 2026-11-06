@@ -89,9 +89,13 @@ This file holds the commands, the file map and the rules that hold everywhere. T
   - `reserve.ts`: reserve floors from `RESERVE_FLOORS`, and `debitCurrency`.
   - `fx.ts`: `quoteValidity` and `describeQuotes`, on the `FX_QUOTE_VALIDITY` setting.
 - `src/store/`:
-  - `ledger.ts`: the SQLite ledger (`node:sqlite`): tables, transactions, the duplicate lock, the hash chain, `readSnapshot`, `readingSoft`.
-  - `audit-trail.ts`: hashing, chain checks and exports for invoice, pay run and reconciliation timelines.
-  - `recon-store.ts`: reconciliation's tables.
+  - `ledger.ts`: the `Ledger` facade over the SQLite ledger (`node:sqlite`). It builds every store on one `Db` and delegates to them. A new method goes in the store that owns its tables, with a one-line delegation here.
+  - `db.ts`: the connection, the one transaction helper (`transaction`, `readSnapshot`), `readingSoft` and the stored-JSON readers.
+  - `schema.ts`: `SCHEMA`, `ADDED_COLUMNS`, the time triggers and the upgrades.
+  - `chain.ts`: `HashChain`, used by the invoice, pay run and reconciliation timelines.
+  - One store per group of tables: `invoices.ts`, `attempts.ts` (`openAttempt`, `insertAttempt`, the duplicate lock), `approvals.ts` (one request book for invoices and pay runs), `payouts.ts`, `closes.ts`, `runs.ts`, `outages.ts`, `inbox.ts`, `alerts.ts`, `bank-changes.ts`, `drafts.ts`, `locks.ts`, `emails.ts`, `timeline.ts`, `webhook-events.ts`. Read models for views are in `read/`.
+  - `audit-trail.ts`: chain reports and exports for invoice, pay run and reconciliation timelines.
+  - `recon-store.ts`: reconciliation's tables, on the shared `Db`.
 - `src/engine/`:
   - `engine.ts`: the agent, shared by the CLI and the server. `resumeIncident` is one look at an invoice. Also `startPayment`, `startFirst`, `replaceUnderLock`, `approvePayment`, `closeIncident`, `payAgain`, `note` and `noteError`, tying payouts sent outside PayOnce, and FX rates.
   - `create.ts`: `createEngine(settings, ledger?)`, the one place an `Engine` is built: the Airwallex client first, then the ledger, then the reader. It returns the client's problem instead of throwing it. `pnpm ui` and `pnpm recover` add their sandbox bank to what it builds.
