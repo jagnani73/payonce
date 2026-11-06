@@ -20,7 +20,15 @@ import { assess } from "./assessment.js";
 import { close, closeRefused } from "./close.js";
 import { withCurrencyLock } from "./currency-lock.js";
 import { readNewEmails } from "./emails.js";
-import { RETRY_FAILED_LOOK_MS, type Assessment, type Engine, type NextLook } from "./engine.js";
+import {
+  CONTINUE,
+  nextLookAt,
+  RETRY_FAILED_LOOK_MS,
+  type Assessment,
+  type Engine,
+  type NextLook,
+  type StepResult,
+} from "./engine.js";
 import { continueEscalated, escalate } from "./escalated.js";
 import { anyLive, heldBeforePaying, keptFailed, paidOriginal, paidTwice } from "./facts.js";
 import { holdRefused, startFirst } from "./first-payment.js";
@@ -31,16 +39,7 @@ import { linkUnseenPayouts, syncOutsidePayouts } from "./outside.js";
 import { syncTransfer } from "./payments.js";
 import { MISMATCHED_FAILED_REASON, MISMATCHED_TRANSFER_REASON, withFloorReason } from "./reason-text.js";
 import { replaceUnderLock } from "./replacement.js";
-import {
-  accountChangedCause,
-  failNeverSent,
-  holdRetryForOutsidePayout,
-  lateTransferCause,
-  mismatchedCause,
-  namesOnlyCause,
-  paidOutsideCause,
-  retry,
-} from "./retry.js";
+import { accountChangedCause, failNeverSent, holdPending, retry } from "./retry.js";
 import { AccountChangedError, noteChecks, replacementOverdue, transferChecks, waitForBank, type TransferChecks } from "./send.js";
 
 // An invoice whose payment an outage held waits for a person to end it. The hold
@@ -125,32 +124,56 @@ export async function resumeIncident(
   engine.ledger.lookAt(invoiceId, next);
 }
 
+// What a look knows as it goes: the invoice as it last read it, and the original
+// the policy goes by and a replacement still with the bank, as read so far.
+interface Look {
+  readonly engine: Engine;
+  readonly invoiceId: string;
+  readonly sendRunRow: boolean;
+  obligation: Obligation;
+  original: Transfer | null;
+  liveReplacement: Transfer | null;
+}
+
+// A look at an invoice the bank has an original for, with the payouts sent
+// outside PayOnce as it read them.
+interface SentLook extends Look {
+  original: Transfer;
+  outside: OutsidePayout[];
+}
+
+// Once the look has read the payouts sent outside PayOnce and the new emails of
+// an invoice the bank has an original for, these run in this order, and the
+// policy decides when none ends the look.
+const SENT_STEPS: readonly ((look: SentLook) => StepResult)[] = [
+  leaveClosed,
+  holdIfPaidTwice,
+  waitOnKeptFailed,
+  closeIfPaid,
+  followReplacement,
+  continueIfEscalated,
+];
+
+// The look reads what the bank has for the invoice, then holds it while a
+// transfer that does not match it is live, starts or holds a first payment when
+// the bank has no original, reads the payouts sent outside PayOnce and the new
+// emails, and takes SENT_STEPS. Every await is here, in this order, so a look
+// runs beside other looks and the sweep as it always has (see StepResult).
 async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Promise<NextLook> {
   const read: Obligation | undefined = engine.ledger.obligation(invoiceId);
   if (read === undefined) {
     throw new Error(`${invoiceId} is not in the ledger`);
   }
-  let obligation: Obligation = read;
+  const look: Look = { engine, invoiceId, sendRunRow, obligation: read, original: null, liveReplacement: null };
 
   // A transfer kept beside an attempt because it does not match the invoice is
-  // read like any payment with the bank. Once the bank has failed every one, the
-  // reason the invoice waits for a person says so, unless another process has
-  // changed the reason or closed the invoice meanwhile.
+  // read like any payment with the bank.
   for (const attempt of engine.ledger.attempts(invoiceId).filter(mismatchedLive)) {
     if (attempt.mismatchedTransferId !== null && attempt.mismatchedStatus !== "PAID") {
       syncMismatched(engine, attempt, await getTransfer(engine.client, attempt.mismatchedTransferId));
     }
   }
-  if (
-    obligation.escalationReason === MISMATCHED_TRANSFER_REASON &&
-    !engine.ledger.attempts(invoiceId).some(mismatchedLive) &&
-    engine.ledger.rewordEscalation(invoiceId, MISMATCHED_TRANSFER_REASON, MISMATCHED_FAILED_REASON)
-  ) {
-    obligation = engine.ledger.obligation(invoiceId) ?? obligation;
-  }
-  let originalId: string | null = null;
-  let original: Transfer | null = null;
-  let liveReplacement: Transfer | null = null;
+  sayMismatchedFailed(look);
   for (const attempt of engine.ledger.attempts(invoiceId)) {
     // An attempt Airwallex refused never became a transfer. Only one still
     // pending is retried.
@@ -163,71 +186,31 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
         ? await findTransferByRequestId(engine.client, attempt.requestId)
         : undefined;
     if (existing !== undefined) {
-      const checks: TransferChecks = transferChecks(engine, obligation, attempt);
+      const checks: TransferChecks = transferChecks(engine, look.obligation, attempt);
       transfer = await syncTransfer(engine.client, engine.ledger, existing.id, checks.decide);
       noteChecks(engine, invoiceId, checks);
       engine.bank?.sent(invoiceId, attempt.kind, transfer.id, transfer.short_reference_id);
     } else if (attempt.transferId === null) {
-      // A payout sent outside PayOnce since the attempt was opened, for example in
-      // the Airwallex web app while its create call went unanswered, may already
-      // pay the invoice, so the attempt is not sent again while one is live. One
-      // tied just now that has already failed holds nothing: the next look, at
-      // once, sends the attempt, as before any other payment. Nor is it sent
-      // while a payment found late may pay the invoice.
       const linked: boolean = await linkUnseenPayouts(engine, invoiceId);
       const outside: OutsidePayout[] = await syncOutsidePayouts(engine, invoiceId);
-      // A transfer found late that the bank has live may pay the invoice. This
-      // attempt waits for it as for a paid payout sent outside PayOnce, and is
-      // marked failed if it never became a transfer, so the late one takes the
-      // lock.
-      const twice: Attempt | undefined = paidTwice(engine.ledger, invoiceId);
-      if (twice !== undefined) {
-        return failNeverSent(engine, obligation, attempt, lateTransferCause(engine, invoiceId, twice));
+      const held: StepResult = holdPending(engine, look.obligation, attempt, outside, linked);
+      if (held.kind === "next") {
+        return held.at;
       }
-      // A paid one that only names the invoice is held for in the same way, so
-      // PayOnce sends nothing beside it, and once the attempt is marked failed a
-      // person decides: it may be this invoice paid from another wallet, or not
-      // this invoice's payment at all.
-      const tied: { pays: OutsidePayout[]; namesOnly: OutsidePayout[] } = engine.ledger.payingPayouts(invoiceId);
-      const paidBy: OutsidePayout | undefined = tied.pays.find(
-        (payout: OutsidePayout): boolean => payout.state === "paid",
-      );
-      if (paidBy !== undefined) {
-        return failNeverSent(engine, obligation, attempt, paidOutsideCause(engine, invoiceId, paidBy));
-      }
-      const namedBy: OutsidePayout | undefined = tied.namesOnly[0];
-      if (namedBy !== undefined) {
-        return failNeverSent(engine, obligation, attempt, namesOnlyCause(engine, obligation, namedBy));
-      }
-      if (anyLive(outside)) {
-        return holdRetryForOutsidePayout(engine, invoiceId, attempt);
-      }
-      // A paid one is waited for as a paid payout sent outside PayOnce is, so the
-      // attempt is marked failed if it never became a transfer.
-      const mismatched: Attempt | undefined = engine.ledger.attempts(invoiceId).find(mismatchedLive);
-      if (mismatched?.mismatchedStatus === "PAID") {
-        return failNeverSent(engine, obligation, attempt, mismatchedCause(engine, invoiceId, mismatched));
-      }
-      if (mismatched !== undefined) {
-        return holdMismatched(engine, invoiceId, mismatched);
-      }
-      if (linked) {
-        return Date.now();
-      }
-      const paying: Obligation = obligation;
-      const checks: TransferChecks = transferChecks(engine, obligation, attempt);
+      const paying: Obligation = look.obligation;
+      const checks: TransferChecks = transferChecks(engine, paying, attempt);
       let sent: Transfer | null | undefined;
       try {
         sent = await withCurrencyLock(
           engine.ledger,
           debitCurrency(paying),
-          (): Promise<Transfer | null | undefined> => retry(engine, paying, attempt, original, checks),
+          (): Promise<Transfer | null | undefined> => retry(engine, paying, attempt, look.original, checks),
         );
       } catch (error: unknown) {
         if (!(error instanceof AccountChangedError)) {
           throw error;
         }
-        return failNeverSent(engine, obligation, attempt, accountChangedCause(engine, invoiceId, attempt.kind));
+        return failNeverSent(engine, paying, attempt, accountChangedCause(engine, invoiceId, attempt.kind));
       }
       // The next look, at once, holds or records it as the ledger now stands.
       if (sent === undefined) {
@@ -242,35 +225,7 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
     } else {
       transfer = await syncTransfer(engine.client, engine.ledger, attempt.transferId);
     }
-    const state: AttemptState | null = attemptStateOf(transfer);
-    // Not for a transfer the ledger keeps failed while another payment holds the
-    // duplicate lock: paidTwice holds the invoice for a person below.
-    if (
-      state !== attempt.state &&
-      (state === "paid" || state === "failed") &&
-      engine.ledger.attemptOf(attempt.requestId, transfer.id)?.state === state
-    ) {
-      note(engine.ledger, invoiceId, "bank", `${capitalise(attempt.kind)} ${describe(transfer)}`);
-    }
-    // After the bank line, so an outage this failure declares reads after it.
-    if (state === "failed") {
-      railFailureSeen(engine.ledger, transfer, "look");
-    }
-    // The original the policy goes by is the latest the bank has not failed, so a
-    // transfer found late that is live is never taken for a failed one and
-    // replaced. With none live, it is the latest.
-    if (
-      attempt.kind === "original" &&
-      (original === null ||
-        originalStateOf(transfer) !== "failed" ||
-        originalStateOf(original) === "failed")
-    ) {
-      originalId = transfer.id;
-      original = transfer;
-    } else if (attempt.kind === "replacement" && originalStateOf(transfer) === "in_flight") {
-      liveReplacement = transfer;
-    }
-    say(`  ${attempt.kind} ${describe(transfer)}`);
+    notePayment(look, attempt, transfer);
   }
   // A transfer kept failed beside a payment that has failed since, in this look
   // or another, takes its own state now that the duplicate lock is free.
@@ -284,64 +239,152 @@ async function look(engine: Engine, invoiceId: string, sendRunRow: boolean): Pro
     }
   }
   // A transfer found at a rate nobody approved may have escalated it above.
-  obligation = engine.ledger.obligation(invoiceId) ?? obligation;
+  look.obligation = engine.ledger.obligation(invoiceId) ?? look.obligation;
+
   // Before anything is decided, held or released for a closed invoice reopened by
   // it, or for one with nothing sent. Payouts sent outside PayOnce are read first,
   // so one the bank has paid or failed since is recorded, and the watcher stops
   // waking the invoice for it.
   const mismatched: Attempt | undefined = engine.ledger.attempts(invoiceId).find(mismatchedLive);
-  if (mismatched !== undefined && obligation.state !== "settled") {
+  if (mismatched !== undefined && look.obligation.state !== "settled") {
     await syncOutsidePayouts(engine, invoiceId);
     return holdMismatched(engine, invoiceId, mismatched);
   }
-
-  if (originalId === null) {
-    const refused: Attempt | undefined = engine.ledger.attempts(invoiceId).at(-1);
-    if (refused === undefined && obligation.state === "open") {
-      return startFirst(engine, obligation, sendRunRow);
-    }
-    if (refused !== undefined && obligation.state === "open") {
-      return continueHeld(engine, holdRefused(engine, obligation, refused));
-    }
-    return heldBeforePaying(engine.ledger, obligation) ? continueHeld(engine, obligation) : null;
+  const original: Transfer | null = look.original;
+  if (original === null) {
+    return nothingSent(look);
   }
   const outside: OutsidePayout[] = await syncOutsidePayouts(engine, invoiceId);
-  await readNewEmails(engine, obligation, false);
-  // Closed already, by the policy or by a person, so nothing is decided or sent,
-  // whatever its payments show now. A payment found late that may still pay it
-  // reopened it when it was recorded.
-  if (obligation.state === "settled" || obligation.state === "rejected") {
-    return null;
-  }
-  // Before the policy, so its reason is not replaced, and before a paid payment
-  // could close the incident.
-  const twice: Attempt | undefined = paidTwice(engine.ledger, invoiceId);
-  if (twice !== undefined) {
-    return holdPaidTwice(engine, invoiceId, twice);
-  }
-  // Still kept failed, as when another process opened or recorded a payment
-  // meanwhile: nothing is decided around a payment the bank has live, and the
-  // next look, at once, records it again.
-  if (engine.ledger.attempts(invoiceId).some(keptFailed)) {
-    return Date.now();
-  }
-  if (engine.ledger.paidOnce(invoiceId)) {
-    // A paid replacement was sent on a decision already made, so it closes the
-    // incident. A paid original goes to the policy, which may want a person. So
-    // does an invoice with a live payout sent outside PayOnce.
-    if (paidOriginal(engine.ledger, invoiceId) === undefined && !anyLive(outside)) {
-      // Refused when a payment went out at a rate nobody approved, or when another
-      // process changed the ledger since this look read it.
-      return close(engine, invoiceId, obligation.state) ? null : closeRefused(engine, invoiceId);
+  const sent: SentLook = { ...look, original, outside };
+  await readNewEmails(engine, sent.obligation, false);
+  for (const step of SENT_STEPS) {
+    const result: StepResult = step(sent);
+    if (result.kind === "next") {
+      return result.at;
     }
   }
-  if (liveReplacement !== null) {
-    return isOverdue(liveReplacement)
-      ? replacementOverdue(engine, invoiceId, liveReplacement)
-      : waitForBank(engine, invoiceId, "replacement", liveReplacement);
+  return act(engine, sent.obligation, await assess(engine, sent.obligation, original.id));
+}
+
+// Once the bank has failed every transfer kept beside an attempt because it does
+// not match the invoice, the reason the invoice waits for a person says so,
+// unless another process has changed the reason or closed the invoice meanwhile.
+function sayMismatchedFailed(look: Look): void {
+  const { engine, invoiceId }: Look = look;
+  if (
+    look.obligation.escalationReason === MISMATCHED_TRANSFER_REASON &&
+    !engine.ledger.attempts(invoiceId).some(mismatchedLive) &&
+    engine.ledger.rewordEscalation(invoiceId, MISMATCHED_TRANSFER_REASON, MISMATCHED_FAILED_REASON)
+  ) {
+    look.obligation = engine.ledger.obligation(invoiceId) ?? look.obligation;
   }
-  if (obligation.state === "escalated") {
-    return continueEscalated(engine, obligation, originalId);
+}
+
+// What reading one payment found: a bank line when the bank paid or failed it
+// since the last look, the rail failure, and which original and replacement the
+// look goes by.
+function notePayment(look: Look, attempt: Attempt, transfer: Transfer): void {
+  const { engine, invoiceId }: Look = look;
+  const state: AttemptState | null = attemptStateOf(transfer);
+  // Not for a transfer the ledger keeps failed while another payment holds the
+  // duplicate lock: paidTwice holds the invoice for a person below.
+  if (
+    state !== attempt.state &&
+    (state === "paid" || state === "failed") &&
+    engine.ledger.attemptOf(attempt.requestId, transfer.id)?.state === state
+  ) {
+    note(engine.ledger, invoiceId, "bank", `${capitalise(attempt.kind)} ${describe(transfer)}`);
   }
-  return act(engine, obligation, await assess(engine, obligation, originalId));
+  // After the bank line, so an outage this failure declares reads after it.
+  if (state === "failed") {
+    railFailureSeen(engine.ledger, transfer, "look");
+  }
+  // The original the policy goes by is the latest the bank has not failed, so a
+  // transfer found late that is live is never taken for a failed one and
+  // replaced. With none live, it is the latest.
+  if (
+    attempt.kind === "original" &&
+    (look.original === null ||
+      originalStateOf(transfer) !== "failed" ||
+      originalStateOf(look.original) === "failed")
+  ) {
+    look.original = transfer;
+  } else if (attempt.kind === "replacement" && originalStateOf(transfer) === "in_flight") {
+    look.liveReplacement = transfer;
+  }
+  say(`  ${attempt.kind} ${describe(transfer)}`);
+}
+
+// An invoice the bank has no original for: a new one sends its first payment, one
+// Airwallex refused every original for goes to a person, and one held before
+// paying waits for an approval.
+function nothingSent(look: Look): NextLook | Promise<NextLook> {
+  const { engine, invoiceId, obligation }: Look = look;
+  const refused: Attempt | undefined = engine.ledger.attempts(invoiceId).at(-1);
+  if (refused === undefined && obligation.state === "open") {
+    return startFirst(engine, obligation, look.sendRunRow);
+  }
+  if (refused !== undefined && obligation.state === "open") {
+    return continueHeld(engine, holdRefused(engine, obligation, refused));
+  }
+  return heldBeforePaying(engine.ledger, obligation) ? continueHeld(engine, obligation) : null;
+}
+
+// Closed already, by the policy or by a person, so nothing is decided or sent,
+// whatever its payments show now. A payment found late that may still pay it
+// reopened it when it was recorded.
+function leaveClosed(look: SentLook): StepResult {
+  return look.obligation.state === "settled" || look.obligation.state === "rejected" ? nextLookAt(null) : CONTINUE;
+}
+
+// Before the policy, so its reason is not replaced, and before a paid payment
+// could close the incident.
+function holdIfPaidTwice(look: SentLook): StepResult {
+  const twice: Attempt | undefined = paidTwice(look.engine.ledger, look.invoiceId);
+  return twice === undefined ? CONTINUE : nextLookAt(holdPaidTwice(look.engine, look.invoiceId, twice));
+}
+
+// Still kept failed, as when another process opened or recorded a payment
+// meanwhile: nothing is decided around a payment the bank has live, and the
+// next look, at once, records it again.
+function waitOnKeptFailed(look: SentLook): StepResult {
+  return look.engine.ledger.attempts(look.invoiceId).some(keptFailed) ? nextLookAt(Date.now()) : CONTINUE;
+}
+
+// A paid replacement was sent on a decision already made, so it closes the
+// incident. A paid original goes to the policy, which may want a person. So does
+// an invoice with a live payout sent outside PayOnce. The close is refused when a
+// payment went out at a rate nobody approved, or when another process changed
+// the ledger since this look read it.
+function closeIfPaid(look: SentLook): StepResult {
+  const { engine, invoiceId }: SentLook = look;
+  if (
+    !engine.ledger.paidOnce(invoiceId) ||
+    paidOriginal(engine.ledger, invoiceId) !== undefined ||
+    anyLive(look.outside)
+  ) {
+    return CONTINUE;
+  }
+  return nextLookAt(close(engine, invoiceId, look.obligation.state) ? null : closeRefused(engine, invoiceId));
+}
+
+// A replacement already out is waited on until its deadline, and then goes to a
+// person. It is never followed by another payment.
+function followReplacement(look: SentLook): StepResult {
+  const replacement: Transfer | null = look.liveReplacement;
+  if (replacement === null) {
+    return CONTINUE;
+  }
+  return nextLookAt(
+    isOverdue(replacement)
+      ? replacementOverdue(look.engine, look.invoiceId, replacement)
+      : waitForBank(look.engine, look.invoiceId, "replacement", replacement),
+  );
+}
+
+// An invoice with a person pays only on a matching approval.
+function continueIfEscalated(look: SentLook): StepResult {
+  return look.obligation.state === "escalated"
+    ? nextLookAt(continueEscalated(look.engine, look.obligation, look.original.id))
+    : CONTINUE;
 }

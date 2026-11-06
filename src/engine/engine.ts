@@ -29,6 +29,19 @@ export interface Engine {
 // Null when it waits for news or for a person.
 export type NextLook = number | null;
 
+// What one step of a look comes to: the look ends with the time of its next look,
+// or with the work under way that gives it, or it goes on to the next step. A
+// step is a plain function that awaits nothing itself: the look returns the work
+// it started as it is, so a look takes no more turns of the event loop than its
+// work does, and runs beside other looks and the sweep in the same order.
+export type StepResult = { kind: "next"; at: NextLook | Promise<NextLook> } | { kind: "continue" };
+
+export const CONTINUE: StepResult = { kind: "continue" };
+
+export function nextLookAt(at: NextLook | Promise<NextLook>): StepResult {
+  return { kind: "next", at };
+}
+
 // How long after a look that failed the agent tries again.
 export const RETRY_FAILED_LOOK_MS: number = 60_000;
 
