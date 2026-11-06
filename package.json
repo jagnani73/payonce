@@ -23,9 +23,11 @@
     "ask": "tsx src/surfaces/cli/ask.ts",
     "metrics": "tsx src/surfaces/cli/metrics.ts",
     "reset": "tsx src/surfaces/cli/reset.ts",
+    "preui": "node scripts/build-web.mjs",
     "ui": "tsx src/surfaces/http/main.ts",
     "mcp": "tsx src/surfaces/mcp/main.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p web",
+    "build:web": "node scripts/build-web.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.3.1",
