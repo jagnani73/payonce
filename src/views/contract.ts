@@ -1375,10 +1375,10 @@ export type RunAuditExportView = RunAuditExport;
 // ---------- MCP and CLI ----------
 
 // MCP tools answer the same views with three changes, applied by one projection
-// in views/mcp-views.ts instead of hand copies:
-// - activity is dropped;
-// - every Theirs field is wrapped as { outsideText, from } (mcp-text.ts), using
-//   the field list the views declare (views/outside-fields.ts), not path rules;
+// (marked, in surfaces/mcp/mcp-text.ts) instead of hand copies:
+// - activity is dropped, and so is askWhy, which needs settings MCP never loads;
+// - every Theirs field is wrapped as { outsideText, from }, using the field list
+//   the views declare (views/outside-fields.ts), not path rules;
 // - long lists are capped: timeline to the newest `lines` lines (default 20),
 //   rows of lists to `limit`.
 // The MCP tools map to views: board -> IncidentsView (scope needs-you by default),
