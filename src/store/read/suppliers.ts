@@ -75,7 +75,8 @@ function routedRead<
 const SUPPLIER_ATTEMPT_COLUMNS: string = `attempts.invoice_id, obligations.beneficiary_id, attempts.transfer_id,
   attempts.state, attempts.failure_code, attempts.account_key, attempts.sent_key, attempts.sent_ending,
   attempts.misdirected, attempts.bank_created_at, attempts.opened_at, attempts.bank_status,
-  attempts.found_late_at, attempts.mismatched_transfer_id, attempts.mismatched_status`;
+  attempts.found_late_at, attempts.mismatched_transfer_id, attempts.mismatched_status,
+  CASE WHEN json_valid(attempts.arrival) THEN json_extract(attempts.arrival, '$.country') END AS country`;
 
 interface SupplierAttemptRow {
   invoice_id: string;
@@ -93,6 +94,7 @@ interface SupplierAttemptRow {
   found_late_at: string | null;
   mismatched_transfer_id: string | null;
   mismatched_status: string | null;
+  country: unknown;
 }
 
 function toSupplierAttempt(row: SupplierAttemptRow): SupplierAttempt {
@@ -112,6 +114,7 @@ function toSupplierAttempt(row: SupplierAttemptRow): SupplierAttempt {
     foundLateAt: row.found_late_at ?? null,
     mismatchedTransferId: row.mismatched_transfer_id ?? null,
     mismatchedStatus: row.mismatched_status ?? null,
+    country: typeof row.country === "string" && /^[A-Z]{2}$/.test(row.country) ? row.country : null,
   };
 }
 
@@ -238,6 +241,9 @@ export interface SupplierAttempt {
   foundLateAt: string | null;
   mismatchedTransferId: string | null;
   mismatchedStatus: string | null;
+  // The bank's country of the details it was sent to, from its route advisory,
+  // as Airwallex gave it. Null when none was kept.
+  country: string | null;
 }
 
 // An attempt as a record's detail shows it. rateMismatch says only whether the

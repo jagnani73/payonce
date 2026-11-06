@@ -485,6 +485,8 @@ export interface SupplierDetail {
   generatedAt: string;
   key: string;
   name: string;
+  // The bank country of the newest transfer PayOnce sent to the record.
+  country: string | null;
   // The other names on file for the record, newest first.
   names: string[];
   phoneLast4: string | null;
@@ -514,6 +516,8 @@ export interface SupplierSummary {
   name: string;
   otherNames: number;
   sameName: string[];
+  // The bank country of the newest transfer PayOnce sent to the record.
+  country: string | null;
   // The account the record held the last time PayOnce stored it, and the phone
   // on file, by their last four characters only.
   accountEnding: string | null;
@@ -1237,6 +1241,17 @@ function situationsOf(ledger: Ledger, invoiceIds: string[], now: number): Map<st
     invoiceSnapshotsWithin(ledger, { policy: policyFromEnv({}), askWhy: false }, now, invoiceIds).map(
       (snapshot: InvoiceSnapshot): [string, Situation] => [snapshot.obligation.invoiceId, situationOf(snapshot, now)],
     ),
+  );
+}
+
+// The bank country of the newest transfer PayOnce sent to the record, as its
+// route advisory kept it from Airwallex.
+function countryOf(facts: RecordFacts): string | null {
+  return (
+    facts.attempts
+      .map((attempt: SupplierAttempt): string | null => attempt.country)
+      .filter((country: string | null): country is string => country !== null)
+      .at(-1) ?? null
   );
 }
 
@@ -2170,6 +2185,7 @@ function summaryOf(
     name: nameOf(facts),
     otherNames: Math.max(0, names.length - 1),
     sameName: [...sameName].sort(),
+    country: countryOf(facts),
     accountEnding: accounts.views.find((account: AccountView): boolean => account.recordLastStored)?.ending ?? null,
     phoneLast4: onFile === null ? lastFourDigits(phone?.supplierPhone ?? null) : onFile.ending,
     invoices: {
@@ -2324,6 +2340,7 @@ function detailOf(ledger: Ledger, key: string, now: number): SupplierDetail | nu
       generatedAt: new Date(now).toISOString(),
       key,
       name,
+      country: countryOf(facts),
       names: names.filter((each: string): boolean => supplierNameKey(each) !== supplierNameKey(name)),
       // A record only a waiting run names has no invoice to read its phone from.
       phoneLast4: contact.phone === null ? lastFourDigits(phone?.supplierPhone ?? null) : contact.phone.ending,

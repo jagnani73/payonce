@@ -718,6 +718,7 @@ export interface SearchView {
   // An exact invoice number or bank reference: open it directly.
   exact: { href: string } | null;
   payments: { invoiceId: InvoiceId; supplier: Theirs; amount: Money; label: string; tone: Tone }[];
+  // hint as SupplierListRow gives it: "US · USD · Local · ···6789".
   suppliers: { key: SupplierKey; name: Theirs; hint: string }[];
   runs: { id: RunId; fileName: Theirs; label: string }[];
   emails: { id: UploadId; subject: Theirs; from: Theirs; label: string }[];
@@ -990,9 +991,10 @@ export interface SupplierCaution {
 export interface SupplierListRow {
   key: SupplierKey | null;
   name: Theirs;
-  // "US · Local · ···6789", tells same-named records apart.
+  // "US · USD · Local · ···6789", tells same-named records apart.
   hint: string;
   sameName: number;
+  // The bank country of the newest transfer PayOnce sent to the record.
   country: string | null;
   currencies: string[];
   methods: TransferMethod[];
@@ -1096,6 +1098,8 @@ export interface SupplierContactDetail {
   notice: string;
 }
 
+// label names the account by its ending ("the account ending 3000"): the
+// ledger keeps no bank name per account, only inside approval terms' text.
 export interface SupplierAccountView extends AccountView {
   // A, B, C on this page, in the order first seen.
   letter: string;

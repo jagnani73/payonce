@@ -1,11 +1,12 @@
 import { runSituationOf, situationOf, type InvoiceSnapshot, type RunSnapshot, type Situation } from "../domain/situation.js";
 import type { Settings } from "../settings.js";
 import { readingSoft, type Ledger, type SearchRead } from "../store/ledger.js";
-import type { SearchView } from "./contract.js";
+import type { SearchView, SupplierListRow } from "./contract.js";
 import { snapshotOptions, supplierKeyOf } from "./context.js";
 import { money } from "./parts.js";
 import { paymentHref } from "./rows.js";
 import { readInvoiceSnapshots, readRunSnapshot } from "./snapshot.js";
+import { supplierRows } from "./supplier-pages.js";
 
 // Search across payments, supplier records, pay runs, inbox emails and bank
 // references. An exact invoice number or reference opens its payment directly.
@@ -18,6 +19,12 @@ const UPLOAD_LABELS: Record<string, string> = { waiting: "In the inbox", deliver
 export function searchView(ledger: Ledger, settings: Settings, now: number, q: string): SearchView {
   return readingSoft((): SearchView => {
     const found: SearchRead = ledger.search(q, SEARCH_LIMIT);
+    // The supplier list's hint, read only when a record is found.
+    let hint: Map<string, string> | undefined;
+    const hints = (): Map<string, string> =>
+      (hint ??= new Map<string, string>(
+        supplierRows(ledger, now).flatMap((row: SupplierListRow): [string, string][] => (row.key === null ? [] : [[row.key, row.hint]])),
+      ));
     const snapshots: InvoiceSnapshot[] = readInvoiceSnapshots(
       ledger,
       snapshotOptions(settings, null),
@@ -45,7 +52,7 @@ export function searchView(ledger: Ledger, settings: Settings, now: number, q: s
       }),
       suppliers: found.suppliers.flatMap((supplier: SearchRead["suppliers"][number]) => {
         const key: string | null = supplierKeyOf(supplier.beneficiaryId);
-        return key === null ? [] : [{ key, name: supplier.supplier, hint: `record ${key.slice(0, 8)}` }];
+        return key === null ? [] : [{ key, name: supplier.supplier, hint: hints().get(key) ?? "" }];
       }),
       runs: found.runs.map((run: SearchRead["runs"][number]) => {
         const snapshot: RunSnapshot | undefined = readRunSnapshot(ledger, run.id, snapshotOptions(settings, null), now);

@@ -67,47 +67,62 @@ const METHOD_WORDS: Record<string, string> = { LOCAL: "Local", SWIFT: "SWIFT" };
 
 const DRAFT_STATES: Record<string, string> = { draft: "Draft", copied: "Copied", sent: "Marked as sent", dismissed: "Dismissed" };
 
-function hintOf(currencies: string[], methods: string[], key: string | null, sameName: number): string {
+// "US · USD · Local · ···6789": what tells two records of one name apart,
+// without the record's id.
+function hintOf(country: string | null, currencies: string[], methods: string[], ending: string | null): string {
   return [
+    ...(country === null ? [] : [country]),
     ...(currencies.length === 0 ? [] : [currencies.join(", ")]),
     ...(methods.length === 0 ? [] : [methods.map((method: string): string => METHOD_WORDS[method] ?? method).join(", ")]),
-    ...(sameName > 0 && key !== null ? [`record ${key.slice(0, 8)}`] : []),
+    ...(ending === null ? [] : [`···${ending}`]),
   ].join(" · ");
 }
 
+// Every supplier record as a list row, newest first.
+export function supplierRows(ledger: Ledger, now: number): SupplierListRow[] {
+  const list: SupplierList = supplierList(ledger, now);
+  const byRecord: Map<string, Obligation[]> = new Map();
+  for (const obligation of ledger.obligations()) {
+    byRecord.set(obligation.beneficiaryId, [...(byRecord.get(obligation.beneficiaryId) ?? []), obligation]);
+  }
+  return list.suppliers.map((summary: SupplierSummary): SupplierListRow => {
+    const invoices: Obligation[] = summary.key === null ? [] : (byRecord.get(summary.key) ?? []);
+    const currencies: string[] = [...new Set(invoices.map((obligation: Obligation): string => obligation.currency))].sort();
+    const methods: string[] = [...new Set(invoices.map((obligation: Obligation): string => obligation.transferMethod))].sort();
+    return {
+      key: summary.key,
+      name: summary.name,
+      hint: hintOf(summary.country, currencies, methods, summary.accountEnding),
+      sameName: summary.sameName.length,
+      country: summary.country,
+      currencies,
+      methods: methods.filter((method: string): method is "LOCAL" | "SWIFT" => method === "LOCAL" || method === "SWIFT"),
+      accountEnding: summary.accountEnding,
+      phoneEnding: summary.phoneLast4,
+      payments: { open: summary.invoices.open + summary.invoices.escalated, total: summary.invoices.total },
+      cautions: summary.cautions.map((code: CautionCode) => ({ code, text: CAUTION_LABELS[code] })),
+    };
+  });
+}
+
+// The fewest characters of an account ending a search matches by.
+const ENDING_SEARCH_MIN: number = 3;
+
+// q matches a record's name, its id, and the last characters of the account it
+// holds, typed with or without the "···" the page writes before them.
 export function suppliersView(ledger: Ledger, _settings: Settings, now: number, q: string | null = null): SuppliersView {
   return readingSoft((): SuppliersView => {
-    const list: SupplierList = supplierList(ledger, now);
-    const byRecord: Map<string, Obligation[]> = new Map();
-    for (const obligation of ledger.obligations()) {
-      byRecord.set(obligation.beneficiaryId, [...(byRecord.get(obligation.beneficiaryId) ?? []), obligation]);
-    }
-    const lower: string | null = q === null ? null : q.toLowerCase();
+    const lower: string | null = q === null ? null : q.trim().toLowerCase();
+    const ending: string = (lower ?? "").replace(/^[·.\s]+/, "");
     return {
       view: "suppliers",
-      rows: list.suppliers
-        .filter(
-          (summary: SupplierSummary): boolean =>
-            lower === null || summary.name.toLowerCase().includes(lower) || (summary.key ?? "").toLowerCase().includes(lower),
-        )
-        .map((summary: SupplierSummary): SupplierListRow => {
-          const invoices: Obligation[] = summary.key === null ? [] : (byRecord.get(summary.key) ?? []);
-          const currencies: string[] = [...new Set(invoices.map((obligation: Obligation): string => obligation.currency))].sort();
-          const methods: string[] = [...new Set(invoices.map((obligation: Obligation): string => obligation.transferMethod))].sort();
-          return {
-            key: summary.key,
-            name: summary.name,
-            hint: hintOf(currencies, methods, summary.key, summary.sameName.length),
-            sameName: summary.sameName.length,
-            country: null,
-            currencies,
-            methods: methods.filter((method: string): method is "LOCAL" | "SWIFT" => method === "LOCAL" || method === "SWIFT"),
-            accountEnding: summary.accountEnding,
-            phoneEnding: summary.phoneLast4,
-            payments: { open: summary.invoices.open + summary.invoices.escalated, total: summary.invoices.total },
-            cautions: summary.cautions.map((code: CautionCode) => ({ code, text: CAUTION_LABELS[code] })),
-          };
-        }),
+      rows: supplierRows(ledger, now).filter(
+        (row: SupplierListRow): boolean =>
+          lower === null ||
+          row.name.toLowerCase().includes(lower) ||
+          (row.key ?? "").toLowerCase().includes(lower) ||
+          (ending.length >= ENDING_SEARCH_MIN && (row.accountEnding?.toLowerCase().endsWith(ending) ?? false)),
+      ),
     };
   });
 }
@@ -165,7 +180,12 @@ export function supplierView(ledger: Ledger, settings: Settings, now: number, ke
       key: detail.key,
       name: detail.name,
       otherNames: detail.names.filter((name: string): boolean => name !== detail.name),
-      hint: hintOf(detail.currencies, detail.methods, detail.key, detail.related.filter((item: RelatedRecord): boolean => item.why.includes("same-name")).length),
+      hint: hintOf(
+        detail.country,
+        detail.currencies,
+        detail.methods,
+        detail.accounts.find((account: RecordAccount): boolean => account.recordLastStored)?.ending ?? null,
+      ),
       cautions: detail.cautions.map(
         (caution: RecordCaution): SupplierCaution => ({
           code: caution.code,
