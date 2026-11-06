@@ -1,0 +1,210 @@
+/* Settings: a section list beside the sections, and rows of a label, a value
+   and the variables that set it, in small mono. Cards and tables come from
+   styles.css. */
+
+.set-layout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 24px;
+}
+
+.set-nav {
+  position: sticky;
+  top: 16px;
+  display: flex;
+  flex: 0 0 200px;
+  flex-direction: column;
+}
+
+.set-nav__link {
+  display: flex;
+  align-items: center;
+  min-height: var(--target);
+  padding: 0 10px;
+  border-radius: 6px;
+  color: var(--text-body);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.set-nav__link:hover {
+  background: var(--muted-fill);
+  color: var(--text);
+}
+
+.set-sections {
+  display: flex;
+  flex: 1 1 640px;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.set-section {
+  display: flex;
+  flex-direction: column;
+  scroll-margin-top: 16px;
+}
+
+.set-section:focus {
+  outline: none;
+}
+
+.set-section__title {
+  margin-bottom: 10px;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.set-row {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr) auto;
+  gap: 4px 16px;
+  align-items: baseline;
+  padding: 10px 0;
+  border-top: 1px solid var(--line-faint);
+}
+
+.set-section__title + .set-row {
+  border-top: 0;
+}
+
+.set-row__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.set-row__value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.set-row__value--warn {
+  color: var(--warn-text);
+  font-weight: 600;
+}
+
+.set-row__value--off {
+  color: var(--text-2);
+}
+
+.set-row__problem,
+.set-row__details {
+  grid-column: 2 / -1;
+}
+
+.set-row__problem {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--danger);
+}
+
+.set-vars {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 2px 8px;
+}
+
+.set-var {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.set-fixed {
+  justify-self: end;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.set-approvers {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px 24px;
+  padding-bottom: 6px;
+}
+
+.set-approvers__table {
+  flex: 0 1 360px;
+  min-width: 0;
+}
+
+.set-note {
+  padding-bottom: 6px;
+  font-size: 13px;
+}
+
+.set-floors {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+
+.set-unset {
+  color: var(--warn-text);
+  font-weight: 600;
+}
+
+.set-subtitle {
+  margin: 14px 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.set-lead {
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+
+.set-section > p + p {
+  margin-top: 6px;
+}
+
+@media (max-width: 899px) {
+  .set-layout {
+    gap: 12px;
+  }
+
+  .set-nav {
+    position: static;
+    flex: 1 1 100%;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .set-nav__link {
+    min-height: 36px;
+    padding: 0 12px;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-pill);
+    background: var(--surface);
+    font-size: 13px;
+  }
+
+  .set-sections {
+    flex-basis: 100%;
+  }
+
+  .set-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .set-row__label {
+    grid-column: 1 / -1;
+  }
+
+  .set-row__problem,
+  .set-row__details {
+    grid-column: 1 / -1;
+  }
+
+  .set-approvers__table {
+    flex-basis: 100%;
+  }
+}
