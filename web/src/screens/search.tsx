@@ -226,9 +226,7 @@ export function SearchResults(props: ScreenProps): JSX.Element {
           <LoadError what="the search results" error={found.error} />
           {found.data === null ? (
             found.error === null ? (
-              <div class="card card--flush">
-                <Loading rows={3} label="Searching" />
-              </div>
+              <Loading rows={3} label="Searching" />
             ) : null
           ) : (
             <Results view={found.data} />

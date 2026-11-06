@@ -328,9 +328,7 @@ export function Incidents(props: ScreenProps): JSX.Element {
       <LoadError what="Incidents" error={incidents.error} />
       {view === null ? (
         incidents.error === null ? (
-          <div class="card card--flush">
-            <Loading rows={5} label="Loading payments" />
-          </div>
+          <Loading rows={5} label="Loading payments" />
         ) : null
       ) : (
         <>
