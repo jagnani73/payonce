@@ -68,6 +68,7 @@ function optionOf(ledger: Ledger, record: BeneficiaryRecord & { id: string }, su
         : { label: [details?.bank_name, ending === null ? null : `account ending ${ending}`].filter((part: string | null | undefined): part is string => typeof part === "string").join(", "), ending },
     lastPaid: lastPaid === undefined ? null : { at: null, reference: lastPaid.reference, ending: null },
     cautions: (summaries.get(record.id)?.cautions ?? []).map((code: SupplierSummary["cautions"][number]): string => CAUTION_LABELS[code]),
+    onRecord: summaries.has(record.id),
   };
 }
 

@@ -724,6 +724,8 @@ export interface BeneficiaryOption {
   // From the ledger.
   lastPaid: { at: Iso | null; reference: Reference | null; ending: string | null } | null;
   cautions: string[];
+  // A supplier record exists for it, so #supplier/KEY opens one.
+  onRecord: boolean;
 }
 
 export interface BeneficiaryPickerView {
@@ -765,6 +767,11 @@ export interface PaymentCheckView {
   headroom: HeadroomLine | null;
   warnings: string[];
   sandbox: { bankOutcome: string; text: string } | null;
+  // The invoice number checked: the one given, or the one PayOnce made for an
+  // empty field, which the form can send to start the payment under it.
+  invoiceId: InvoiceId;
+  // The contact on file the payment would start with, once the record is read.
+  contact: { phoneEnding: string | null; emailDomain: Theirs | null } | null;
 }
 
 export interface PaymentCreated {
