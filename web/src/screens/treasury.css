@@ -1,0 +1,560 @@
+/* Treasury: cash, reconciliation and outages. Cards, tables, fields and chips
+   come from styles.css; these rules lay out what only Treasury has. Reports and
+   Settings use .form-row, .two-up, .facts and .figure from here too. */
+
+.tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.stack-tight {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.treasury__tabs.has-outage .tabs__tab[href$="/outages"] .tabs__count {
+  background: var(--urgent-fill);
+  color: var(--urgent-text);
+}
+
+/* ---------- the bar above a tab: when it was read, and its button ---------- */
+
+.cash-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+}
+
+.cash-bar__read {
+  color: var(--text-2);
+}
+
+.cash-bar__checks {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+/* ---------- figures in a wallet's own column ---------- */
+
+.figure {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.figure.is-negative {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.figure.is-empty {
+  color: var(--text-3);
+}
+
+/* ---------- the wallet table ---------- */
+
+.cash-table .table {
+  min-width: 860px;
+}
+
+.cash-table tbody th {
+  border-top: 1px solid var(--line-faint);
+  background: transparent;
+  padding: 0;
+}
+
+.cash-row {
+  cursor: pointer;
+}
+
+.cash-row:hover td,
+.cash-row:hover th {
+  background: var(--sunk);
+}
+
+.cash-row.is-open td,
+.cash-row.is-open th {
+  background: var(--accent-soft);
+}
+
+.cash-row td {
+  vertical-align: middle;
+}
+
+.cash-row__wallet {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: var(--target);
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cash-headroom {
+  font-weight: 700;
+}
+
+.cash-headroom.is-below .figure,
+.is-low .figure {
+  color: var(--danger);
+}
+
+.cash-floor--unset {
+  color: var(--warn-text);
+  font-weight: 600;
+}
+
+.cash-floor--unreadable {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.cash-idle td {
+  padding: 0;
+}
+
+.cash-idle__toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: var(--target);
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  text-align: left;
+  cursor: pointer;
+}
+
+.cash-idle__toggle:hover {
+  background: var(--sunk);
+}
+
+/* ---------- the worksheet ---------- */
+
+.worksheet {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.sheet-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sheet-group__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.sheet-group__title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.sheet-group__bucket {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.sheet-group__total {
+  margin-left: auto;
+  font-weight: 600;
+}
+
+.sheet-lines {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sheet-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  padding: 6px 0 6px 14px;
+  border-top: 1px solid var(--muted-fill);
+  font-size: 13px;
+}
+
+.sheet-line__what {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  min-width: 0;
+}
+
+.sheet-line__ref,
+.sheet-line__fee {
+  color: var(--text-3);
+}
+
+.sheet-line__ref {
+  font-weight: 400;
+}
+
+.sheet-line__amount {
+  margin-left: auto;
+}
+
+.sheet-group__more {
+  align-self: flex-start;
+  margin-left: 6px;
+}
+
+.sheet-note {
+  padding: 10px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: var(--sunk);
+  font-size: 13px;
+  color: var(--text-body);
+}
+
+/* ---------- forms in a card: fields side by side, the button at the end ---------- */
+
+.form-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 14px;
+}
+
+.form-row > .field {
+  flex: 0 1 220px;
+}
+
+.form-row > .form-row__wide {
+  flex: 1 1 300px;
+  max-width: none;
+}
+
+.form-row > .action {
+  align-self: flex-end;
+}
+
+.form-note {
+  font-size: 13px;
+}
+
+/* ---------- reconciliation ---------- */
+
+.breaks-card .card__head {
+  margin-bottom: 4px;
+}
+
+.break-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 12px;
+}
+
+.break-group + .break-group {
+  margin-top: 8px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.break-group__title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.break-group__action {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.breaks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.break {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+}
+
+.break__box {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.break__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.break__meta {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.two-up {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.fold__summary {
+  display: flex;
+  align-items: center;
+  min-height: var(--target);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.plain-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 6px;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+  color: var(--text-body);
+}
+
+.recon-wallets {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 12px;
+}
+
+.recon-wallet {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+
+.recon-wallet__title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.recon-wallet__status {
+  color: var(--text-2);
+}
+
+.recon-wallet__status--check {
+  color: var(--warn-text);
+  font-weight: 600;
+}
+
+.recon-wallet__toggle {
+  align-self: flex-start;
+}
+
+.recon-idle {
+  margin-top: 12px;
+  font-size: 13px;
+}
+
+.moves {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.move {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  padding: 6px 0;
+  border-top: 1px solid var(--muted-fill);
+}
+
+.move__when {
+  flex: 0 0 96px;
+  color: var(--text-3);
+}
+
+.move__what {
+  display: flex;
+  flex: 1 1 160px;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.move__how {
+  color: var(--text-3);
+  overflow-wrap: anywhere;
+}
+
+.move__amount {
+  white-space: nowrap;
+}
+
+.explained {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+
+.explained__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.recon-audit {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 13px;
+}
+
+/* ---------- outages ---------- */
+
+.outage-rule {
+  max-width: 900px;
+  color: var(--text-2);
+}
+
+.outage {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px dashed var(--blocked-line);
+}
+
+.outage:focus {
+  outline: none;
+}
+
+.outage__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.outage__title {
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 6px 12px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.facts dt {
+  color: var(--text-3);
+}
+
+.facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.outage__sends {
+  font-weight: 600;
+}
+
+.outage__form {
+  padding-top: 12px;
+  border-top: 1px solid var(--blocked-fill);
+}
+
+.ended-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ended {
+  padding: 8px 0;
+  border-top: 1px solid var(--muted-fill);
+}
+
+.ended:first-child {
+  border-top: 0;
+}
+
+.ended:focus {
+  outline: none;
+  background: var(--accent-soft);
+}
+
+@media (max-width: 899px) {
+  .cash-bar__checks {
+    margin-left: 0;
+  }
+
+  .facts {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+
+  .facts dd {
+    margin-bottom: 6px;
+  }
+
+  .form-row > .field,
+  .form-row > .form-row__wide {
+    flex: 1 1 100%;
+    max-width: none;
+  }
+
+  .form-row > .action {
+    width: 100%;
+  }
+
+  .form-row > .action > .btn {
+    width: 100%;
+  }
+
+  .recon-wallets,
+  .two-up {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .move__when {
+    flex-basis: 100%;
+  }
+}
