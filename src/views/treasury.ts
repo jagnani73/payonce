@@ -35,7 +35,7 @@ import {
   type CurrencyCash,
   type InvoiceFloor,
 } from "../store/read/cash.js";
-import { capitalise } from "../text/printable.js";
+import { capitalise } from "../domain/sentences.js";
 import type { Settings } from "../settings.js";
 import { readingSoft, type Ledger, type OutageHoldKind } from "../store/ledger.js";
 import type {

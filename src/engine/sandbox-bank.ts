@@ -7,7 +7,7 @@ import type { AttemptKind } from "../store/ledger.js";
 import { LineError } from "../text/line-error.js";
 import { PAID_OUTCOME, SANDBOX_BANK_AFTER, STAYS_IN_FLIGHT } from "../text/words.js";
 import { FAILURE_CODE_PATTERN, REFERENCE_PATTERN } from "../domain/patterns.js";
-import { capitalise } from "../text/printable.js";
+import { capitalise } from "../domain/sentences.js";
 
 const SETTLED_STATUSES: ReadonlySet<string> = new Set<string>([
   "PAID",

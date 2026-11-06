@@ -4,7 +4,7 @@ import { readMinor } from "../domain/money.js";
 import { foundAfterClose, reasonFor } from "../domain/reasons.js";
 import type { Attempt, AttemptState, Ledger, Obligation, ObligationState } from "../store/ledger.js";
 import { anyLive, paidTwice } from "../store/read/facts.js";
-import { capitalise } from "../text/printable.js";
+import { capitalise } from "../domain/sentences.js";
 import type { Engine, NextLook } from "./engine.js";
 import { describe, note } from "./lines.js";
 import { syncTransfer } from "./payments.js";

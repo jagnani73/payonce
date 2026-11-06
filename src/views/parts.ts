@@ -18,7 +18,7 @@ import {
   type RunLedgerReport,
 } from "../store/audit-trail.js";
 import type { EventKind, Ledger, LedgerEvent } from "../store/ledger.js";
-import { capitalise } from "../text/printable.js";
+import { capitalise } from "../domain/sentences.js";
 import type {
   AccountView,
   Activity,

@@ -22,7 +22,7 @@ import {
   type RunLedgerReport,
 } from "../store/audit-trail.js";
 import type { Ledger, Obligation, Run } from "../store/ledger.js";
-import { capitalise } from "../text/printable.js";
+import { capitalise } from "../domain/sentences.js";
 import type { AuditCheckView } from "./contract.js";
 
 // The audit trail of the whole ledger: every invoice's and pay run's timeline,

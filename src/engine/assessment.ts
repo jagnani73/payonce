@@ -15,7 +15,7 @@ import { crossCurrency, type Attempt, type BankChange, type Obligation } from ".
 import { committedMinor } from "../store/read/cash.js";
 import { anyLive, paidDuplicate } from "../store/read/facts.js";
 import { storedFindings, type StoredFindings } from "../store/stored.js";
-import { capitalise } from "../text/printable.js";
+import { capitalise } from "../domain/sentences.js";
 import { emailsNotRead, sendersNotOnFile } from "./emails.js";
 import type { Assessment, Decided, Engine, Rate } from "./engine.js";
 import { note } from "./lines.js";

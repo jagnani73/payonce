@@ -87,12 +87,6 @@ export function storable(text: string): string {
   return text.replace(LONE_SURROGATE, "�");
 }
 
-// The text with its first character in capitals, such as a clause that starts a
-// sentence.
-export function capitalise(text: string): string {
-  return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
 // Invoice numbers as a timeline names them: "A", "A and B", "A, B and C".
 export function listOf(invoiceIds: string[]): string {
   return invoiceIds.length <= 1

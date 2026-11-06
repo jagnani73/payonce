@@ -3,7 +3,7 @@ import { deadlineMinutes, type BankDeadlineMinutes } from "../domain/deadlines.j
 import { INVOICE_ID_PATTERN } from "../store/ledger.js";
 import { formatMoney } from "../domain/money.js";
 import { CURRENCY_PATTERN, REFERENCE_PATTERN, STATUS_PATTERN } from "../domain/patterns.js";
-import { capitalise } from "../text/printable.js";
+import { capitalise } from "../domain/sentences.js";
 
 // Reconciliation's matcher: Airwallex's wallet movements and transfers against
 // each other and against PayOnce's ledger. It is pure. It reads nothing and

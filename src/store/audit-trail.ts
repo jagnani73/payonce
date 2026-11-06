@@ -1,4 +1,4 @@
-import { capitalise } from "../text/printable.js";
+import { capitalise } from "../domain/sentences.js";
 import { GENESIS, INVOICE_CHAIN, RECON_CHAIN, RUN_CHAIN, type HashedLine } from "./chain.js";
 
 export const HASH_METHOD: string =

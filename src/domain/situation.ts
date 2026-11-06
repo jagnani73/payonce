@@ -39,7 +39,7 @@ import {
   type StoredReason,
 } from "./reasons.js";
 import { timeAt, timed, type Timed, type TimePart } from "./timed.js";
-import { capitalise } from "../text/printable.js";
+import { capitalise } from "./sentences.js";
 import type {
   Approval,
   Attempt,

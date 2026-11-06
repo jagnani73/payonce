@@ -15,7 +15,7 @@ import {
 } from "../store/ledger.js";
 import { anyLive, paidTwice } from "../store/read/facts.js";
 import { requestTerms } from "../store/stored.js";
-import { capitalise } from "../text/printable.js";
+import { capitalise } from "../domain/sentences.js";
 import { withCurrencyLock } from "./currency-lock.js";
 import { CONTINUE, nextLookAt, type Engine, type NextLook, type StepResult } from "./engine.js";
 import { holdMismatched, holdPaidTwice } from "./late-mismatched.js";

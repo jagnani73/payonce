@@ -3,7 +3,7 @@ import { MAX_EMAIL_BYTES, noteTexts } from "../intake/eml.js";
 import { candidatesFor, invoiceIndex, type Candidate, type InvoiceIndex, type Match } from "../intake/intake.js";
 import type { Settings } from "../settings.js";
 import { readingSoft, storedObject, type Ledger, type Upload, type UploadState } from "../store/ledger.js";
-import { capitalise } from "../text/printable.js";
+import { capitalise } from "../domain/sentences.js";
 import type { CandidateView, Can, InboxItemView, InboxListView, UploadRow } from "./contract.js";
 import { readerLabel, readerOf, snapshotOptions } from "./context.js";
 import { allowed, money, refused } from "./parts.js";

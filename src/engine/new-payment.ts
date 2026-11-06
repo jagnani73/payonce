@@ -14,7 +14,7 @@ import {
   type RunRow,
   type TransferMethod,
 } from "../store/ledger.js";
-import { capitalise } from "../text/printable.js";
+import { capitalise } from "../domain/sentences.js";
 import { UNNAMED_PAYEE } from "../text/words.js";
 import type { Engine } from "./engine.js";
 

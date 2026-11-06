@@ -16,7 +16,8 @@ import {
   type OutsidePayout,
 } from "../store/ledger.js";
 import { heldBeforePaying, paidTwice } from "../store/read/facts.js";
-import { capitalise, say } from "../text/printable.js";
+import { capitalise } from "../domain/sentences.js";
+import { say } from "../text/printable.js";
 import { assess } from "./assessment.js";
 import { close, closeRefused } from "./close.js";
 import { withCurrencyLock } from "./currency-lock.js";

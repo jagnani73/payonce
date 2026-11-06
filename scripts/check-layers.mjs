@@ -53,11 +53,6 @@ const ALLOWED = [
     to: "engine/new-payment.ts",
     why: "The preview checks the payee and builds the invoice with the start's own code, for the same reason",
   },
-  {
-    from: ["domain/situation.ts"],
-    to: "text/printable.ts",
-    why: "capitalise. situation.ts belongs to the views work, and capitalise moves into domain/ with that work",
-  },
 ];
 
 const PARSER = new Set(["intake/eml.ts", "intake/html-text.ts", "intake/css-text.ts", "intake/parse-worker.ts"]);
