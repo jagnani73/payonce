@@ -1,18 +1,23 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, type Dirent } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { extname } from "node:path";
+import { extname, join, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { sayError } from "../../text/printable.js";
 import { HttpError, sendJson } from "./http.js";
 
 // Local demo server. It binds to loopback only and has no authentication.
 export const HOST: string = "127.0.0.1";
-const WEB_DIR: URL = new URL("../../../web/", import.meta.url);
+// The built page: pnpm build:web writes it, and pnpm ui runs that first.
+const PAGE_DIR: string = fileURLToPath(new URL("../../../web/dist/", import.meta.url));
+const NOT_BUILT_TEXT: string =
+  "The page is not built. Run pnpm build:web, or start PayOnce with pnpm ui, which builds it first";
 
 const CONTENT_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".svg": "image/svg+xml",
+  ".map": "application/json; charset=utf-8",
 };
 
 export interface RouteCall {
@@ -89,15 +94,37 @@ function guard(request: IncomingMessage, method: string, pathname: string, allow
   }
 }
 
-// Only files that exist directly in web/ are served, so a path cannot leave it.
-function serveStatic(response: ServerResponse, pathname: string): void {
+// Every file under web/dist/, by its path from there with forward slashes, found
+// once when the server starts. None when the page is not built.
+function pageFiles(): ReadonlySet<string> {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(PAGE_DIR, { recursive: true, withFileTypes: true });
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return new Set<string>();
+    }
+    throw error;
+  }
+  return new Set<string>(
+    entries
+      .filter((entry: Dirent): boolean => entry.isFile())
+      .map((entry: Dirent): string => relative(PAGE_DIR, join(entry.parentPath, entry.name)).split(sep).join("/")),
+  );
+}
+
+// Only the files pageFiles found are served, so a path cannot leave web/dist/.
+function serveStatic(response: ServerResponse, pathname: string, files: ReadonlySet<string>): void {
+  if (files.size === 0) {
+    throw new HttpError(503, NOT_BUILT_TEXT);
+  }
   const name: string = pathname === "/" ? "index.html" : pathname.slice(1);
-  if (!readdirSync(WEB_DIR).includes(name)) {
+  if (!files.has(name)) {
     throw new HttpError(404, "Not found");
   }
   // Read before any header goes out, so a failed read can still become an error
-  // response.
-  const content: Buffer = readFileSync(new URL(name, WEB_DIR));
+  // response. A file pnpm build:web --watch writes again is served as it is now.
+  const content: Buffer = readFileSync(join(PAGE_DIR, ...name.split("/")));
   // The page has no inline script or style and makes no outside request, so
   // even text that slipped into markup could not run or load anything.
   response.writeHead(200, {
@@ -114,6 +141,7 @@ function serveStatic(response: ServerResponse, pathname: string): void {
 async function route(
   routes: readonly Route[],
   allowedHosts: ReadonlySet<string>,
+  files: ReadonlySet<string>,
   request: IncomingMessage,
   response: ServerResponse,
 ): Promise<void> {
@@ -127,7 +155,7 @@ async function route(
     if (method !== "GET") {
       throw new HttpError(405, "Method not allowed");
     }
-    serveStatic(response, pathname);
+    serveStatic(response, pathname, files);
     return;
   }
 
@@ -151,10 +179,11 @@ export function requestListener(
     `${HOST}:${port}`,
     `localhost:${port}`,
   ]);
+  const files: ReadonlySet<string> = pageFiles();
   return (request: IncomingMessage, response: ServerResponse): void => {
     // Every answer, a CSV download or an error included, says not to guess its type.
     response.setHeader("X-Content-Type-Options", "nosniff");
-    route(routes, allowedHosts, request, response).catch((error: unknown): void => {
+    route(routes, allowedHosts, files, request, response).catch((error: unknown): void => {
       const status: number = error instanceof HttpError ? error.status : 500;
       const message: string = error instanceof Error ? error.message : String(error);
       if (status === 500) {
