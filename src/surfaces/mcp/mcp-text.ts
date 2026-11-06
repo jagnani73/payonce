@@ -14,15 +14,15 @@ export const NOTICE: string =
 // the model settings this process never loads.
 const DROPPED: ReadonlySet<string> = new Set<string>(["activity", "askWhy"]);
 
-// Strings that carry no words: times, days, hashes, ids, codes, enum values,
-// amounts as formatMoney writes them, and the page's own links.
+// Strings that carry no words: times, days, hashes, ids, codes, enum values and
+// amounts as formatMoney writes them. A link is not one: it passes only in a
+// field outside-fields.ts lists with the form of the link PayOnce builds there.
 const TOKENS: RegExp[] = [
   /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:?\d{2})?)?$/,
   /^[0-9a-f]{64}$/,
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
   /^[A-Za-z0-9_:-]{1,40}$/,
   /^[-−]?\d{1,3}(,\d{3})*\.\d{2} [A-Z]{3}$/,
-  /^[#/][A-Za-z0-9/_.?=&%:-]{0,200}$/,
 ];
 
 // A run of digits that can be a phone number: an optional + and digit groups
@@ -126,7 +126,10 @@ function markString(
   if (typeof field === "string") {
     return outside(text, field, path, known);
   }
-  return field.plainWhen(text, parent) ? plain(text, known) : outside(text, field.from, path, known);
+  if (!field.plainWhen(text, parent)) {
+    return outside(text, field.from, path, known);
+  }
+  return field.closed === true ? maskKnown(text, known) : plain(text, known);
 }
 
 function walk(

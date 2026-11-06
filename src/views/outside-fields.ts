@@ -46,7 +46,8 @@ import type {
 // field that holds PayOnce's words only in some forms is wrapped unless its
 // check vouches for it. Every other string is wrapped as "unknown" unless it is
 // a token (a time, an id, a code, an amount), so a field added to a view later
-// is wrapped until it is listed here.
+// is wrapped until it is listed here. A link is not a token: it passes only in
+// the fields below that hold one, in the form PayOnce builds there.
 
 // Where text PayOnce did not write came from. quoted is PayOnce's own wording
 // that can carry such text, such as a timeline line or a sentence that names a
@@ -57,6 +58,8 @@ export interface Checked {
   from: OutsideSource;
   // True when the text is in a form PayOnce vouches for, given the object that holds it.
   plainWhen: (text: string, parent: Readonly<Record<string, unknown>>) => boolean;
+  // The form holds no words, such as a link: only a phone number on file is cut from it.
+  closed?: true;
 }
 
 export type Field = OutsideSource | "plain" | Checked;
@@ -157,6 +160,22 @@ const WHY_TEXT: Checked = quotedUnless(codeIn(FIXED_WHY));
 const RAIL: Checked = { from: "unknown", plainWhen: fits(RAIL_PATTERN) };
 const REFERENCE: Checked = { from: "airwallex", plainWhen: fits(REFERENCE_PATTERN) };
 
+// The page's links, each in the one form PayOnce builds it from an invoice number
+// (INVOICE_ID_PATTERN) or a run's number. Any other text in these fields is wrapped.
+const INVOICE: string = "[A-Za-z0-9-]{1,40}";
+const RUN: string = "[0-9]{1,10}";
+
+function link(source: string): Checked {
+  return { from: "unknown", plainWhen: fits(new RegExp(`^${source}$`)), closed: true };
+}
+
+const ROW_LINK: Checked = link(
+  `(#incident/${INVOICE}(\\?do=(approve|callback|close-paid|close-unpaid|end-outage|trace))?|#run/${RUN}(\\?do=(approve|recheck))?)`,
+);
+const AUDIT_EXPORT_LINK: Checked = link(`/api/(incidents/${INVOICE}|runs/${RUN})/audit\\?format=(json|csv)`);
+const BANK_DETAILS_LINK: Checked = link(`/api/incidents/${INVOICE}/bank-details`);
+const LEDGER_EXPORT_LINK: Checked = link("/api/audit/export");
+
 // ---------- shared pieces ----------
 
 const WHY = { text: WHY_TEXT } as const satisfies Fields<Why>;
@@ -176,7 +195,7 @@ const REASON = {
   "clauses[].label": "plain",
 } as const satisfies Fields<ReasonView>;
 const TIMELINE = { "lines[].kindLabel": "plain", "lines[].lead": "plain", "lines[].text": "quoted" } as const satisfies Fields<TimelineView>;
-const AUDIT_LINE = { problem: "plain" } as const satisfies Fields<AuditLineView>;
+const AUDIT_LINE = { problem: "plain", "exports.json": AUDIT_EXPORT_LINK, "exports.csv": AUDIT_EXPORT_LINK } as const satisfies Fields<AuditLineView>;
 const APPROVER = { name: "person", ...under("why", WHY) } as const satisfies Fields<ApproverChoice>;
 // The engine's and runs.ts's fixed words for why someone may not approve.
 const BARRED = {
@@ -215,9 +234,16 @@ const INCIDENT_ROW = {
   "incident.cause": "quoted",
   "tags[].text": "plain",
   "primary.label": "plain",
+  "primary.href": ROW_LINK,
 } as const satisfies Fields<IncidentRow>;
 
-const RUN_ROW_ITEM = { fileName: "person", label: "plain", next: "quoted", "primary.label": "plain" } as const satisfies Fields<RunRowItem>;
+const RUN_ROW_ITEM = {
+  fileName: "person",
+  label: "plain",
+  next: "quoted",
+  "primary.label": "plain",
+  "primary.href": ROW_LINK,
+} as const satisfies Fields<RunRowItem>;
 
 export const QUEUE_ITEM = { ...under("row", { ...INCIDENT_ROW, ...RUN_ROW_ITEM }) } as const satisfies Fields<QueueItem>;
 
@@ -254,6 +280,7 @@ const OPTION = {
   "consequence[]": "quoted",
   ...under("can", CAN),
   ...under("approvers[]", APPROVER),
+  formPath: BANK_DETAILS_LINK,
   "covers[].text": "plain",
   "namesOnly[].text": "quoted",
   "withdraws.approvedBy[]": "person",
@@ -462,7 +489,11 @@ export const REPORTS_FIELDS = {
   "metrics.recon.rows[].label": "plain",
 } as const satisfies Fields<ReportsView>;
 
-export const AUDIT_FIELDS = { "problems[]": "plain", "recon.problem": "plain" } as const satisfies Fields<AuditCheckView>;
+export const AUDIT_FIELDS = {
+  "problems[]": "plain",
+  "recon.problem": "plain",
+  exportPath: LEDGER_EXPORT_LINK,
+} as const satisfies Fields<AuditCheckView>;
 
 const CHAIN_EXPORT = {
   "method.hash": "plain",
