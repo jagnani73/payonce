@@ -2625,7 +2625,7 @@ function buildWhy(invoiceId, explainer, entry, limited, stale) {
         `Written by ${whyText(answer.model)}${when} from PayOnce's records for this invoice${answer.cut ? ", and shortened to fit" : ""}. A model can be wrong. The timeline and the cards are the record.`,
       ),
     ],
-    entry.error !== null && h("p", { class: "form-error", role: "alert" }, entry.error),
+    entry.error !== null && h("p", { class: "form-error", role: "alert" }, withPeriod(entry.error)),
   ];
   els.why.replaceChildren(...children.flat(Infinity).filter((child) => child instanceof Node));
 }
