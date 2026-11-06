@@ -59,7 +59,7 @@ function Group(props: { title: string; found: number; limit: number; children: C
       sub={
         <>
           <span class="count-pill">{props.found}</span>
-          {props.found < props.limit ? null : <span>{`Showing the newest ${props.limit}. Type more to narrow it.`}</span>}
+          {props.found < props.limit ? null : <span>{`Showing the first ${props.limit}. Type more to narrow it.`}</span>}
         </>
       }
       flush

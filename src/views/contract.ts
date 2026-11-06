@@ -707,7 +707,7 @@ export interface SearchView {
   runs: { id: RunId; fileName: Theirs; label: string }[];
   emails: { id: UploadId; subject: Theirs; from: Theirs; label: string }[];
   transfers: { reference: Reference; invoiceId: InvoiceId; kind: string }[];
-  // At most this many of each kind, newest first.
+  // At most this many of each kind.
   limit: number;
 }
 
