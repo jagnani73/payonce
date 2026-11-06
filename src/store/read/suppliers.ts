@@ -174,6 +174,7 @@ interface SupplierCallbackRow {
   applied_key: string | null;
   old_details: string;
   recorded_at: string;
+  contact_id: number | null;
 }
 
 type SupplierDraftRow = Omit<DraftRow, "facts" | "subject" | "body" | "text_hash" | "dismiss_note">;
@@ -307,6 +308,9 @@ export interface SupplierCallback {
   appliedKey: string | null;
   oldDetails: string;
   recordedAt: string;
+  // Made on the phone number on file now, as verifiedBankChange asks before a
+  // callback verifies an account. True on a file that keeps no numbers apart.
+  onFilePhone: boolean;
 }
 
 // An email's addresses and whether it was read in full, for the sender check.
@@ -580,9 +584,10 @@ export class SupplierReads {
         accountKey: typeof row.account_key === "string" ? row.account_key : null,
       }),
     );
+    const kept: boolean = this.contacts.kept();
     const callbacks: SupplierCallback[] = all<SupplierCallbackRow>(
       `SELECT id, invoice_id, beneficiary_id, called_by, number_called, called_at, state,
-              applied_key, old_details, recorded_at
+              applied_key, old_details, recorded_at, contact_id
          FROM bank_changes ${where("beneficiary_id")} ORDER BY id`,
     ).map(
       (row: SupplierCallbackRow): SupplierCallback => ({
@@ -596,6 +601,8 @@ export class SupplierReads {
         appliedKey: row.applied_key,
         oldDetails: row.old_details,
         recordedAt: row.recorded_at,
+        onFilePhone:
+          !kept || (row.contact_id !== null && row.contact_id === (this.contacts.onFile(row.beneficiary_id, "phone")?.id ?? null)),
       }),
     );
     const emails: SupplierEmailFacts[] = all<{ invoice_id: string; sender: string; reply_to: string; partial: number }>(

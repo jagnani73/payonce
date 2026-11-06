@@ -1093,10 +1093,12 @@ function accountsOf(ledger: Ledger, facts: RecordFacts, owners: Owners): Account
           runId: storedSighting.runId,
           runLine: storedSighting.runLine,
         };
-  // verifiedBankChange reads the latest applied callback, whatever it kept.
-  const latestApplied: SupplierCallback | undefined = facts.callbacks
+  // verifiedBankChange reads the latest applied callback, whatever it kept, and
+  // only while it was made on the phone number on file now.
+  const latest: SupplierCallback | undefined = facts.callbacks
     .filter((callback: SupplierCallback): boolean => callback.state === "applied")
     .at(-1);
+  const latestApplied: SupplierCallback | undefined = latest?.onFilePhone === true ? latest : undefined;
   const appliedKey: string | null =
     latestApplied === undefined || latestApplied.appliedKey === null ? null : appliedAccount(latestApplied.appliedKey).key;
   // Each payment, payout, callback and failure under the account it went to, so
