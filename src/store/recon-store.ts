@@ -1,4 +1,4 @@
-import type { DatabaseSync, StatementSync } from "node:sqlite";
+import type { StatementSync } from "node:sqlite";
 import {
   GENESIS,
   nextLedgerHead,
@@ -11,6 +11,7 @@ import {
   type ReconEventFields,
 } from "./audit-trail.js";
 import { oneLine } from "../text/printable.js";
+import type { Db } from "./db.js";
 import type {
   BreakKind,
   ClearReason,
@@ -463,9 +464,9 @@ function toBreak(row: BreakRow): ReconBreak {
 }
 
 export class ReconStore {
-  private readonly db: DatabaseSync;
+  private readonly db: Db;
 
-  constructor(db: DatabaseSync) {
+  constructor(db: Db) {
     this.db = db;
   }
 
