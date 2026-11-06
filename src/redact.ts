@@ -74,3 +74,9 @@ export function redactKey(text: string, key: string, label: string = "[key]"): s
   }
   return result;
 }
+
+// Text with each of several keys cut out as redactKey cuts one, for the email
+// reader and Ask why, which hold a key for each model service they ask.
+export function redactKeys(text: string, keys: readonly string[], label: string = "[key]"): string {
+  return keys.reduce((done: string, key: string): string => redactKey(done, key, label), text);
+}

@@ -118,6 +118,7 @@ import {
 } from "./intake.js";
 import { KeywordReader } from "./keyword-reader.js";
 import { isPeriod, metricsReport, PERIOD_PROBLEM, type MetricsReport } from "./metrics.js";
+import { ModelReader } from "./model-reader.js";
 import {
   approvePayment,
   closeIncident,
@@ -330,8 +331,9 @@ const engine: Engine = {
   bank,
 };
 const agent: Dispatcher = new Dispatcher(engine);
-// Explains an incident on the reader's key and models. Null without
-// READER_API_KEY, and then the page's button says the model reader is off.
+// Explains an incident on the reader's keys and models. Null without
+// CLAUDE_API_KEY or READER_API_KEY, and then the page's button says the model
+// reader is off.
 const explainer: Explainer | null = explainerFromEnv();
 // The names "Ask why" passes on for whoever read an invoice's emails.
 const READER_NAMES: string[] = readerNamesFromEnv();
@@ -1313,7 +1315,10 @@ function resume(invoiceId: string): unknown {
 async function askWhy(request: IncomingMessage, invoiceId: string): Promise<ShownAnswer> {
   await readJson(request);
   if (explainer === null) {
-    throw new HttpError(503, "The model reader is off, so PayOnce cannot ask a model. Set READER_API_KEY in .env and restart");
+    throw new HttpError(
+      503,
+      "The model reader is off, so PayOnce cannot ask a model. Set CLAUDE_API_KEY or READER_API_KEY in .env and restart",
+    );
   }
   requireObligation(invoiceId);
   let build: WhyBuild | undefined;
@@ -1874,15 +1879,19 @@ async function route(
       maxRunRows: MAX_RUN_ROWS,
       maxRunFileChars: MAX_RUN_FILE_CHARS,
       maxEmailBytes: MAX_EMAIL_BYTES,
-      // The page warns that a model on Google's free tier reads uploads.
+      // The page names where a model reader sends uploads, and warns when a model
+      // on Google's free tier may read them.
       reader: engine.reader.name,
       readerIsModel: !(engine.reader instanceof KeywordReader),
-      // The "Ask why" card: off without READER_API_KEY, and the page's limits.
+      readerServices: engine.reader instanceof ModelReader ? engine.reader.views : [],
+      // The "Ask why" card: off without CLAUDE_API_KEY or READER_API_KEY, and the
+      // page's limits.
       explainer: {
         on: explainer !== null,
         models: explainer?.name ?? "",
-        host: explainer?.host ?? "",
+        services: explainer?.views ?? [],
         googleFreeTier: explainer?.googleFreeTier ?? false,
+        maxSeconds: explainer?.maxSeconds ?? 0,
         perMinute: ASKS_PER_MINUTE,
         perDay: ASKS_PER_DAY,
       },

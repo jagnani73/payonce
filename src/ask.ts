@@ -96,7 +96,7 @@ async function main(): Promise<void> {
   const explainer: Explainer | null = explainerFromEnv();
   if (explainer === null) {
     fail(
-      `The model reader is off, so PayOnce cannot ask a model. Set READER_API_KEY in .env, or run pnpm ask ${shownId} facts to see what would be sent`,
+      `The model reader is off, so PayOnce cannot ask a model. Set CLAUDE_API_KEY or READER_API_KEY in .env, or run pnpm ask ${shownId} facts to see what would be sent`,
     );
   }
   let answer: ModelAnswer;

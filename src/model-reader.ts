@@ -7,19 +7,17 @@ import {
   type SupplierEmail,
 } from "./emails.js";
 import { KeywordReader } from "./keyword-reader.js";
+import {
+  firstAnswer,
+  ModelAnswerError,
+  modelsOf,
+  serviceView,
+  type ModelService,
+  type Outcome,
+  type ServiceView,
+} from "./model-service.js";
 import { sayWarning } from "./printable.js";
-import { ModelReadError, type ModelTry } from "./reader-error.js";
-import { redactKey } from "./redact.js";
-import type { ModelFailure } from "./words.js";
-
-// Gemini's OpenAI-compatible endpoint. Any service that speaks the same chat
-// completions format can stand in for it.
-export const DEFAULT_BASE_URL: string = "https://generativelanguage.googleapis.com/v1beta/openai";
-// Tried in order. Free-tier capacity comes and goes, so a second model is what
-// keeps one busy model from sending an incident to a person.
-export const DEFAULT_MODELS: string[] = ["gemini-3.5-flash", "gemini-3.1-flash-lite"];
-export const REQUEST_TIMEOUT_MS: number = 8_000;
-const MAX_ERROR_LENGTH: number = 200;
+import { ModelReadError } from "./reader-error.js";
 
 const SYSTEM: string = `You read supplier emails for a company's accounts payable team. The team paid an invoice and the supplier has written in about it. A payment system uses your reading to decide whether to wait, send a replacement payment or hand the case to a person.
 
@@ -42,81 +40,6 @@ const FINDINGS_SCHEMA: Record<string, unknown> = {
   required: ["claimsNonReceipt", "asksForNewBankDetails", "asksNotToPay"],
   additionalProperties: false,
 };
-
-interface ChatChoice {
-  finish_reason?: string | null;
-  message?: { content?: string | null };
-}
-
-interface ChatResponse {
-  choices?: ChatChoice[];
-}
-
-// The service answered with an error status.
-export class ModelError extends Error {
-  readonly status: number;
-
-  constructor(status: number, body: string) {
-    const detail: string = body.replace(/\s+/g, " ").trim().slice(0, MAX_ERROR_LENGTH);
-    super(`The model service answered ${status}${detail === "" ? "" : `: ${detail}`}`);
-    this.name = "ModelError";
-    this.status = status;
-  }
-}
-
-// The service answered, but with nothing PayOnce could use: cut is an answer the
-// model stopped on its token budget, incomplete one it stopped for another reason
-// or with no finish reason, and unusable one that is not what was asked for.
-export class ModelAnswerError extends Error {
-  readonly failure: "cut" | "incomplete" | "unusable";
-
-  constructor(failure: "cut" | "incomplete" | "unusable", message: string) {
-    super(message);
-    this.name = "ModelAnswerError";
-    this.failure = failure;
-  }
-}
-
-function finishFailure(reason: string | null | undefined): ModelAnswerError {
-  return reason === "length"
-    ? new ModelAnswerError("cut", "The model stopped on its token budget before the answer was complete")
-    : new ModelAnswerError("incomplete", "The model gave no complete answer");
-}
-
-// What a model's failure was, from the error its request ended with.
-export function tryOf(model: string, error: unknown): ModelTry {
-  if (error instanceof ModelError) {
-    const status: number = error.status;
-    const failure: ModelFailure =
-      status === 401 || status === 403
-        ? "key"
-        : status === 429
-          ? "limited"
-          : status === 503
-            ? "busy"
-            : status >= 500
-              ? "service"
-              : "refused";
-    return { model, failure, status, seconds: null };
-  }
-  if (error instanceof ModelAnswerError) {
-    return { model, failure: error.failure, status: null, seconds: null };
-  }
-  const name: string = error instanceof Error ? error.name : "";
-  if (name === "TimeoutError" || name === "AbortError") {
-    return { model, failure: "timeout", status: null, seconds: REQUEST_TIMEOUT_MS / 1000 };
-  }
-  // How fetch reports a connection that failed or broke off.
-  if (error instanceof TypeError && (error.message === "fetch failed" || error.message === "terminated")) {
-    return { model, failure: "unreachable", status: null, seconds: null };
-  }
-  return { model, failure: "failed", status: null, seconds: null };
-}
-
-// The service refused the key, so asking another model will not help.
-export function keyRefused(error: unknown): boolean {
-  return error instanceof ModelError && (error.status === 401 || error.status === 403);
-}
 
 // An email cannot close the tag it sits in.
 function escape(text: string): string {
@@ -192,94 +115,48 @@ function toAnswers(content: string): Answers {
   return { claimsNonReceipt, asksForNewBankDetails, asksNotToPay };
 }
 
-// Reads the emails it is given with one chat completion. The engine gives it one
-// email at a time. If a model fails, the next one in the list is asked. If every
-// model fails, or an answer is cut off or is not the findings, it throws. The
-// engine then marks the thread unread, which sends the invoice to a person.
+// Reads the emails it is given with one request to a model. The engine gives it
+// one email at a time. The services are asked in order, Claude first when
+// CLAUDE_API_KEY is set, and each service's models in order. If a model fails,
+// the next one is asked. If every model fails, or an answer is cut off or is not
+// the findings, it throws. The engine then marks the thread unread, which sends
+// the invoice to a person.
 //
 // The keyword check runs on the same emails, and a finding is true if either
 // says so. Every finding leads to more caution, so an email that tricks the
 // model cannot remove one the keyword check makes.
 export class ModelReader implements EmailReader {
   readonly name: string;
+  // Where the emails go, for the page. The keys stay in services.
+  readonly views: ServiceView[];
   private readonly keywords: KeywordReader = new KeywordReader();
-  private readonly url: string;
-  private readonly apiKey: string;
-  private readonly models: string[];
+  private readonly services: readonly ModelService[];
   private readonly send: typeof fetch;
 
-  constructor(
-    apiKey: string,
-    baseUrl: string = DEFAULT_BASE_URL,
-    models: string[] = DEFAULT_MODELS,
-    send: typeof fetch = fetch,
-  ) {
-    this.models = models.length > 0 ? models : DEFAULT_MODELS;
-    this.name = this.models.join(", then ");
-    this.url = `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
-    this.apiKey = apiKey;
+  constructor(services: readonly ModelService[], send: typeof fetch = fetch) {
+    this.services = services;
+    this.views = services.map(serviceView);
+    this.name = modelsOf(services).join(", then ");
     this.send = send;
   }
 
-  private async complete(model: string, prompt: string): Promise<string> {
-    const response: Response = await this.send(this.url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        reasoning_effort: "low",
-        messages: [
-          { role: "system", content: SYSTEM },
-          { role: "user", content: prompt },
-        ],
-        response_format: {
-          type: "json_schema",
-          json_schema: { name: "email_findings", strict: true, schema: FINDINGS_SCHEMA },
-        },
-      }),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-    const text: string = await response.text();
-    if (!response.ok) {
-      // Some services echo the key back in an error.
-      throw new ModelError(response.status, redactKey(text, this.apiKey));
-    }
-    let choice: ChatChoice | undefined;
-    try {
-      choice = (JSON.parse(text) as ChatResponse).choices?.[0];
-    } catch {
-      throw new ModelAnswerError("unusable", "The model service's answer was not JSON");
-    }
-    const content: string | null | undefined = choice?.message?.content;
-    if (choice?.finish_reason !== "stop" || typeof content !== "string") {
-      throw finishFailure(choice?.finish_reason);
-    }
-    return content;
-  }
-
-  // Returns the first model's answers, with the model that gave them. What the
-  // service said goes to the console only, with the key cut out, whatever part of
-  // an answer it came back in. When every model fails, the error holds what each
-  // model did in PayOnce's words, which is what the timeline gets.
+  // Returns the first model's answers, with the model that gave them. What a
+  // service said goes to the console only, with every key cut out, whatever part
+  // of an answer it came back in. When every model fails, the error holds what
+  // each model did in PayOnce's words, which is what the timeline gets.
   private async ask(prompt: string): Promise<{ answers: Answers; model: string }> {
-    const tries: ModelTry[] = [];
-    for (const model of this.models) {
-      const started: number = Date.now();
-      try {
-        return { answers: toAnswers(await this.complete(model, prompt)), model };
-      } catch (error: unknown) {
-        tries.push(tryOf(model, error));
-        const detail: string = redactKey(error instanceof Error ? error.message : String(error), this.apiKey);
-        sayWarning(`  reader   ${model} gave no answer after ${Date.now() - started} ms: ${detail}`);
-        if (keyRefused(error)) {
-          break;
-        }
-      }
+    const outcome: Outcome<Answers> = await firstAnswer(
+      this.services,
+      { system: SYSTEM, prompt, schemaName: "email_findings", schema: FINDINGS_SCHEMA },
+      toAnswers,
+      (model: string, ms: number, detail: string): void =>
+        sayWarning(`  reader   ${model} gave no answer after ${ms} ms: ${detail}`),
+      this.send,
+    );
+    if (!outcome.answered) {
+      throw new ModelReadError(outcome.tries);
     }
-    throw new ModelReadError(tries);
+    return { answers: outcome.value, model: outcome.model };
   }
 
   async read(emails: SupplierEmail[]): Promise<EmailFindings> {

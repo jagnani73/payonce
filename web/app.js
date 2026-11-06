@@ -664,6 +664,33 @@ function incidentPath(invoiceId) {
 
 // ---------- loading and polling ----------
 
+// The model services the reader and Ask why ask, in order, as the server names
+// them: each one's models, the host they go to and whether it is Google's free tier.
+function serviceViews(list) {
+  return Array.isArray(list)
+    ? list
+        .filter((service) => typeof service?.models === "string" && service.models !== "")
+        .map((service) => ({
+          claude: service.claude === true,
+          models: service.models,
+          host: typeof service.host === "string" ? service.host : "",
+          googleFreeTier: service.googleFreeTier === true,
+        }))
+    : [];
+}
+
+// Where a list of services sends what it is given, such as "claude-haiku-5-5, then
+// claude-sonnet-5-5 at api.anthropic.com, then gemini-3.5-flash on Google's free tier".
+function servicesText(services) {
+  return services
+    .map((service) =>
+      service.googleFreeTier
+        ? `${service.models} on Google's free tier`
+        : `${service.models} at ${service.host || "the address in READER_BASE_URL"}`,
+    )
+    .join(", then ");
+}
+
 async function loadOptions() {
   if (state.options !== null) {
     return;
@@ -690,11 +717,16 @@ async function loadOptions() {
       maxEmailBytes: typeof options.maxEmailBytes === "number" ? options.maxEmailBytes : null,
       reader: typeof options.reader === "string" ? options.reader : "",
       readerIsModel: options.readerIsModel === true,
+      readerServices: serviceViews(options.readerServices),
       explainer: {
         on: options.explainer?.on === true,
         models: typeof options.explainer?.models === "string" ? options.explainer.models : "",
-        host: typeof options.explainer?.host === "string" ? options.explainer.host : "",
+        services: serviceViews(options.explainer?.services),
         googleFreeTier: options.explainer?.googleFreeTier === true,
+        maxSeconds:
+          typeof options.explainer?.maxSeconds === "number" && options.explainer.maxSeconds > 0
+            ? options.explainer.maxSeconds
+            : null,
       },
     };
     state.optionsError = null;
@@ -2546,15 +2578,13 @@ function buildWhy(invoiceId, explainer, entry, limited, stale) {
   const clock = at === null ? null : minuteText(at);
   const when = clock === null ? "" : ` at ${clock}`;
   // Google may use what its free tier is sent; any other service is named by host.
-  const sentTo =
-    explainer?.googleFreeTier === true
-      ? `${explainer.models} on Google's free tier`
-      : `${explainer?.models ?? "the model"} at ${explainer?.host || "the address in READER_BASE_URL"}`;
+  const services = explainer?.services ?? [];
+  const sentTo = services.length > 0 ? servicesText(services) : explainer?.models || "the model";
   const children = [
     h("div", { class: "approval__head" }, h("h2", { id: "why-title" }, "Why this happened"), button),
     state.options !== null &&
       !on &&
-      h("p", { class: "hint" }, "The model reader is off. Set READER_API_KEY to ask a model why."),
+      h("p", { class: "hint" }, "The model reader is off. Set CLAUDE_API_KEY or READER_API_KEY to ask a model why."),
     on &&
       answer === null &&
       !entry.asking &&
@@ -2568,7 +2598,7 @@ function buildWhy(invoiceId, explainer, entry, limited, stale) {
         "p",
         { class: "why__asking" },
         h("span", { class: "pulse", "aria-hidden": "true" }),
-        "Asking the model. This can take up to 17 seconds.",
+        `Asking the model. This can take up to ${explainer?.maxSeconds ?? 17} seconds.`,
       ),
     answer !== null && [
       h("p", { class: "why__text" }, whyText(answer.explanation)),
@@ -4735,6 +4765,27 @@ function toBase64(bytes) {
   return btoa(binary);
 }
 
+// The note under the reader's name. Google may use what its free tier is sent, so
+// the note warns when a Gemini model there may read uploads, and is hidden when
+// none can. index.html starts with the text for no model, until options load.
+function readerNote(services) {
+  if (services.length === 0) {
+    return {
+      text: "Set CLAUDE_API_KEY for Claude to read uploaded mail, or READER_API_KEY for a Gemini model on Google's free tier. Google may use free-tier content to improve its products.",
+      caution: false,
+    };
+  }
+  const google = services.findIndex((service) => service.googleFreeTier);
+  if (google === -1) {
+    return null;
+  }
+  const after = google === 0 ? "" : " only when Claude gives no answer";
+  return {
+    text: `A Gemini model on Google's free tier reads uploaded mail${after}, and Google may use free-tier content to improve its products. Keep confidential mail out, or unset READER_API_KEY.`,
+    caution: true,
+  };
+}
+
 function renderEmailForm() {
   const options = state.options;
   els.emailButton.disabled = state.adding || options === null;
@@ -4742,8 +4793,14 @@ function renderEmailForm() {
   els.emailPaste.readOnly = state.adding;
   els.emailUploadedBy.readOnly = state.adding;
   setText(els.emailButton, state.adding ? "Adding the email" : "Add email");
-  setText(els.emailReader, options === null || options.reader === "" ? "" : `Emails are read by: ${options.reader}.`);
-  setClass(els.emailFreeTier, options?.readerIsModel === true ? "hint is-caution" : "hint");
+  const readBy = options === null || options.readerServices.length === 0 ? options?.reader ?? "" : servicesText(options.readerServices);
+  setText(els.emailReader, readBy === "" ? "" : `Emails are read by: ${readBy}.`);
+  const note = options === null ? undefined : readerNote(options.readerServices);
+  if (note !== undefined) {
+    setText(els.emailFreeTier, note?.text ?? "");
+    els.emailFreeTier.hidden = note === null;
+  }
+  setClass(els.emailFreeTier, note?.caution === true ? "hint is-caution" : "hint");
   const error = state.addError;
   if (!changed("addError", error)) {
     return;

@@ -1,22 +1,24 @@
 import { createHash } from "node:crypto";
 import { cleanText } from "./eml.js";
 import {
-  DEFAULT_BASE_URL,
-  DEFAULT_MODELS,
-  keyRefused,
+  firstAnswer,
   ModelAnswerError,
-  ModelError,
+  modelsOf,
   REQUEST_TIMEOUT_MS,
-  tryOf,
-} from "./model-reader.js";
+  serviceView,
+  type ModelService,
+  type Outcome,
+  type ServiceView,
+} from "./model-service.js";
 import { triesText, type ModelTry } from "./reader-error.js";
-import { redactKey } from "./redact.js";
+import { redactKeys } from "./redact.js";
 import { printable, sayWarning } from "./printable.js";
-import { readerSettingsFromEnv, type ReaderSettings } from "./reader.js";
+import { modelServicesFromEnv } from "./reader.js";
 import type { LegendEntry, WhyBuild, WhyFacts } from "./why-facts.js";
 
 // Asks the model reader's models why PayOnce did what it did on one invoice, from
-// the facts why-facts.ts builds. The answer is for a person to read and nothing
+// the facts why-facts.ts builds: Claude's first when CLAUDE_API_KEY is set, then
+// the ones READER_API_KEY is for. The answer is for a person to read and nothing
 // else: it is never stored in the ledger, the timeline, approval terms, alerts or
 // drafts, and nothing PayOnce decides reads it.
 
@@ -40,10 +42,11 @@ const ANSWER_SCHEMA: Record<string, unknown> = {
 export const MAX_EXPLANATION_CHARS: number = 1_000;
 export const MAX_NOT_IN_FACTS_CHARS: number = 300;
 // The answer's cap in tokens: the two caps above come to about 330 tokens of
-// JSON, and a model that counts its reasoning against the cap, as Gemini does,
-// needs room for that as well. Gemini's endpoint gives low effort a reasoning
-// budget of about 1,024 tokens, and at 1,000 in all gemini-3.1-flash-lite ran out
-// before it answered. Anything past the character caps is cut anyway.
+// JSON, and a model that counts its reasoning against the cap, as Gemini and
+// Claude do, needs room for that as well. Gemini's endpoint gives low effort a
+// reasoning budget of about 1,024 tokens, and at 1,000 in all
+// gemini-3.1-flash-lite ran out before it answered. Anything past the character
+// caps is cut anyway.
 export const MAX_TOKENS: number = 4_000;
 
 // The page's limits, per server process. The CLI has none.
@@ -51,19 +54,11 @@ export const ASKS_PER_MINUTE: number = 2;
 export const ASKS_PER_DAY: number = 30;
 const MINUTE_MS: number = 60_000;
 const DAY_MS: number = 24 * 60 * MINUTE_MS;
-// After every model answered 429, nothing is asked for this long.
+// After a 429 from every model whose service took the key, nothing is asked for
+// this long.
 const LIMITED_PAUSE_MS: number = MINUTE_MS;
 const CACHE_MS: number = 10 * MINUTE_MS;
 const CACHE_ENTRIES: number = 50;
-
-interface ChatChoice {
-  finish_reason?: string | null;
-  message?: { content?: string | null };
-}
-
-interface ChatResponse {
-  choices?: ChatChoice[];
-}
 
 // One model's answer, as it came back, before it is cleaned for display.
 export interface ModelAnswer {
@@ -74,7 +69,8 @@ export interface ModelAnswer {
 }
 
 // Every model failed. The message says what each one did, in PayOnce's words.
-// limited is true when each one answered 429.
+// limited is true when each one answered 429 or refused the key, and one or more
+// answered 429.
 export class ExplainError extends Error {
   readonly limited: boolean;
   readonly tries: ModelTry[];
@@ -122,126 +118,75 @@ function toAnswer(content: string): { explanation: string; notInFacts: string } 
   return { explanation, notInFacts };
 }
 
-function hostOf(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return "the address in READER_BASE_URL";
-  }
-}
-
 export class Explainer {
+  // Every model asked, in order.
   readonly models: string[];
-  // Shown on the page and the CLI, such as "gemini-3.5-flash, then gemini-3.1-flash-lite".
+  // Shown on the page and the CLI, such as "claude-haiku-5-5, then claude-sonnet-5-5".
   readonly name: string;
-  // The host the facts go to, and whether it is Google's endpoint, whose free
-  // tier Google may use to improve its products. The page's hint names one or the
-  // other.
-  readonly host: string;
+  // Where the facts go, service by service, for the page's hint. The keys stay in
+  // services.
+  readonly views: ServiceView[];
+  // Whether a service is Google's endpoint, whose free tier Google may use to
+  // improve its products.
   readonly googleFreeTier: boolean;
-  private readonly url: string;
-  private readonly apiKey: string;
+  // How long an ask can take when every model times out.
+  readonly maxSeconds: number;
+  private readonly services: readonly ModelService[];
+  private readonly keys: string[];
   private readonly send: typeof fetch;
 
-  constructor(
-    apiKey: string,
-    baseUrl: string = DEFAULT_BASE_URL,
-    models: string[] = DEFAULT_MODELS,
-    send: typeof fetch = fetch,
-  ) {
-    this.models = models.length > 0 ? models : DEFAULT_MODELS;
+  constructor(services: readonly ModelService[], send: typeof fetch = fetch) {
+    this.services = services;
+    this.models = modelsOf(services);
     this.name = this.models.join(", then ");
-    this.url = `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
-    this.host = hostOf(baseUrl);
-    this.googleFreeTier = this.host === hostOf(DEFAULT_BASE_URL);
-    this.apiKey = apiKey;
+    this.views = services.map(serviceView);
+    this.googleFreeTier = this.views.some((view: ServiceView): boolean => view.googleFreeTier);
+    this.maxSeconds = (this.models.length * REQUEST_TIMEOUT_MS) / 1000 + 1;
+    this.keys = services.map((service: ModelService): string => service.apiKey);
     this.send = send;
   }
 
-  // The key cut out of any text that could carry it, in any form it may take.
-  private redact(text: string): string {
-    return redactKey(text, this.apiKey);
-  }
-
-  private async complete(model: string, prompt: string): Promise<string> {
-    const response: Response = await this.send(this.url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        reasoning_effort: "low",
-        max_tokens: MAX_TOKENS,
-        messages: [
-          { role: "system", content: EXPLAIN_SYSTEM },
-          { role: "user", content: prompt },
-        ],
-        response_format: {
-          type: "json_schema",
-          json_schema: { name: "incident_explanation", strict: true, schema: ANSWER_SCHEMA },
-        },
-      }),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-    const text: string = await response.text();
-    if (!response.ok) {
-      // Some services echo the key back in an error.
-      throw new ModelError(response.status, this.redact(text));
-    }
-    let choice: ChatChoice | undefined;
-    try {
-      choice = (JSON.parse(text) as ChatResponse).choices?.[0];
-    } catch {
-      throw new ModelAnswerError("unusable", "The model service's answer was not JSON");
-    }
-    const content: string | null | undefined = choice?.message?.content;
-    if (choice?.finish_reason !== "stop" || typeof content !== "string") {
-      throw choice?.finish_reason === "length"
-        ? new ModelAnswerError("cut", "The model stopped on its token budget before the answer was complete")
-        : new ModelAnswerError("incomplete", "The model gave no complete answer");
-    }
-    return content;
-  }
-
-  // The first model's answer. Each model gets one request. A refused key stops at
-  // once, because another model will not take it either. What the service said
-  // goes to the console only, with the key cut out.
+  // The first model's answer. Each model gets one request. A refused key skips
+  // the rest of that service's models, because they will not take it either.
+  // What a service said goes to the console only, with every key cut out.
   async explain(facts: WhyFacts): Promise<ModelAnswer> {
-    const prompt: string = promptOf(facts);
-    const tries: ModelTry[] = [];
-    let limited: boolean = true;
-    for (const model of this.models) {
-      const started: number = Date.now();
-      try {
-        const answer: { explanation: string; notInFacts: string } = toAnswer(await this.complete(model, prompt));
-        // A service that echoes the key in an error can echo it in an answer too.
-        return {
-          explanation: this.redact(answer.explanation),
-          notInFacts: this.redact(answer.notInFacts),
-          model,
-          ms: Date.now() - started,
-        };
-      } catch (error: unknown) {
-        tries.push(tryOf(model, error));
-        const detail: string = this.redact(error instanceof Error ? error.message : String(error));
-        limited = limited && error instanceof ModelError && error.status === 429;
-        sayWarning(`  why      ${model} gave no answer after ${Date.now() - started} ms: ${printable(detail)}`);
-        if (keyRefused(error)) {
-          break;
-        }
-      }
+    const outcome: Outcome<{ explanation: string; notInFacts: string }> = await firstAnswer(
+      this.services,
+      {
+        system: EXPLAIN_SYSTEM,
+        prompt: promptOf(facts),
+        schemaName: "incident_explanation",
+        schema: ANSWER_SCHEMA,
+        maxTokens: MAX_TOKENS,
+      },
+      toAnswer,
+      (model: string, ms: number, detail: string): void =>
+        sayWarning(`  why      ${model} gave no answer after ${ms} ms: ${printable(detail)}`),
+      this.send,
+    );
+    if (!outcome.answered) {
+      // A refused key will be refused again, so a service that refused it does not
+      // stop the pause another service's 429 calls for.
+      const limited: boolean =
+        outcome.tries.some((attempt: ModelTry): boolean => attempt.failure === "limited") &&
+        outcome.tries.every((attempt: ModelTry): boolean => attempt.failure === "limited" || attempt.failure === "key");
+      throw new ExplainError(outcome.tries, limited);
     }
-    throw new ExplainError(tries, limited && tries.length > 0);
+    // A service that echoes the key in an error can echo it in an answer too.
+    return {
+      explanation: redactKeys(outcome.value.explanation, this.keys),
+      notInFacts: redactKeys(outcome.value.notInFacts, this.keys),
+      model: outcome.model,
+      ms: outcome.ms,
+    };
   }
 }
 
-// The explainer on the reader's key, base URL and model list, or null without
-// READER_API_KEY.
+// The explainer on the reader's services and model lists, or null without
+// CLAUDE_API_KEY or READER_API_KEY.
 export function explainerFromEnv(env: NodeJS.ProcessEnv = process.env): Explainer | null {
-  const settings: ReaderSettings | null = readerSettingsFromEnv(env);
-  return settings === null ? null : new Explainer(settings.apiKey, settings.baseUrl, settings.models);
+  const services: ModelService[] = modelServicesFromEnv(env);
+  return services.length === 0 ? null : new Explainer(services);
 }
 
 // ---------- what is shown ----------
@@ -332,12 +277,13 @@ interface Remembered {
   at: number;
 }
 
-// The explainer shares the reader's free-tier key, and a reader that fails sends
-// an incident to a person, so the page's asks leave the reader room. Everything
-// is in memory and gone on a restart. One ask runs at a time, the same facts get
-// the remembered answer for 10 minutes without a model call, and at most
-// ASKS_PER_MINUTE asks start in any minute and ASKS_PER_DAY on a UTC day. When
-// every model answered 429, nothing is asked for a minute.
+// The explainer shares the reader's keys, one of them maybe on Google's free
+// tier, and a reader that fails sends an incident to a person, so the page's asks
+// leave the reader room. Everything is in memory and gone on a restart. One ask
+// runs at a time, the same facts get the remembered answer for 10 minutes without
+// a model call, and at most ASKS_PER_MINUTE asks start in any minute and
+// ASKS_PER_DAY on a UTC day. After a 429 from every model whose service took the
+// key, nothing is asked for a minute.
 export class ExplainLimiter {
   private busy: boolean = false;
   private starts: number[] = [];
