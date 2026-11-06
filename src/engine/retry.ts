@@ -420,7 +420,12 @@ async function retry(
       if (decidedFor === undefined) {
         return { kind: "account-unknown" };
       }
-      await requireAccount(engine, obligation, decidedFor, "replacement was approved");
+      await requireAccount(
+        engine,
+        obligation,
+        decidedFor,
+        approved?.action === "replace" ? "replacement was approved" : "replacement was decided",
+      );
     } else if (approved?.action === "pay") {
       await requireAccount(engine, obligation, approved.accountKey, "payment was approved");
     } else if (row?.accountKey !== undefined && row.accountKey !== null) {
