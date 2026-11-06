@@ -971,7 +971,8 @@ export interface SuppliersView {
 // summary the record page and the payment page show, and the action slot.
 export interface SupplierContactView {
   phoneEnding: string | null;
-  emailDomains: { domain: Theirs; payments: number; newest: Iso | null }[];
+  // The payments that give each domain, and the first and newest of them.
+  emailDomains: { domain: Theirs; payments: number; first: InvoiceId; newest: InvoiceId }[];
   // Who last changed the contact on file, and when. Null until that design lands.
   changedBy: PersonName | null;
   changedAt: Iso | null;

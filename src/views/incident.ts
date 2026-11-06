@@ -91,7 +91,7 @@ function transferState(attempt: Attempt): TransferState {
   if (attempt.state === "failed" && !keptFailedLive(attempt)) {
     return "failed";
   }
-  return attempt.state === "in_flight" && attempt.bankStatus === null && attempt.foundLateAt !== null ? "unknown-status" : "with-bank";
+  return "with-bank";
 }
 
 function stateLabel(state: TransferState, attempt: { failureCode: string | null }, due: number | null): string {

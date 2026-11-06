@@ -172,7 +172,12 @@ export function supplierView(ledger: Ledger, settings: Settings, now: number, ke
       ),
       contact: {
         phoneEnding: detail.phoneLast4,
-        emailDomains: detail.domains.map((domain: SupplierDetail["domains"][number]) => ({ domain: domain.domain, payments: domain.invoices, newest: domain.newest })),
+        emailDomains: detail.domains.map((domain: SupplierDetail["domains"][number]) => ({
+          domain: domain.domain,
+          payments: domain.invoices,
+          first: domain.first,
+          newest: domain.newest,
+        })),
         changedBy: null,
         changedAt: null,
         pending: null,
