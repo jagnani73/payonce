@@ -3,7 +3,6 @@ import { ContactError } from "../../../domain/contacts.js";
 import { confirmContact, proposeContact, withdrawContact } from "../../../engine/contacts.js";
 import type { ContactChange } from "../../../store/ledger.js";
 import { contactDetailView } from "../../../views/contacts.js";
-import { liveFrom, type Live } from "../../../views/context.js";
 import type { Acted, Notice, SupplierContactDetail, SupplierView } from "../../../views/contract.js";
 import { supplierView } from "../../../views/supplier-pages.js";
 import { SUPPLIER_KEY_PATTERN } from "../../../views/suppliers.js";
@@ -19,8 +18,7 @@ const STATUS: Record<ContactError["why"], number> = { input: 400, refused: 403, 
 // due are then woken. A released pay run row that has not sent is left to the
 // watcher, which gives it the run's turn.
 export function contactRoutes(app: HttpApp): Route[] {
-  const { engine, agent, settings, isBusy } = app;
-  const live: Live = liveFrom(isBusy);
+  const { engine, agent, settings, live } = app;
 
   function recordKey(raw: string): string {
     if (!SUPPLIER_KEY_PATTERN.test(raw)) {
