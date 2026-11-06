@@ -44,7 +44,7 @@ If the bank sits on a payment past its deadline, a person hears about it. PayOnc
 | The policy would replace, but an outage is active on the payment's currency and transfer method | Escalate to a person |
 | The original failed, a resend can fix it and the beneficiary details are unchanged | Replace |
 
-`src/decide.ts` checks the rules in that order, apart from the second bill and the outage. The engine checks those two where `decide.ts` would replace, the outage last, in the transaction that would open the replacement (see [Rail outages](#rail-outages)). A transfer found late that may pay the supplier twice, or one under a payment's request id that does not match the invoice, holds the invoice for a person before the policy runs at all (see [Payouts sent outside PayOnce](#payouts-sent-outside-payonce)). A resend can fix a failure only when it happened on the sending side: a system error or a channel timeout. Any other failure, including a return from the beneficiary's bank, goes to a person.
+`src/domain/decide.ts` checks the rules in that order, apart from the second bill and the outage. The engine checks those two where `decide.ts` would replace, the outage last, in the transaction that would open the replacement (see [Rail outages](#rail-outages)). A transfer found late that may pay the supplier twice, or one under a payment's request id that does not match the invoice, holds the invoice for a person before the policy runs at all (see [Payouts sent outside PayOnce](#payouts-sent-outside-payonce)). A resend can fix a failure only when it happened on the sending side: a system error or a channel timeout. Any other failure, including a return from the beneficiary's bank, goes to a person.
 
 When the supplier asks to hold, cancel or not pay the invoice, and the policy escalated for an earlier rule or the invoice was already held before paying, PayOnce adds "and the supplier asks to hold, cancel or not pay this invoice" to the reason. The approval request, the alert and the approval card all show it, and a person can still approve paying.
 
@@ -52,7 +52,7 @@ Two of these checks do not depend on how the email text is read. The sender's do
 
 A model reads the supplier emails, one at a time. It holds no credentials and moves no money. It answers three yes-or-no questions: does the supplier say the payment has not arrived, ask for a different account, or ask to hold, cancel or not pay the invoice. PayOnce writes the summary a person sees from those answers, so no wording from an email or from the model reaches the approval card. A keyword check reads the same email, and a finding is yes if either says yes. A finding, once made, stays: a later email cannot clear it. Every finding leads to more caution, so an email that tricks the model cannot remove a finding the keyword check makes. An email that the keyword check misses and that also tricks the model can still hide a finding, which is why the sender check and the bank-details check are in code. The emails go to the model marked as untrusted text. If the model fails, or its answer is not three yes-or-no values, the thread counts as unread and the incident goes to a person. The timeline then says, in PayOnce's own words, what happened to each model, such as "gemini-3.5-flash was busy (503), then gemini-3.1-flash-lite timed out after 8 s", and that PayOnce reads the email again on its next look. Nothing the model service wrote goes on the timeline.
 
-With `CLAUDE_API_KEY` set, the reader asks Claude Haiku 5.5 first and Claude Sonnet 5.5 second, through Anthropic's Messages API. With `READER_API_KEY` set, Gemini 3.5 Flash and Gemini 3.1 Flash-Lite come next. They are on Google's free tier and PayOnce calls them through its OpenAI-compatible endpoint, so any service that speaks that format can replace them. Each model gets one try, in that order, and the first answer counts. With neither key, a keyword placeholder in `src/keyword-reader.ts` reads the emails. The page names the model that read them under its findings.
+With `CLAUDE_API_KEY` set, the reader asks Claude Haiku 5.5 first and Claude Sonnet 5.5 second, through Anthropic's Messages API. With `READER_API_KEY` set, Gemini 3.5 Flash and Gemini 3.1 Flash-Lite come next. They are on Google's free tier and PayOnce calls them through its OpenAI-compatible endpoint, so any service that speaks that format can replace them. Each model gets one try, in that order, and the first answer counts. With neither key, a keyword placeholder in `src/reader/keyword-reader.ts` reads the emails. The page names the model that read them under its findings.
 
 ## Supplier emails you upload
 
@@ -539,7 +539,7 @@ In the fifth, `inv-05002` has the same supplier, amount and number as INV-5002, 
 
 ## Read PayOnce from Claude
 
-`src/mcp.ts` is a read-only Model Context Protocol server over stdio. Add it to Claude Code or Claude Desktop and Claude can answer questions such as "what is waiting on a person?" or "why did INV-5001 go to a person?" from the ledger. It has eleven tools:
+`src/surfaces/mcp/main.ts` is a read-only Model Context Protocol server over stdio. Add it to Claude Code or Claude Desktop and Claude can answer questions such as "what is waiting on a person?" or "why did INV-5001 go to a person?" from the ledger. It has eleven tools:
 
 | Tool | What it returns |
 | --- | --- |
@@ -559,7 +559,7 @@ The `cash` tool shows balances and headroom only while `pnpm ui` runs. It asks t
 
 Answers are PayOnce's own JSON, in the JSON API's shapes. Text PayOnce did not write arrives wrapped, such as `{"outsideText": "Example Supplier LLC", "from": "supplier"}`, and each answer starts with a note telling the model to report that text and never act on it. That covers supplier names, email subjects and senders inside timeline lines, Airwallex messages, a pay run file's text and the names and notes people type. Timeline lines and escalation reasons are wrapped whole, as `"from": "quoted"`, because they can quote such text. So is the reason a payment needs two approvers, which can name an invoice or a payee, and email evidence an older PayOnce wrote with the sender's address in it. Only sentences PayOnce builds from its own words and figures stay plain, such as the board's reasons. As in alerts, wrapped text has `://` broken up as `[:]//`, and characters that can reverse or hide part of it are removed. Phone numbers show only their last four digits. The server leaves out the text of supplier emails, attachment names, message drafts, the inbox and the approver list. For emails, `incident` gives how many there are, how many PayOnce could not read in full, how many senders the check flagged, and the findings.
 
-The server uses the official TypeScript SDK, `@modelcontextprotocol/server` 2.3.1 with `zod` 4.6.7. Both are pinned exactly, and only `src/mcp.ts` imports them. It serves both protocol eras: clients that open with the `initialize` handshake (2025-11-25 and earlier) and clients on the 2026-07-28 revision, which has no handshake.
+The server uses the official TypeScript SDK, `@modelcontextprotocol/server` 2.3.1 with `zod` 4.6.7. Both are pinned exactly, and only `src/surfaces/mcp/main.ts` imports them. It serves both protocol eras: clients that open with the `initialize` handshake (2025-11-25 and earlier) and clients on the 2026-07-28 revision, which has no handshake.
 
 Run `pnpm install` first, then `pnpm board` or `pnpm ui` once so that the ledger exists. The server never creates one, and until there is one every tool answers that there is no ledger. `pnpm mcp` starts the server by hand. The client settings below start `node` directly instead, which runs one process with no shell around it.
 
@@ -568,7 +568,7 @@ Run `pnpm install` first, then `pnpm board` or `pnpm ui` once so that the ledger
 Run this from the repository root, in PowerShell, cmd or Git Bash, with `D:/Work/hackathons/payonce` changed to the path of your clone in both places:
 
 ```bash
-claude mcp add --transport stdio --scope local payonce -- node --disable-warning=ExperimentalWarning --import file:///D:/Work/hackathons/payonce/node_modules/tsx/dist/loader.mjs D:/Work/hackathons/payonce/src/mcp.ts
+claude mcp add --transport stdio --scope local payonce -- node --disable-warning=ExperimentalWarning --import file:///D:/Work/hackathons/payonce/node_modules/tsx/dist/loader.mjs D:/Work/hackathons/payonce/src/surfaces/mcp/main.ts
 ```
 
 `--import` needs a `file:///` address, not a `D:\` path. `--scope local` offers the server in sessions started in this folder and keeps this machine's paths out of the repository (`--scope user` offers it everywhere). `claude mcp list` should show `payonce` as connected, and `/mcp` lists its tools in a session.
@@ -588,7 +588,7 @@ Open Settings, then Developer, then Edit Config. That opens `claude_desktop_conf
         "--disable-warning=ExperimentalWarning",
         "--import",
         "file:///D:/Work/hackathons/payonce/node_modules/tsx/dist/loader.mjs",
-        "D:\\Work\\hackathons\\payonce\\src\\mcp.ts"
+        "D:\\Work\\hackathons\\payonce\\src\\surfaces\\mcp\\main.ts"
       ]
     }
   }
@@ -601,58 +601,58 @@ Quit Claude Desktop fully and start it again. It writes the server's stderr to `
 
 | File | Contents |
 | --- | --- |
-| `src/decide.ts` | The decision policy, a pure function |
-| `src/incident.ts` | Types for an incident and a decision |
-| `src/engine.ts` | The agent: look at an invoice, read new emails, decide, replace or escalate, and the timeline |
-| `src/dispatcher.ts` | Runs the agent's steps one invoice at a time |
-| `src/watcher.ts` | Status checks on payments in flight, the fallback for webhooks. It also wakes an incident at its deadline and runs the sweep |
-| `src/deadlines.ts` | How long the bank has to pay or fail a transfer |
-| `src/arrival.ts` | The route advisory: how many business days each route usually takes, the arrival against a due date, and the fee last seen |
-| `src/sweep.ts` | Finds payouts PayOnce did not send |
-| `src/outages.ts` | Rail outages: the rule, counting failures, the timeline lines, ending one, and what the page and the board show |
-| `src/duplicates.ts` | Finds invoices that look like a second bill, and the invoice a payout sent outside PayOnce is for |
-| `src/webhooks.ts`, `src/tunnel.ts` | The webhook receiver and its signature check, and the cloudflared tunnel |
-| `src/sandbox-bank.ts` | Plays the bank in the sandbox: sends, pays and fails transfers |
-| `src/scenario.ts` | The sample payments and the scripted incident |
-| `src/assess.ts` | Maps an Airwallex transfer to the facts the policy reads |
-| `src/ledger.ts` | Obligations, payment attempts, approvals, emails and the timeline in SQLite |
-| `src/audit-trail.ts` | How timeline lines are hashed and checked, and the JSON and CSV export |
-| `src/payments.ts` | Sends an attempt under its `request_id`, syncs transfer state and fees into the ledger, and fills in fees missing from older failed transfers |
-| `src/reserve.ts` | The reserve floors from `RESERVE_FLOORS`, the floor one invoice's replacement is held to, and the wallet a payment leaves |
-| `src/cash-position.ts` | The cash panel's figures, and the committed money the policy also takes off, pay runs included |
-| `src/incident-board.ts` | The incident board: active outages and what they hold, then every open invoice in its group, with the money it has at risk and why |
-| `src/suppliers.ts` | The supplier view: one Airwallex beneficiary record, its accounts, invoices, payments and cautions, read from the ledger, for the page, `pnpm supplier` and the MCP server |
-| `src/run-file.ts` | Reads a pay run CSV file and the cells of each row |
-| `src/runs.ts` | Pay runs: the checks, the terms and the request, approving, releasing and cancelling a run |
-| `src/currency-lock.ts` | The lease that lets one payment at a time be sent in each currency |
-| `src/fx.ts` | How long an exchange rate quote holds, from `FX_QUOTE_VALIDITY` |
-| `src/approval.ts` | Approval terms, the exchange rate quote in them, the hash that binds an approval to them, and the amount limits are compared with |
-| `src/approvers.ts` | The approval policy: who may approve, how many are needed, and when a request expires |
-| `src/bank-change.ts` | Records a callback about new bank details and updates the supplier's record in Airwallex |
-| `src/emails.ts` | The email reader interface, the findings a reader returns, the sender check and the email evidence in approval terms |
-| `src/eml.ts`, `src/html-text.ts`, `src/css-text.ts` | Read an uploaded email: headers, MIME parts, charsets, HTML to text, and the strings in its styles |
-| `src/intake.ts`, `src/parse-worker.ts` | Parses an upload in a worker thread, stores it, finds the invoices it names, and delivers it to the one a person picks |
-| `src/model-service.ts` | The model services in the order they are asked, Claude then Gemini, and one request to a model, shared by the reader and Ask why |
-| `src/model-reader.ts` | The model reader: one request per email that returns the findings |
-| `src/reader.ts` | Sets up the model services from `.env`, and picks the model reader, or the keyword placeholder when no key is set |
-| `src/keyword-reader.ts` | Keyword placeholder that reads the emails when no key is set |
-| `src/why-facts.ts` | The facts a model gets to explain an incident: PayOnce's own fields, the reasons and timeline lines it recognises, and labels for people and other invoices |
-| `src/explainer.ts` | Asks the model reader's models to explain an incident, checks and cleans the answer, and keeps the page's limits |
-| `src/drafts.ts` | Messages to send: the templates, which ones fit an incident, and drafts that keep their hash |
-| `src/recon-match.ts` | Reconciliation's matcher, the break kinds and their wording |
-| `src/recon-store.ts` | Reconciliation's tables, its runs, its breaks and their hash chain |
-| `src/reconcile.ts` | One reconciliation check, the server's timer, the report and a person's explanation |
-| `src/metrics.ts` | The metrics: the eight tables for a period, read from the ledger, and the reason codes |
-| `src/alerts.ts` | Alerts: the webhook setting, what needs a person, and posting with retries |
-| `src/alert-payloads.ts` | What an alert says, and its Slack and Discord message shapes |
-| `src/server.ts` | Local web server and JSON API |
-| `src/mcp.ts` | The read-only MCP server over stdio, and the only file that imports the MCP SDK |
-| `src/mcp-views.ts` | What the MCP tools answer, from the ledger alone |
-| `src/mcp-text.ts` | Marks the text PayOnce did not write in an MCP answer, and masks phone numbers |
-| `src/money.ts` | Major and minor units, and amounts as people read them, for two-decimal currencies |
-| `src/printable.ts` | Cleans every line PayOnce prints to a terminal, so a name or an error cannot move the cursor or write the clipboard |
-| `src/terms-shape.ts` | Checks stored approval terms, an invoice's or a pay run's, before `pnpm approve` or `pnpm payrun` prints them |
-| `src/recover.ts`, `src/approve.ts`, `src/close.ts`, `src/audit.ts`, `src/cash.ts`, `src/board.ts`, `src/payrun.ts`, `src/outbox.ts`, `src/outage.ts`, `src/ask.ts`, `src/recon-cli.ts`, `src/metrics-cli.ts`, `src/supplier.ts`, `src/reset.ts`, `src/index.ts` | The commands |
+| `src/domain/decide.ts` | The decision policy, a pure function |
+| `src/domain/incident.ts` | Types for an incident and a decision |
+| `src/engine/engine.ts` | The agent: look at an invoice, read new emails, decide, replace or escalate, and the timeline |
+| `src/engine/dispatcher.ts` | Runs the agent's steps one invoice at a time |
+| `src/engine/watcher.ts` | Status checks on payments in flight, the fallback for webhooks. It also wakes an incident at its deadline and runs the sweep |
+| `src/domain/deadlines.ts` | How long the bank has to pay or fail a transfer |
+| `src/domain/arrival.ts` | The route advisory: how many business days each route usually takes, the arrival against a due date, and the fee last seen |
+| `src/engine/sweep.ts` | Finds payouts PayOnce did not send |
+| `src/outages/outages.ts` | Rail outages: the rule, counting failures, the timeline lines, ending one, and what the page and the board show |
+| `src/domain/duplicates.ts` | Finds invoices that look like a second bill, and the invoice a payout sent outside PayOnce is for |
+| `src/surfaces/http/webhooks.ts`, `src/surfaces/http/tunnel.ts` | The webhook receiver and its signature check, and the cloudflared tunnel |
+| `src/engine/sandbox-bank.ts` | Plays the bank in the sandbox: sends, pays and fails transfers |
+| `src/engine/scenario.ts` | The sample payments and the scripted incident |
+| `src/domain/assess.ts` | Maps an Airwallex transfer to the facts the policy reads |
+| `src/store/ledger.ts` | Obligations, payment attempts, approvals, emails and the timeline in SQLite |
+| `src/store/audit-trail.ts` | How timeline lines are hashed and checked, and the JSON and CSV export |
+| `src/engine/payments.ts` | Sends an attempt under its `request_id`, syncs transfer state and fees into the ledger, and fills in fees missing from older failed transfers |
+| `src/domain/reserve.ts` | The reserve floors from `RESERVE_FLOORS`, the floor one invoice's replacement is held to, and the wallet a payment leaves |
+| `src/engine/cash-position.ts` | The cash panel's figures, and the committed money the policy also takes off, pay runs included |
+| `src/views/incident-board.ts` | The incident board: active outages and what they hold, then every open invoice in its group, with the money it has at risk and why |
+| `src/views/suppliers.ts` | The supplier view: one Airwallex beneficiary record, its accounts, invoices, payments and cautions, read from the ledger, for the page, `pnpm supplier` and the MCP server |
+| `src/runs/run-file.ts` | Reads a pay run CSV file and the cells of each row |
+| `src/runs/runs.ts` | Pay runs: the checks, the terms and the request, approving, releasing and cancelling a run |
+| `src/engine/currency-lock.ts` | The lease that lets one payment at a time be sent in each currency |
+| `src/domain/fx.ts` | How long an exchange rate quote holds, from `FX_QUOTE_VALIDITY` |
+| `src/domain/approval.ts` | Approval terms, the exchange rate quote in them, the hash that binds an approval to them, and the amount limits are compared with |
+| `src/domain/approvers.ts` | The approval policy: who may approve, how many are needed, and when a request expires |
+| `src/engine/bank-change.ts` | Records a callback about new bank details and updates the supplier's record in Airwallex |
+| `src/reader/emails.ts` | The email reader interface, the findings a reader returns, the sender check and the email evidence in approval terms |
+| `src/intake/eml.ts`, `src/intake/html-text.ts`, `src/intake/css-text.ts` | Read an uploaded email: headers, MIME parts, charsets, HTML to text, and the strings in its styles |
+| `src/intake/intake.ts`, `src/intake/parse-worker.ts` | Parses an upload in a worker thread, stores it, finds the invoices it names, and delivers it to the one a person picks |
+| `src/reader/model-service.ts` | The model services in the order they are asked, Claude then Gemini, and one request to a model, shared by the reader and Ask why |
+| `src/reader/model-reader.ts` | The model reader: one request per email that returns the findings |
+| `src/reader/reader.ts` | Sets up the model services from `.env`, and picks the model reader, or the keyword placeholder when no key is set |
+| `src/reader/keyword-reader.ts` | Keyword placeholder that reads the emails when no key is set |
+| `src/explain/why-facts.ts` | The facts a model gets to explain an incident: PayOnce's own fields, the reasons and timeline lines it recognises, and labels for people and other invoices |
+| `src/explain/explainer.ts` | Asks the model reader's models to explain an incident, checks and cleans the answer, and keeps the page's limits |
+| `src/outbox/drafts.ts` | Messages to send: the templates, which ones fit an incident, and drafts that keep their hash |
+| `src/recon/recon-match.ts` | Reconciliation's matcher, the break kinds and their wording |
+| `src/store/recon-store.ts` | Reconciliation's tables, its runs, its breaks and their hash chain |
+| `src/recon/reconcile.ts` | One reconciliation check, the server's timer, the report and a person's explanation |
+| `src/views/metrics.ts` | The metrics: the eight tables for a period, read from the ledger, and the reason codes |
+| `src/alerts/alerts.ts` | Alerts: the webhook setting, what needs a person, and posting with retries |
+| `src/alerts/alert-payloads.ts` | What an alert says, and its Slack and Discord message shapes |
+| `src/surfaces/http/main.ts` | Local web server and JSON API |
+| `src/surfaces/mcp/main.ts` | The read-only MCP server over stdio, and the only file that imports the MCP SDK |
+| `src/views/mcp-views.ts` | What the MCP tools answer, from the ledger alone |
+| `src/surfaces/mcp/mcp-text.ts` | Marks the text PayOnce did not write in an MCP answer, and masks phone numbers |
+| `src/domain/money.ts` | Major and minor units, and amounts as people read them, for two-decimal currencies |
+| `src/text/printable.ts` | Cleans every line PayOnce prints to a terminal, so a name or an error cannot move the cursor or write the clipboard |
+| `src/surfaces/cli/terms-shape.ts` | Checks stored approval terms, an invoice's or a pay run's, before `pnpm approve` or `pnpm payrun` prints them |
+| `src/surfaces/cli/recover.ts`, `src/surfaces/cli/approve.ts`, `src/surfaces/cli/close.ts`, `src/surfaces/cli/audit.ts`, `src/surfaces/cli/cash.ts`, `src/surfaces/cli/board.ts`, `src/surfaces/cli/payrun.ts`, `src/surfaces/cli/outbox.ts`, `src/surfaces/cli/outage.ts`, `src/surfaces/cli/ask.ts`, `src/surfaces/cli/reconcile.ts`, `src/surfaces/cli/metrics.ts`, `src/surfaces/cli/supplier.ts`, `src/surfaces/cli/reset.ts`, `src/surfaces/cli/dev.ts` | The commands |
 | `src/airwallex/` | Sandbox client: login, beneficiaries, transfers, exchange rate quotes, balances and their cache for the cash panel, balance history, the webhook subscription and the simulation calls |
 | `web/` | The page: plain HTML, CSS and JavaScript with no build step |
 | `fixtures/emails/` | Sample supplier emails |
