@@ -175,8 +175,19 @@ export interface SupplierBrief {
   account: AccountView | null;
   // Last four digits of the phone on file, never more.
   phoneEnding: string | null;
+  phone: IncidentPhoneView;
   emailDomain: Theirs | null;
   cautions: { count: number; top: string | null };
+}
+
+// The phone on file as the callback and approval cards show it: where it came
+// from and who put it there, a new number waiting for a second person (which
+// blocks the callback form), and whether the number the latest request's
+// callback was made on is still on file (null with no such request).
+export interface IncidentPhoneView {
+  onFile: PhoneOnFileView | null;
+  pending: { ending: string | null; proposedBy: PersonName | null; proposedAt: Iso | null } | null;
+  requestCallbackOnFile: boolean | null;
 }
 
 // ---------- approval requests ----------
@@ -194,7 +205,7 @@ export interface ApproverChoice {
 
 export interface Barred {
   name: PersonName;
-  // code: "started" | "uploaded-run" | "recorded-callback"
+  // code: "started" | "uploaded-run" | "recorded-callback" | "set-callback-phone"
   why: Why;
 }
 
@@ -966,21 +977,91 @@ export interface SuppliersView {
   rows: SupplierListRow[];
 }
 
-// The supplier's contact on file. supplier-contacts.md (another agent) owns how
-// it changes: the supplier_contacts table, propose, confirm and withdraw, and
-// GET /api/suppliers/:key/contact for the full values. This contract reserves the
-// summary the record page and the payment page show, and the action slot.
+// The record's phone on file, by its last four digits only. GET
+// /api/suppliers/:key/contact gives the full number. removed: two people took it
+// off file, so none is on file. originText is PayOnce's words for a number no
+// person put on file, "" for one two people did. changed: it replaced another
+// number in the last 7 days, with PayOnce's warning.
+export interface PhoneOnFileView {
+  contactId: number;
+  ending: string | null;
+  removed: boolean;
+  origin: "person" | "scenario" | "migrated";
+  originText: string;
+  since: Iso | null;
+  proposedBy: PersonName | null;
+  // "supplier's contract", "supplier's website", "call to a known number", "in person", "other source".
+  proposedSource: string | null;
+  confirmedBy: PersonName | null;
+  confirmedSource: string | null;
+  replacedEnding: string | null;
+  changed: { text: string } | null;
+}
+
+// A new number waiting for a second person, by its ending only, so whoever
+// confirms it types it from their own source. seenInEmails and seenFlagged count
+// the supplier emails on file that hold its digits, and those from senders the
+// check flags.
+export interface PhoneProposalView {
+  contactId: number;
+  ending: string | null;
+  removal: boolean;
+  replacesEnding: string | null;
+  proposedBy: PersonName | null;
+  proposedAt: Iso | null;
+  source: string | null;
+  note: PersonName;
+  seenInEmails: number;
+  seenFlagged: number;
+  lapsesAt: Iso | null;
+  lapsed: boolean;
+}
+
+export interface PhoneVersionView {
+  contactId: number;
+  ending: string | null;
+  state: "proposed" | "on_file" | "replaced" | "withdrawn" | "lapsed";
+  origin: "person" | "scenario" | "migrated";
+  proposedBy: PersonName | null;
+  proposedAt: Iso | null;
+  confirmedBy: PersonName | null;
+  confirmedAt: Iso | null;
+  closedBy: PersonName | null;
+  closedAt: Iso | null;
+}
+
+// The supplier's contact on file: the phone, which two people put there or
+// change (supplier-contacts.md), and the email domains the payments give.
 export interface SupplierContactView {
   phoneEnding: string | null;
   // The payments that give each domain, and the first and newest of them.
   emailDomains: { domain: Theirs; payments: number; first: InvoiceId; newest: InvoiceId }[];
-  // Who last changed the contact on file, and when. Null until that design lands.
+  // Who confirmed the phone on file, and when.
   changedBy: PersonName | null;
   changedAt: Iso | null;
-  // A change waiting for a second person, by field. Null until that design lands.
+  // A change waiting for a second person, by field.
   pending: { field: "phone" | "domain"; ending: string | null; proposedBy: PersonName; proposedAt: Iso }[] | null;
-  // Filled by the contact design (propose, confirm, withdraw). Empty until then.
+  // propose, confirm and withdraw.
   actions: Record<string, Can>;
+  phone: PhoneOnFileView | null;
+  proposal: PhoneProposalView | null;
+  // Every other version, newest first.
+  history: PhoneVersionView[];
+  // Who proposed or confirmed the number on file, and so may not record a callback on it.
+  callbackBarred: PersonName[];
+  // Where a number may come from, in PayOnce's words.
+  notice: string;
+}
+
+// GET /api/suppliers/:key/contact: the phone on file in full, which no list or
+// view gives. Never in MCP. A waiting proposal stays by its ending only.
+export interface SupplierContactDetail {
+  view: "supplier-contact";
+  key: SupplierKey;
+  phone: (PhoneOnFileView & { value: string }) | null;
+  proposal: PhoneProposalView | null;
+  history: PhoneVersionView[];
+  notice: string;
 }
 
 export interface SupplierAccountView extends AccountView {

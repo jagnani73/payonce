@@ -41,6 +41,7 @@ import type {
   Tone,
 } from "./contract.js";
 import { cautionsOf } from "./cautions.js";
+import { incidentPhone } from "./contacts.js";
 import { isBusy, snapshotOptions, supplierKeyOf, type Live } from "./context.js";
 import { decisionPanel, headroomOf } from "./decision.js";
 import {
@@ -333,7 +334,20 @@ function messagesTab(outbox: Outbox): MessagesTab {
 
 // ---------- the supplier and the money ----------
 
-function supplierBrief(snapshot: InvoiceSnapshot, detail: SupplierDetail | null, request: RequestView | null): SupplierBrief {
+// The callback the latest request relies on, while it is open.
+function requestCallback(snapshot: InvoiceSnapshot): number | null {
+  const latest: RequestSnapshot | undefined = snapshot.requests.at(-1);
+  const open: boolean = latest?.approval.state === "requested" || latest?.approval.state === "approved";
+  return open ? (latest?.terms?.evidence.bankChange?.id ?? null) : null;
+}
+
+function supplierBrief(
+  ledger: Ledger,
+  snapshot: InvoiceSnapshot,
+  detail: SupplierDetail | null,
+  request: RequestView | null,
+  now: number,
+): SupplierBrief {
   const o: Obligation = snapshot.obligation;
   const cautions: SupplierCaution[] = (detail?.cautions ?? []).filter((caution: SupplierCaution): boolean => caution.level === "caution");
   const lastPaid: SupplierAccount | undefined =
@@ -344,6 +358,7 @@ function supplierBrief(snapshot: InvoiceSnapshot, detail: SupplierDetail | null,
     name: o.supplier,
     account: request !== null ? request.terms.account : accountView(null, lastPaid?.ending ?? null),
     phoneEnding: lastFour(o.supplierPhone),
+    phone: incidentPhone(ledger, detail, requestCallback(snapshot), now),
     emailDomain: o.supplierDomain === "" ? null : o.supplierDomain,
     cautions: { count: cautions.length, top: cautions[0]?.text ?? null },
   };
@@ -417,7 +432,7 @@ export function incidentView(
       messages: messagesTab(outbox),
       timeline: timelineView(ledger.events(o.invoiceId)),
       audit: invoiceAuditLine(ledger, o.invoiceId, now),
-      supplier: supplierBrief(snapshot, key === null ? null : supplierDetail(ledger, key, now), request),
+      supplier: supplierBrief(ledger, snapshot, key === null ? null : supplierDetail(ledger, key, now), request, now),
       money: {
         amount: money(o.amountMinor, o.currency),
         fromWallet: wallet === undefined ? null : money(wallet.minor, wallet.currency, wallet.estimated || wallet.feeUnknown > 0),

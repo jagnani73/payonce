@@ -6,8 +6,12 @@ import type {
   DuplicateView,
   IncidentRow,
   OutageStrip,
+  PhoneOnFileView,
+  PhoneProposalView,
+  PhoneVersionView,
   SupplierAccountView,
   SupplierCaution,
+  SupplierContactView,
   SupplierListRow,
   SupplierView,
   SuppliersView,
@@ -94,6 +98,54 @@ function accountLines(account: SupplierAccountView): string[] {
   ];
 }
 
+const STATE_WORDS: Record<PhoneVersionView["state"], string> = {
+  proposed: "proposed",
+  on_file: "on file",
+  replaced: "replaced",
+  withdrawn: "withdrawn",
+  lapsed: "lapsed",
+};
+
+function setBy(by: string | null, source: string | null): string {
+  return `${by ?? "someone"}${source === null ? "" : ` (${source})`}`;
+}
+
+// The phone on file by its ending, who put it there, a proposal waiting for a
+// second person and the earlier versions.
+function contactLines(contact: SupplierContactView): string[] {
+  const phone: PhoneOnFileView | null = contact.phone;
+  const lines: string[] = [];
+  if (phone !== null) {
+    const who: string =
+      phone.originText !== ""
+        ? phone.originText
+        : `proposed by ${setBy(phone.proposedBy, phone.proposedSource)}, confirmed by ${setBy(phone.confirmedBy, phone.confirmedSource)}`;
+    lines.push(
+      phone.removed
+        ? `None on file since ${utc(phone.since)}: ${who}`
+        : `Ending ${phone.ending ?? "not known"}, on file since ${utc(phone.since)}, ${who}`,
+      ...(phone.changed === null ? [] : [phone.changed.text]),
+      ...(contact.callbackBarred.length === 0 ? [] : [`${listOf(contact.callbackBarred)} cannot record a callback on it`]),
+    );
+  }
+  const proposal: PhoneProposalView | null = contact.proposal;
+  if (proposal !== null) {
+    const seen: string =
+      proposal.seenInEmails === 0
+        ? ""
+        : `; its digits appear in ${count(proposal.seenInEmails, "supplier email", "supplier emails")} on file${proposal.seenFlagged === 0 ? "" : `, ${proposal.seenFlagged} from a sender the check flags`}`;
+    lines.push(
+      `${proposal.lapsed ? "Lapsed, not confirmed" : "Waiting for a second person"}: ${proposal.removal ? "removing the number on file" : `ending ${proposal.ending ?? "not known"}`} (${proposal.contactId}), proposed by ${setBy(proposal.proposedBy, proposal.source)} at ${utc(proposal.proposedAt)}${proposal.lapsed ? "" : `, lapses at ${utc(proposal.lapsesAt)}`}${seen}`,
+    );
+  }
+  for (const version of contact.history) {
+    lines.push(
+      `Earlier: ${version.ending === null ? "none on file" : `ending ${version.ending}`}, ${STATE_WORDS[version.state]}${version.closedAt === null ? "" : ` at ${utc(version.closedAt)}`}${version.closedBy === null ? "" : ` by ${version.closedBy}`}`,
+    );
+  }
+  return lines;
+}
+
 function duplicateText(duplicate: DuplicateView): string {
   return `${duplicate.invoiceId} (${duplicate.label})`;
 }
@@ -123,6 +175,7 @@ function printDetail(view: SupplierView): void {
           .join(", ")}`;
   put(`${view.contact.phoneEnding === null ? "No phone on file" : `Phone on file ending ${view.contact.phoneEnding}`}. ${domains}`);
   section("Cautions", view.cautions.flatMap(cautionLines));
+  section("Phone on file", contactLines(view.contact));
   section("Money by wallet", view.money.length === 0 ? ["Nothing in play"] : table(view.money.map(walletLine)));
   section("Accounts", view.accounts.length === 0 ? ["PayOnce has not kept an account for this record"] : view.accounts.flatMap(accountLines));
   putPayments(`Payments not closed (${view.payments.open.length})`, view.payments.open, view.generatedAt);

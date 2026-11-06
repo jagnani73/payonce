@@ -25,6 +25,7 @@ import {
   type SupplierSummary,
 } from "./suppliers.js";
 import type { IncidentRow, SupplierAccountView, SupplierCaution, SupplierListRow, SupplierView, SuppliersView } from "./contract.js";
+import { contactView } from "./contacts.js";
 import { snapshotOptions, type Live } from "./context.js";
 import { walletTotals } from "./incidents.js";
 import { failureView, plural, refused } from "./parts.js";
@@ -38,6 +39,8 @@ import { readInvoiceSnapshots } from "./snapshot.js";
 
 // Short words for each caution code, as a list row's chips show them.
 export const CAUTION_LABELS: Record<CautionCode, string> = {
+  "phone-proposed": "New phone number waits",
+  "phone-changed": "Phone number changed",
   "account-changed": "Bank details changed",
   "callback-verified": "Verified by callback",
   "new-payee": "New payee",
@@ -170,19 +173,7 @@ export function supplierView(ledger: Ledger, settings: Settings, now: number, ke
           since: caution.since,
         }),
       ),
-      contact: {
-        phoneEnding: detail.phoneLast4,
-        emailDomains: detail.domains.map((domain: SupplierDetail["domains"][number]) => ({
-          domain: domain.domain,
-          payments: domain.invoices,
-          first: domain.first,
-          newest: domain.newest,
-        })),
-        changedBy: null,
-        changedAt: null,
-        pending: null,
-        actions: {},
-      },
+      contact: contactView(detail, now),
       accounts: detail.accounts.map(accountOf),
       payments: {
         open: rows.filter((row: IncidentRow): boolean => row.situation.group !== "closed"),

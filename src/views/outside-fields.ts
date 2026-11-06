@@ -21,6 +21,7 @@ import type {
   OutageCardView,
   OutagesView,
   OutageStrip,
+  PhoneOnFileView,
   QueueItem,
   ReportsView,
   RequestView,
@@ -206,8 +207,20 @@ const APPROVER = { name: "person", ...under("why", WHY) } as const satisfies Fie
 // The engine's and runs.ts's fixed words for why someone may not approve.
 const BARRED = {
   name: "person",
-  "why.text": quotedUnless(codeIn(["started", "uploaded-run", "recorded-callback"])),
+  "why.text": quotedUnless(codeIn(["started", "uploaded-run", "recorded-callback", "set-callback-phone"])),
 } as const satisfies Fields<Barred>;
+// Why a person cannot propose, confirm or withdraw a phone number now. The
+// waiting proposal's refusal names who proposed it.
+const CONTACT_CAN = { "why.text": quotedUnless(codeIn(["no-phone-proposal", "phone-proposal-lapsed"])) } as const;
+// The phone on file, by its ending, and who put it there.
+const PHONE_ON_FILE = {
+  originText: "plain",
+  proposedBy: "person",
+  proposedSource: "plain",
+  confirmedBy: "person",
+  confirmedSource: "plain",
+  "changed.text": "plain",
+} as const satisfies Fields<PhoneOnFileView>;
 const CALLBACK = { calledBy: "person", spokeTo: "person", confirmed: "person" } as const satisfies Fields<CallbackEvidenceView>;
 const DUPLICATE = { label: "plain" } as const satisfies Fields<DuplicateView>;
 const OUTAGE_STRIP = { rail: RAIL, sendsText: "plain" } as const satisfies Fields<OutageStrip>;
@@ -353,6 +366,8 @@ export const INCIDENT_FIELDS = {
   ...under("audit", AUDIT_LINE),
   "supplier.name": "supplier",
   ...under("supplier.account", ACCOUNT),
+  ...under("supplier.phone.onFile", PHONE_ON_FILE),
+  "supplier.phone.pending.proposedBy": "person",
   "supplier.emailDomain": "supplier",
   "supplier.cautions.top": "plain",
   ...under("related.secondBills[]", DUPLICATE),
@@ -436,6 +451,18 @@ export const SUPPLIER_FIELDS = {
   "contact.emailDomains[].domain": "supplier",
   "contact.changedBy": "person",
   "contact.pending[].proposedBy": "person",
+  ...under("contact.phone", PHONE_ON_FILE),
+  "contact.proposal.proposedBy": "person",
+  "contact.proposal.source": "plain",
+  "contact.proposal.note": "person",
+  "contact.history[].proposedBy": "person",
+  "contact.history[].confirmedBy": "person",
+  "contact.history[].closedBy": "person",
+  "contact.callbackBarred[]": "person",
+  "contact.notice": "plain",
+  ...under("contact.actions.propose", CONTACT_CAN),
+  ...under("contact.actions.confirm", CONTACT_CAN),
+  ...under("contact.actions.withdraw", CONTACT_CAN),
   "accounts[].label": "airwallex",
   "accounts[].verifiedBy.calledBy": "person",
   "accounts[].barred[]": "person",
