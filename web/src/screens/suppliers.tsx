@@ -1,14 +1,15 @@
 import type { JSX } from "preact";
-import { NotBuilt } from "../components/States";
-import { useTitle } from "../hooks";
 import type { ScreenProps } from "../router";
+import { SupplierList } from "./suppliers/list";
+import { SupplierRecord } from "./suppliers/record";
+import "./suppliers.css";
 
-// ia.md section 7. Routes: #suppliers, #supplier/K (route.word says which).
+// ia.md section 7. #suppliers (and #suppliers?q=…) is the list; #supplier/K is one
+// record, K its Airwallex beneficiary id. #supplier with no key is the list.
 export function Suppliers(props: ScreenProps): JSX.Element {
-  useTitle("Suppliers");
-  return (
-    <NotBuilt title="Suppliers">
-      <p class="muted mono">{props.route.hash}</p>
-    </NotBuilt>
+  return props.route.word === "supplier" && props.route.segments.length > 0 ? (
+    <SupplierRecord route={props.route} />
+  ) : (
+    <SupplierList route={props.route} />
   );
 }
