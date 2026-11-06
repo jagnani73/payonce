@@ -58,6 +58,7 @@ export function searchView(ledger: Ledger, settings: Settings, now: number, q: s
         label: UPLOAD_LABELS[upload.state] ?? upload.state,
       })),
       transfers: found.transfers,
+      limit: SEARCH_LIMIT,
     };
   });
 }
