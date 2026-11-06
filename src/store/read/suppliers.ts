@@ -1,6 +1,8 @@
 import type { ApprovalState } from "../approvals.js";
 import type { AttemptKind, AttemptState } from "../attempts.js";
+import type { Contact } from "../../domain/contacts.js";
 import type { BankChangeState, BankChangeStore } from "../bank-changes.js";
+import type { ContactReads } from "../contacts.js";
 import { stringsOf, type Db } from "../db.js";
 import type { DraftRow, DraftState } from "../drafts.js";
 import type { InvoiceStore, Obligation, ObligationState, TransferMethod } from "../invoices.js";
@@ -366,6 +368,8 @@ export interface SupplierRunRow {
 interface SupplierShared {
   approvals: SupplierApproval[];
   callbacks: SupplierCallback[];
+  // Every version of the phone on file, oldest first.
+  contacts: Contact[];
   emails: SupplierEmailFacts[];
   findings: SupplierFindings[];
   failures: SupplierFailure[];
@@ -401,11 +405,13 @@ export class SupplierReads {
   private readonly db: Db;
   private readonly invoices: InvoiceStore;
   private readonly bankChanges: BankChangeStore;
+  private readonly contacts: ContactReads;
 
-  constructor(db: Db, invoices: InvoiceStore, bankChanges: BankChangeStore) {
+  constructor(db: Db, invoices: InvoiceStore, bankChanges: BankChangeStore, contacts: ContactReads) {
     this.db = db;
     this.invoices = invoices;
     this.bankChanges = bankChanges;
+    this.contacts = contacts;
   }
 
   // What the supplier list reads for every record: only the columns its cautions
@@ -418,7 +424,7 @@ export class SupplierReads {
       this.db
         .prepare(
           `SELECT invoice_id, beneficiary_id, supplier, state, escalation_reason, supplier_domain,
-                  supplier_phone, duplicate_of, currency, transfer_method
+                  ${this.contacts.phoneColumn()} AS supplier_phone, duplicate_of, currency, transfer_method
              FROM obligations ORDER BY rowid DESC`,
         )
         .all() as unknown as SupplierObligationRow[]
@@ -647,7 +653,7 @@ export class SupplierReads {
         skipReasons: row.skip_reasons ?? 0,
       }),
     );
-    return { approvals, callbacks, emails, findings, failures, runRows };
+    return { approvals, callbacks, contacts: this.contacts.of(beneficiaryId), emails, findings, failures, runRows };
   }
 
   // Whether an invoice, or a pay row of the waiting run, names this beneficiary

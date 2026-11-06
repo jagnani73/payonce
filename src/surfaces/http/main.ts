@@ -26,6 +26,7 @@ import { httpApp, type HttpApp } from "./app.js";
 import { HOST, requestListener, type Route } from "./router.js";
 import { alertRoutes } from "./routes/alerts.js";
 import { cashRoutes } from "./routes/cash.js";
+import { contactRoutes } from "./routes/contacts.js";
 import { inboxRoutes } from "./routes/inbox.js";
 import { incidentRoutes } from "./routes/incidents.js";
 import { outageRoutes } from "./routes/outages.js";
@@ -182,6 +183,7 @@ function main(): void {
     ...sandboxRoutes(app),
     ...viewRoutes(app, SWEEP_EVERY_MS),
     ...paymentRoutes(app),
+    ...contactRoutes(app),
   ];
   const start: StartUp = startUp(app);
   const server: Server = createServer(requestListener(routes, port));

@@ -1,10 +1,13 @@
 import type { Attempt, ObligationState, OutsidePayout } from "../store/ledger.js";
+import { PROPOSAL_BLOCKS_CALLBACK } from "./contacts.js";
 import { liveAtBank, payoutNotFailed, type LiveTested } from "./live.js";
 
 // What decides whether a callback with new bank details can be recorded for an
 // invoice now. The two facts that scan the ledger are read only when the checks
 // before them pass.
 export interface CallbackFacts {
+  // A new phone number for the record waits for a second person.
+  phoneProposed: boolean;
   supplierPhone: string | null;
   state: ObligationState;
   attempts: (LiveTested & Pick<Attempt, "kind">)[];
@@ -20,11 +23,15 @@ export interface CallbackFacts {
 }
 
 // Why a callback cannot be recorded for the invoice now, or null when it can.
-// Bank details can change only while the invoice is with a person and nothing is
-// with the bank or paid: every payment PayOnce sent has failed, or it was held
-// before paying a supplier PayOnce has paid before, no payout sent outside
-// PayOnce is live, and no other invoice to the supplier is about to pay.
+// It is made on the record's phone on file, so not while a new one waits for a
+// second person. Bank details can change only while the invoice is with a person
+// and nothing is with the bank or paid: every payment PayOnce sent has failed, or
+// it was held before paying a supplier PayOnce has paid before, no payout sent
+// outside PayOnce is live, and no other invoice to the supplier is about to pay.
 export function callbackBlocked(facts: CallbackFacts): string | null {
+  if (facts.phoneProposed) {
+    return PROPOSAL_BLOCKS_CALLBACK;
+  }
   if (facts.supplierPhone === null) {
     return "No phone number is on file for this supplier, so there is no number to call back";
   }

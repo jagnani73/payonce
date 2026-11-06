@@ -6,6 +6,7 @@ import {
   type ReasonColumns,
   type StoredReason,
 } from "../domain/reasons.js";
+import type { ContactStore } from "./contacts.js";
 import { storedStrings, type Db } from "./db.js";
 import type { Timelines } from "./timeline.js";
 
@@ -50,8 +51,10 @@ export interface NewObligation {
   // The name the person who started the incident gave. Null when PayOnce does
   // not know, as for a payout sent outside it.
   startedBy: string | null;
-  // The supplier's phone number from the supplier record, for calling back about
-  // a change of bank details. Null when none is on file.
+  // The supplier's phone number, for calling back about a change of bank
+  // details. Null when none is on file. Read, it is the phone on file for the
+  // record the invoice pays (supplier_contacts). Written, it is a scenario's
+  // number, which goes on file for a record with none.
   supplierPhone: string | null;
   // The wallet the invoice is paid from, when not its own currency's.
   sourceCurrency?: string;
@@ -105,6 +108,8 @@ export interface ObligationRow {
   escalation_reason: string;
   started_by: string | null;
   supplier_phone: string | null;
+  // The record's phone on file, as ContactReads.phoneColumn reads it.
+  phone_on_file: string | null;
   payout_reference: string | null;
   duplicate_of: string | null;
   rejected_by: string | null;
@@ -132,7 +137,7 @@ function toObligation(row: ObligationRow): Obligation {
     state: row.state,
     escalationReason: row.escalation_reason,
     startedBy: row.started_by,
-    supplierPhone: row.supplier_phone,
+    supplierPhone: row.phone_on_file,
     payoutReference: row.payout_reference,
     duplicateOf: row.duplicate_of === null ? [] : storedStrings(row.duplicate_of),
     rejectedBy: row.rejected_by,
@@ -164,10 +169,17 @@ export function alreadyInLedger(invoiceId: string): string {
 export class InvoiceStore {
   private readonly db: Db;
   private readonly timelines: Timelines;
+  private readonly contacts: ContactStore;
 
-  constructor(db: Db, timelines: Timelines) {
+  constructor(db: Db, timelines: Timelines, contacts: ContactStore) {
     this.db = db;
     this.timelines = timelines;
+    this.contacts = contacts;
+  }
+
+  // Every column of an invoice, with its record's phone on file.
+  private columns(): string {
+    return `*, ${this.contacts.reads.phoneColumn()} AS phone_on_file`;
   }
 
   // Writes the invoice and its first timeline line in one transaction, so every
@@ -204,17 +216,21 @@ export class InvoiceStore {
           input.startedBy === null ? "Incident opened" : `Incident opened by ${input.startedBy}`,
           null,
         );
+        const phone: string = (input.supplierPhone ?? "").trim();
+        if (phone !== "") {
+          this.contacts.seedScenario(input.invoiceId, input.beneficiaryId, phone);
+        }
       }
     });
     const row: ObligationRow = this.db
-      .prepare("SELECT * FROM obligations WHERE invoice_id = ?")
+      .prepare(`SELECT ${this.columns()} FROM obligations WHERE invoice_id = ?`)
       .get(input.invoiceId) as unknown as ObligationRow;
     return toObligation(row);
   }
 
   obligation(invoiceId: string): Obligation | undefined {
     const row: ObligationRow | undefined = this.db
-      .prepare("SELECT * FROM obligations WHERE invoice_id = ?")
+      .prepare(`SELECT ${this.columns()} FROM obligations WHERE invoice_id = ?`)
       .get(invoiceId) as unknown as ObligationRow | undefined;
     return row === undefined ? undefined : toObligation(row);
   }
@@ -222,7 +238,7 @@ export class InvoiceStore {
   // Newest first.
   obligations(): Obligation[] {
     const rows: ObligationRow[] = this.db
-      .prepare("SELECT * FROM obligations ORDER BY rowid DESC")
+      .prepare(`SELECT ${this.columns()} FROM obligations ORDER BY rowid DESC`)
       .all() as unknown as ObligationRow[];
     return rows.map(toObligation);
   }
@@ -231,7 +247,7 @@ export class InvoiceStore {
   openObligations(): Obligation[] {
     return (
       this.db
-        .prepare("SELECT * FROM obligations WHERE state IN ('open', 'escalated') ORDER BY rowid DESC")
+        .prepare(`SELECT ${this.columns()} FROM obligations WHERE state IN ('open', 'escalated') ORDER BY rowid DESC`)
         .all() as unknown as ObligationRow[]
     ).map(toObligation);
   }
@@ -240,7 +256,7 @@ export class InvoiceStore {
   obligationsFor(beneficiaryId: string): Obligation[] {
     return (
       this.db
-        .prepare("SELECT * FROM obligations WHERE beneficiary_id = ? ORDER BY rowid DESC")
+        .prepare(`SELECT ${this.columns()} FROM obligations WHERE beneficiary_id = ? ORDER BY rowid DESC`)
         .all(beneficiaryId) as unknown as ObligationRow[]
     ).map(toObligation);
   }
@@ -280,7 +296,7 @@ export class InvoiceStore {
     }
     const row: ObligationRow | undefined = this.db
       .prepare(
-        `SELECT * FROM obligations WHERE invoice_id = ? OR payout_reference = ?
+        `SELECT ${this.columns()} FROM obligations WHERE invoice_id = ? OR payout_reference = ?
           ORDER BY rowid LIMIT 1`,
       )
       .get(reference, reference) as unknown as ObligationRow | undefined;

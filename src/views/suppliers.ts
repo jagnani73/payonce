@@ -6,6 +6,17 @@ import { templateLabel } from "../outbox/drafts.js";
 import { numberOf, numbersOf, sameInvoiceNumber, supplierNameKey } from "../domain/duplicates.js";
 import { summarise, unverifiedSenders, type SupplierEmail } from "../reader/emails.js";
 import { accountChangedReason } from "../domain/reasons.js";
+import {
+  CHANGED_RECENTLY_MS,
+  lapsed,
+  lapsesAt,
+  phoneEnding,
+  sourceLabel,
+  waiting,
+  type Contact,
+  type ContactOrigin,
+  type ContactState,
+} from "../domain/contacts.js";
 import { situationOf, type InvoiceSnapshot, type PaymentState, type Situation } from "../domain/situation.js";
 import {
   boardEntriesFor,
@@ -74,6 +85,8 @@ const LINKS_LISTED: number = 25;
 const ENDING: RegExp = /^[A-Za-z0-9]{1,4}$/;
 
 export type CautionCode =
+  | "phone-proposed"
+  | "phone-changed"
   | "account-changed"
   | "callback-verified"
   | "new-payee"
@@ -105,6 +118,8 @@ interface CautionKind {
 
 // In the order they are listed, cautions before infos.
 const CAUTIONS: Record<CautionCode, CautionKind> = {
+  "phone-proposed": { level: "caution", must: true },
+  "phone-changed": { level: "caution", must: true },
   "account-changed": { level: "caution", must: true },
   "callback-verified": { level: "info", must: true },
   "new-payee": { level: "info", must: true },
@@ -396,6 +411,68 @@ export interface RecordStored {
   account: string;
 }
 
+// The record's phone on file. It is the one every invoice of the record reads,
+// shown by its last four digits only. removed: two people took it off file.
+export interface PhoneOnFile {
+  id: number;
+  ending: string | null;
+  removed: boolean;
+  origin: ContactOrigin;
+  // When it went on file: confirmed, or when PayOnce kept a scenario's or an
+  // older invoice's number.
+  since: string | null;
+  proposedBy: string | null;
+  proposedSource: string | null;
+  confirmedBy: string | null;
+  confirmedSource: string | null;
+  // The number it took the place of, by its ending, and whether that was in the
+  // last 7 days.
+  replacedEnding: string | null;
+  changedRecently: boolean;
+  // Requests its change withdrew because they relied on a callback.
+  withdrawnRequests: number;
+}
+
+// A new number waiting for a second person, by its ending only, so whoever
+// confirms it has to find it in their own source.
+export interface PhoneProposal {
+  id: number;
+  ending: string | null;
+  removal: boolean;
+  replacesEnding: string | null;
+  proposedBy: string | null;
+  proposedAt: string | null;
+  source: string | null;
+  note: string;
+  seenInEmails: number;
+  seenFlagged: number;
+  lapsesAt: string | null;
+  lapsed: boolean;
+}
+
+export interface PhoneVersion {
+  id: number;
+  ending: string | null;
+  state: ContactState;
+  origin: ContactOrigin;
+  proposedBy: string | null;
+  proposedAt: string | null;
+  confirmedBy: string | null;
+  confirmedAt: string | null;
+  closedBy: string | null;
+  closedAt: string | null;
+}
+
+export interface ContactBlock {
+  phone: PhoneOnFile | null;
+  proposal: PhoneProposal | null;
+  // Every other version, newest first.
+  history: PhoneVersion[];
+  // Who proposed or confirmed the number on file, and so may not record a
+  // callback on it.
+  callbackBarred: string[];
+}
+
 export interface SupplierDetail {
   generatedAt: string;
   key: string;
@@ -403,6 +480,7 @@ export interface SupplierDetail {
   // The other names on file for the record, newest first.
   names: string[];
   phoneLast4: string | null;
+  contact: ContactBlock;
   domains: { domain: string; invoices: number; first: string; newest: string }[];
   currencies: string[];
   methods: string[];
@@ -461,6 +539,7 @@ interface RecordFacts {
   payouts: SupplierPayout[];
   approvals: SupplierApproval[];
   callbacks: SupplierCallback[];
+  contacts: Contact[];
   // By invoice: only the addresses and whether each was read in full.
   emails: Map<string, SupplierEmail[]>;
   findings: Map<string, Findings>;
@@ -478,6 +557,7 @@ function blankFacts(id: string): RecordFacts {
     payouts: [],
     approvals: [],
     callbacks: [],
+    contacts: [],
     emails: new Map<string, SupplierEmail[]>(),
     findings: new Map<string, Findings>(),
     drafts: [],
@@ -540,6 +620,9 @@ function recordsOf(read: SupplierListRead): Map<string, RecordFacts> {
   }
   for (const callback of read.callbacks) {
     known(callback.beneficiaryId)?.callbacks.push(callback);
+  }
+  for (const contact of read.contacts) {
+    known(contact.beneficiaryId)?.contacts.push(contact);
   }
   const beneficiaryOf: Map<string, string> = new Map<string, string>(
     read.obligations.map((obligation: SupplierObligation): [string, string] => [
@@ -1034,7 +1117,7 @@ function accountsOf(ledger: Ledger, facts: RecordFacts, owners: Owners): Account
       latestApplied !== undefined && verifying.includes(latestApplied) ? latestApplied : undefined;
     const barred: Set<string> = new Set<string>();
     for (const detailsKey of new Set<string>(verifying.map((callback: SupplierCallback): string => callback.appliedKey ?? ""))) {
-      for (const stored of ledger.bankChangeRecorders(facts.id, detailsKey)) {
+      for (const stored of barredFor(ledger, facts.id, detailsKey)) {
         const name: string | null = knownName(stored);
         if (name !== null) {
           barred.add(name);
@@ -1163,6 +1246,21 @@ function cautionsOf(
 ): Caution[] {
   const found: CautionDraft[] = [];
   const openOnes: SupplierObligation[] = facts.obligations.filter(open);
+  const contact: ContactBlock = contactOf(facts, now);
+  if (contact.proposal !== null && !contact.proposal.lapsed) {
+    found.push({
+      code: "phone-proposed",
+      text: "A new phone number for this supplier waits for a second person to confirm it from their own source. Nobody can record a callback for this supplier until it is confirmed or withdrawn.",
+      since: contact.proposal.proposedAt,
+    });
+  }
+  if (contact.phone?.changedRecently === true) {
+    found.push({
+      code: "phone-changed",
+      text: "The phone number on file changed in the last 7 days. A changed number shortly before new bank details is how callback fraud works.",
+      since: contact.phone.since,
+    });
+  }
   const inState = (state: PaymentState): SupplierObligation[] =>
     openOnes.filter((obligation: SupplierObligation): boolean => situations.get(obligation.invoiceId)?.state === state);
   const ids = (list: SupplierObligation[]): string[] =>
@@ -1331,7 +1429,7 @@ function cautionsOf(
   if (noPhone.length > 0) {
     found.push({
       code: "no-phone",
-      text: "These invoices wait for a person and have no phone number on file, so nobody can record a callback for them.",
+      text: "These invoices wait for a person and have no phone number on file, so nobody can record a callback for them. Put one on file below. It takes two people.",
       invoices: ids(noPhone),
     });
   }
@@ -1622,6 +1720,93 @@ function lastFourDigits(phone: string | null): string | null {
   return digits === "" ? null : digits.slice(-4);
 }
 
+// Who may not approve a payment to the account a callback verified: everyone
+// who recorded a callback for it, and whoever proposed or confirmed a number one
+// was made on, as barredFrom reads them.
+function barredFor(ledger: Ledger, beneficiaryId: string, detailsKey: string): string[] {
+  return [
+    ...ledger.bankChangeRecorders(beneficiaryId, detailsKey),
+    ...ledger.callbackPhoneSetters(beneficiaryId, detailsKey).map((setter: { name: string }): string => setter.name),
+  ];
+}
+
+// The record's phone on file, the proposal waiting for a second person, and
+// every other version, from the record's contact rows.
+function contactOf(facts: RecordFacts, now: number): ContactBlock {
+  const phones: Contact[] = facts.contacts.filter((contact: Contact): boolean => contact.field === "phone");
+  const onFile: Contact | undefined = phones.find((contact: Contact): boolean => contact.state === "on_file");
+  const proposal: Contact | undefined = phones.find((contact: Contact): boolean => contact.state === "proposed");
+  const byId = (id: number | null): Contact | undefined =>
+    id === null ? undefined : phones.find((contact: Contact): boolean => contact.id === id);
+  const replaced: Contact | undefined = byId(onFile?.replacesId ?? null);
+  const since: string | null = onFile === undefined ? null : iso(onFile.confirmedAt ?? onFile.proposedAt);
+  const callbackBarred: string[] =
+    onFile === undefined || onFile.value === ""
+      ? []
+      : [onFile.proposedBy, onFile.confirmedBy]
+          .map(knownName)
+          .filter((name: string | null): name is string => name !== null);
+  return {
+    phone:
+      onFile === undefined
+        ? null
+        : {
+            id: onFile.id,
+            ending: phoneEnding(onFile.value),
+            removed: onFile.value === "",
+            origin: onFile.origin,
+            since,
+            proposedBy: onFile.proposedBy,
+            proposedSource: sourceLabel(onFile.proposedSource),
+            confirmedBy: onFile.confirmedBy,
+            confirmedSource: sourceLabel(onFile.confirmedSource),
+            replacedEnding: replaced === undefined ? null : phoneEnding(replaced.value),
+            changedRecently:
+              replaced !== undefined &&
+              replaced.value !== "" &&
+              onFile.origin === "person" &&
+              since !== null &&
+              now - Date.parse(since) <= CHANGED_RECENTLY_MS,
+            withdrawnRequests: onFile.withdrawnRequests,
+          },
+    proposal:
+      proposal === undefined
+        ? null
+        : {
+            id: proposal.id,
+            ending: phoneEnding(proposal.value),
+            removal: proposal.value === "",
+            replacesEnding: phoneEnding(byId(proposal.replacesId)?.value ?? null),
+            proposedBy: proposal.proposedBy,
+            proposedAt: iso(proposal.proposedAt),
+            source: sourceLabel(proposal.proposedSource),
+            note: proposal.proposedNote,
+            seenInEmails: proposal.seenInEmails,
+            seenFlagged: proposal.seenFlagged,
+            lapsesAt: lapsesAt(proposal),
+            lapsed: lapsed(proposal, now),
+          },
+    history: phones
+      .filter((contact: Contact): boolean => contact !== onFile && contact !== proposal)
+      .reverse()
+      .map(
+        (contact: Contact): PhoneVersion => ({
+          id: contact.id,
+          ending: phoneEnding(contact.value),
+          state: contact.state,
+          origin: contact.origin,
+          proposedBy: contact.proposedBy,
+          proposedAt: iso(contact.proposedAt),
+          confirmedBy: contact.confirmedBy,
+          confirmedAt: iso(contact.confirmedAt),
+          closedBy: contact.closedBy,
+          closedAt: iso(contact.closedAt),
+        }),
+      ),
+    callbackBarred,
+  };
+}
+
 function bankChangesOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts): BankChangeView[] {
   return facts.callbacks.map((callback: SupplierCallback): BankChangeView => {
     const before: { key: string } | null = beforeAccount(callback.oldDetails);
@@ -1629,10 +1814,13 @@ function bankChangesOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts): 
       callback.state === "applied" && callback.appliedKey !== null ? appliedAccount(callback.appliedKey) : null;
     const barred: string[] =
       callback.state === "applied" && callback.appliedKey !== null
-        ? ledger
-            .bankChangeRecorders(facts.id, callback.appliedKey)
-            .map(knownName)
-            .filter((name: string | null): name is string => name !== null)
+        ? [
+            ...new Set<string>(
+              barredFor(ledger, facts.id, callback.appliedKey)
+                .map(knownName)
+                .filter((name: string | null): name is string => name !== null),
+            ),
+          ]
         : [];
     return {
       id: callback.id,
@@ -1933,6 +2121,9 @@ function nameOf(facts: RecordFacts): string {
   );
 }
 
+// A list entry with what only its place in the list reads.
+type Ranked = SupplierSummary & { mustCaution: boolean; phoneWaiting: boolean };
+
 function summaryOf(
   ledger: Ledger,
   facts: RecordFacts,
@@ -1940,7 +2131,7 @@ function summaryOf(
   owners: Owners,
   situations: Map<string, Situation>,
   now: number,
-): SupplierSummary & { mustCaution: boolean } {
+): Ranked {
   const accounts: Accounts = accountsOf(ledger, facts, owners);
   const cautions: Caution[] = cautionsOf(ledger, facts, accounts, owners, situations, now);
   const groups: Record<BoardGroup, number> = { person: 0, deadline: 0, bank: 0, open: 0 };
@@ -1976,6 +2167,7 @@ function summaryOf(
     atRisk: sumMoney(entries),
     cautions: [...new Set<CautionCode>(caution.map((entry: Caution): CautionCode => entry.code))],
     mustCaution: caution.some((entry: Caution): boolean => CAUTIONS[entry.code].must),
+    phoneWaiting: facts.contacts.some((entry: Contact): boolean => entry.field === "phone" && waiting(entry, now)),
   };
 }
 
@@ -2026,12 +2218,13 @@ function listOfRecords(ledger: Ledger, now: number): SupplierList {
       ? boardEntriesFor(ledger, ledger.openObligations(), null, now, lazyIndex(ledger)).entries
       : [];
     const entriesOf: Map<string, BoardEntry[]> = grouped(entries, (entry: BoardEntry): string => entry.beneficiaryId);
-    const summaries: (SupplierSummary & { mustCaution: boolean })[] = [...records.values()].map(
+    const summaries: Ranked[] = [...records.values()].map(
       (facts: RecordFacts) => summaryOf(ledger, facts, entriesOf.get(facts.id) ?? [], owners, situations, now),
     );
+    // A phone number waiting for a second person waits on a person too.
     summaries.sort(
-      (a: SupplierSummary & { mustCaution: boolean }, b: SupplierSummary & { mustCaution: boolean }): number =>
-        Number(b.groups.person > 0) - Number(a.groups.person > 0) ||
+      (a: Ranked, b: Ranked): number =>
+        Number(b.groups.person > 0 || b.phoneWaiting) - Number(a.groups.person > 0 || a.phoneWaiting) ||
         Number(b.mustCaution) - Number(a.mustCaution) ||
         largest(b.atRisk) - largest(a.atRisk) ||
         supplierNameKey(a.name).localeCompare(supplierNameKey(b.name)) ||
@@ -2039,8 +2232,9 @@ function listOfRecords(ledger: Ledger, now: number): SupplierList {
     );
     return {
       generatedAt: new Date(now).toISOString(),
-      suppliers: summaries.map(({ mustCaution, ...summary }: SupplierSummary & { mustCaution: boolean }): SupplierSummary => {
+      suppliers: summaries.map(({ mustCaution, phoneWaiting, ...summary }: Ranked): SupplierSummary => {
         void mustCaution;
+        void phoneWaiting;
         return summary;
       }),
     };
@@ -2107,13 +2301,16 @@ function detailOf(ledger: Ledger, key: string, now: number): SupplierDetail | nu
     const phone: SupplierObligation | undefined = facts.obligations.find(
       (obligation: SupplierObligation): boolean => (obligation.supplierPhone ?? "").trim() !== "",
     );
+    const contact: ContactBlock = contactOf(facts, now);
     const stored: Accounts["stored"] = accounts.stored;
     return {
       generatedAt: new Date(now).toISOString(),
       key,
       name,
       names: names.filter((each: string): boolean => supplierNameKey(each) !== supplierNameKey(name)),
-      phoneLast4: lastFourDigits(phone?.supplierPhone ?? null),
+      // A record only a waiting run names has no invoice to read its phone from.
+      phoneLast4: contact.phone === null ? lastFourDigits(phone?.supplierPhone ?? null) : contact.phone.ending,
+      contact,
       domains: domainsOf(facts),
       currencies: [...new Set<string>(facts.obligations.map((obligation: SupplierObligation): string => obligation.currency))]
         .filter((currency: string): boolean => CURRENCY_PATTERN.test(currency))

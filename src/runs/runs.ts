@@ -703,8 +703,9 @@ export function runRule(
   return { needed: 1, why: "" };
 }
 
-// Who may not approve the run: whoever uploaded it, and everyone who recorded the
-// callback for an account a row pays. A name stored before names were checked
+// Who may not approve the run: whoever uploaded it, everyone who recorded the
+// callback for an account a row pays, and whoever proposed or confirmed the phone
+// number such a callback was made on. A name stored before names were checked
 // that does not follow the name rule bars nobody (knownName): runRule asks for
 // two approvers for such an uploader, and a row to a callback-verified account
 // needs two already.
@@ -724,6 +725,12 @@ export function runBarred(ledger: Ledger, terms: RunTerms): Barred[] {
       const name: string | null = knownName(stored);
       if (name !== null) {
         barred.push({ name, why: `recorded the callback for the bank details row ${row.line} pays` });
+      }
+    }
+    for (const setter of ledger.callbackPhoneSetters(row.beneficiaryId, change.appliedKey)) {
+      const name: string | null = knownName(setter.name);
+      if (name !== null) {
+        barred.push({ name, why: `${setter.role} the phone number the callback for row ${row.line} was made on` });
       }
     }
   }

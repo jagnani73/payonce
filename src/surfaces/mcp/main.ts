@@ -222,9 +222,9 @@ function answer(fields: Readonly<Record<string, Field>>, read: (ledger: Ledger, 
       if (gaps.length > 0) {
         throw new ToolRefusal(older(gaps));
       }
-      const phones: RegExp[] = phonePatterns(
-        ledger.obligations().map((obligation: Obligation): string | null => obligation.supplierPhone),
-      );
+      // Every number the ledger keeps: on file, proposed or replaced, and every
+      // number a callback was made on.
+      const phones: RegExp[] = phonePatterns(ledger.storedPhones());
       const result: unknown = marked(read(ledger, Date.now()), fields, phones);
       return {
         content: [

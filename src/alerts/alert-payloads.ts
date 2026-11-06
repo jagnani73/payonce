@@ -129,6 +129,24 @@ export interface ReconAlertFacts {
   newestReference: string | null;
 }
 
+// A supplier record's phone number: a new one waiting for a second person, or
+// one two people put on file or changed in the last day. Never the number, an
+// email domain or anyone's name.
+export interface ContactAlertFacts {
+  kind: "contact";
+  // The beneficiary id, for the link, when it is in its own form.
+  supplierKey: string | null;
+  supplier: string;
+  field: "phone";
+  state: "waiting" | "set" | "changed";
+  change: "first" | "change" | "removal";
+  // When it was proposed, or put on file.
+  at: string;
+  openInvoices: number;
+  // Approval requests the change withdrew because they relied on a callback.
+  withdrawn: number;
+}
+
 export interface SummaryAlertFacts {
   kind: "summary";
   invoices: number;
@@ -152,6 +170,7 @@ export type AlertFacts =
   | InboxAlertFacts
   | OutageAlertFacts
   | ReconAlertFacts
+  | ContactAlertFacts
   | SummaryAlertFacts;
 
 // Text in a message. outside is text PayOnce did not write itself, such as a
@@ -583,6 +602,47 @@ function reconMessage(facts: ReconAlertFacts, base: string): AlertMessage {
   };
 }
 
+const SUPPLIER_KEY: RegExp = /^[A-Za-z0-9-]{1,64}$/;
+
+const CONTACT_TITLES: Record<ContactAlertFacts["state"], string> = {
+  waiting: "A new supplier phone number waits for a second person",
+  set: "A supplier phone number was put on file",
+  changed: "A supplier phone number was changed",
+};
+
+const CONTACT_CHANGES: Record<ContactAlertFacts["change"], string> = {
+  first: "A first phone number for the record",
+  change: "A new number in place of the one on file",
+  removal: "Taking the number on file off file",
+};
+
+const CONTACT_NEXT: Record<ContactAlertFacts["state"], string> = {
+  waiting:
+    "It goes on file only once someone else finds the same number in their own source and confirms it. Nobody can record a callback for this supplier until then",
+  set: "Callbacks about new bank details for this supplier are made on it",
+  changed: "A callback made on the old number no longer verifies bank details",
+};
+
+function contactMessage(facts: ContactAlertFacts, base: string): AlertMessage {
+  const key: string | null = facts.supplierKey !== null && SUPPLIER_KEY.test(facts.supplierKey) ? facts.supplierKey : null;
+  const withdrawn: number = Number.isSafeInteger(facts.withdrawn) ? facts.withdrawn : 0;
+  return {
+    title: CONTACT_TITLES[facts.state],
+    line: [ours("Supplier"), theirs(facts.supplier, NO_NAME)],
+    fields: [
+      field("Supplier", theirs(facts.supplier, NO_NAME)),
+      field("What", ours(CONTACT_CHANGES[facts.change]), false),
+      field(facts.state === "waiting" ? "Proposed" : "Put on file", ours(utcText(facts.at))),
+      field("Open payments", ours(String(Number.isSafeInteger(facts.openInvoices) ? facts.openInvoices : 0))),
+      ...(facts.state === "changed" ? [field("Approval requests withdrawn", ours(String(withdrawn)))] : []),
+      field("Next", ours(CONTACT_NEXT[facts.state]), false),
+    ],
+    link: key === null ? `${base}/` : `${base}/#supplier/${key}`,
+    linkText: key === null ? "Open PayOnce" : "Open the supplier record in PayOnce",
+    urgent: facts.state === "changed",
+  };
+}
+
 function summaryMessage(facts: SummaryAlertFacts, base: string): AlertMessage {
   const inbox: number = facts.inbox ?? 0;
   const outages: number = facts.outages ?? 0;
@@ -629,6 +689,8 @@ export function alertMessage(facts: AlertFacts, base: string): AlertMessage {
       return outageMessage(facts, base);
     case "recon":
       return reconMessage(facts, base);
+    case "contact":
+      return contactMessage(facts, base);
     case "summary":
       return summaryMessage(facts, base);
   }

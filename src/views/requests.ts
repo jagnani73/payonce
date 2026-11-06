@@ -65,6 +65,9 @@ function barredCode(text: string): string {
   if (text === "uploaded the pay run it came from" || text === "uploaded this run") {
     return "uploaded-run";
   }
+  if (/^(proposed|confirmed) the phone number the callback/.test(text)) {
+    return "set-callback-phone";
+  }
   return text.startsWith("recorded the callback") ? "recorded-callback" : "other";
 }
 

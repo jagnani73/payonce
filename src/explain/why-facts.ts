@@ -10,6 +10,7 @@ import {
 } from "../domain/approval.js";
 import { knownName, sameName, type ApprovalPolicy, type Barred } from "../domain/approvers.js";
 import { HOLIDAYS_NOTE, type ArrivalTerms } from "../domain/arrival.js";
+import { setterBarWhy } from "../domain/contacts.js";
 import { committedMinor } from "../engine/cash-position.js";
 import { deadlineMinutes } from "../domain/deadlines.js";
 import { EMAILS_UNREAD_REASON } from "../domain/decide.js";
@@ -307,6 +308,8 @@ const BARRED_WHY: ReadonlySet<string> = new Set<string>([
   "started this incident",
   "uploaded the pay run it came from",
   "recorded the callback for the new bank details",
+  setterBarWhy("proposed"),
+  setterBarWhy("confirmed"),
 ]);
 const CHANGED_FIELD: string = "payment|amount|currency|beneficiary|exchange rate|arrival estimate|evidence";
 // A model's name as the reader and the explainer write it, from READER_MODEL.
