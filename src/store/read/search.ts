@@ -52,7 +52,8 @@ function likeOf(q: string): string {
 }
 
 // Reads across the ledger's tables for finding things by what a person types,
-// and the names people have typed. Nothing here writes.
+// and the names people have typed. Each group comes newest first. Nothing here
+// writes.
 export class SearchReads {
   private readonly db: Db;
 
@@ -105,12 +106,14 @@ export class SearchReads {
       transfers: (
         this.db
           .prepare(
-            `SELECT reference, invoice_id, kind FROM attempts WHERE reference LIKE ? ESCAPE '\\'
-             UNION ALL
-             SELECT mismatched_reference, invoice_id, 'unrecognised' FROM attempts WHERE mismatched_reference LIKE ? ESCAPE '\\'
-             UNION ALL
-             SELECT reference, invoice_id, 'outside-payout' FROM outside_payouts WHERE reference LIKE ? ESCAPE '\\'
-             LIMIT ?`,
+            `SELECT reference, invoice_id, kind FROM (
+               SELECT reference, invoice_id, kind, opened_at AS at FROM attempts WHERE reference LIKE ? ESCAPE '\\'
+               UNION ALL
+               SELECT mismatched_reference, invoice_id, 'unrecognised', opened_at FROM attempts WHERE mismatched_reference LIKE ? ESCAPE '\\'
+               UNION ALL
+               SELECT reference, invoice_id, 'outside-payout', found_at FROM outside_payouts WHERE reference LIKE ? ESCAPE '\\'
+             )
+             ORDER BY at IS NULL, at DESC, reference LIMIT ?`,
           )
           .all(like, like, like, limit) as unknown as TransferHit[]
       ).map((row: TransferHit) => ({ reference: row.reference, invoiceId: row.invoice_id, kind: row.kind })),
