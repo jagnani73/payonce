@@ -71,10 +71,12 @@ import {
   type OutsidePayout,
   type RunRow,
 } from "../store/ledger.js";
-import { formatMoney } from "../domain/money.js";
-import { RAIL_FAILURE_CODES } from "../outages/outages.js";
+import { formatAmount, formatMoney } from "../domain/money.js";
 import { currencyFloor, debitCurrency, floorFor, type ReservePolicy } from "../domain/reserve.js";
 import { SANDBOX_BANK_AFTER, SANDBOX_BANK_RECOVER, SANDBOX_BANK_STOPPED, TRY_WORDS_SOURCE } from "../text/words.js";
+import { CURRENCY_PATTERN, CURRENCY_SOURCE, FAILURE_CODE_SOURCE, METHOD_PATTERN, METHOD_SOURCE, REFERENCE_PATTERN, REFERENCE_SOURCE, STATUS_PATTERN, STATUS_SOURCE } from "../domain/patterns.js";
+import { FAILURE_WORDS, RAIL_FAILURE_CODES, RESENDABLE_FAILURE_CODES } from "../domain/failure-codes.js";
+import { capitalise } from "../text/printable.js";
 
 // The facts a model is given to explain one invoice. Every value is PayOnce's own
 // words, a closed-pattern value such as a bank reference, a status or an amount,
@@ -268,12 +270,8 @@ export interface WhyBuild {
 
 // ---------- closed patterns ----------
 
-const REF_PATTERN: RegExp = /^[A-Z0-9-]{1,30}$/;
-const STATUS_PATTERN: RegExp = /^[A-Z_]{1,30}$/;
-const CURRENCY_PATTERN: RegExp = /^[A-Z]{3}$/;
 const DATE_PATTERN: RegExp = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
 const COUNTRY_PATTERN: RegExp = /^[A-Z]{2}$/;
-const METHOD_PATTERN: RegExp = /^(?:LOCAL|SWIFT)$/;
 // A wallet or transfer method that is not a currency code or a method, as on a
 // payout found in Airwallex.
 const UNPASSED_WALLET: string = "(a wallet PayOnce does not pass on)";
@@ -282,19 +280,6 @@ const UNPASSED_METHOD: string = "(a transfer method PayOnce does not pass on)";
 // here and the line becomes a stand-in.
 const SAFE_LINE: RegExp = /^[A-Za-z0-9 .,:;()'%=+\-/[\]"#_]*$/;
 
-// The bank's failure codes, in PayOnce's words.
-export const FAILURE_WORDS: Readonly<Record<string, string>> = {
-  "91401": "system error",
-  "91402": "channel timeout",
-  "90701": "account closed",
-  "90101": "invalid account name or number",
-  "90802": "beneficiary bank returned",
-  "91001": "recall requested",
-  "91301": "duplication return",
-  "99901": "unable to apply",
-  "99902": "other",
-};
-const RESENDABLE: ReadonlySet<string> = new Set<string>(["91401", "91402"]);
 
 // The Airwallex error codes PayOnce passes on. Any other becomes UNPASSED_CODE.
 export const KNOWN_CODES: ReadonlySet<string> = new Set<string>([
@@ -314,16 +299,16 @@ export const KNOWN_CODES: ReadonlySet<string> = new Set<string>([
 ]);
 
 // Regular expression sources for the slots a line or a reason may hold.
-const REF: string = "[A-Z0-9-]{1,30}";
+const REF: string = REFERENCE_SOURCE;
 const UUID: string = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const REF_OR_ID: string = `(?:${REF}|${UUID})`;
-const STATUS: string = "[A-Z_]{1,30}";
+const STATUS: string = STATUS_SOURCE;
 const INV: string = "[A-Za-z0-9-]{1,40}";
 const INV_LIST: string = `${INV}(?:(?:, | and )${INV})*`;
-const MONEY: string = String.raw`-?[0-9][0-9,]*\.[0-9]{2} [A-Z]{3}`;
-const CUR: string = "[A-Z]{3}";
-const METHOD: string = "LOCAL|SWIFT";
-const RATE: string = String.raw`1 [A-Z]{3} = [0-9]+(?:\.[0-9]+)?(?:e[-+]?[0-9]+)? [A-Z]{3}`;
+const MONEY: string = String.raw`-?[0-9][0-9,]*\.[0-9]{2} ${CURRENCY_SOURCE}`;
+const CUR: string = CURRENCY_SOURCE;
+const METHOD: string = METHOD_SOURCE;
+const RATE: string = String.raw`1 ${CURRENCY_SOURCE} = [0-9]+(?:\.[0-9]+)?(?:e[-+]?[0-9]+)? ${CURRENCY_SOURCE}`;
 const PCT: string = String.raw`[0-9]+\.[0-9]{2}%`;
 const CLOCK: string = "[0-9]{2}:[0-9]{2} UTC";
 const DATE: string = "[0-9]{4}-[0-9]{2}-[0-9]{2}";
@@ -364,7 +349,7 @@ const SANDBOX_TRANSFER: string = `transfer ${REF}|the transfer`;
 const SANDBOX_ENDS: readonly string[] = [SANDBOX_BANK_AFTER, SANDBOX_BANK_STOPPED, SANDBOX_BANK_RECOVER];
 const SANDBOX_END: string = `(${SANDBOX_ENDS.map(escapeRegExp).join("|")})`;
 const OLD_CONVERTS_END: string = "If the bank has neither paid nor failed it by its deadline, a person hears about it";
-const SANDBOX_ANSWER: string = ": it answered ([0-9]{3})(?: ([A-Za-z0-9_]{1,40}))?|: it did not answer";
+const SANDBOX_ANSWER: string = `: it answered ([0-9]{3})(?: (${FAILURE_CODE_SOURCE}))?|: it did not answer`;
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -374,12 +359,8 @@ function pattern(source: string): RegExp {
   return new RegExp(`^(?:${source})$`);
 }
 
-function capitalise(text: string): string {
-  return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
 function ref(value: string | null | undefined): string | null {
-  return value !== null && value !== undefined && REF_PATTERN.test(value) ? value : null;
+  return value !== null && value !== undefined && REFERENCE_PATTERN.test(value) ? value : null;
 }
 
 function status(value: string | null | undefined): string | null {
@@ -1427,7 +1408,7 @@ const LINE_RULES: readonly LineRule[] = [
     `Outage (${N}) declared on (${CUR}) (${METHOD}): payouts to (${N}) payees failed with (${RAIL_CODES}) within (${N}) minutes \\(([\\s\\S]*)\\)\\. PayOnce opens no new payment on ${CUR} (?:${METHOD}) until a person ends the outage`,
     (match: RegExpExecArray): string => {
       const references: string[] = (match[7] ?? "").split(", ");
-      const named: string = references.every((reference: string): boolean => REF_PATTERN.test(reference)) ? ` (${references.join(", ")})` : "";
+      const named: string = references.every((reference: string): boolean => REFERENCE_PATTERN.test(reference)) ? ` (${references.join(", ")})` : "";
       return `Outage ${match[1] ?? ""} declared on ${match[2] ?? ""} ${match[3] ?? ""}: payouts to ${match[4] ?? ""} payees failed with ${match[5] ?? ""} within ${match[6] ?? ""} minutes${named}. PayOnce opens no new payment on ${match[2] ?? ""} ${match[3] ?? ""} until a person ends the outage`;
     },
   ),
@@ -1551,7 +1532,7 @@ function paymentFacts(ledger: Ledger, obligation: Obligation, attempt: Attempt, 
     deadline: live && deadlineAt !== null ? new Date(deadlineAt).toISOString() : null,
     pastDeadline: live && deadlineAt !== null ? now >= deadlineAt : null,
     failure: attempt.state === "failed" ? failureText(code) : null,
-    resendCanFix: attempt.state === "failed" && code !== null && /^[0-9]{5}$/.test(code) ? RESENDABLE.has(code) : null,
+    resendCanFix: attempt.state === "failed" && code !== null && /^[0-9]{5}$/.test(code) ? RESENDABLE_FAILURE_CODES.has(code) : null,
     amountFromWallet: money(attempt.amountMinor, attempt.currency),
     fee: money(attempt.feeMinor, attempt.feeCurrency),
     openedOnApproval: attempt.approvalId,
@@ -1735,14 +1716,13 @@ function policyFacts(obligation: Obligation, settings: WhySettings, builder: Fac
       validity = "the setting could not be read";
     }
   }
-  const major = (minor: number): string => formatMoney(minor, "").trim();
   return {
     note: "These settings are as PayOnce reads them now. An earlier step may have run under other settings",
     approvers: settings.approvals.approvers.map((approver: { name: string; limitMinor: number }) => ({
       person: builder.aliases.person(approver.name),
-      limit: major(approver.limitMinor),
+      limit: formatAmount(approver.limitMinor),
     })),
-    twoApproversAbove: major(settings.approvals.twoApproversAboveMinor),
+    twoApproversAbove: formatAmount(settings.approvals.twoApproversAboveMinor),
     approvalRequestExpiresAfterMinutes: settings.approvals.expiresAfterMs / 60_000,
     approvalsRefused: settings.approvals.problem !== null,
     bankDeadlineMinutes: deadlineMinutes(obligation.transferMethod),

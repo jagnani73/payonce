@@ -6,6 +6,8 @@ import type { Bank } from "./engine.js";
 import type { AttemptKind } from "../store/ledger.js";
 import { LineError } from "../text/line-error.js";
 import { PAID_OUTCOME, SANDBOX_BANK_AFTER, STAYS_IN_FLIGHT } from "../text/words.js";
+import { FAILURE_CODE_PATTERN, REFERENCE_PATTERN } from "../domain/patterns.js";
+import { capitalise } from "../text/printable.js";
 
 const SETTLED_STATUSES: ReadonlySet<string> = new Set<string>([
   "PAID",
@@ -15,11 +17,6 @@ const SETTLED_STATUSES: ReadonlySet<string> = new Set<string>([
 
 const READ_TRIES: number = 4;
 const READ_RETRY_MS: number = 1_500;
-
-// The bank's short reference and an Airwallex error code, in the forms Airwallex
-// gives them. Anything else is left out of the line.
-const REFERENCE: RegExp = /^[A-Z0-9-]{1,30}$/;
-const ERROR_CODE: RegExp = /^[A-Za-z0-9_]{1,40}$/;
 
 // What the sandbox bank was doing: reading the transfer, waiting for Airwallex to
 // move it past SCHEDULED, asking the simulator to move it to a status, or leaving
@@ -36,10 +33,10 @@ export class SandboxBankError extends LineError {
   readonly what: string;
 
   constructor(step: BankStep, reference: string | null, error: AirwallexError | AirwallexUnreachableError | TransferWaitError | null) {
-    const named: string = reference !== null && REFERENCE.test(reference) ? `transfer ${reference}` : "the transfer";
+    const named: string = reference !== null && REFERENCE_PATTERN.test(reference) ? `transfer ${reference}` : "the transfer";
     const answered: string =
       error instanceof AirwallexError
-        ? `: it answered ${error.status}${error.code !== undefined && ERROR_CODE.test(error.code) ? ` ${error.code}` : ""}`
+        ? `: it answered ${error.status}${error.code !== undefined && FAILURE_CODE_PATTERN.test(error.code) ? ` ${error.code}` : ""}`
         : error instanceof AirwallexUnreachableError
           ? ": it did not answer"
           : "";
@@ -47,9 +44,9 @@ export class SandboxBankError extends LineError {
       step === "read"
         ? `The sandbox bank could not read ${named} from Airwallex this time${answered}, so the simulator, which stands in for the bank, did not move it`
         : step === "wait"
-          ? `${named.charAt(0).toUpperCase()}${named.slice(1)} stayed SCHEDULED in Airwallex for longer than the sandbox bank waits, so the simulator, which stands in for the bank, did not move it this time`
+          ? `${capitalise(named)} stayed SCHEDULED in Airwallex for longer than the sandbox bank waits, so the simulator, which stands in for the bank, did not move it this time`
           : step === "converts"
-            ? `The sandbox's simulator, which stands in for the bank, does not move a transfer that converts currency, so nothing here pays or fails ${reference !== null && REFERENCE.test(reference) ? reference : "it"}, and it stays in PROCESSING`
+            ? `The sandbox's simulator, which stands in for the bank, does not move a transfer that converts currency, so nothing here pays or fails ${reference !== null && REFERENCE_PATTERN.test(reference) ? reference : "it"}, and it stays in PROCESSING`
             : `The sandbox's simulator, which stands in for the bank, did not move ${named} to ${step} this time${answered}`;
     super(`${what}. ${SANDBOX_BANK_AFTER}`, "bank", error === null ? what : error.message);
     this.name = "SandboxBankError";

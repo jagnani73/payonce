@@ -4,7 +4,6 @@ import {
   BOARD_GROUPS,
   BOARD_ORIGINS,
   boardReport,
-  CURRENCY_PATTERN,
   isBoardGroup,
   isBoardOrigin,
   type BoardEntry,
@@ -15,9 +14,10 @@ import {
   type BoardTotal,
 } from "../../views/incident-board.js";
 import { Ledger, LEDGER_PATH } from "../../store/ledger.js";
-import { formatMoney } from "../../domain/money.js";
+import { formatAmount, formatMoney } from "../../domain/money.js";
 import { sendsText, type OutageCode } from "../../outages/outages.js";
 import { printable, say, shownFailureCode, utcTime } from "../../text/printable.js";
+import { CURRENCY_PATTERN } from "../../domain/patterns.js";
 
 // The incident board in the terminal, ranked as the page ranks it. It reads only
 // the ledger, with no Airwallex call, and loads .env only if there is one, for the
@@ -100,7 +100,7 @@ function totalLine(total: BoardTotal): string {
   ];
   const parts: string[] = buckets
     .filter(([minor]: [number, string]): boolean => minor !== 0)
-    .map(([minor, what]: [number, string]): string => `${what} ${formatMoney(minor, "").trim()}`);
+    .map(([minor, what]: [number, string]): string => `${what} ${formatAmount(minor)}`);
   const notes: string[] = [];
   if (total.estimated) {
     notes.push("part estimated");

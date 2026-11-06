@@ -1,9 +1,10 @@
-import { boardReport, CURRENCY_PATTERN, isBoardGroup, isBoardOrigin, type BoardReport } from "../../../views/incident-board.js";
+import { boardReport, isBoardGroup, isBoardOrigin, type BoardReport } from "../../../views/incident-board.js";
 import { isPeriod, metricsReport, PERIOD_PROBLEM, type MetricsReport } from "../../../views/metrics.js";
 import { supplierDetail, supplierList, type SupplierDetail } from "../../../views/suppliers.js";
 import type { HttpApp } from "../app.js";
 import { HttpError, sendJson } from "../http.js";
 import type { Route } from "../router.js";
+import { CURRENCY_PATTERN } from "../../../domain/patterns.js";
 
 // The last three metrics answers, by period, the ledger's change stamp and the
 // minute, since durations still running and requests open now move with the clock.

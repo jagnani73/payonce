@@ -1,5 +1,6 @@
 import type { Obligation } from "../store/ledger.js";
 import { formatMoney, toMinor } from "./money.js";
+import { CURRENCY_PATTERN } from "./patterns.js";
 
 // The cash each wallet keeps back, by currency, in minor units. A currency that
 // is not listed has no floor, and the policy then sends every automatic
@@ -16,8 +17,6 @@ export interface CurrencyFloor {
   minor: number | null;
   source: FloorSource;
 }
-
-const CURRENCY_PATTERN: RegExp = /^[A-Z]{3}$/;
 
 // The wallet a payment's money leaves: the invoice's own currency, or the one it
 // is paid from across currencies.

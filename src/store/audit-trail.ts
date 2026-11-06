@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { capitalise } from "../text/printable.js";
 
 // The prev_hash of an invoice's first line, and the ledger's running hash before
 // its first line.
@@ -447,7 +448,7 @@ function lostLines(ids: readonly (string | number)[], one: string, many: string,
 function sentences(problems: string[]): string {
   return problems
     .map((problem: string, index: number): string =>
-      index === 0 ? problem : `${problem.charAt(0).toUpperCase()}${problem.slice(1)}`,
+      index === 0 ? problem : capitalise(problem),
     )
     .join(". ");
 }

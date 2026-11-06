@@ -23,8 +23,9 @@ import {
 import { toMinor } from "../domain/money.js";
 import { railFailureSeen } from "../outages/outages.js";
 import { oneLine, say, sayWarning } from "../text/printable.js";
+import { TRANSFER_METHODS } from "../domain/patterns.js";
 
-const METHODS: ReadonlySet<string> = new Set<string>(["LOCAL", "SWIFT"]);
+const METHODS: ReadonlySet<string> = new Set<string>(TRANSFER_METHODS);
 
 // A found payout's invoice has no floor of its own, so its currency's floor in
 // RESERVE_FLOORS applies.

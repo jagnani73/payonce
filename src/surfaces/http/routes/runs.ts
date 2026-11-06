@@ -48,6 +48,7 @@ import {
 import { adviceFor, isLive, type AuditSummary, type HttpApp } from "../app.js";
 import { HttpError, MAX_FINDING_LENGTH, name, readJson, RUN_ID_PATTERN, sendJson, text, UPLOAD_BODY_MS } from "../http.js";
 import type { Route } from "../router.js";
+import { capitalise } from "../../../text/printable.js";
 
 // A pay run file travels as a string inside JSON. Its largest, 40,000 characters,
 // takes at most 6 bytes a character once escaped, so this always fits it, and
@@ -223,7 +224,7 @@ export function runRoutes(app: HttpApp): Route[] {
       describeBreaks(report.breaks) ?? (ledger.intact ? null : describeRunLedger(ledger));
     return {
       lines: report.lines,
-      problem: problem === null ? null : problem.charAt(0).toUpperCase() + problem.slice(1),
+      problem: problem === null ? null : capitalise(problem),
     };
   }
 

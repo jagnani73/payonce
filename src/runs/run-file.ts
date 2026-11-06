@@ -4,6 +4,7 @@ import { validDomain } from "../intake/eml.js";
 import { INVOICE_ID_PATTERN, type TransferMethod } from "../store/ledger.js";
 import { printable } from "../text/printable.js";
 import { PAID_OUTCOME, SANDBOX_OUTCOMES } from "../text/words.js";
+import { TRANSFER_METHODS } from "../domain/patterns.js";
 
 // A column a pay run file can have. Nothing else is read from a file: no bank
 // details and no phone number. supplier_domain is the domain the supplier's
@@ -55,7 +56,6 @@ const UNSAFE_NAME: RegExp =
 export const BENEFICIARY_ID_PATTERN: RegExp = /^[A-Za-z0-9-]{1,64}$/;
 const CURRENCY_PATTERN: RegExp = /^[A-Za-z]{3}$/;
 const AMOUNT_PATTERN: RegExp = /^(0|[1-9][0-9]{0,11})(?:\.([0-9]{1,2}))?$/;
-const METHODS: readonly TransferMethod[] = ["LOCAL", "SWIFT"];
 const MINOR_DIGITS: number = 2;
 
 // One data row as read, with what its cells say and every problem in them.
@@ -300,7 +300,7 @@ export function rowFromCells(line: number, columns: string[], cells: string[]): 
 
   const methodCell: string = value("method").toUpperCase();
   const method: TransferMethod | null =
-    METHODS.find((entry: TransferMethod): boolean => entry === methodCell) ?? null;
+    TRANSFER_METHODS.find((entry: TransferMethod): boolean => entry === methodCell) ?? null;
   if (methodCell !== "" && method === null) {
     problems.push(`The method ${value("method")} is not LOCAL or SWIFT`);
   }

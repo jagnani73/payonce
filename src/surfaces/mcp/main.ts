@@ -28,6 +28,7 @@ import {
 import { loadSettings, type Settings } from "../../settings.js";
 import { printableError, sayError } from "../../text/printable.js";
 import { SUPPLIER_KEY_PATTERN } from "../../views/suppliers.js";
+import { CURRENCY_PATTERN } from "../../domain/patterns.js";
 
 // A read-only Model Context Protocol server over stdio, so an agent such as
 // Claude can read PayOnce's ledger. It opens the ledger read-only for each call,
@@ -301,7 +302,7 @@ function createServer(): McpServer {
         group: z.enum(["person", "deadline", "bank", "open"]).optional(),
         currency: z
           .string()
-          .regex(/^[A-Z]{3}$/)
+          .regex(CURRENCY_PATTERN)
           .optional()
           .describe("The wallet the money leaves, such as USD"),
         origin: z.enum(["payonce", "outside", "pay-run"]).optional(),

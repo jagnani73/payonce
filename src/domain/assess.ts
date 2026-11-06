@@ -3,6 +3,7 @@ import type { Transfer, TransferBankDetails } from "../airwallex/transfers.js";
 import type { OriginalTransferState } from "./incident.js";
 import type { AttemptState } from "../store/ledger.js";
 import { readMinor } from "./money.js";
+import { RESENDABLE_FAILURE_CODES } from "./failure-codes.js";
 
 export interface Fee {
   minor: number;
@@ -25,15 +26,6 @@ const IN_FLIGHT_STATUSES: ReadonlySet<string> = new Set<string>([
 export const FAILED_STATUS_LIST: readonly string[] = ["FAILED", "CANCELLED"];
 
 const FAILED_STATUSES: ReadonlySet<string> = new Set<string>(FAILED_STATUS_LIST);
-
-// 91401 system error, 91402 channel timeout. Both fail on the sending side, so the
-// beneficiary details were never rejected and the same payment can be sent again.
-// The sandbox reports failure.details.type as INCORRECT_ROUTING for every failure,
-// so the code is the only field worth reading.
-export const RESENDABLE_FAILURE_CODES: ReadonlySet<string> = new Set<string>([
-  "91401",
-  "91402",
-]);
 
 export function originalStateOf(transfer: Transfer): OriginalTransferState {
   if (IN_FLIGHT_STATUSES.has(transfer.status)) {

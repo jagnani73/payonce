@@ -1,4 +1,3 @@
-import { RESENDABLE_FAILURE_CODES } from "../domain/assess.js";
 import { attemptLostFee, payoutLostFee } from "../engine/cash-position.js";
 import {
   expiryOf,
@@ -11,10 +10,11 @@ import {
   type MetricsRead,
   type MetricsRequest,
 } from "../store/ledger.js";
-import { RAIL_FAILURE_CODES } from "../outages/outages.js";
 import { BREAK_KINDS, clearsByItself, KIND_LABELS, type BreakKind } from "../recon/recon-match.js";
 import type { BreakTimes } from "../store/recon-store.js";
-import { FAILURE_WORDS, KNOWN_CODES, REASON_LEADS, type ReasonCode } from "../explain/why-facts.js";
+import { KNOWN_CODES, REASON_LEADS, type ReasonCode } from "../explain/why-facts.js";
+import { CURRENCY_PATTERN } from "../domain/patterns.js";
+import { FAILURE_WORDS, RAIL_FAILURE_CODES, RESENDABLE_FAILURE_CODES } from "../domain/failure-codes.js";
 
 // Ops metrics over three periods, from the ledger alone. Display only: nothing
 // PayOnce decides, alerts on, binds or checks reads them. Every string in a
@@ -29,7 +29,6 @@ export const PERIOD_PROBLEM: string = "The period is 7d, 30d or all";
 
 const DAY_MS: number = 86_400_000;
 const PERIOD_DAYS: Record<Exclude<Period, "all">, number> = { "7d": 7, "30d": 30 };
-const CURRENCY: RegExp = /^[A-Z]{3}$/;
 const FIVE_DIGITS: RegExp = /^[0-9]{5}$/;
 const ISO_YEAR: RegExp = /^[0-9]{4}-/;
 
@@ -543,7 +542,7 @@ function paymentsOf(read: MetricsRead, index: Indexed, window: Window): Payments
       continue;
     }
     const currency: string = obligation.currency;
-    if (!CURRENCY.test(currency)) {
+    if (!CURRENCY_PATTERN.test(currency)) {
       unreadableInvoices.add(attempt.invoiceId);
       continue;
     }
@@ -601,7 +600,7 @@ function paymentsOf(read: MetricsRead, index: Indexed, window: Window): Payments
     if (took === null) {
       return false;
     }
-    if (!CURRENCY.test(took.currency)) {
+    if (!CURRENCY_PATTERN.test(took.currency)) {
       unreadableInvoices.add(invoiceId);
       return true;
     }
@@ -706,7 +705,7 @@ function failuresOf(read: MetricsRead, index: Indexed, window: Window): Failures
       notOnFile += 1;
       continue;
     }
-    if (!CURRENCY.test(obligation.currency)) {
+    if (!CURRENCY_PATTERN.test(obligation.currency)) {
       unreadable += 1;
       continue;
     }
@@ -837,7 +836,7 @@ function incidentsOf(read: MetricsRead, index: Indexed, window: Window): Inciden
     const attempts: MetricsAttempt[] = index.attempts.get(obligation.invoiceId) ?? [];
     const how: CloseHow = closeHow(obligation, attempts);
     const group: CloseGroup = GROUP_OF[how];
-    if (CURRENCY.test(obligation.currency)) {
+    if (CURRENCY_PATTERN.test(obligation.currency)) {
       const row: ClosedRow = rowFor(closed, `${obligation.currency}|${how}`, () => ({
         currency: obligation.currency,
         how,
@@ -956,7 +955,7 @@ function feesOf(read: MetricsRead, index: Indexed, window: Window): FeesTable {
   let notOnFile: number = 0;
   let unreadable: number = 0;
   const add = (currency: string, feeMinor: number | null, outside: boolean): void => {
-    if (!CURRENCY.test(currency)) {
+    if (!CURRENCY_PATTERN.test(currency)) {
       unreadable += 1;
       return;
     }
@@ -1025,7 +1024,7 @@ function duplicatesOf(read: MetricsRead, window: Window): DuplicatesTable {
       notOnFile += 1;
       continue;
     }
-    if (!CURRENCY.test(obligation.currency)) {
+    if (!CURRENCY_PATTERN.test(obligation.currency)) {
       unreadable += 1;
       continue;
     }
@@ -1093,7 +1092,7 @@ function outagesOf(read: MetricsRead, window: Window, now: number): OutagesTable
         continue;
       }
     }
-    if (!CURRENCY.test(outage.currency)) {
+    if (!CURRENCY_PATTERN.test(outage.currency)) {
       unreadable += 1;
       continue;
     }

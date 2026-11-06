@@ -1,4 +1,5 @@
 import { inspect } from "node:util";
+import { FAILURE_CODE_PATTERN, REFERENCE_PATTERN } from "../domain/patterns.js";
 
 // What PayOnce prints to a terminal. Supplier and payee names and error text come
 // from Airwallex, names and notes are typed, and a pay run file comes from
@@ -13,10 +14,6 @@ const CONTROL: RegExp = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
 const HIDDEN: RegExp = /[\p{Cf}\u{e0000}-\u{e007f}]/gu;
 // The same characters one at a time, for JSON, where each is written as \uXXXX.
 const UNSAFE_IN_JSON: RegExp = /[\u007f-\u009f\u2028\u2029\p{Cf}\u{e0000}-\u{e007f}]/gu;
-// The bank's short reference and a failure code in the forms Airwallex gives
-// them, as the supplier view and the MCP answers accept them.
-const REFERENCE: RegExp = /^[A-Z0-9-]{1,30}$/;
-const FAILURE_CODE: RegExp = /^[A-Za-z0-9_]{1,40}$/;
 
 export const UNSHOWN_REFERENCE: string = "a reference PayOnce cannot show";
 export const UNSHOWN_FAILURE_CODE: string = "a code PayOnce cannot show";
@@ -24,12 +21,12 @@ export const UNSHOWN_FAILURE_CODE: string = "a code PayOnce cannot show";
 // A short reference or a transfer reference from Airwallex, or PayOnce's words
 // for one in any other form, so a stored value cannot print a line of its own.
 export function shownReference(value: unknown): string {
-  return typeof value === "string" && REFERENCE.test(value) ? value : UNSHOWN_REFERENCE;
+  return typeof value === "string" && REFERENCE_PATTERN.test(value) ? value : UNSHOWN_REFERENCE;
 }
 
 // A failure code from Airwallex, or PayOnce's words for one in any other form.
 export function shownFailureCode(value: unknown): string {
-  return typeof value === "string" && FAILURE_CODE.test(value) ? value : UNSHOWN_FAILURE_CODE;
+  return typeof value === "string" && FAILURE_CODE_PATTERN.test(value) ? value : UNSHOWN_FAILURE_CODE;
 }
 
 // A time as the terminal commands print it, "2026-11-03 01:49 UTC", whatever
@@ -62,6 +59,17 @@ export function printableLines(text: string): string {
 // stay as written, because the page and printable drop them when they show it.
 export function oneLine(text: string): string {
   return text.replace(CONTROL, " ");
+}
+
+// The same, trimmed, for the fields of an alert.
+export function trimmedLine(text: string): string {
+  return oneLine(text).trim();
+}
+
+// The text with its first character in capitals, such as a clause that starts a
+// sentence.
+export function capitalise(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 // JSON with every character a terminal could act on written as \uXXXX.

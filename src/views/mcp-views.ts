@@ -53,6 +53,8 @@ import {
   type RunCash,
 } from "../runs/runs.js";
 import { resolveSupplier, supplierDetail, supplierList, type Resolved, type SupplierDetail } from "./suppliers.js";
+import { CURRENCY_PATTERN, TRANSFER_METHODS } from "../domain/patterns.js";
+import { capitalise } from "../text/printable.js";
 
 // What the read-only MCP server answers, built from the ledger alone. The shapes
 // follow the JSON API's, without the server's busy and watching, and with the
@@ -71,9 +73,7 @@ export const NOT_CHAINED: string =
   "This ledger's timelines are not a hash chain yet. The next pnpm ui or other command that opens it starts the chain";
 const RUNS_NOT_CHAINED: string =
   "This ledger's pay run timelines are not a hash chain yet. The next pnpm ui or other command that opens it starts the chain";
-const CURRENCY: RegExp = /^[A-Z]{3}$/;
 const DAY: RegExp = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
-const METHODS: readonly string[] = ["LOCAL", "SWIFT"];
 const BALANCE_MAX_AGE_MS: number = 30_000;
 
 const NO_BALANCES: BalanceState = {
@@ -111,7 +111,7 @@ function isDayCount(value: unknown): boolean {
 // wrapped where it does not fit.
 function vouchedArrival(arrival: ArrivalTerms): ArrivalTerms | null {
   const fits: boolean =
-    METHODS.includes(arrival.method) &&
+    TRANSFER_METHODS.includes(arrival.method) &&
     (arrival.route === null || ROUTES.includes(arrival.route)) &&
     isDay(arrival.from) &&
     [arrival.earliest, arrival.latest, arrival.dueDate].every(
@@ -150,7 +150,7 @@ function timelineOf(events: LedgerEvent[], lines: number): Timeline {
 }
 
 function capitalised(problem: string | null): string | null {
-  return problem === null ? null : problem.charAt(0).toUpperCase() + problem.slice(1);
+  return problem === null ? null : capitalise(problem);
 }
 
 // The line under an incident's timeline on the page: its length and the first
@@ -360,7 +360,7 @@ export function runView(ledger: Ledger, runId: number, lines: number): unknown {
       return {
         ...row,
         feeSeen:
-          arrival === null || row.currency === null || !CURRENCY.test(row.currency)
+          arrival === null || row.currency === null || !CURRENCY_PATTERN.test(row.currency)
             ? null
             : feeSeenText(ledger, row.currency, arrival.method),
         arrivalAdvice: arrival === null ? null : adviceOf(arrival, run.state === "waiting"),
@@ -480,7 +480,7 @@ export function cachedBalances(answer: unknown): CachedBalances | null {
   const floors: Map<string, number> = new Map<string, number>();
   for (const entry of answer["currencies"] as unknown[]) {
     const currency: unknown = isRecord(entry) ? entry["currency"] : undefined;
-    if (!isRecord(entry) || typeof currency !== "string" || !CURRENCY.test(currency)) {
+    if (!isRecord(entry) || typeof currency !== "string" || !CURRENCY_PATTERN.test(currency)) {
       continue;
     }
     const floor: unknown = entry["floor"];

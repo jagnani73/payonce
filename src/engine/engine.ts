@@ -134,11 +134,12 @@ import {
 } from "../store/ledger.js";
 import { LineError } from "../text/line-error.js";
 import { ModelReadError, triesText } from "../reader/reader-error.js";
-import { formatMoney, readMinor, toMajor, toMinor } from "../domain/money.js";
+import { formatMoney, invoiceMoney, readMinor, toMajor, toMinor } from "../domain/money.js";
 import { holdLine, railFailureSeen, waitingLine } from "../outages/outages.js";
 import { sendAttempt, syncTransfer, wasRejected, type Decide } from "./payments.js";
-import { oneLine, say, sayError, sayWarning, shownReference } from "../text/printable.js";
+import { capitalise, oneLine, say, sayError, sayWarning, shownReference } from "../text/printable.js";
 import { debitCurrency, floorFor, type ReservePolicy } from "../domain/reserve.js";
+import { STATUS_PATTERN } from "../domain/patterns.js";
 
 // What the reader found. unverifiedSenders is kept for display; the policy works
 // the sender check out again from the stored emails. unread marks a thread the
@@ -378,14 +379,6 @@ function describe(transfer: Transfer): string {
       ? ""
       : `, ${transfer.failure.code} ${transfer.failure.message ?? ""}`.trimEnd();
   return `${transfer.short_reference_id} ${transfer.status}${failure}`;
-}
-
-function capitalise(text: string): string {
-  return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
-function money(obligation: Obligation): string {
-  return formatMoney(obligation.amountMinor, obligation.currency);
 }
 
 // A payout's amount, payee and status, as the timeline shows it.
@@ -1192,7 +1185,7 @@ async function assess(
       committed > 0
         ? `, and ${formatMoney(committed, wallet)} is committed to other payments not sent yet`
         : "";
-    const replacement: string = converts ? `A replacement of ${money(obligation)}` : "A replacement";
+    const replacement: string = converts ? `A replacement of ${invoiceMoney(obligation)}` : "A replacement";
     note(
       engine.ledger,
       obligation.invoiceId,
@@ -1414,7 +1407,7 @@ async function send(
     engine.ledger,
     obligation.invoiceId,
     "payment",
-    `${capitalise(kind)} ${created.short_reference_id} sent: ${money(obligation)} to ${obligation.supplier}${conversionText(created)}${fee}`,
+    `${capitalise(kind)} ${created.short_reference_id} sent: ${invoiceMoney(obligation)} to ${obligation.supplier}${conversionText(created)}${fee}`,
   );
   noteChecks(engine, obligation.invoiceId, checks);
   const sentTo: TransferBankDetails | undefined = created.beneficiary?.bank_details;
@@ -1954,7 +1947,7 @@ function quoteLine(obligation: Obligation, fx: FxTerms, previous: FxTerms | unde
     previous === undefined || previous.quoteId === fx.quoteId
       ? ""
       : `. The last request's quote was ${describeRate(previous)} (${formatMoney(previous.sellAmountMinor, previous.sellCurrency)})`;
-  return `Quote for ${money(obligation)}: ${formatMoney(fx.sellAmountMinor, fx.sellCurrency)} at ${describeRate(fx)}, ${markupOf(fx)} from mid-market, held until ${until} UTC${was}`;
+  return `Quote for ${invoiceMoney(obligation)}: ${formatMoney(fx.sellAmountMinor, fx.sellCurrency)} at ${describeRate(fx)}, ${markupOf(fx)} from mid-market, held until ${until} UTC${was}`;
 }
 
 // Asks the approvers to approve a payment under the approval policy, and says
@@ -2002,8 +1995,8 @@ function awaitApproval(
         : `, about ${formatMoney(terms.fx.sellAmountMinor, terms.fx.sellCurrency)},`;
     const payment: string =
       terms.action === "replace"
-        ? `A replacement of ${money(obligation)}${fx}`
-        : `Paying ${money(obligation)} for this invoice${fx}`;
+        ? `A replacement of ${invoiceMoney(obligation)}${fx}`
+        : `Paying ${invoiceMoney(obligation)} for this invoice${fx}`;
     note(
       engine.ledger,
       invoiceId,
@@ -2097,7 +2090,7 @@ function awaitApproval(
     return null;
   }
   // A held invoice can be closed without paying instead.
-  const payment: string = `${money(obligation)} to ${terms.payTo} (the account on file)${paidWith(terms.fx)}`;
+  const payment: string = `${invoiceMoney(obligation)} to ${terms.payTo} (the account on file)${paidWith(terms.fx)}`;
   note(
     engine.ledger,
     invoiceId,
@@ -3876,7 +3869,6 @@ function coveredByClose(ledger: Ledger, invoiceId: string): CoveredTransfer[] {
 // Airwallex's transfer ids are UUIDs and its statuses capital words, so a stored
 // value in any other form is not shown.
 const TRANSFER_ID: RegExp = /^[A-Za-z0-9-]{1,64}$/;
-const BANK_STATUS: RegExp = /^[A-Z_]{1,30}$/;
 
 // How a close names the transfers it covers, as the card and pnpm close show them.
 // The bank's reference, transfer id and status show only in their own forms,
@@ -3886,7 +3878,7 @@ export function coveredText(transfer: CoveredTransfer): string {
   const status: string =
     transfer.status === null
       ? "status not read"
-      : BANK_STATUS.test(transfer.status)
+      : STATUS_PATTERN.test(transfer.status)
         ? transfer.status
         : "a status PayOnce cannot show";
   return `${shownReference(transfer.reference)} (${id}), ${status}, under the ${transfer.kind}'s request id`;

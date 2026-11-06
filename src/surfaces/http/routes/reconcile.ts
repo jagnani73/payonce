@@ -9,10 +9,10 @@ import {
   type BreakView,
 } from "../../../recon/reconcile.js";
 import { ReconChangedError, ReconKindsError, ReconUnknownError } from "../../../store/recon-store.js";
-import { CURRENCY_PATTERN } from "../../../views/incident-board.js";
 import type { HttpApp } from "../app.js";
 import { HttpError, readJson, sendJson, typed } from "../http.js";
 import type { Route } from "../router.js";
+import { CURRENCY_PATTERN } from "../../../domain/patterns.js";
 
 // Reconciliation's routes. The report and the movements read the ledger alone.
 // A person explains breaks of one kind, bound to the facts the page showed.

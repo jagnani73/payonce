@@ -48,6 +48,7 @@ import {
 } from "../outages/outages.js";
 import { debitCurrency } from "../domain/reserve.js";
 import { runStatus, type RunStatus } from "../runs/runs.js";
+import { RAIL_PATTERN } from "../domain/patterns.js";
 
 // The incident board: every invoice that is not closed, and every pay row of the
 // run waiting for approval, ranked by how soon a person should look at it, then
@@ -73,9 +74,6 @@ export const ORIGIN_LABELS: Record<BoardOrigin, string> = {
   outside: "Sent outside PayOnce",
   "pay-run": "Pay run",
 };
-
-export const CURRENCY_PATTERN: RegExp = /^[A-Z]{3}$/;
-const RAIL_NAME: RegExp = /^[A-Z]{3} [A-Z_]{1,20}$/;
 
 // Money that can still leave a wallet. A fee kept on a failed transfer has left.
 const AT_RISK: ReadonlySet<CashKind> = new Set<CashKind>([...FIRM_KINDS, ...WAITING_KINDS, "with-bank", "outside"]);
@@ -483,7 +481,7 @@ function invoiceTouch(
 // and those lines hold only PayOnce's own words and figures, so a rail that is
 // not a currency code and a method is not named there.
 function railName(mark: BoardOutageMark): string {
-  return RAIL_NAME.test(mark.rail) ? mark.rail : "a rail PayOnce cannot name";
+  return RAIL_PATTERN.test(mark.rail) ? mark.rail : "a rail PayOnce cannot name";
 }
 
 function outageLead(mark: BoardOutageMark): string {

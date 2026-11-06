@@ -57,11 +57,12 @@ import {
   type Signoff,
   type TransferMethod,
 } from "../store/ledger.js";
-import { formatMoney } from "../domain/money.js";
+import { formatAmount, formatMoney } from "../domain/money.js";
 import { runHoldLine, runWaitingLine } from "../outages/outages.js";
 import { oneLine, printable, say, sayError } from "../text/printable.js";
 import { currencyFloor, type CurrencyFloor, type FloorSource } from "../domain/reserve.js";
 import { rowFromCells, type RunFile, type RunFileRow } from "./run-file.js";
+import { TRANSFER_METHODS } from "../domain/patterns.js";
 
 // The Dispatcher key for a run's steps. A colon cannot be in an invoice number, so
 // it never names an invoice.
@@ -120,10 +121,8 @@ interface Payee {
   lastPaid: { reference: string | null; routeKey: string; payTo: string } | undefined;
 }
 
-const METHODS: readonly TransferMethod[] = ["LOCAL", "SWIFT"];
-
 function amount(minor: number | null): string {
-  return minor === null ? "unknown" : formatMoney(minor, "").trim();
+  return minor === null ? "unknown" : formatAmount(minor);
 }
 
 function listOf(items: string[]): string {
@@ -310,7 +309,7 @@ function checkRow(
             : `The beneficiary's account is in ${details.account_currency}, and the row pays ${row.currency}`,
         );
       }
-      const usable: TransferMethod[] = METHODS.filter((entry: TransferMethod): boolean =>
+      const usable: TransferMethod[] = TRANSFER_METHODS.filter((entry: TransferMethod): boolean =>
         payee.methods.includes(entry),
       );
       if (row.method !== null && !usable.includes(row.method)) {

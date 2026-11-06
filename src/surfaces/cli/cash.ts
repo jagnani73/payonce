@@ -10,11 +10,11 @@ import {
 } from "../../engine/cash-position.js";
 import { loadEnvIfPresent } from "../../env-file.js";
 import { Ledger, LEDGER_PATH, readingSoft } from "../../store/ledger.js";
-import { formatMoney } from "../../domain/money.js";
 import { recordMissingFees } from "../../engine/payments.js";
 import { say } from "../../text/printable.js";
 import { describeFloors, type ReservePolicy } from "../../domain/reserve.js";
 import { loadSettings, type Settings } from "../../settings.js";
+import { formatAmount } from "../../domain/money.js";
 
 const LABEL_WIDTH: number = 34;
 const DETAIL_WIDTH: number = 30;
@@ -22,7 +22,7 @@ const AMOUNT_WIDTH: number = 16;
 const INVOICES_SHOWN: number = 3;
 
 function amount(minor: number | null): string {
-  return minor === null ? "Unknown" : formatMoney(minor, "").trim();
+  return minor === null ? "Unknown" : formatAmount(minor);
 }
 
 // A detail too long for its column goes on a line of its own under the label, so

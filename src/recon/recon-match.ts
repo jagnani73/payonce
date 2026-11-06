@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { deadlineMinutes } from "../domain/deadlines.js";
 import { INVOICE_ID_PATTERN } from "../store/ledger.js";
 import { formatMoney } from "../domain/money.js";
+import { CURRENCY_PATTERN, REFERENCE_PATTERN, STATUS_PATTERN } from "../domain/patterns.js";
+import { capitalise } from "../text/printable.js";
 
 // Reconciliation's matcher: Airwallex's wallet movements and transfers against
 // each other and against PayOnce's ledger. It is pure. It reads nothing and
@@ -455,7 +457,7 @@ export function typeWords(type: unknown): string {
 // The same, as a label: "Deposit", "Payout reversal", "Another kind".
 export function typeName(type: unknown): string {
   const words: string = typeWords(type).replace(/^(a|an) /, "");
-  return `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
+  return capitalise(words);
 }
 
 export function twoDecimal(currency: string): boolean {
@@ -1059,26 +1061,22 @@ function factsCurrency(raw: string): unknown {
 
 // ---------- wording ----------
 
-const CURRENCY: RegExp = /^[A-Z]{3}$/;
-const REFERENCE: RegExp = /^[A-Z0-9-]{1,30}$/;
-const STATUS: RegExp = /^[A-Z_]{1,30}$/;
-
 // Every slot is checked again as it is read back, whatever the store holds, so a
 // fact that does not fit reads in PayOnce's words instead of as itself.
 function walletOf(value: unknown): string {
-  return typeof value === "string" && CURRENCY.test(value) ? `the ${value} wallet` : "a wallet";
+  return typeof value === "string" && CURRENCY_PATTERN.test(value) ? `the ${value} wallet` : "a wallet";
 }
 
 function walletOwn(value: unknown): string {
-  return typeof value === "string" && CURRENCY.test(value) ? `The ${value} wallet's` : "A wallet's";
+  return typeof value === "string" && CURRENCY_PATTERN.test(value) ? `The ${value} wallet's` : "A wallet's";
 }
 
 function transferOf(value: unknown): string {
-  return typeof value === "string" && REFERENCE.test(value) ? `transfer ${value}` : "a transfer";
+  return typeof value === "string" && REFERENCE_PATTERN.test(value) ? `transfer ${value}` : "a transfer";
 }
 
 function moneyOf(minor: unknown, currency: unknown): string {
-  return typeof minor === "number" && Number.isSafeInteger(minor) && typeof currency === "string" && CURRENCY.test(currency)
+  return typeof minor === "number" && Number.isSafeInteger(minor) && typeof currency === "string" && CURRENCY_PATTERN.test(currency)
     ? formatMoney(minor, currency)
     : "an amount PayOnce cannot show";
 }
@@ -1087,12 +1085,8 @@ function invoiceOf(value: unknown): string {
   return typeof value === "string" && INVOICE_ID_PATTERN.test(value) ? value : "an invoice";
 }
 
-function sentence(text: string): string {
-  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
-}
-
 export function shownReference(value: unknown): string | null {
-  return typeof value === "string" && REFERENCE.test(value) ? value : null;
+  return typeof value === "string" && REFERENCE_PATTERN.test(value) ? value : null;
 }
 
 export function shownInvoice(value: unknown): string | null {
@@ -1100,11 +1094,11 @@ export function shownInvoice(value: unknown): string | null {
 }
 
 export function shownCurrency(value: unknown): string | null {
-  return typeof value === "string" && CURRENCY.test(value) ? value : null;
+  return typeof value === "string" && CURRENCY_PATTERN.test(value) ? value : null;
 }
 
 export function shownStatus(value: unknown): string | null {
-  return typeof value === "string" && STATUS.test(value) ? value : null;
+  return typeof value === "string" && STATUS_PATTERN.test(value) ? value : null;
 }
 
 // The break in PayOnce's words, from its stored facts. No time is in it, so it
@@ -1127,20 +1121,20 @@ export function breakText(kind: BreakKind, raw: string): string {
     case "debited-twice": {
       const count: unknown = facts["count"];
       const times: string = typeof count === "number" && Number.isSafeInteger(count) ? `${count} times` : "more than once";
-      return `${sentence(transfer)} took money from ${wallet} ${times}, ${money("totalMinor")} in all.`;
+      return `${capitalise(transfer)} took money from ${wallet} ${times}, ${money("totalMinor")} in all.`;
     }
     case "debit-differs":
       return facts["expectedMinor"] === null
-        ? `${sentence(transfer)} took ${money("foundMinor")} from ${wallet}, which is not the wallet Airwallex's transfer names.`
-        : `${sentence(transfer)} took ${money("foundMinor")} from ${wallet}. Airwallex's transfer says ${money("expectedMinor")}.`;
+        ? `${capitalise(transfer)} took ${money("foundMinor")} from ${wallet}, which is not the wallet Airwallex's transfer names.`
+        : `${capitalise(transfer)} took ${money("foundMinor")} from ${wallet}. Airwallex's transfer says ${money("expectedMinor")}.`;
     case "fee-differs":
       return facts["expectedMinor"] === null
-        ? `${sentence(wallet)} shows a fee of ${money("foundMinor")} for ${transfer}, which is not the wallet the transfer's fee is in.`
-        : `${sentence(wallet)} shows a fee of ${money("foundMinor")} for ${transfer}. The transfer says ${money("expectedMinor")}.`;
+        ? `${capitalise(wallet)} shows a fee of ${money("foundMinor")} for ${transfer}, which is not the wallet the transfer's fee is in.`
+        : `${capitalise(wallet)} shows a fee of ${money("foundMinor")} for ${transfer}. The transfer says ${money("expectedMinor")}.`;
     case "refund-missing":
-      return `${sentence(transfer)} failed, and ${money("expectedMinor")} has not come back to ${wallet}.`;
+      return `${capitalise(transfer)} failed, and ${money("expectedMinor")} has not come back to ${wallet}.`;
     case "refund-differs":
-      return `${sentence(transfer)} failed. ${money("foundMinor")} came back to ${wallet}, and PayOnce expected ${money("expectedMinor")}.`;
+      return `${capitalise(transfer)} failed. ${money("foundMinor")} came back to ${wallet}, and PayOnce expected ${money("expectedMinor")}.`;
     case "refund-unexpected":
       return `${money("foundMinor")} came back to ${wallet} for ${transfer}, which Airwallex does not show as failed.`;
     case "paid-then-returned": {
@@ -1153,16 +1147,16 @@ export function breakText(kind: BreakKind, raw: string): string {
           ? "and Airwallex now shows it failed"
           : `then ${money("returnedMinor")} came back to ${wallet}`;
       if (facts["payment"] === "mismatched") {
-        return `${sentence(transfer)}, kept beside a payment on ${invoice} because it does not match the invoice, was recorded as paid, ${back}.`;
+        return `${capitalise(transfer)}, kept beside a payment on ${invoice} because it does not match the invoice, was recorded as paid, ${back}.`;
       }
       const which: string =
         facts["payment"] === "outside" ? `${transfer}, sent outside PayOnce for ${invoice},` : `${transfer} on ${invoice}`;
-      return `${sentence(which)} was recorded as paid, ${back}. The supplier may not have been paid.`;
+      return `${capitalise(which)} was recorded as paid, ${back}. The supplier may not have been paid.`;
     }
     case "untied-payout": {
       const refunded: unknown = facts["refundedMinor"];
       const back: string = typeof refunded === "number" && refunded > 0 ? ` ${money("refundedMinor")} came back.` : "";
-      return `${sentence(transfer)}, sent outside PayOnce, took ${money("debitMinor")} from ${wallet} and is tied to no invoice.${back}`;
+      return `${capitalise(transfer)}, sent outside PayOnce, took ${money("debitMinor")} from ${wallet} and is tied to no invoice.${back}`;
     }
     case "unexplained-credit":
       return `${money("amountMinor")} came into ${wallet} as ${typeWords(facts["type"])}, and no transfer explains it.`;
@@ -1172,7 +1166,7 @@ export function breakText(kind: BreakKind, raw: string): string {
       const waits: string =
         typeof facts["transferId"] === "string"
           ? "the transfer it names"
-          : typeof cur === "string" && CURRENCY.test(cur)
+          : typeof cur === "string" && CURRENCY_PATTERN.test(cur)
             ? "that wallet's transfers"
             : "any transfer";
       return `A movement in ${wallet} has an amount, balance, time or currency PayOnce cannot read. Until it can, PayOnce does not match ${waits}.`;
@@ -1201,14 +1195,14 @@ export function waitingText(item: WaitingItem): string {
     case "refund":
       return `Waiting for ${amount} to come back to ${wallet} for ${transfer}, which failed.`;
     case "untied":
-      return `${sentence(transfer)}, sent outside PayOnce, is tied to no invoice yet. The sweep may still tie it.`;
+      return `${capitalise(transfer)}, sent outside PayOnce, is tied to no invoice yet. The sweep may still tie it.`;
     case "unread":
       return `A movement of ${amount} in ${wallet} names a transfer PayOnce has not read yet.`;
     case "refused":
       return `A movement of ${amount} in ${wallet} names a transfer Airwallex refused to show. PayOnce asks again on a later check.`;
     case "unfunded": {
       const status: string | null = shownStatus(item.status);
-      return `${sentence(transfer)} is ${status ?? "not funded yet"}, so no debit is expected yet.`;
+      return `${capitalise(transfer)} is ${status ?? "not funded yet"}, so no debit is expected yet.`;
     }
   }
 }

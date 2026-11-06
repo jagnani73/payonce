@@ -24,17 +24,7 @@ import {
 } from "../store/ledger.js";
 import { currentSettings } from "../settings.js";
 import { say, sayWarning, shownFailureCode } from "../text/printable.js";
-
-// The failure codes that say the rail failed, not the payee's account. Each has
-// PayOnce's own label. Account codes (account closed, invalid account,
-// beneficiary bank returned, recall, duplication return), unknown codes and a
-// transfer with no code never count.
-export const RAIL_FAILURE_CODES: Readonly<Record<string, string>> = {
-  "91401": "system error",
-  "91402": "channel timeout",
-  "99901": "unable to apply",
-  "99902": "other",
-};
+import { RAIL_FAILURE_CODES } from "../domain/failure-codes.js";
 
 const MAX_NOTE_LENGTH: number = 200;
 const MINUTE_MS: number = 60_000;

@@ -29,3 +29,13 @@ export function formatMoney(amountMinor: number, currency: string): string {
   });
   return `${amount} ${currency}`;
 }
+
+// The amount alone, with no currency, such as 1,250.00.
+export function formatAmount(amountMinor: number): string {
+  return formatMoney(amountMinor, "").trim();
+}
+
+// An invoice's amount in its own currency.
+export function invoiceMoney(invoice: { amountMinor: number; currency: string }): string {
+  return formatMoney(invoice.amountMinor, invoice.currency);
+}

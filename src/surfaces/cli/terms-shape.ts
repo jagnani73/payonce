@@ -1,6 +1,7 @@
 import type { ApprovalTerms, RunTerms } from "../../domain/approval.js";
 import { validDomain } from "../../intake/eml.js";
 import { INVOICE_ID_PATTERN } from "../../store/ledger.js";
+import { CURRENCY_PATTERN } from "../../domain/patterns.js";
 
 // What pnpm approve and pnpm payrun print of stored approval terms, checked
 // field by field in the type and form each is printed in. Terms that do not
@@ -8,8 +9,6 @@ import { INVOICE_ID_PATTERN } from "../../store/ledger.js";
 // approve nothing for them. The engine reads terms as it always has.
 
 type Fields = Record<string, unknown>;
-
-const CURRENCY: RegExp = /^[A-Z]{3}$/;
 
 function isFields(value: unknown): value is Fields {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -126,7 +125,7 @@ function readableRunTotal(total: unknown): boolean {
   return (
     isFields(total) &&
     isText(total["currency"]) &&
-    CURRENCY.test(total["currency"]) &&
+    CURRENCY_PATTERN.test(total["currency"]) &&
     isMinor(total["amountMinor"]) &&
     isMinor(total["payments"]) &&
     isMinorOrNull(total["reserveFloorMinor"])

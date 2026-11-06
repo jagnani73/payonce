@@ -21,10 +21,11 @@ import {
   type Ledger,
   type Obligation,
 } from "../store/ledger.js";
-import { formatMoney } from "../domain/money.js";
+import { formatMoney, invoiceMoney } from "../domain/money.js";
 import { say } from "../text/printable.js";
 import { failedBy, type ReconTransfer } from "../recon/recon-match.js";
 import type { RefundBreak } from "../store/recon-store.js";
+import { CURRENCY_PATTERN, METHOD_PATTERN, REFERENCE_PATTERN, STATUS_PATTERN } from "../domain/patterns.js";
 
 // Messages for a person to send to the supplier or the bank. PayOnce never sends
 // them. Each is rendered once, from facts PayOnce formats itself: amounts, bank
@@ -72,18 +73,14 @@ interface Template {
   render(facts: Facts): Text;
 }
 
-const REFERENCE: RegExp = /^[A-Z0-9-]{1,30}$/;
-const BANK_STATUS: RegExp = /^[A-Z_]{1,30}$/;
 const DAY: RegExp = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
-const CURRENCY: RegExp = /^[A-Z]{3}$/;
-const METHOD: RegExp = /^(?:LOCAL|SWIFT)$/;
 
 function matching(value: string | null | undefined, pattern: RegExp): string | null {
   return typeof value === "string" && pattern.test(value) ? value : null;
 }
 
 function referenceOf(attempt: Attempt | undefined): string | null {
-  return attempt?.reference !== null && attempt?.reference !== undefined && REFERENCE.test(attempt.reference)
+  return attempt?.reference !== null && attempt?.reference !== undefined && REFERENCE_PATTERN.test(attempt.reference)
     ? attempt.reference
     : null;
 }
@@ -144,10 +141,6 @@ function statusOf(attempt: Attempt): string {
 
 function sentWithTheBank(attempt: Attempt): boolean {
   return attempt.transferId !== null && (attempt.state === "in_flight" || attempt.state === "paid");
-}
-
-function amountOf(obligation: Obligation): string {
-  return formatMoney(obligation.amountMinor, obligation.currency);
 }
 
 function stillOpen(obligation: Obligation): boolean {
@@ -217,7 +210,7 @@ function refundAmount(refund: RefundBreak): string | null {
     Number.isSafeInteger(expectedMinor) &&
     expectedMinor > 0 &&
     typeof currency === "string" &&
-    CURRENCY.test(currency)
+    CURRENCY_PATTERN.test(currency)
     ? formatMoney(expectedMinor, currency)
     : null;
 }
@@ -248,7 +241,7 @@ const TEMPLATES: Record<DraftTemplate, Template> = {
       }
       return {
         invoice: context.obligation.invoiceId,
-        amount: amountOf(context.obligation),
+        amount: invoiceMoney(context.obligation),
         reference: referenceOf(original),
         sentOn: sentOn(original),
         status: statusOf(original),
@@ -300,7 +293,7 @@ const TEMPLATES: Record<DraftTemplate, Template> = {
       const called: number = calledAt === null ? Number.NaN : Date.parse(calledAt);
       return {
         invoice: context.obligation.invoiceId,
-        amount: amountOf(context.obligation),
+        amount: invoiceMoney(context.obligation),
         failedReference: referenceOf(failed),
         failedOn: sentOn(failed),
         reference: referenceOf(replacement),
@@ -356,7 +349,7 @@ const TEMPLATES: Record<DraftTemplate, Template> = {
         .find((attempt: Attempt): boolean => referenceOf(attempt) !== null);
       return {
         invoice: context.obligation.invoiceId,
-        amount: amountOf(context.obligation),
+        amount: invoiceMoney(context.obligation),
         reference: referenceOf(latest),
       };
     },
@@ -423,16 +416,16 @@ const TEMPLATES: Record<DraftTemplate, Template> = {
         return "no payment is with the bank past its deadline";
       }
       const status: string =
-        late.bankStatus !== null && BANK_STATUS.test(late.bankStatus) ? late.bankStatus : "in flight";
+        late.bankStatus !== null && STATUS_PATTERN.test(late.bankStatus) ? late.bankStatus : "in flight";
       return {
         reference: referenceOf(late),
         invoice: context.obligation.invoiceId,
-        amount: amountOf(context.obligation),
+        amount: invoiceMoney(context.obligation),
         debited:
           crossCurrency(context.obligation) && late.amountMinor !== null && late.currency !== null
             ? formatMoney(late.amountMinor, late.currency)
             : null,
-        method: matching(context.obligation.transferMethod, METHOD),
+        method: matching(context.obligation.transferMethod, METHOD_PATTERN),
         createdAt: timeText(late.bankCreatedAt),
         status,
       };
@@ -484,7 +477,7 @@ const TEMPLATES: Record<DraftTemplate, Template> = {
         return noRefundMissing(context.refunds);
       }
       const transfer: ReconTransfer | null = refund.transfer;
-      const reference: string | null = referenceOf(failed) ?? matching(transfer?.reference, REFERENCE);
+      const reference: string | null = referenceOf(failed) ?? matching(transfer?.reference, REFERENCE_PATTERN);
       if (reference === null) {
         return "the payment whose refund is missing has no bank reference PayOnce can quote";
       }
@@ -492,9 +485,9 @@ const TEMPLATES: Record<DraftTemplate, Template> = {
       return {
         reference,
         debited: refundAmount(refund),
-        status: matching(transfer?.status, BANK_STATUS),
+        status: matching(transfer?.status, STATUS_PATTERN),
         failedDay: failedAt === null ? null : dayText(today(new Date(failedAt))),
-        method: matching(context.obligation.transferMethod, METHOD),
+        method: matching(context.obligation.transferMethod, METHOD_PATTERN),
       };
     },
     suggest(_context: Context, facts: Facts): string | null {

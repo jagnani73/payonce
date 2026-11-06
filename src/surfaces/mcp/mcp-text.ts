@@ -1,7 +1,7 @@
 import { capped, defanged } from "../../alerts/alert-payloads.js";
 import { ROUTES } from "../../domain/arrival.js";
-import { RAIL_FAILURE_CODES } from "../../outages/outages.js";
-import { FAILURE_WORDS } from "../../explain/why-facts.js";
+import { FAILURE_CODE_PATTERN, RAIL_PATTERN, REFERENCE_PATTERN, STATUS_PATTERN } from "../../domain/patterns.js";
+import { FAILURE_WORDS, RAIL_FAILURE_CODES } from "../../domain/failure-codes.js";
 
 // Where text PayOnce did not write came from. quoted is PayOnce's own wording
 // that can carry such text: timeline lines, escalation reasons, skip and close
@@ -22,15 +22,9 @@ interface Rule {
   unless?: RegExp;
 }
 
-// The bank's short reference, a failure code and a transfer status, as PayOnce
-// accepts them elsewhere. Anything else in those fields is wrapped.
-const REFERENCE: RegExp = /^[A-Z0-9-]{1,30}$/;
-const FAILURE_CODE: RegExp = /^[A-Za-z0-9_]{1,40}$/;
-const STATUS: RegExp = /^[A-Z_]{1,30}$/;
 // The keyword reader's name, or model ids as READER_MODEL lists them.
 const READER_NAME: RegExp = /^(keyword placeholder|[A-Za-z0-9._:/-]{1,60}(, then [A-Za-z0-9._:/-]{1,60}){0,4})$/;
 const REASON_CODE: RegExp = /^[a-z][a-z-]{0,39}$/;
-const RAIL: RegExp = /^[A-Z]{3} [A-Z_]{1,20}$/;
 // Airwallex's bank_country_code, as an estimate carries it.
 export const COUNTRY_CODE: RegExp = /^[A-Z]{2}$/;
 const ROUTE: RegExp = new RegExp(
@@ -63,7 +57,7 @@ const EMAIL_EVIDENCE: RegExp = new RegExp(
 // codes it checked against a pattern. A key of the same name anywhere else, such
 // as inside stored approval terms, is not one of them.
 const PLAIN: RegExp[] = [
-  // board: incident-board.ts's fixed text, which names a rail only once it fits RAIL.
+  // board: incident-board.ts's fixed text, which names a rail only once it fits RAIL_PATTERN.
   /^entries\[\]\.(why|also\[\])$/,
   /^(groups|origins)\[\]\.label$/,
   /^incidents\[\]\.board\.(label|why)$/,
@@ -120,10 +114,10 @@ const RULES: Rule[] = [
   { path: /(^|\.)arrival\.country$/, from: "airwallex", unless: COUNTRY_CODE },
   { path: /(^|\.)arrival\.route$/, from: "unknown", unless: ROUTE },
   { path: /(^|\.)entries\[\]\.reason$/, from: "unknown", unless: REASON_CODE },
-  { path: /(^|\.)rail$/, from: "unknown", unless: RAIL },
-  { path: /(^|\.)(reference|originalReference|paidBy|mismatchedReference)$/, from: "airwallex", unless: REFERENCE },
-  { path: /(^|\.)failureCode$/, from: "airwallex", unless: FAILURE_CODE },
-  { path: /(^|\.)(bankStatus|mismatchedStatus)$/, from: "airwallex", unless: STATUS },
+  { path: /(^|\.)rail$/, from: "unknown", unless: RAIL_PATTERN },
+  { path: /(^|\.)(reference|originalReference|paidBy|mismatchedReference)$/, from: "airwallex", unless: REFERENCE_PATTERN },
+  { path: /(^|\.)failureCode$/, from: "airwallex", unless: FAILURE_CODE_PATTERN },
+  { path: /(^|\.)(bankStatus|mismatchedStatus)$/, from: "airwallex", unless: STATUS_PATTERN },
   { path: /(^|\.)readBy$/, from: "unknown", unless: READER_NAME },
   // supplier: the record's names and domains, the last four characters of an
   // account, and a failure code's words.

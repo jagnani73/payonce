@@ -45,11 +45,12 @@ import {
   type SupplierRunRow,
   type Upload,
 } from "../store/ledger.js";
-import { RAIL_FAILURE_CODES, railOf } from "../outages/outages.js";
+import { railOf } from "../outages/outages.js";
 import { debitCurrency } from "../domain/reserve.js";
 import { BENEFICIARY_ID_PATTERN } from "../runs/run-file.js";
 import { UNNAMED_PAYEE } from "../engine/sweep.js";
-import { FAILURE_WORDS } from "../explain/why-facts.js";
+import { CURRENCY_PATTERN, FAILURE_CODE_PATTERN, METHOD_PATTERN, RAIL_PATTERN, REFERENCE_PATTERN, STATUS_PATTERN } from "../domain/patterns.js";
+import { ACCOUNT_FAILURE_CODES, FAILURE_WORDS, RAIL_FAILURE_CODES } from "../domain/failure-codes.js";
 
 // The supplier view: one Airwallex beneficiary record, the key every control
 // already checks the next payment against, with what PayOnce owed it, sent it,
@@ -69,16 +70,8 @@ const LINKS_LISTED: number = 25;
 // What PayOnce shows of Airwallex's text: references, statuses and codes only in
 // their own forms, and the last four characters of an account only as letters
 // and digits.
-const REFERENCE: RegExp = /^[A-Z0-9-]{1,30}$/;
-const STATUS: RegExp = /^[A-Z_]{1,30}$/;
-const FAILURE_CODE: RegExp = /^[A-Za-z0-9_]{1,40}$/;
 const ENDING: RegExp = /^[A-Za-z0-9]{1,4}$/;
-const RAIL_NAME: RegExp = /^[A-Z]{3} [A-Z_]{1,20}$/;
-const CURRENCY: RegExp = /^[A-Z]{3}$/;
-const METHOD: RegExp = /^(LOCAL|SWIFT)$/;
 
-// Codes that say the account itself is closed or wrong, not the rail.
-const ACCOUNT_LEVEL_CODES: ReadonlySet<string> = new Set<string>(["90701", "90101", "90802"]);
 const ACCOUNT_REASONS: readonly string[] = [
   CHANGED_BANK_DETAILS_REASON,
   LAST_PAID_CHANGED_REASON,
@@ -1074,7 +1067,7 @@ function accountsOf(ledger: Ledger, facts: RecordFacts, owners: Owners): Account
       outside,
       lastPaid: lastPaid?.accountKey === key,
       lastPaidReference:
-        lastPaid?.accountKey === key && lastPaid.reference !== null && REFERENCE.test(lastPaid.reference) ? lastPaid.reference : null,
+        lastPaid?.accountKey === key && lastPaid.reference !== null && REFERENCE_PATTERN.test(lastPaid.reference) ? lastPaid.reference : null,
       recordLastStored: stored?.key === key,
       verifiedBy:
         latest === undefined
@@ -1111,7 +1104,7 @@ function earliest(times: number[]): string | null {
 
 function railName(currency: string, method: string): string | null {
   const rail: string = railOf({ currency, method });
-  return RAIL_NAME.test(rail) ? rail : null;
+  return RAIL_PATTERN.test(rail) ? rail : null;
 }
 
 interface CautionDraft {
@@ -1145,7 +1138,7 @@ function failedAttempt(attempt: SupplierAttempt): boolean {
 // code in its own form, and only the table's own entries, never one such as
 // constructor that every object has.
 function wordsFor(table: Readonly<Record<string, string>>, code: string | null): string | null {
-  return code !== null && FAILURE_CODE.test(code) && Object.hasOwn(table, code) ? (table[code] ?? null) : null;
+  return code !== null && FAILURE_CODE_PATTERN.test(code) && Object.hasOwn(table, code) ? (table[code] ?? null) : null;
 }
 
 // An invoice the engine sent to a person because the record's bank details
@@ -1268,7 +1261,7 @@ function cautionsOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts, owne
       (attempt: SupplierAttempt): boolean =>
         failedAttempt(attempt) &&
         attemptKey(attempt) === key &&
-        ACCOUNT_LEVEL_CODES.has(attempt.failureCode ?? "") &&
+        ACCOUNT_FAILURE_CODES.has(attempt.failureCode ?? "") &&
         now - sentAtOf(attempt) <= RECENT_MS,
     );
     const latest: SupplierAttempt | undefined = failed.at(-1);
@@ -1468,12 +1461,12 @@ function activeOutages(ledger: Ledger, openOnes: SupplierObligation[]): OutageBr
 
 function paymentView(attempt: SupplierPayment, labelOf: Map<string, string>): PaymentView {
   const key: string | null = attemptKey(attempt);
-  const code: string | null = attempt.failureCode !== null && FAILURE_CODE.test(attempt.failureCode) ? attempt.failureCode : null;
+  const code: string | null = attempt.failureCode !== null && FAILURE_CODE_PATTERN.test(attempt.failureCode) ? attempt.failureCode : null;
   return {
     kind: attempt.kind === "replacement" ? "replacement" : "original",
-    reference: attempt.reference !== null && REFERENCE.test(attempt.reference) ? attempt.reference : null,
+    reference: attempt.reference !== null && REFERENCE_PATTERN.test(attempt.reference) ? attempt.reference : null,
     state: attempt.state,
-    bankStatus: attempt.bankStatus !== null && STATUS.test(attempt.bankStatus) ? attempt.bankStatus : null,
+    bankStatus: attempt.bankStatus !== null && STATUS_PATTERN.test(attempt.bankStatus) ? attempt.bankStatus : null,
     failureCode: code,
     failureWords: wordsFor(FAILURE_WORDS, code),
     amountMinor: attempt.amountMinor,
@@ -1486,16 +1479,16 @@ function paymentView(attempt: SupplierPayment, labelOf: Map<string, string>): Pa
     foundLate: attempt.foundLateAt !== null,
     rateMismatch: attempt.rateMismatch,
     mismatchedReference:
-      attempt.mismatchedReference !== null && REFERENCE.test(attempt.mismatchedReference) ? attempt.mismatchedReference : null,
+      attempt.mismatchedReference !== null && REFERENCE_PATTERN.test(attempt.mismatchedReference) ? attempt.mismatchedReference : null,
     mismatchedStatus:
-      attempt.mismatchedStatus !== null && STATUS.test(attempt.mismatchedStatus) ? attempt.mismatchedStatus : null,
+      attempt.mismatchedStatus !== null && STATUS_PATTERN.test(attempt.mismatchedStatus) ? attempt.mismatchedStatus : null,
   };
 }
 
 function payoutView(payout: SupplierPayoutView, labelOf: Map<string, string>): PaymentView {
   return {
     kind: "outside",
-    reference: REFERENCE.test(payout.reference) ? payout.reference : null,
+    reference: REFERENCE_PATTERN.test(payout.reference) ? payout.reference : null,
     state: payout.state,
     bankStatus: null,
     failureCode: null,
@@ -1752,8 +1745,8 @@ function outagesOf(ledger: Ledger, facts: RecordFacts): SupplierDetail["outages"
     ),
     failures: facts.failures.map(
       (failure: SupplierFailure): FailureView => ({
-        reference: REFERENCE.test(failure.reference) ? failure.reference : null,
-        code: FAILURE_CODE.test(failure.code) ? failure.code : null,
+        reference: REFERENCE_PATTERN.test(failure.reference) ? failure.reference : null,
+        code: FAILURE_CODE_PATTERN.test(failure.code) ? failure.code : null,
         codeWords: wordsFor(RAIL_FAILURE_CODES, failure.code),
         failedAt: iso(failure.failedAt),
         invoiceId: failure.invoiceId,
@@ -2108,12 +2101,12 @@ function detailOf(ledger: Ledger, key: string, now: number): SupplierDetail | nu
       phoneLast4: lastFourDigits(phone?.supplierPhone ?? null),
       domains: domainsOf(facts),
       currencies: [...new Set<string>(facts.obligations.map((obligation: SupplierObligation): string => obligation.currency))]
-        .filter((currency: string): boolean => CURRENCY.test(currency))
+        .filter((currency: string): boolean => CURRENCY_PATTERN.test(currency))
         .sort(),
       methods: [
         ...new Set<string>(facts.obligations.map((obligation: SupplierObligation): string => obligation.transferMethod)),
       ]
-        .filter((method: string): boolean => METHOD.test(method))
+        .filter((method: string): boolean => METHOD_PATTERN.test(method))
         .sort(),
       related: relatedOf(facts, accounts, owners, names),
       recordStored:

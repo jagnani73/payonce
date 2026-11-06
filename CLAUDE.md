@@ -77,7 +77,9 @@ This file holds the commands, the file map and the rules that hold everywhere. T
 - `src/domain/`:
   - `decide.ts`: the pure policy (wait, replace, escalate, close) and `floorReason`. Every reason it gives is an exported constant, apart from the one that names the source currency.
   - `incident.ts`: the `Incident` and `Decision` types. Amounts are minor units.
-  - `money.ts`: `toMinor`, `readMinor`, `toMajor`, `formatMoney`, for two-decimal currencies only.
+  - `money.ts`: `toMinor`, `readMinor`, `toMajor`, `formatMoney`, `formatAmount` (no currency) and `invoiceMoney`, for two-decimal currencies only.
+  - `patterns.ts`: the one definition of each form PayOnce accepts a short reference, currency, failure code, status, transfer method or rail in, as a pattern and as a source for longer patterns.
+  - `failure-codes.ts`: the bank failure codes PayOnce knows, with each one's words and whether a resend can fix it, it counts toward an outage, or it says the account is closed or wrong. `FAILURE_WORDS`, `RAIL_FAILURE_CODES`, `RESENDABLE_FAILURE_CODES` and `ACCOUNT_FAILURE_CODES` are read from it. The page keeps its own copy in `web/app.js`.
   - `assess.ts`: reads an Airwallex transfer: its state, whether a resend can fix it, its account and route keys, fee and debit.
   - `deadlines.ts`: how long the bank has to pay or fail a transfer, by method.
   - `arrival.ts`: the route advisory: usual arrival days by corridor, due-date risk and its wording.
@@ -103,7 +105,7 @@ This file holds the commands, the file map and the rules that hold everywhere. T
   - `sandbox-bank.ts`: plays the bank in the sandbox through the simulator.
   - `scenario.ts`: the demo payments (`SCENARIOS`) and the scripted incident.
 - `src/runs/run-file.ts`, `src/runs/runs.ts`: the pay run CSV parser, and pay runs from upload to release.
-- `src/outages/outages.ts`: rail outages: the failure codes, recording failures, ending one, the views.
+- `src/outages/outages.ts`: rail outages: recording failures, ending one, the views.
 - `src/recon/recon-match.ts`, `src/recon/reconcile.ts`: reconciliation's matcher and its checks.
 - `src/intake/`: `eml.ts`, `html-text.ts`, `css-text.ts`, the raw email parser and its HTML and CSS scanners, and `intake.ts`, `parse-worker.ts`, the upload queue, the parse worker, matching an upload to invoices and delivering it.
 - `src/reader/`: `emails.ts` (the `EmailReader` interface, findings, `summarise`, the sender check and the fixture loader), `model-reader.ts`, `keyword-reader.ts`, `reader.ts`, `reader-error.ts` (the two email readers, their services from the settings and their failures), and `model-service.ts` (the model services the reader and Ask why ask in order, Claude's Messages API then Gemini's chat completions, and one request to a model over `fetch`).
@@ -111,7 +113,7 @@ This file holds the commands, the file map and the rules that hold everywhere. T
 - `src/alerts/alerts.ts`, `src/alerts/alert-payloads.ts`: alert conditions, and the Slack and Discord posts.
 - `src/explain/why-facts.ts`, `src/explain/explainer.ts`: Ask why: the facts with their aliases and reason grammar, and the model call.
 - `src/views/`: `incident-board.ts` (the incident board), `suppliers.ts` (the supplier view), `metrics.ts` (the ops metrics) and `mcp-views.ts` (what the MCP tools answer).
-- `src/text/`: `printable.ts` (everything printed to a terminal goes through it: `say`, `printable`, `printableJson`, `shownReference`), `redact.ts` (`redactKey`, which cuts a key out of error text in every form), `words.ts` (fixed words the read-only code shares without importing the reader or the sandbox bank) and `line-error.ts` (`LineError`, an error whose message is a timeline line).
+- `src/text/`: `printable.ts` (everything printed to a terminal goes through it: `say`, `printable`, `printableJson`, `shownReference`; also `oneLine` for text PayOnce stores, `trimmedLine` for an alert's fields, and `capitalise`), `redact.ts` (`redactKey`, which cuts a key out of error text in every form), `words.ts` (fixed words the read-only code shares without importing the reader or the sandbox bank) and `line-error.ts` (`LineError`, an error whose message is a timeline line).
 - `src/surfaces/http/`: `pnpm ui`. `main.ts` builds the engine, the watcher, alerts and the reconciliation timer and starts them in order. `router.ts` holds the route table's types, the Host and Origin guard, the static files and the request handler. `routes/*.ts` hold the handlers by area, each a function of the `HttpApp` in `app.ts`, which also has the helpers more than one area uses. `http.ts` reads bodies and writes answers. `start.ts` picks up interrupted payments and connects webhooks. `webhooks.ts` and `tunnel.ts` are the webhook receiver and its cloudflared quick tunnel.
 - `src/surfaces/mcp/main.ts`, `src/surfaces/mcp/mcp-text.ts`: the read-only MCP server, and the marking of text PayOnce did not write.
 - `src/surfaces/cli/`: one file per command: `recover.ts`, `approve.ts`, `close.ts`, `audit.ts`, `cash.ts`, `board.ts`, `payrun.ts`, `outbox.ts`, `outage.ts`, `ask.ts`, `supplier.ts`, `reconcile.ts`, `metrics.ts`, `reset.ts` and `dev.ts` (`pnpm dev`). `terms-shape.ts` checks stored terms before a command prints or approves them.
@@ -152,7 +154,7 @@ These are short forms of rules the topic files give in full, with their exceptio
 ### Text, names and secrets
 
 - Every reason PayOnce stores is an exported constant or built from them, apart from the one that names the source currency, and Ask why's reason grammar is built from those constants. A new reason needs a constant and a grammar part, or Ask why shows a stand-in. `escalation_reason` never holds email text, model output, a phone number or account details, because alerts send it.
-- Text PayOnce did not write (Airwallex names and errors, emails, typed names and notes, pay run cells) goes through a cleaning step before it is shown: `say` and `printable` on the console, `marked` in MCP answers, `defanged` in alerts, and on the page `whyText`, always into text nodes. Email subjects and bodies are shown on the page as stored, in text nodes. Short references and failure codes are shown only in their fixed patterns.
+- Text PayOnce did not write (Airwallex names and errors, emails, typed names and notes, pay run cells) goes through a cleaning step before it is shown: `say` and `printable` on the console, `marked` in MCP answers, `defanged` in alerts, and on the page `whyText`, always into text nodes. Email subjects and bodies are shown on the page as stored, in text nodes. Short references and failure codes are shown only in their fixed patterns (`domain/patterns.ts`).
 - Alerts are built from ledger fields, never from timeline lines, and never name an approver or an account. Text from the model service never reaches a timeline line, which uses `triesText`'s fixed words, and neither does `airwallexAdvice`. The Ask why answer is never stored.
 - Every PayOnce name a person types goes through `personName`, and two names are compared with `sameName`. The supplier's contact on a callback is not a PayOnce name.
 - Timeline lines are one line each, hash-chained and never edited. They are written through `note` or `runNote`, or by the Ledger methods that append a line inside their own transaction, never with plain SQL.

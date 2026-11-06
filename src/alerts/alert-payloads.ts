@@ -4,8 +4,10 @@
 // hold email text, model output, account details or anything secret. The inbox
 // alert is a count: no sender, name, subject or text of an uploaded email.
 
-import { RAIL_FAILURE_CODES } from "../outages/outages.js";
 import { isBreakKind, KIND_LABELS } from "../recon/recon-match.js";
+import { CURRENCY_PATTERN, REFERENCE_PATTERN } from "../domain/patterns.js";
+import { RAIL_FAILURE_CODES } from "../domain/failure-codes.js";
+import { trimmedLine } from "../text/printable.js";
 
 export type AlertFormat = "slack" | "discord";
 
@@ -195,7 +197,6 @@ const RED: number = 15158332;
 const FOOTNOTE: string = "Sandbox, no real money.";
 const NO_NAME: string = "(no name)";
 const NO_REASON: string = "(no reason recorded)";
-const CONTROL: RegExp = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
 // Format characters (bidi controls, zero-width characters, the soft hyphen, tag
 // characters and the rest of Unicode's Cf), which could reverse or hide part of
 // a supplier name inside a code span, and the unassigned rest of the tag block.
@@ -214,11 +215,6 @@ const NEED_TITLES: Record<InvoiceNeed, string> = {
   callback: "needs a call to the supplier",
   check: "needs a person",
 };
-
-// Control characters and line breaks become spaces.
-export function oneLine(text: string): string {
-  return text.replace(CONTROL, " ").trim();
-}
 
 // Escapes each character, then cuts to max characters with an ellipsis. It cuts
 // between whole characters, so neither an escape nor a surrogate pair is split,
@@ -259,7 +255,7 @@ function discordChar(char: string): string {
 // backtick would end the code span, so it becomes an apostrophe. Format
 // characters are dropped.
 export function defanged(text: string): string {
-  return oneLine(text.replace(HIDDEN, "")).replace(/:\/\//g, "[:]//").replace(/\bwww\./gi, "www[.]").replace(/`/g, "'");
+  return trimmedLine(text.replace(HIDDEN, "")).replace(/:\/\//g, "[:]//").replace(/\bwww\./gi, "www[.]").replace(/`/g, "'");
 }
 
 function identifier(value: string | null, fallback: string): string {
@@ -278,14 +274,14 @@ function slackSpan(part: AlertText, max: number): string {
   const text: AlertText = shown(part);
   return text.outside
     ? `\`${capped(defanged(text.text), max - 2, slackChar)}\``
-    : capped(oneLine(text.text), max, slackChar);
+    : capped(trimmedLine(text.text), max, slackChar);
 }
 
 function discordSpan(part: AlertText, max: number): string {
   const text: AlertText = shown(part);
   return text.outside
     ? `\`${capped(defanged(text.text), max - 2, (char: string): string => char)}\``
-    : capped(oneLine(text.text), max, discordChar);
+    : capped(trimmedLine(text.text), max, discordChar);
 }
 
 // "28 Oct 2026, 15:05 UTC"
@@ -478,7 +474,7 @@ function inboxMessage(facts: InboxAlertFacts, base: string): AlertMessage {
 // "USD LOCAL", from a currency and a method PayOnce checks, so the title holds
 // only its own words.
 function railText(facts: OutageAlertFacts): string {
-  return /^[A-Z]{3}$/.test(facts.currency) && (facts.method === "LOCAL" || facts.method === "SWIFT")
+  return CURRENCY_PATTERN.test(facts.currency) && (facts.method === "LOCAL" || facts.method === "SWIFT")
     ? `${facts.currency} ${facts.method}`
     : "a currency and transfer method";
 }
@@ -501,7 +497,7 @@ function clockText(iso: string | null): string {
 // codes' labels are in the fields only.
 function outageMessage(facts: OutageAlertFacts, base: string): AlertMessage {
   const rail: string = railText(facts);
-  const references: string[] = facts.references.filter((reference: string): boolean => /^[A-Z0-9-]{1,30}$/.test(reference));
+  const references: string[] = facts.references.filter((reference: string): boolean => REFERENCE_PATTERN.test(reference));
   const payees: string = plural(facts.payees, "payee", "payees");
   const fields: AlertField[] = [
     field("Rail", ours(rail)),
@@ -547,16 +543,16 @@ const BALANCE_KINDS: readonly string[] = ["balance-gap", "balance-differs"];
 
 function reconMessage(facts: ReconAlertFacts, base: string): AlertMessage {
   const currency: string | null =
-    facts.newestCurrency !== null && /^[A-Z]{3}$/.test(facts.newestCurrency) ? facts.newestCurrency : null;
+    facts.newestCurrency !== null && CURRENCY_PATTERN.test(facts.newestCurrency) ? facts.newestCurrency : null;
   const kinds: string = facts.kinds
     .map((entry: { kind: string; count: number }): string =>
       isBreakKind(entry.kind) && Number.isSafeInteger(entry.count) ? `${KIND_LABELS[entry.kind]}: ${entry.count}` : "",
     )
     .filter((text: string): boolean => text !== "")
     .join(", ");
-  const wallets: string = facts.currencies.filter((code: string): boolean => /^[A-Z]{3}$/.test(code)).join(", ");
+  const wallets: string = facts.currencies.filter((code: string): boolean => CURRENCY_PATTERN.test(code)).join(", ");
   const reference: string | null =
-    facts.newestReference !== null && /^[A-Z0-9-]{1,30}$/.test(facts.newestReference) ? facts.newestReference : null;
+    facts.newestReference !== null && REFERENCE_PATTERN.test(facts.newestReference) ? facts.newestReference : null;
   const invoice: string = identifier(facts.newestInvoice, "");
   const newest: string[] = [
     ...(isBreakKind(facts.newestKind) ? [KIND_LABELS[facts.newestKind]] : []),
@@ -647,11 +643,11 @@ function capFor(item: AlertField): number {
 // local page still works.
 export function slackPayload(message: AlertMessage): unknown {
   return {
-    text: capped(oneLine(message.title), SLACK_HEADER_MAX, slackChar),
+    text: capped(trimmedLine(message.title), SLACK_HEADER_MAX, slackChar),
     blocks: [
       {
         type: "header",
-        text: { type: "plain_text", text: capped(oneLine(message.title), SLACK_HEADER_MAX, (char: string): string => char), emoji: false },
+        text: { type: "plain_text", text: capped(trimmedLine(message.title), SLACK_HEADER_MAX, (char: string): string => char), emoji: false },
       },
       {
         type: "section",
@@ -691,10 +687,10 @@ export function slackPayload(message: AlertMessage): unknown {
 export function discordPayload(message: AlertMessage, at: string): unknown {
   return {
     username: "PayOnce",
-    content: capped(oneLine(message.title), DISCORD_TITLE_MAX, discordChar),
+    content: capped(trimmedLine(message.title), DISCORD_TITLE_MAX, discordChar),
     embeds: [
       {
-        title: capped(oneLine(message.title), DISCORD_TITLE_MAX, (char: string): string => char),
+        title: capped(trimmedLine(message.title), DISCORD_TITLE_MAX, (char: string): string => char),
         description: `${message.line.map((part: AlertText): string => discordSpan(part, MAX_SUPPLIER)).join(" ")}\nOpen it in PayOnce on the machine running it: ${message.link}`,
         color: message.urgent ? RED : AMBER,
         fields: message.fields.map((item: AlertField) => ({

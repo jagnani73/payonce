@@ -48,6 +48,7 @@ import type {
   RefusedLookup,
   WindowRead,
 } from "../store/recon-store.js";
+import { CURRENCY_PATTERN, REFERENCE_PATTERN, STATUS_PATTERN } from "../domain/patterns.js";
 
 // One reconciliation run: Airwallex's balance history and transfers, read with
 // GETs only, matched against each other and against PayOnce's ledger, and the
@@ -88,9 +89,6 @@ const AUDIT_EVERY_MS: number = 60_000;
 
 const ID: RegExp = /^[A-Za-z0-9_-]{1,80}$/;
 const CODE: RegExp = /^[A-Z_]{1,40}$/;
-const CURRENCY: RegExp = /^[A-Z]{3}$/;
-const REFERENCE: RegExp = /^[A-Z0-9-]{1,30}$/;
-const STATUS: RegExp = /^[A-Z_]{1,30}$/;
 const METHOD: RegExp = /^[A-Z_]{1,20}$/;
 // Airwallex's times: 2026-10-29T04:48:14+0800, 2026-10-28T20:48:14.662+00:00
 // or ...Z. Anything else cannot be read, rather than guessed at.
@@ -206,7 +204,7 @@ function hashOf(value: unknown): string {
 // read replaces it.
 export function movementOf(item: HistoryItem, seq: number, window: { fromMs: number }): Movement {
   const idOk: boolean = typeof item.id === "string" && ID.test(item.id);
-  const currency: string = typeof item.currency === "string" && CURRENCY.test(item.currency) ? item.currency : "";
+  const currency: string = typeof item.currency === "string" && CURRENCY_PATTERN.test(item.currency) ? item.currency : "";
   const posted: number = airwallexTime(item.posted_at);
   const whole: boolean = idOk && currency !== "" && Number.isFinite(posted);
   return {
@@ -238,15 +236,15 @@ export function reconTransferOf(transfer: Transfer, now: number): ReconTransfer 
   if (typeof transfer.id !== "string" || !ID.test(transfer.id)) {
     return null;
   }
-  const status: string | null = checked(transfer.status, STATUS);
+  const status: string | null = checked(transfer.status, STATUS_PATTERN);
   const debit: Debit | null = debitOf(transfer);
   const fee: Fee | null = feeOf(transfer);
-  const debitCurrency: string | null = debit === null ? null : checked(debit.currency, CURRENCY);
-  const feeCurrency: string | null = fee === null ? null : checked(fee.currency, CURRENCY);
+  const debitCurrency: string | null = debit === null ? null : checked(debit.currency, CURRENCY_PATTERN);
+  const feeCurrency: string | null = fee === null ? null : checked(fee.currency, CURRENCY_PATTERN);
   return {
     transferId: transfer.id,
     found: true,
-    reference: checked(transfer.short_reference_id, REFERENCE),
+    reference: checked(transfer.short_reference_id, REFERENCE_PATTERN),
     status,
     method: checked(transfer.transfer_method, METHOD),
     createdMs: timeOrNull(transfer.created_at),
@@ -254,7 +252,7 @@ export function reconTransferOf(transfer: Transfer, now: number): ReconTransfer 
     debitMinor: debitCurrency === null ? null : (debit?.minor ?? null),
     debitCurrency,
     transferMinor: readMinor(transfer.transfer_amount),
-    transferCurrency: checked(transfer.transfer_currency, CURRENCY),
+    transferCurrency: checked(transfer.transfer_currency, CURRENCY_PATTERN),
     feeMinor: feeCurrency === null ? null : (fee?.minor ?? null),
     feeCurrency,
     failedSeenMs: status !== null && failedStatus(status) ? now : null,

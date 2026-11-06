@@ -43,6 +43,7 @@ import { boardGroups, type BoardGroupOf } from "../../../views/incident-board.js
 import { adviceFor, isLive, type AuditSummary, type HttpApp } from "../app.js";
 import { HttpError, MAX_FINDING_LENGTH, name, readJson, sendJson, text } from "../http.js";
 import type { Route } from "../router.js";
+import { capitalise } from "../../../text/printable.js";
 
 // The transfers a close card can cover, one per attempt at most.
 const MAX_COVERED: number = 50;
@@ -95,7 +96,7 @@ export function incidentRoutes(app: HttpApp): Route[] {
       describeBreaks(report.breaks) ?? (ledger.intact ? null : describeLedger(ledger));
     return {
       lines: report.lines,
-      problem: problem === null ? null : problem.charAt(0).toUpperCase() + problem.slice(1),
+      problem: problem === null ? null : capitalise(problem),
     };
   }
 
