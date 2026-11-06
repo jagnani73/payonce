@@ -86,6 +86,13 @@
   font-weight: 600;
 }
 
+.set-row__when {
+  display: block;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text-3);
+}
+
 .set-row__value--off {
   color: var(--text-2);
 }
@@ -106,6 +113,7 @@
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 2px 8px;
+  max-width: 240px;
 }
 
 .set-var {
@@ -191,17 +199,23 @@
     flex-basis: 100%;
   }
 
+  /* Label, value, then the variables, each on its own line. */
   .set-row {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .set-row__label {
-    grid-column: 1 / -1;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .set-row__problem,
   .set-row__details {
-    grid-column: 1 / -1;
+    grid-column: 1;
+  }
+
+  .set-vars {
+    justify-content: flex-start;
+    max-width: none;
+  }
+
+  .set-fixed {
+    justify-self: start;
   }
 
   .set-approvers__table {

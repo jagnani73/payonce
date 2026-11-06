@@ -1,5 +1,4 @@
 import type { ComponentChildren, JSX } from "preact";
-import { useEffect } from "preact/hooks";
 import { Details } from "../components/Action";
 import { Table, type Column } from "../components/Layout";
 import { Callout } from "../components/Notice";
@@ -10,6 +9,7 @@ import { usePoll, type Polled } from "../poll";
 import type { ScreenProps } from "../router";
 import { timeZone } from "../time";
 import type { SettingRow, SettingsView } from "../types";
+import { useScrollTo } from "./treasury/scroll";
 import "./settings.css";
 
 // Settings (ia.md section 10): what PayOnce read from its .env file, read-only.
@@ -177,7 +177,7 @@ function Alerts(props: { view: SettingsView["alerts"] }): JSX.Element {
     { key: "time", label: "Time", cell: (alert: Alert) => <Time at={alert.createdAt} /> },
     { key: "kind", label: "Kind", cell: (alert: Alert) => alert.kind },
     { key: "title", label: "Title", cell: (alert: Alert) => <Theirs text={alert.title} /> },
-    { key: "state", label: "State", cell: (alert: Alert) => alert.state },
+    { key: "state", label: "State", cell: (alert: Alert) => `${alert.state.charAt(0).toUpperCase()}${alert.state.slice(1)}` },
     { key: "tries", label: "Tries", cell: (alert: Alert) => alert.tries, numeric: true },
     { key: "error", label: "Last error", cell: (alert: Alert) => (alert.lastError === null ? "None" : <Theirs text={alert.lastError} />) },
   ];
@@ -243,19 +243,19 @@ function Airwallex(props: { view: SettingsView["airwallex"] }): JSX.Element {
       <div class="set-row">
         <span class="set-row__label">Connection</span>
         <span class={c.state === "ok" ? "set-row__value" : "set-row__value set-row__value--warn"}>
-          {c.text}
-          {c.lastOkAt === null ? null : (
-            <>
-              {" · last good call "}
+          {a.offline ? "None: PayOnce is using the offline host" : c.text}
+          {c.lastOkAt === null && c.failingSince === null ? null : (
+            <span class="set-row__when">
+              {c.lastOkAt === null ? "No good call yet" : "Last good call "}
               <Time at={c.lastOkAt} />
-            </>
+              {c.state !== "ok" && c.failingSince !== null ? (
+                <>
+                  {" · failing since "}
+                  <Time at={c.failingSince} />
+                </>
+              ) : null}
+            </span>
           )}
-          {c.state !== "ok" && c.failingSince !== null ? (
-            <>
-              {" · failing since "}
-              <Time at={c.failingSince} />
-            </>
-          ) : null}
         </span>
         <span class="set-fixed">Live</span>
         {c.detail === null ? null : (
@@ -266,14 +266,14 @@ function Airwallex(props: { view: SettingsView["airwallex"] }): JSX.Element {
       </div>
       <Line label="Webhooks" vars={a.variables.webhooks}>
         {a.webhooks.on
-          ? `On${a.webhooks.host === null ? "" : ` · ${a.webhooks.host}`}, and PayOnce checks payments with the bank every ${a.checksEverySeconds} s as well`
+          ? `On${a.webhooks.host === null ? "" : ` · ${a.webhooks.host}`}. PayOnce also checks payments with the bank every ${a.checksEverySeconds} s`
           : `Off, so PayOnce checks payments with the bank every ${a.checksEverySeconds} s`}
       </Line>
       <Line label="Transfer listing" vars={null}>
         {`PayOnce lists Airwallex transfers every ${a.listingEverySeconds} s`}
       </Line>
       <Line label="Reconciliation" vars={a.variables.recon}>
-        {a.reconEveryMinutes === null ? "Runs only when someone asks: Check now in Treasury › Reconciliation" : `Every ${a.reconEveryMinutes} minutes`}
+        {a.reconEveryMinutes === null ? "Only when someone presses Check now in Treasury › Reconciliation" : `Every ${a.reconEveryMinutes} minutes`}
       </Line>
     </Section>
   );
@@ -320,16 +320,8 @@ export function Settings(props: ScreenProps): JSX.Element {
   useTitle("Settings");
   const settings: Polled<SettingsView> = usePoll<SettingsView>("/api/settings", (): number => SETTINGS_MS);
   const target: string | null = SECTIONS.find((section: { key: string }): boolean => section.key === props.route.segments[0])?.key ?? null;
-  const loaded: boolean = settings.data !== null;
-
   // #settings/alerts opens at Alerts once the sections are on screen.
-  useEffect((): void => {
-    if (target !== null && loaded) {
-      const section: HTMLElement | null = document.getElementById(anchor(target));
-      section?.scrollIntoView({ block: "start" });
-      section?.focus({ preventScroll: true });
-    }
-  }, [target, loaded]);
+  useScrollTo(target === null ? null : anchor(target), settings.data !== null);
 
   return (
     <div class="screen settings">
