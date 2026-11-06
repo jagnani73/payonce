@@ -1131,7 +1131,7 @@ function canOf(f: Facts, state: PaymentState): Record<PersonAction, Can> {
     recordCallback: !f.escalated
       ? refused("not-escalated", "The payment is not waiting on a person.")
       : s.callbackBlocked !== null
-        ? refused("callback-blocked", s.callbackBlocked)
+        ? refused("callback-blocked", /[.!?]$/.test(s.callbackBlocked) ? s.callbackBlocked : `${s.callbackBlocked}.`)
         : allowed(),
     closeAsPaid: paidKind(f.closeKind) ? allowed() : refused("not-paid", "Nothing on file has paid this payment."),
     closeUnpaid: unpaidKind(f.closeKind)
