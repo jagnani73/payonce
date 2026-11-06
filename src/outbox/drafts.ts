@@ -3,14 +3,9 @@ import type { ApprovalTerms } from "../domain/approval.js";
 import { personName } from "../domain/approvers.js";
 import { today, type ArrivalTerms } from "../domain/arrival.js";
 import { deadlineMinutes } from "../domain/deadlines.js";
-import {
-  CHANGED_BANK_DETAILS_REASON,
-  LAST_PAID_CHANGED_REASON,
-  NEW_BANK_DETAILS_REASON,
-  ORIGINAL_DEADLINE_REASON,
-} from "../domain/decide.js";
+import { inFlight, pastDeadline } from "../domain/live.js";
+import { aboutBankDetailsReason, type StoredReason } from "../domain/reasons.js";
 import type { EmailFindings } from "../reader/emails.js";
-import { REPLACEMENT_DEADLINE_REASON } from "../domain/reasons.js";
 import {
   crossCurrency,
   type Approval,
@@ -55,6 +50,8 @@ interface Context {
   ledger: Ledger;
   obligation: Obligation;
   attempts: Attempt[];
+  // The reason the invoice went to a person, as codes, or null.
+  reason: StoredReason | null;
   findings: EmailFindings | null;
   emails: number;
   now: number;
@@ -148,13 +145,7 @@ function stillOpen(obligation: Obligation): boolean {
 }
 
 function aboutBankDetails(context: Context): boolean {
-  const reason: string = context.obligation.escalationReason;
-  return (
-    context.findings?.asksForNewBankDetails === true ||
-    reason.startsWith(NEW_BANK_DETAILS_REASON) ||
-    reason.startsWith(CHANGED_BANK_DETAILS_REASON) ||
-    reason.startsWith(LAST_PAID_CHANGED_REASON)
-  );
+  return context.findings?.asksForNewBankDetails === true || aboutBankDetailsReason(context.reason);
 }
 
 function phoneEnding(obligation: Obligation): string | null {
@@ -162,22 +153,15 @@ function phoneEnding(obligation: Obligation): string | null {
   return digits.length < 4 ? null : digits.slice(-4);
 }
 
-// The latest payment with the bank past the time PayOnce gives it, or undefined.
+// The latest transfer with the bank past the time PayOnce gives it, or undefined:
+// one the bank has and has not paid or failed, in a status PayOnce knows or not.
 // One with no creation time on file counts when the invoice went to a person for
 // a deadline.
 function overdue(context: Context): Attempt | undefined {
-  const reason: string = context.obligation.escalationReason;
-  const deadlineReason: boolean =
-    reason.startsWith(ORIGINAL_DEADLINE_REASON) || reason.startsWith(REPLACEMENT_DEADLINE_REASON);
-  return [...context.attempts].reverse().find((attempt: Attempt): boolean => {
-    if (attempt.state !== "in_flight" || attempt.transferId === null) {
-      return false;
-    }
-    const created: number = attempt.bankCreatedAt === null ? Number.NaN : Date.parse(attempt.bankCreatedAt);
-    return Number.isNaN(created)
-      ? deadlineReason
-      : context.now >= created + deadlineMinutes(context.obligation.transferMethod) * 60_000;
-  });
+  const minutes: number = deadlineMinutes(context.obligation.transferMethod);
+  return [...context.attempts]
+    .reverse()
+    .find((attempt: Attempt): boolean => inFlight(attempt) && pastDeadline(attempt, minutes, context.reason, context.now));
 }
 
 function lines(...parts: (string | null | false)[]): string {
@@ -552,6 +536,7 @@ function contextOf(ledger: Ledger, obligation: Obligation, now: number): Context
     ledger,
     obligation,
     attempts,
+    reason: ledger.reasonOf(obligation),
     findings: findings === undefined ? null : (JSON.parse(findings) as EmailFindings),
     emails: ledger.emails(obligation.invoiceId).length,
     now,
