@@ -1,0 +1,404 @@
+/* Incidents: the filters row, the outage strip, the totals bar and the payments
+   table. On a phone the rows are the shared queue cards from styles.css. */
+
+.incidents {
+  gap: 18px;
+}
+
+.incidents__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.incidents__new {
+  margin-left: auto;
+}
+
+/* The scope tabs line up with the filters under them, as in the mockup. */
+.incidents .tabs__row {
+  padding: 0;
+}
+
+.incidents .tabs__select {
+  padding: 0;
+}
+
+/* ---------- filters ---------- */
+
+.ifilters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px 16px;
+}
+
+.ifilters__search {
+  flex: 1 1 280px;
+  max-width: 420px;
+}
+
+.ifilters__pick {
+  min-width: 120px;
+}
+
+.ifilters__pick--wide {
+  min-width: 200px;
+}
+
+.ifilters__toggles {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 18px;
+}
+
+.icheck {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--target);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.icheck input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.icheck.is-off {
+  color: var(--text-3);
+  cursor: default;
+}
+
+.ifilters__hint {
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+/* ---------- the outage strip ---------- */
+
+.istrip {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px 12px;
+  min-height: 48px;
+  padding: 10px 16px;
+  border: 1px dashed var(--blocked-line);
+  border-radius: var(--radius-card);
+  background: var(--warn-fill);
+  color: var(--banner-text);
+  text-decoration: none;
+}
+
+.istrip:hover {
+  color: var(--banner-text);
+  border-style: solid;
+}
+
+
+.istrip__go {
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+/* ---------- the totals bar ---------- */
+
+.itotals {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  font-size: 13px;
+}
+
+.itotals--none {
+  color: var(--text-3);
+}
+
+.itotals__caption {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.itotals__wallet {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 18px;
+}
+
+.itotals__code {
+  min-width: 40px;
+}
+
+.itotals__label {
+  color: var(--text-3);
+}
+
+.itotals__note {
+  color: var(--text-2);
+}
+
+/* ---------- the list ---------- */
+
+.ilist {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+
+.ilist__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.itable-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.itable {
+  width: 100%;
+  min-width: 1040px;
+  border-collapse: collapse;
+}
+
+.itable th,
+.itable td {
+  padding: 14px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.itable th:first-child,
+.itable td:first-child {
+  padding-left: 20px;
+}
+
+.itable th:last-child,
+.itable td:last-child {
+  padding-right: 20px;
+}
+
+.itable thead th {
+  padding-top: 10px;
+  padding-bottom: 10px;
+  background: var(--sunk);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.itable .is-end {
+  text-align: right;
+}
+
+.itable__col-state {
+  width: 190px;
+}
+
+.itable__col-payment {
+  width: 22%;
+}
+
+.itable__col-amount {
+  width: 140px;
+}
+
+.itable__col-who {
+  width: 140px;
+}
+
+.itable__col-since {
+  width: 96px;
+}
+
+.itable__col-due {
+  width: 72px;
+}
+
+.itable__group th {
+  padding-top: 14px;
+  padding-bottom: 6px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.itable__group .count-pill {
+  margin-left: 8px;
+}
+
+.itable__row td {
+  border-top: 1px solid var(--line-soft);
+}
+
+.itable__row {
+  cursor: pointer;
+}
+
+.itable__row:hover td {
+  background: var(--sunk);
+}
+
+.itable__state {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+}
+
+.itable__detail {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.itable__payment {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+
+.itable__id {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.itable__id:hover {
+  text-decoration: underline;
+}
+
+.itable__who {
+  overflow-wrap: anywhere;
+}
+
+.itable__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.itable__amount {
+  display: block;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.itable__from {
+  display: block;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.itable__next {
+  color: var(--text-body);
+}
+
+.itable__blocker {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 4px;
+  color: var(--blocked-text);
+}
+
+.itable__blocker .icon {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.itable__soft {
+  color: var(--text-2);
+}
+
+.igroup + .igroup {
+  border-top: 1px solid var(--line);
+}
+
+.igroup__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 14px 10px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+@media (max-width: 899px) {
+  .incidents {
+    gap: 14px;
+  }
+
+  .ifilters {
+    gap: 10px 12px;
+  }
+
+  .ifilters__search {
+    flex-basis: 100%;
+    max-width: none;
+  }
+
+  .ifilters__pick,
+  .ifilters__pick--wide {
+    flex: 1 1 140px;
+    min-width: 0;
+  }
+
+  .istrip {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    padding: 10px 14px;
+  }
+
+  .istrip__icon {
+    margin-top: 2px;
+  }
+
+  .istrip__go {
+    grid-column: 2;
+  }
+
+  .itotals {
+    padding: 12px 14px;
+  }
+
+  .itotals__wallet {
+    gap: 2px 14px;
+  }
+
+  .ilist__foot {
+    padding: 12px 14px;
+  }
+
+  /* With no group heading, the box's own border is the first card's top line. */
+  .igroup:first-child > .qrows:first-child > .qrow:first-child {
+    border-top: 0;
+  }
+}
