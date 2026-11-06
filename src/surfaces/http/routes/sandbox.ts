@@ -3,14 +3,24 @@ import { airwallexAdvice, AirwallexError, AirwallexUnreachableError } from "../.
 import { dueDateProblem } from "../../../domain/arrival.js";
 import { noteError } from "../../../engine/lines.js";
 import { payAgain, type PayAgainResult } from "../../../engine/person.js";
-import { DEFAULT_SCENARIO, newInvoiceId, openScenario, runScenario, SCENARIOS, type ScenarioDef } from "../../../engine/scenario.js";
+import {
+  DEFAULT_EMAILS,
+  DEFAULT_SCENARIO,
+  newInvoiceId,
+  openScenario,
+  runScenario,
+  SCENARIOS,
+  type ScenarioDef,
+} from "../../../engine/scenario.js";
 import { INVOICE_ID_PATTERN, type Obligation, type RunRow } from "../../../store/ledger.js";
 import { SANDBOX_OUTCOMES } from "../../../text/words.js";
 import type { DuplicateLockResult, PaymentCreated } from "../../../views/contract.js";
-import { sandboxView, threadLabel } from "../../../views/sandbox.js";
+import { sandboxView, threadLabel, type SandboxScenarios } from "../../../views/sandbox.js";
 import type { HttpApp } from "../app.js";
 import { HttpError, name, readJson, sendJson } from "../http.js";
 import type { Route } from "../router.js";
+
+const SCRIPTED: SandboxScenarios = { scenarios: SCENARIOS, defaultScenario: DEFAULT_SCENARIO, defaultEmails: DEFAULT_EMAILS };
 
 // The sandbox simulator: a scripted incident, which plays the bank and the
 // supplier's emails, and the duplicate lock test. PayOnce only ever runs against
@@ -103,7 +113,7 @@ export function sandboxRoutes(app: HttpApp): Route[] {
     {
       method: "GET",
       pattern: "/api/sandbox",
-      handler: ({ response }): void => sendJson(response, 200, sandboxView(emailThreads())),
+      handler: ({ response }): void => sendJson(response, 200, sandboxView(SCRIPTED, emailThreads())),
     },
     {
       method: "POST",

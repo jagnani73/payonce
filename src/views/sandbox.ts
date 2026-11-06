@@ -1,4 +1,3 @@
-import { DEFAULT_EMAILS, DEFAULT_SCENARIO, SCENARIOS, type ScenarioDef } from "../engine/scenario.js";
 import { PAID_OUTCOME, SANDBOX_OUTCOMES, STAYS_IN_FLIGHT } from "../text/words.js";
 import type { SandboxView } from "./contract.js";
 
@@ -30,13 +29,22 @@ export function threadLabel(id: string): string {
   return `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
 }
 
+// The scripted incidents and what a start uses when it names none, from
+// engine/scenario.ts. The route hands them over, because the views do not
+// import the engine.
+export interface SandboxScenarios {
+  scenarios: readonly { id: string; label: string }[];
+  defaultScenario: string;
+  defaultEmails: string;
+}
+
 // emailThreads: the threads in fixtures/emails/, the default first.
-export function sandboxView(emailThreads: string[]): SandboxView {
+export function sandboxView(scripted: SandboxScenarios, emailThreads: string[]): SandboxView {
   return {
     view: "sandbox",
-    scenarios: SCENARIOS.map((scenario: ScenarioDef) => ({ id: scenario.id, label: scenario.label })),
+    scenarios: scripted.scenarios.map((scenario: { id: string; label: string }) => ({ id: scenario.id, label: scenario.label })),
     bankOutcomes: SANDBOX_OUTCOMES.map((outcome: string) => ({ id: outcome, label: outcomeLabel(outcome) })),
     emailThreads: emailThreads.map((id: string) => ({ id, label: threadLabel(id) })),
-    defaults: { scenario: DEFAULT_SCENARIO, bankOutcome: DEFAULT_OUTCOME, emails: DEFAULT_EMAILS },
+    defaults: { scenario: scripted.defaultScenario, bankOutcome: DEFAULT_OUTCOME, emails: scripted.defaultEmails },
   };
 }
