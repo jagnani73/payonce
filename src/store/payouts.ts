@@ -165,16 +165,6 @@ export class PayoutStore {
     this.timelines = timelines;
   }
 
-  // The invoices with a payout sent outside PayOnce in flight or in a status
-  // PayOnce does not know: any state that is not final, as the watcher reads them
-  // and an incident's watching counts them.
-  invoicesWithPayoutInFlight(): Set<string> {
-    const rows: { invoice_id: string }[] = this.db
-      .prepare("SELECT DISTINCT invoice_id FROM outside_payouts WHERE state NOT IN ('paid', 'failed')")
-      .all() as unknown as { invoice_id: string }[];
-    return new Set(rows.map((row: { invoice_id: string }): string => row.invoice_id));
-  }
-
   // Records a payout found in Airwallex as the original of a new invoice. Both
   // rows are written or neither is. The attempt takes the duplicate lock like
   // any other.

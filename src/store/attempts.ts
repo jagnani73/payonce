@@ -263,23 +263,6 @@ export class AttemptStore {
     this.locks = locks;
   }
 
-  // Every attempt that may still be with the bank, from any invoice: more than
-  // withBank takes, never fewer, so the incident list tests them in code without
-  // reading each invoice's attempts. A paid attempt, and a failed one with no
-  // transfer or one the bank failed, are left out.
-  attemptsMaybeWithBank(): Attempt[] {
-    const rows: AttemptRow[] = this.db
-      .prepare(
-        `SELECT * FROM attempts
-          WHERE state <> 'paid'
-            AND (state <> 'failed'
-              OR (transfer_id IS NOT NULL AND (bank_status IS NULL OR bank_status NOT IN (${FAILED_IN_SQL}))))
-          ORDER BY rowid`,
-      )
-      .all() as unknown as AttemptRow[];
-    return rows.map(toAttempt);
-  }
-
   private insertAttempt(
     requestId: string,
     invoiceId: string,

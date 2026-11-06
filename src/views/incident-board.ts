@@ -234,12 +234,6 @@ export interface BoardFilters {
   origin: BoardOrigin | null;
 }
 
-export interface BoardGroupOf {
-  group: BoardGroup;
-  label: string;
-  why: string;
-}
-
 export interface BoardGroupCount {
   group: BoardGroup;
   label: string;
@@ -993,18 +987,6 @@ function totalsOf(ranked: Ranked[], currency: string | null): BoardTotal[] {
 
 function inCurrency(entry: BoardEntry, currency: string): boolean {
   return entry.wallet === currency || entry.atRisk.some((money: BoardMoney): boolean => money.currency === currency);
-}
-
-// The group each invoice on the board is in, with its label and why it is there,
-// for the incident list. Closed invoices and run rows are not in it.
-export function boardGroups(ledger: Ledger, now: number = Date.now()): Map<string, BoardGroupOf> {
-  const groups: Map<string, BoardGroupOf> = new Map<string, BoardGroupOf>();
-  for (const { entry } of rankedBoard(ledger, now).ranked) {
-    if (entry.kind === "invoice") {
-      groups.set(entry.invoiceId, { group: entry.group, label: GROUP_LABELS[entry.group], why: entry.why });
-    }
-  }
-  return groups;
 }
 
 // The board's entries for these invoices and the waiting run's pay rows to

@@ -272,17 +272,6 @@ export class RunStore {
     this.approvals = approvals;
   }
 
-  // The run each invoice from a pay run was released from.
-  runIdsByInvoice(): Map<string, number> {
-    const rows: { invoice_id: string; run_id: number }[] = this.db
-      .prepare(
-        `SELECT obligations.invoice_id, run_rows.run_id FROM obligations
-           JOIN run_rows ON run_rows.id = obligations.run_row_id`,
-      )
-      .all() as unknown as { invoice_id: string; run_id: number }[];
-    return new Map(rows.map((row): [string, number] => [row.invoice_id, row.run_id]));
-  }
-
   run(id: number): Run | undefined {
     const row: RunRecord | undefined = this.db
       .prepare("SELECT * FROM runs WHERE id = ?")

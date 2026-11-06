@@ -18,12 +18,6 @@ import type { Schema } from "./schema.js";
 // is caught within a minute, as the alert loop's audit check catches it.
 const FULL_HEAD_CHECK_MS: number = 60_000;
 
-// A line the incident list may show for a closed invoice: a decision, a close, or a
-// standing line, but never an error, an email or a message draft.
-const HEADLINE_LINE: string = `(kind IN ('decision', 'closed')
-    OR (topic IS NOT NULL AND topic NOT LIKE 'outbox:%'))
-  AND kind NOT IN ('error', 'email', 'outbox')`;
-
 export type EventKind =
   | "payment"
   | "email"
@@ -301,28 +295,6 @@ export class Timelines {
         .prepare("SELECT * FROM events WHERE invoice_id = ? ORDER BY id")
         .all(invoiceId) as unknown as EventRow[]
     ).map(toChainedEvent);
-  }
-
-  // Each invoice's latest decision, close or standing line, for the incident list.
-  // Each lookup walks back from the invoice's last line on events_by_invoice, so
-  // the list does not read every timeline.
-  headlines(): Map<string, string> {
-    const rows: { invoice_id: string; message: string | null }[] = this.db
-      .prepare(
-        `SELECT invoice_id,
-                (SELECT message FROM events
-                  WHERE events.invoice_id = obligations.invoice_id AND ${HEADLINE_LINE}
-                  ORDER BY id DESC LIMIT 1) AS message
-           FROM obligations`,
-      )
-      .all() as unknown as { invoice_id: string; message: string | null }[];
-    const headlines: Map<string, string> = new Map<string, string>();
-    for (const row of rows) {
-      if (row.message !== null) {
-        headlines.set(row.invoice_id, row.message);
-      }
-    }
-    return headlines;
   }
 
   // Whether the running hash matches every line in the ledger, as auditSnapshot and

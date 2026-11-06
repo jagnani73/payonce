@@ -430,22 +430,6 @@ export class Ledger {
     return this.repos.timelines.chainedEvents(invoiceId);
   }
 
-  headlines(): Map<string, string> {
-    return this.repos.timelines.headlines();
-  }
-
-  runIdsByInvoice(): Map<string, number> {
-    return this.repos.runs.runIdsByInvoice();
-  }
-
-  attemptsMaybeWithBank(): Attempt[] {
-    return this.repos.attempts.attemptsMaybeWithBank();
-  }
-
-  invoicesWithPayoutInFlight(): Set<string> {
-    return this.repos.payouts.invoicesWithPayoutInFlight();
-  }
-
   runningHashCheck(now: number = Date.now()): LedgerReport {
     return this.repos.timelines.runningHashCheck(now);
   }
