@@ -1,16 +1,13 @@
 import type { StatementSync } from "node:sqlite";
 import {
-  GENESIS,
-  nextLedgerHead,
-  reconEventHash,
   restartOf,
-  restartRecord,
   storable,
   type ChainedReconEvent,
   type ReconAuditSnapshot,
   type ReconEventFields,
 } from "./audit-trail.js";
 import { oneLine } from "../text/printable.js";
+import { GENESIS, RECON_CHAIN } from "./chain.js";
 import type { Db } from "./db.js";
 import type {
   BreakKind,
@@ -112,12 +109,6 @@ const RECON_SCHEMA: string = `
   );
 `;
 
-const RECON_HEAD_KEY: string = "recon_events_head";
-// Set with the chain's first line and never removed, so a chain that has started
-// and holds no line, or has lost its running hash, shows as broken.
-const RECON_FIRST_LINE_KEY: string = "recon_first_line_at";
-// The first time the running hash was found missing and started again.
-const RECON_RESTARTED_KEY: string = "recon_events_head_restarted";
 // The newest run whose findings are recorded. A run that started before it
 // commits nothing.
 const COMMITTED_RUN_KEY: string = "recon_committed_run";
@@ -487,14 +478,14 @@ export class ReconStore {
       // A chain whose lines came before the key takes it from its first line.
       this.db
         .prepare("INSERT OR IGNORE INTO meta (key, value) SELECT ?, at FROM recon_events ORDER BY id LIMIT 1")
-        .run(RECON_FIRST_LINE_KEY);
+        .run(RECON_CHAIN.shape.started);
       this.db
         .prepare(
           `INSERT OR IGNORE INTO meta (key, value)
            SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM recon_events)
              AND NOT EXISTS (SELECT 1 FROM meta WHERE key = ?)`,
         )
-        .run(RECON_HEAD_KEY, GENESIS, RECON_FIRST_LINE_KEY);
+        .run(RECON_CHAIN.shape.head, GENESIS, RECON_CHAIN.shape.started);
     });
   }
 
@@ -780,28 +771,20 @@ export class ReconStore {
       .get() as { hash: string } | undefined;
     const prevHash: string = last?.hash ?? GENESIS;
     const line: ReconEventFields = { breakId, at, kind, message: storable(oneLine(message)) };
-    const hash: string = reconEventHash(prevHash, line);
+    const hash: string = RECON_CHAIN.hash(prevHash, line);
     const inserted: { lastInsertRowid: number | bigint } = this.db
       .prepare("INSERT INTO recon_events (break_id, at, kind, message, prev_hash, hash) VALUES (?, ?, ?, ?, ?, ?)")
       .run(line.breakId, line.at, line.kind, line.message, prevHash, hash);
-    // The first line starts the running hash from the genesis. A running hash
-    // missing after that was removed: the line is still written, the running hash
-    // starts again from the genesis, and the first restart is kept with the time
-    // and the line, so every audit reports it from then on. The chain's first line
+    // The first line starts the running hash from the genesis, and a running hash
+    // missing after that was removed (HashChain.advance). The chain's first line
     // is the only line with no line, no key and no other opened break before it.
-    const head: string | null = this.meta(RECON_HEAD_KEY);
     const first: boolean =
       last === undefined &&
-      this.meta(RECON_FIRST_LINE_KEY) === null &&
-      this.meta(RECON_RESTARTED_KEY) === null &&
+      this.meta(RECON_CHAIN.shape.started) === null &&
+      this.meta(RECON_CHAIN.shape.restarted) === null &&
       this.db.prepare("SELECT 1 FROM recon_breaks WHERE id <> ? AND state <> 'pending' LIMIT 1").get(breakId) === undefined;
-    if (head === null && !first) {
-      this.db
-        .prepare("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)")
-        .run(RECON_RESTARTED_KEY, restartRecord(at, Number(inserted.lastInsertRowid), `break ${breakId}`));
-    }
-    this.setMeta(RECON_HEAD_KEY, nextLedgerHead(head ?? GENESIS, hash));
-    this.db.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)").run(RECON_FIRST_LINE_KEY, at);
+    RECON_CHAIN.advance(this.db, hash, at, Number(inserted.lastInsertRowid), `break ${breakId}`, !first);
+    this.db.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)").run(RECON_CHAIN.shape.started, at);
   }
 
   private insertBreak(found: FoundBreak, state: "pending" | "open", at: string): number {
@@ -1157,9 +1140,9 @@ export class ReconStore {
           hash: row.hash,
         }),
       ),
-      ledgerHead: this.meta(RECON_HEAD_KEY),
-      chainStartedAt: this.meta(RECON_FIRST_LINE_KEY),
-      restarted: restartOf(this.meta(RECON_RESTARTED_KEY)),
+      ledgerHead: this.meta(RECON_CHAIN.shape.head),
+      chainStartedAt: this.meta(RECON_CHAIN.shape.started),
+      restarted: restartOf(this.meta(RECON_CHAIN.shape.restarted)),
       // A break gets its first line when it opens, so one that opened with none
       // lost its lines. A pending break has none yet.
       unlined: (

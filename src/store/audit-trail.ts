@@ -1,9 +1,5 @@
-import { createHash } from "node:crypto";
 import { capitalise } from "../text/printable.js";
-
-// The prev_hash of an invoice's first line, and the ledger's running hash before
-// its first line.
-export const GENESIS: string = "0".repeat(64);
+import { GENESIS, INVOICE_CHAIN, RECON_CHAIN, RUN_CHAIN, type HashedLine } from "./chain.js";
 
 export const HASH_METHOD: string =
   "SHA-256, in hex, of prevHash followed by the JSON object {at, invoice_id, kind, message, topic} as UTF-8, with the keys in that order and no spaces. Only quotes, backslashes and control characters are escaped, as JavaScript's JSON.stringify does; every other character is written as itself";
@@ -75,10 +71,6 @@ export function restartOf(value: string | null): HeadRestart | null {
   } catch {
     return { at: null, id: null, of: null };
   }
-}
-
-export function restartRecord(at: string, id: number, of: string): string {
-  return JSON.stringify({ at, id, of });
 }
 
 // What the ledger holds for an audit, read in one transaction.
@@ -167,45 +159,6 @@ export function storable(text: string): string {
   return text.replace(LONE_SURROGATE, "�");
 }
 
-function sha256(text: string): string {
-  return createHash("sha256").update(text, "utf8").digest("hex");
-}
-
-// JSON.stringify keeps the keys in the order written here and adds no spaces, so
-// anyone can rebuild the same text from an export.
-export function canonicalEvent(event: EventFields): string {
-  return JSON.stringify({
-    at: event.at,
-    invoice_id: event.invoiceId,
-    kind: event.kind,
-    message: event.message,
-    topic: event.topic,
-  });
-}
-
-export function eventHash(prevHash: string, event: EventFields): string {
-  return sha256(prevHash + canonicalEvent(event));
-}
-
-export function canonicalRunEvent(event: RunEventFields): string {
-  return JSON.stringify({
-    at: event.at,
-    run_id: event.runId,
-    kind: event.kind,
-    message: event.message,
-    topic: event.topic,
-  });
-}
-
-export function runEventHash(prevHash: string, event: RunEventFields): string {
-  return sha256(prevHash + canonicalRunEvent(event));
-}
-
-// The ledger's running hash once a line with this hash joins any invoice's chain.
-export function nextLedgerHead(ledgerHead: string, hash: string): string {
-  return sha256(ledgerHead + hash);
-}
-
 // Reconciliation's record is one chain over every break, with a running hash of
 // its own, so a line removed from its end is caught too.
 export const RECON_HASH_METHOD: string =
@@ -251,68 +204,10 @@ export interface ReconChainReport {
   intact: boolean;
 }
 
-export function canonicalReconEvent(event: ReconEventFields): string {
-  return JSON.stringify({
-    at: event.at,
-    break_id: event.breakId,
-    kind: event.kind,
-    message: event.message,
-  });
-}
-
-export function reconEventHash(prevHash: string, event: ReconEventFields): string {
-  return sha256(prevHash + canonicalReconEvent(event));
-}
-
-// What breaksOf checks on a line of any chain.
-interface HashedLine {
-  id: number;
-  at: string;
-  prevHash: string | null;
-  hash: string | null;
-}
-
 interface ChainLine extends HashedLine {
   kind: string;
   topic: string | null;
   message: string;
-}
-
-// Checks each line against the stored hash of the line before it and against its
-// own content, so one changed line shows up once and not on every line after it.
-// A line with no hash is skipped, as the ledger skips it when it adds the next.
-function breaksOf<E extends HashedLine>(
-  events: E[],
-  hashOf: (prevHash: string, event: E) => string,
-): ChainBreak[] {
-  const breaks: ChainBreak[] = [];
-  let previous: string = GENESIS;
-  events.forEach((event: E, index: number): void => {
-    const line: number = index + 1;
-    const found = (problem: string): void => {
-      breaks.push({ line, id: event.id, at: event.at, problem });
-    };
-    if (event.prevHash === null || event.hash === null) {
-      found("has no hash, so it was written outside the chain");
-      return;
-    }
-    if (event.prevHash !== previous) {
-      found(
-        line === 1
-          ? "does not start the chain, so lines before it were removed"
-          : `does not follow line ${line - 1}: a line between them was removed or added, or line ${line - 1} was rewritten with a new hash`,
-      );
-    }
-    if (hashOf(event.prevHash, event) !== event.hash) {
-      found("was changed after it was written");
-    }
-    previous = event.hash;
-  });
-  return breaks;
-}
-
-export function chainBreaks(events: ChainedEvent[]): ChainBreak[] {
-  return breaksOf(events, eventHash);
 }
 
 export function chainReport(invoiceId: string, events: ChainedEvent[]): ChainReport {
@@ -320,7 +215,7 @@ export function chainReport(invoiceId: string, events: ChainedEvent[]): ChainRep
     invoiceId,
     lines: events.length,
     head: events.at(-1)?.hash ?? null,
-    breaks: chainBreaks(events),
+    breaks: INVOICE_CHAIN.breaks(events),
   };
 }
 
@@ -342,7 +237,7 @@ export function runChainReport(runId: number, events: ChainedRunEvent[]): RunCha
     runId,
     lines: events.length,
     head: events.at(-1)?.hash ?? null,
-    breaks: breaksOf(events, runEventHash),
+    breaks: RUN_CHAIN.breaks(events),
   };
 }
 
@@ -359,23 +254,13 @@ export function runChainReports(events: ChainedRunEvent[]): RunChainReport[] {
   );
 }
 
-function runningHash(hashes: (string | null)[]): string {
-  let computed: string = GENESIS;
-  for (const hash of hashes) {
-    if (hash !== null) {
-      computed = nextLedgerHead(computed, hash);
-    }
-  }
-  return computed;
-}
-
 // The running hash catches what an invoice's own chain cannot: its last lines, or
 // all of them, removed. A running hash that went missing and started again, and
 // an invoice with no line at all, are reported from then on, because removing
 // every line and the running hash together would otherwise leave a chain that
 // verifies.
 export function ledgerReport(snapshot: AuditSnapshot): LedgerReport {
-  const computed: string = runningHash(snapshot.hashes);
+  const computed: string = INVOICE_CHAIN.running(snapshot.hashes);
   return {
     lines: snapshot.hashes.length,
     invoices: snapshot.invoices,
@@ -388,7 +273,7 @@ export function ledgerReport(snapshot: AuditSnapshot): LedgerReport {
 }
 
 export function runLedgerReport(snapshot: RunAuditSnapshot): RunLedgerReport {
-  const computed: string = runningHash(snapshot.hashes);
+  const computed: string = RUN_CHAIN.running(snapshot.hashes);
   return {
     lines: snapshot.hashes.length,
     runs: snapshot.runs,
@@ -471,8 +356,10 @@ export function describeLedger(report: LedgerReport): string {
 // The chain line by line and the running hash, which catches the last lines
 // removed.
 export function reconChainReport(snapshot: ReconAuditSnapshot): ReconChainReport {
-  const breaks: ChainBreak[] = breaksOf(snapshot.events, reconEventHash);
-  const computed: string = runningHash(snapshot.events.map((event: ChainedReconEvent): string | null => event.hash));
+  const breaks: ChainBreak[] = RECON_CHAIN.breaks(snapshot.events);
+  const computed: string = RECON_CHAIN.running(
+    snapshot.events.map((event: ChainedReconEvent): string | null => event.hash),
+  );
   const first: ChainedReconEvent | undefined = snapshot.events[0];
   const lostStart: ReconChainReport["lostStart"] =
     snapshot.chainStartedAt === null ? null : first === undefined ? "empty" : first.at !== snapshot.chainStartedAt ? "cut" : null;

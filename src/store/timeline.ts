@@ -1,12 +1,6 @@
-import type { StatementSync } from "node:sqlite";
 import { oneLine } from "../text/printable.js";
 import {
-  eventHash,
-  GENESIS,
-  nextLedgerHead,
   restartOf,
-  restartRecord,
-  runEventHash,
   storable,
   type AuditSnapshot,
   type ChainedEvent,
@@ -17,6 +11,7 @@ import {
   type RunAuditSnapshot,
   type RunEventFields,
 } from "./audit-trail.js";
+import { GENESIS, INVOICE_CHAIN, RUN_CHAIN } from "./chain.js";
 import type { ColumnRow, Db } from "./db.js";
 import type { Schema } from "./schema.js";
 
@@ -130,26 +125,6 @@ function toChainedEvent(row: EventRow): ChainedEvent {
   };
 }
 
-// The running hash of every line's hash, so lines removed from the end of a
-// timeline, or a whole invoice's lines, are caught.
-const LEDGER_HEAD_KEY: string = "events_head";
-
-const CHAIN_STARTED_KEY: string = "chain_started_at";
-
-const BACKFILLED_THROUGH_KEY: string = "chain_backfilled_through";
-
-// The first time the running hash was found missing and started again.
-const LEDGER_RESTARTED_KEY: string = "events_head_restarted";
-
-// The same for pay run timelines, which are chained apart from invoice timelines.
-const RUN_HEAD_KEY: string = "run_events_head";
-
-const RUN_CHAIN_STARTED_KEY: string = "run_chain_started_at";
-
-const RUN_BACKFILLED_THROUGH_KEY: string = "run_chain_backfilled_through";
-
-const RUN_RESTARTED_KEY: string = "run_events_head_restarted";
-
 // Invoice and pay run timelines (events, run_events): their lines, their hash
 // chains and the running hashes.
 export class Timelines {
@@ -163,73 +138,22 @@ export class Timelines {
     this.schema = schema;
   }
 
-  // True once the timeline is a hash chain: any record of the chain in meta, or
-  // any line with a hash, counts. A file opened read-only from before the chain
-  // has no hash column, and one from before meta has no meta table.
+  // True once invoice timelines are a hash chain (HashChain.started).
   chainStarted(): boolean {
-    const hashColumn: boolean = (
-      this.db.prepare("PRAGMA table_info(events)").all() as unknown as ColumnRow[]
-    ).some((column: ColumnRow): boolean => column.name === "hash");
-    return (
-      this.db.metaValue(CHAIN_STARTED_KEY) !== null ||
-      this.db.metaValue(BACKFILLED_THROUGH_KEY) !== null ||
-      this.db.metaValue(LEDGER_HEAD_KEY) !== null ||
-      this.db.metaValue(LEDGER_RESTARTED_KEY) !== null ||
-      (hashColumn &&
-        this.db.prepare("SELECT 1 FROM events WHERE hash IS NOT NULL LIMIT 1").get() !==
-          undefined)
-    );
+    return INVOICE_CHAIN.started(this.db);
   }
 
-  // The first time the ledger is opened with the chain, hashes the lines already
-  // there in id order and starts the running hash. A ledger whose chain has
-  // started is never hashed again, even if part of its record has gone missing,
-  // because hashing again would vouch for whatever the lines now say.
+  // The first time the ledger is opened with the chain, hashes the invoice lines
+  // already there, once (HashChain.start).
   startChain(): void {
-    this.db.transaction((): void => {
-      if (!this.chainStarted()) {
-        const rows: EventRow[] = this.db
-          .prepare("SELECT * FROM events ORDER BY id")
-          .all() as unknown as EventRow[];
-        const update: StatementSync = this.db.prepare(
-          "UPDATE events SET prev_hash = ?, hash = ? WHERE id = ?",
-        );
-        const heads: Map<string, string> = new Map();
-        let ledgerHead: string = GENESIS;
-        for (const row of rows) {
-          const event: ChainedEvent = toChainedEvent(row);
-          const prevHash: string = heads.get(event.invoiceId) ?? GENESIS;
-          const hash: string = eventHash(prevHash, event);
-          update.run(prevHash, hash, event.id);
-          heads.set(event.invoiceId, hash);
-          ledgerHead = nextLedgerHead(ledgerHead, hash);
-        }
-        const insert: StatementSync = this.db.prepare(
-          "INSERT INTO meta (key, value) VALUES (?, ?)",
-        );
-        insert.run(LEDGER_HEAD_KEY, ledgerHead);
-        insert.run(CHAIN_STARTED_KEY, new Date().toISOString());
-        insert.run(BACKFILLED_THROUGH_KEY, String(rows.at(-1)?.id ?? 0));
-      }
-    });
+    this.db.transaction((): void => INVOICE_CHAIN.start(this.db, toChainedEvent));
   }
 
   // True once pay run timelines are a hash chain, read the way chainStarted reads
   // invoice timelines. A file opened read-only from before pay runs has no
   // run_events table, and one from before this chain has no hash column.
   runChainStarted(): boolean {
-    const hashColumn: boolean = (
-      this.db.prepare("PRAGMA table_info(run_events)").all() as unknown as ColumnRow[]
-    ).some((column: ColumnRow): boolean => column.name === "hash");
-    return (
-      this.db.metaValue(RUN_CHAIN_STARTED_KEY) !== null ||
-      this.db.metaValue(RUN_BACKFILLED_THROUGH_KEY) !== null ||
-      this.db.metaValue(RUN_HEAD_KEY) !== null ||
-      this.db.metaValue(RUN_RESTARTED_KEY) !== null ||
-      (hashColumn &&
-        this.db.prepare("SELECT 1 FROM run_events WHERE hash IS NOT NULL LIMIT 1").get() !==
-          undefined)
-    );
+    return RUN_CHAIN.started(this.db);
   }
 
   // True when the file has a run_events table with any line in it.
@@ -242,32 +166,7 @@ export class Timelines {
   // Starts the chain of pay run timelines the way startChain starts the invoices':
   // the lines already there are hashed once, in id order, and never again.
   startRunChain(): void {
-    this.db.transaction((): void => {
-      if (!this.runChainStarted()) {
-        const rows: RunEventRow[] = this.db
-          .prepare("SELECT * FROM run_events ORDER BY id")
-          .all() as unknown as RunEventRow[];
-        const update: StatementSync = this.db.prepare(
-          "UPDATE run_events SET prev_hash = ?, hash = ? WHERE id = ?",
-        );
-        const heads: Map<number, string> = new Map();
-        let runHead: string = GENESIS;
-        for (const row of rows) {
-          const event: ChainedRunEvent = toChainedRunEvent(row);
-          const prevHash: string = heads.get(event.runId) ?? GENESIS;
-          const hash: string = runEventHash(prevHash, event);
-          update.run(prevHash, hash, event.id);
-          heads.set(event.runId, hash);
-          runHead = nextLedgerHead(runHead, hash);
-        }
-        const insert: StatementSync = this.db.prepare(
-          "INSERT INTO meta (key, value) VALUES (?, ?)",
-        );
-        insert.run(RUN_HEAD_KEY, runHead);
-        insert.run(RUN_CHAIN_STARTED_KEY, new Date().toISOString());
-        insert.run(RUN_BACKFILLED_THROUGH_KEY, String(rows.at(-1)?.id ?? 0));
-      }
-    });
+    this.db.transaction((): void => RUN_CHAIN.start(this.db, toChainedRunEvent));
   }
 
   // Chains the line to the invoice's last line and adds it to the running hash in
@@ -310,35 +209,14 @@ export class Timelines {
       message: storable(oneLine(message)),
       topic: topic === null ? null : storable(topic),
     };
-    const hash: string = eventHash(prevHash, line);
+    const hash: string = INVOICE_CHAIN.hash(prevHash, line);
     const inserted: { lastInsertRowid: number | bigint } = this.db
       .prepare(
         `INSERT INTO events (invoice_id, at, kind, message, topic, prev_hash, hash)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(line.invoiceId, line.at, line.kind, line.message, line.topic, prevHash, hash);
-    this.chainHead(LEDGER_HEAD_KEY, LEDGER_RESTARTED_KEY, hash, line.at, Number(inserted.lastInsertRowid), invoice);
-  }
-
-  // Adds a line's hash to a running hash. Every chain sets its running hash when
-  // it starts, so a missing one was removed. The line is still written, because a
-  // payment step must never fail for want of a hash: the running hash starts
-  // again from the genesis, and the first restart is kept in meta, with the time
-  // and the line, so every audit reports it from then on. The caller holds the
-  // write transaction.
-  private chainHead(headKey: string, restartKey: string, hash: string, at: string, id: number, of: string): void {
-    const head: string | null = this.db.metaValue(headKey);
-    if (head === null) {
-      this.db
-        .prepare("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)")
-        .run(restartKey, restartRecord(at, id, of));
-    }
-    this.db
-      .prepare(
-        `INSERT INTO meta (key, value) VALUES (?, ?)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-      )
-      .run(headKey, nextLedgerHead(head ?? GENESIS, hash));
+    INVOICE_CHAIN.advance(this.db, hash, line.at, Number(inserted.lastInsertRowid), invoice);
   }
 
   // What an audit checks, read in one transaction so a line another process adds
@@ -358,10 +236,10 @@ export class Timelines {
         events: rows.map(toChainedEvent),
         hashes: all.map((row: LedgerRow): string | null => row.hash),
         invoices: new Set(all.map((row: LedgerRow): string => row.invoice_id)).size,
-        ledgerHead: this.db.metaValue(LEDGER_HEAD_KEY),
-        chainStartedAt: this.db.metaValue(CHAIN_STARTED_KEY),
-        backfilledThrough: Number(this.db.metaValue(BACKFILLED_THROUGH_KEY) ?? 0),
-        restarted: restartOf(this.db.metaValue(LEDGER_RESTARTED_KEY)),
+        ledgerHead: this.db.metaValue(INVOICE_CHAIN.shape.head),
+        chainStartedAt: this.db.metaValue(INVOICE_CHAIN.shape.started),
+        backfilledThrough: INVOICE_CHAIN.backfilledThrough(this.db),
+        restarted: restartOf(this.db.metaValue(INVOICE_CHAIN.shape.restarted)),
         unlined: this.unlinedInvoices(),
       };
       return snapshot;
@@ -482,7 +360,7 @@ export class Timelines {
       let computed: string = from.computed;
       for (const row of rows) {
         if (row.hash !== null) {
-          computed = nextLedgerHead(computed, row.hash);
+          computed = INVOICE_CHAIN.next(computed, row.hash);
         }
         from.invoices.add(row.invoice_id);
       }
@@ -495,8 +373,8 @@ export class Timelines {
         invoices: from.invoices,
         fullAt: from.fullAt,
       };
-      const stored: string | null = this.db.metaValue(LEDGER_HEAD_KEY);
-      const restarted: HeadRestart | null = restartOf(this.db.metaValue(LEDGER_RESTARTED_KEY));
+      const stored: string | null = this.db.metaValue(INVOICE_CHAIN.shape.head);
+      const restarted: HeadRestart | null = restartOf(this.db.metaValue(INVOICE_CHAIN.shape.restarted));
       const unlined: string[] = this.unlinedInvoices();
       return {
         lines: this.headProgress.lines,
@@ -529,14 +407,14 @@ export class Timelines {
       message: storable(oneLine(message)),
       topic: topic === null ? null : storable(topic),
     };
-    const hash: string = runEventHash(prevHash, line);
+    const hash: string = RUN_CHAIN.hash(prevHash, line);
     const inserted: { lastInsertRowid: number | bigint } = this.db
       .prepare(
         `INSERT INTO run_events (run_id, at, kind, message, topic, prev_hash, hash)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(line.runId, line.at, line.kind, line.message, line.topic, prevHash, hash);
-    this.chainHead(RUN_HEAD_KEY, RUN_RESTARTED_KEY, hash, line.at, Number(inserted.lastInsertRowid), `run ${runId}`);
+    RUN_CHAIN.advance(this.db, hash, line.at, Number(inserted.lastInsertRowid), `run ${runId}`);
   }
 
   // A run's timeline is a hash chain of its own, with a running hash over every
@@ -564,10 +442,10 @@ export class Timelines {
         events: rows.map(toChainedRunEvent),
         hashes: all.map((row: RunHashRow): string | null => row.hash),
         runs: new Set(all.map((row: RunHashRow): number => row.run_id)).size,
-        ledgerHead: this.db.metaValue(RUN_HEAD_KEY),
-        chainStartedAt: this.db.metaValue(RUN_CHAIN_STARTED_KEY),
-        backfilledThrough: Number(this.db.metaValue(RUN_BACKFILLED_THROUGH_KEY) ?? 0),
-        restarted: restartOf(this.db.metaValue(RUN_RESTARTED_KEY)),
+        ledgerHead: this.db.metaValue(RUN_CHAIN.shape.head),
+        chainStartedAt: this.db.metaValue(RUN_CHAIN.shape.started),
+        backfilledThrough: RUN_CHAIN.backfilledThrough(this.db),
+        restarted: restartOf(this.db.metaValue(RUN_CHAIN.shape.restarted)),
         unlined: this.unlinedRuns(),
       };
       return snapshot;
