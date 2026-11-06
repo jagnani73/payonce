@@ -86,7 +86,7 @@ async function act(
       return waitForBank(engine, obligation.invoiceId, "original", assessment.original);
     case "escalate":
       // The first request names the floor as well, as every later one does.
-      return escalate(engine, obligation, withFloorReason(engine, obligation, assessment));
+      return escalate(engine, obligation, withFloorReason(engine, obligation, assessment), "decided");
     case "close":
       return close(engine, obligation.invoiceId, obligation.state)
         ? null

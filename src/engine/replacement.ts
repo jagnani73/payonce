@@ -94,6 +94,7 @@ export async function replaceUnderLock(
       engine,
       obligation,
       withFloorReason(engine, obligation, { ...assessment, incident, decision: next, paidDuplicate: paid }),
+      "decided",
     );
   }
   const replacement: Transfer = await send(engine, obligation, next);
@@ -118,5 +119,5 @@ function escalateForOutage(
   if (!engine.ledger.holdForOutage(outage.id, { invoiceId }, "replacement", holdLine(outage, "replacement"))) {
     return Date.now();
   }
-  return escalate(engine, obligation, assessment, OUTAGE_REASON);
+  return escalate(engine, obligation, assessment, "outage");
 }

@@ -2,7 +2,7 @@ import type { Transfer } from "../airwallex/transfers.js";
 import { bindingOf, type ReplacementTerms } from "../domain/approval.js";
 import type { SignoffRule } from "../domain/approvers.js";
 import { originalStateOf, routeKeyOf } from "../domain/assess.js";
-import { decide } from "../domain/decide.js";
+import { decide, OUTAGE_REASON } from "../domain/decide.js";
 import type { OriginalTransferState } from "../domain/incident.js";
 import { debitCurrency } from "../domain/reserve.js";
 import {
@@ -27,28 +27,32 @@ import { awaitApproval, ruleFor, voidIfStale } from "./requests.js";
 import { requireAccount, send, waitForBank } from "./send.js";
 import { countedFromToday, termsOf } from "./terms.js";
 
+// The reason escalate gives the invoice. decided gives the decision's when the
+// policy escalates, and otherwise keeps the reason the invoice has. outage gives
+// OUTAGE_REASON, for a replacement the policy would send on a rail with an
+// outage: the terms still come from that replace decision.
+export type EscalateAs = "decided" | "outage";
+
 // A replacement is only on offer when the original has failed, and it goes to the
 // beneficiary on file. A paid original leaves nothing to pay, so the person closes
 // the incident. Any other escalation has no payment a person could approve yet.
 // Returns when to look again: when an open request expires, so a new one can be
 // opened.
-// reason, when given, is the invoice's escalation reason in place of the
-// decision's. Only an outage gives one, for a replacement the policy would send:
-// the terms still come from that replace decision.
 export function escalate(
   engine: Engine,
   obligation: Obligation,
   assessment: Assessment,
-  reason: string | null = null,
+  as: EscalateAs,
 ): NextLook {
   // An invoice that is already with a person keeps the reason it went there for
   // when the policy would now do something else.
   engine.ledger.escalate(
     obligation.invoiceId,
-    reason ??
-      (assessment.decision.action === "escalate"
+    as === "outage"
+      ? OUTAGE_REASON
+      : assessment.decision.action === "escalate"
         ? assessment.decision.reason
-        : obligation.escalationReason),
+        : obligation.escalationReason,
   );
   if (assessment.incident.outsidePayoutLive) {
     return holdForOutsidePayout(engine, obligation.invoiceId);
@@ -232,10 +236,11 @@ export async function continueEscalated(
       engine,
       obligation,
       approval?.state === "requested" && approval.needed >= rule.needed ? assessment : assessed,
+      "decided",
     );
   }
   if (voidIfStale(engine, obligation, approval, current, rule)) {
-    return escalate(engine, obligation, assessed);
+    return escalate(engine, obligation, assessed, "decided");
   }
   // An approved payment on a rail with an outage waits with its approval, which
   // is neither spent nor void. useApproval refuses it too.
