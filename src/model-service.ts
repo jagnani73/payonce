@@ -8,7 +8,8 @@ import type { ModelFailure } from "./words.js";
 // service that speaks that format can stand in for it. The services are asked in
 // order, Claude first, and each service's models in its list's order.
 
-// Anthropic's Messages API. The host is fixed, so CLAUDE_API_KEY goes nowhere else.
+// Anthropic's Messages API. The host is fixed and no redirect is followed (see
+// complete), so CLAUDE_API_KEY and what is asked go to this host only.
 export const CLAUDE_URL: string = "https://api.anthropic.com/v1/messages";
 export const ANTHROPIC_VERSION: string = "2026-10-21";
 // Measured on 2026-11-06 (docs/design/email-reader.md and ask-why.md). The reader
@@ -268,10 +269,14 @@ async function complete(
   keys: readonly string[],
   send: typeof fetch,
 ): Promise<string> {
+  // A redirect is refused, not followed: fetch would carry x-api-key and the
+  // email or the facts to the host it names, dropping only Authorization. fetch
+  // then fails with "fetch failed", which tryOf reads as unreachable.
   const response: Response = await send(service.url, {
     method: "POST",
     headers: headersOf(service),
     body: bodyOf(service, model, request),
+    redirect: "error",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   const text: string = await response.text();
