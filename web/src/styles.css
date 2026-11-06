@@ -532,8 +532,8 @@ textarea {
 }
 
 .topbar--phone .brand {
+  flex: 0 0 auto;
   gap: 6px;
-  min-width: 0;
 }
 
 .topbar--phone .brand__mark {
@@ -652,7 +652,7 @@ textarea {
   pointer-events: none;
 }
 
-.search__input {
+.search .search__input {
   width: 100%;
   padding-left: 36px;
   background: var(--sunk);
@@ -769,9 +769,23 @@ textarea {
   cursor: pointer;
 }
 
-.status-chip--compact {
-  gap: 6px;
+.status-chip__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* On a phone the chip sits between the wordmark and the menu button, and a
+   long label gives way first; the popover has it in full. */
+.status--compact {
+  flex: 0 1 auto;
+  min-width: 0;
   margin-left: auto;
+}
+
+.status-chip--compact {
+  max-width: 100%;
+  gap: 6px;
   padding: 0 10px;
   font-size: 12px;
 }
@@ -800,16 +814,17 @@ textarea {
   color: var(--done-text);
 }
 
-.topbar--phone .popover-anchor:has(.status-chip--compact) {
-  margin-left: auto;
+/* On a phone the status popover spans the bar, under it. */
+.topbar--phone .status {
+  position: static;
 }
 
-.topbar--phone .status-chip--compact {
-  margin-left: 0;
-}
-
-.topbar--phone .popover {
-  right: -52px;
+.topbar--phone .status .popover {
+  left: 16px;
+  right: 16px;
+  top: 58px;
+  width: auto;
+  max-width: none;
 }
 
 .status-pop__list {
@@ -1764,6 +1779,7 @@ textarea {
   .qrow__money {
     grid-column: 2;
     grid-row: 2;
+    max-width: 150px;
   }
 
   .qrow__next,

@@ -9,6 +9,8 @@ const MONTHS: readonly string[] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Ju
 const MINUTE_MS: number = 60_000;
 const HOUR_MS: number = 60 * MINUTE_MS;
 const DAY_MS: number = 24 * HOUR_MS;
+// Keeps a number on the line of its unit: "3 d" never breaks.
+const NBSP: string = String.fromCharCode(0xa0);
 
 export function parseIso(at: string | null | undefined): Date | null {
   if (typeof at !== "string" || at === "") {
@@ -82,12 +84,12 @@ export function durationText(ms: number): string {
     return "under a minute";
   }
   if (span < HOUR_MS) {
-    return `${Math.floor(span / MINUTE_MS)} min`;
+    return `${Math.floor(span / MINUTE_MS)}${NBSP}min`;
   }
   if (span < DAY_MS) {
-    return `${Math.floor(span / HOUR_MS)} h`;
+    return `${Math.floor(span / HOUR_MS)}${NBSP}h`;
   }
-  return `${Math.floor(span / DAY_MS)} d`;
+  return `${Math.floor(span / DAY_MS)}${NBSP}d`;
 }
 
 // "12 min ago", "just now".

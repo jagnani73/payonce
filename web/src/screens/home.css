@@ -203,4 +203,9 @@ a.tile:hover {
   .readiness__label {
     min-width: 0;
   }
+
+  /* The phone card says only "Needs you" and the count, as the mockup does. */
+  .home__order {
+    display: none;
+  }
 }

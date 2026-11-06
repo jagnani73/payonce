@@ -16,8 +16,9 @@ import type { HomeView, IncidentRow, QueueItem, ReadinessItem, Tile } from "../t
 import "./home.css";
 
 // Home, "Needs you" (ia.md section 1): what needs a person now, from GET
-// /api/home?me=NAME. Polled every 5 s, and every 1.5 s while a listed payment
-// is being worked on or is with the bank.
+// /api/home?me=NAME. Polled every 5 s, and every 1.5 s while PayOnce is working
+// on a listed payment. Not while one is merely with the bank: Home reads every
+// payment, and a transfer can stay with the bank for days.
 
 function rowsOf(view: HomeView): IncidentRow[] {
   const payments = (items: QueueItem[]): IncidentRow[] =>
@@ -26,9 +27,7 @@ function rowsOf(view: HomeView): IncidentRow[] {
 }
 
 function pace(view: HomeView | null): number {
-  return view !== null && rowsOf(view).some((row: IncidentRow): boolean => row.activity.busy || row.activity.watching)
-    ? FAST_MS
-    : SLOW_MS;
+  return view !== null && rowsOf(view).some((row: IncidentRow): boolean => row.activity.busy) ? FAST_MS : SLOW_MS;
 }
 
 // A tile's second line is a warning when it counts urgent or late payments.
@@ -186,7 +185,7 @@ function Queues(props: { view: HomeView; me: string | null }): JSX.Element {
           sub={
             <>
               <span class="count-pill">{view.needsYou.length}</span>
-              <span class="card__sub-text">Urgent first, then the most money, then the oldest.</span>
+              <span class="home__order">Urgent first, then the most money, then the oldest.</span>
             </>
           }
           actions={<a href="#incidents?scope=needs-you">Open in Incidents</a>}

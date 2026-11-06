@@ -11,7 +11,7 @@ import type { OutageStrip, SettingsView, StatusView } from "../types";
 // The status pill in the top bar and its popover, from GET /api/status (polled
 // by the shell every 10 s). The check pace comes from the settings, read once.
 
-type ChipTone = StatusView["chip"]["tone"] | "danger";
+type ChipTone = StatusView["chip"]["tone"];
 
 function PaymentChecks(props: { settings: SettingsView | null }): JSX.Element {
   const airwallex: SettingsView["airwallex"] | undefined = props.settings?.airwallex;
@@ -112,19 +112,20 @@ export function StatusChip(props: { status: Polled<StatusView>; compact?: boolea
   const status: StatusView | null = props.status.data;
   const lost: boolean = props.status.error !== null;
   const tone: ChipTone = lost ? "danger" : (status?.chip.tone ?? "starting");
-  const label: string = lost ? "PayOnce not answering" : (status?.chip.label ?? "Starting");
+  const label: string = lost ? "PayOnce isn't answering" : (status?.chip.label ?? "Starting");
   return (
-    <div class="popover-anchor">
+    <div class={props.compact === true ? "popover-anchor status status--compact" : "popover-anchor status"}>
       <button
         ref={button}
         type="button"
         class={`status-chip status-chip--${tone}${props.compact === true ? " status-chip--compact" : ""}`}
         aria-expanded={open}
         aria-controls="status-pop"
+        title={label}
         onClick={(): void => setOpen(!open)}
       >
         <Icon name={tone === "ok" ? "check" : tone === "warning" ? "pause" : tone === "danger" ? "warning" : "circle"} size={14} />
-        {label}
+        <span class="status-chip__label">{label}</span>
       </button>
       {open ? (
         <div ref={pop} id="status-pop" class="popover popover--wide" role="dialog" aria-label="PayOnce status">
