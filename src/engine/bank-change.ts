@@ -7,17 +7,11 @@ import { AirwallexError, AirwallexUnreachableError } from "../airwallex/client.j
 import { getTransfer, type Transfer, type TransferBankDetails } from "../airwallex/transfers.js";
 import { personName } from "../domain/approvers.js";
 import { bankDetailsKey, NOT_ROUTING_FIELDS, routeValue } from "../domain/assess.js";
+import { callbackBlocked } from "../domain/callback.js";
 import type { Engine } from "./engine.js";
 import { note } from "./lines.js";
-import {
-  liveAtBank,
-  type Attempt,
-  type Ledger,
-  type Obligation,
-  type OutsidePayout,
-  type PayRunRow,
-  type ScannedObligation,
-} from "../store/ledger.js";
+import type { Attempt, Ledger, Obligation } from "../store/ledger.js";
+import { callbackFacts } from "../store/read/callback.js";
 import { wasRejected } from "./payments.js";
 
 // The bank details a person may change after a callback, with the label the page
@@ -131,65 +125,9 @@ function comparedPayment(ledger: Ledger, obligation: Obligation): ComparedPaymen
     : { transferId: last.transferId, what: "payment PayOnce last made to this supplier" };
 }
 
-// True when another open invoice paid to the same beneficiary is about to pay it:
-// a payment not yet with the bank, an approval not yet spent, or a pay run row
-// approved or released and not sent yet. Changing the record then would change
-// the account that payment goes to outside its turn.
-function anotherPaymentStarting(ledger: Ledger, obligation: Obligation, now: number): boolean {
-  return (
-    ledger.scannedObligations().some(
-      (other: ScannedObligation): boolean =>
-        other.invoiceId !== obligation.invoiceId &&
-        other.beneficiaryId === obligation.beneficiaryId &&
-        other.state !== "settled" &&
-        other.state !== "rejected" &&
-        (ledger
-          .attempts(other.invoiceId)
-          .some((attempt: Attempt): boolean => attempt.state === "pending") ||
-          ledger.latestApproval(other.invoiceId)?.state === "approved"),
-    ) ||
-    ledger
-      .payRunRows(now)
-      .some(
-        (row: PayRunRow): boolean =>
-          row.beneficiaryId === obligation.beneficiaryId && row.invoiceId !== obligation.invoiceId,
-      )
-  );
-}
-
-// Bank details can change only while the invoice is with a person and nothing
-// is with the bank or paid: every payment PayOnce sent has failed, or it was held
-// before paying a supplier PayOnce has paid before, no payout sent outside
-// PayOnce is live, and no other invoice to the supplier is about to pay.
+// callbackBlocked, on the ledger as it is now.
 export function blockedReason(ledger: Ledger, obligation: Obligation, now: number = Date.now()): string | null {
-  if (obligation.supplierPhone === null) {
-    return "No phone number is on file for this supplier, so there is no number to call back";
-  }
-  if (obligation.state !== "escalated") {
-    return obligation.state === "settled"
-      ? "The incident is closed"
-      : "The incident is not waiting on a person";
-  }
-  const attempts: Attempt[] = ledger.attempts(obligation.invoiceId);
-  if (attempts.some(liveAtBank)) {
-    return "A payment for this invoice is still with the bank or paid, so its bank details stay as they are";
-  }
-  if (comparedPayment(ledger, obligation) === undefined) {
-    return ledger.lastPaidUnchecked(obligation.beneficiaryId) === undefined
-      ? "PayOnce has not paid this supplier before, so there are no bank details to compare new ones with. Approve paying the account on file, or close the invoice without paying"
-      : "PayOnce paid this supplier only before it kept which account each payment went to, so there are no checked bank details to compare new ones with. Approve paying the account on file, or close the invoice without paying";
-  }
-  if (
-    ledger
-      .outsidePayouts(obligation.invoiceId)
-      .some((payout: OutsidePayout): boolean => payout.state !== "failed")
-  ) {
-    return "A payout for this invoice sent outside PayOnce may already pay it";
-  }
-  if (anotherPaymentStarting(ledger, obligation, now)) {
-    return "Another invoice to this supplier is about to be paid. Record the callback once it has gone to the bank";
-  }
-  return null;
+  return callbackBlocked(callbackFacts(ledger, obligation, now));
 }
 
 export async function bankChangeForm(engine: Engine, obligation: Obligation): Promise<BankChangeForm> {

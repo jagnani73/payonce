@@ -1,7 +1,6 @@
 import {
   bindingOf,
   changedFields,
-  keyHash,
   paidWith,
   paymentAmount,
   type ApprovalTerms,
@@ -9,14 +8,14 @@ import {
 } from "../domain/approval.js";
 import {
   eligibleApprovers,
-  knownName,
   signoffProblem,
   signoffsNeeded,
   type Approver,
   type Barred,
   type SignoffRule,
 } from "../domain/approvers.js";
-import { knownRoute, routeOfDetailsKey } from "../domain/assess.js";
+import { knownRoute } from "../domain/assess.js";
+import { barredFrom } from "../domain/barred.js";
 import { formatMoney, invoiceMoney } from "../domain/money.js";
 import {
   expiryOf,
@@ -32,49 +31,23 @@ import { note } from "./lines.js";
 import { quoteLine, requestExpiry } from "./rates.js";
 import { countedFromToday } from "./terms.js";
 
-// The people who may not approve a payment of this invoice to the account with
-// this accountKey, and why: whoever started the incident, and everyone who
-// recorded a callback verifying that account. A name stored before names were
-// checked that does not follow the name rule bars nobody (knownName): such a
-// starter counts as not known, so signoffsNeeded asks for two approvers, and a
-// payment to a callback-verified account needs two already.
-export function barredFrom(
+// barredFrom, on the ledger as it is now. The account's routeKey is the one given
+// or, without one, the one the ledger keeps with a request.
+export function barredOnFile(
   ledger: Ledger,
   obligation: Obligation,
   accountKey: string | undefined,
   routeKey: string | null = null,
 ): Barred[] {
-  const barred: Barred[] = [];
-  const starter: string | null = knownName(obligation.startedBy);
-  if (starter !== null) {
-    barred.push({
-      name: starter,
-      why: obligation.runRowId === null ? "started this incident" : "uploaded the pay run it came from",
-    });
-  }
-  // The routeKey of the account, given or as the ledger keeps it with a request,
-  // so a callback for the same account bars its recorder even when a bank name
-  // changed since. When the account's route, or the callback's, is not known, the
-  // recorder is barred: the bar never depends on a key PayOnce cannot check.
-  const route: string | null = knownRoute(
-    routeKey ?? (accountKey === undefined ? undefined : ledger.accountRoutes().get(accountKey)),
+  return barredFrom(
+    {
+      startedBy: obligation.startedBy,
+      fromRun: obligation.runRowId !== null,
+      callbacks: ledger.callbacksFor(obligation.beneficiaryId),
+    },
+    accountKey,
+    knownRoute(routeKey ?? (accountKey === undefined ? undefined : ledger.accountRoutes().get(accountKey))),
   );
-  for (const detailsKey of ledger.appliedKeys(obligation.beneficiaryId)) {
-    const applied: string | null = routeOfDetailsKey(detailsKey);
-    if (
-      accountKey === undefined ||
-      (keyHash(detailsKey) !== accountKey && route !== null && applied !== null && applied !== route)
-    ) {
-      continue;
-    }
-    for (const stored of ledger.bankChangeRecorders(obligation.beneficiaryId, detailsKey)) {
-      const name: string | null = knownName(stored);
-      if (name !== null) {
-        barred.push({ name, why: "recorded the callback for the new bank details" });
-      }
-    }
-  }
-  return barred;
 }
 
 export function ruleFor(
@@ -100,7 +73,7 @@ function approvalProblem(
     rule,
     approval,
     paymentAmount(approved),
-    barredFrom(engine.ledger, obligation, approved.accountKey),
+    barredOnFile(engine.ledger, obligation, approved.accountKey),
   );
 }
 
@@ -151,7 +124,7 @@ export function awaitApproval(
   const eligible: Approver[] = eligibleApprovers(
     engine.approvals,
     paymentAmount(given),
-    barredFrom(engine.ledger, obligation, given.accountKey, routeKey),
+    barredOnFile(engine.ledger, obligation, given.accountKey, routeKey),
   );
   if (engine.approvals.problem !== null || eligible.length < rule.needed) {
     return waitForApproverList(engine, obligation, given, rule, eligible);

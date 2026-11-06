@@ -7,8 +7,10 @@ import {
   type Approver,
   type Barred,
 } from "../domain/approvers.js";
+import { payoutNamesOnly, payoutPays } from "../domain/live.js";
 import { formatMoney } from "../domain/money.js";
 import { STATUS_PATTERN } from "../domain/patterns.js";
+import { closeKindFor } from "../domain/situation.js";
 import { emailEvidence, type SupplierEmail } from "../reader/emails.js";
 import {
   DuplicatePaymentError,
@@ -29,7 +31,7 @@ import { shownReference } from "../text/printable.js";
 import { storedFindings } from "./emails.js";
 import { anyLive, coveredByClose, heldBeforePaying, type CoveredTransfer } from "./facts.js";
 import { listOf, note } from "./lines.js";
-import { barredFrom } from "./requests.js";
+import { barredOnFile } from "./requests.js";
 
 const ATTEMPT_STATE_WORDS: Record<AttemptState, string> = {
   pending: "pending",
@@ -171,55 +173,49 @@ export function pendingClose(
       ? null
       : emailEvidence(storedFindings(ledger, invoiceId, onFile).findings.summary, onFile, obligation.supplierDomain);
   const covered: CoveredTransfer[] = coveredByClose(ledger, invoiceId);
-  const paying: { pays: OutsidePayout[]; namesOnly: OutsidePayout[] } = ledger.payingPayouts(invoiceId);
-  const namesOnly: NamingPayout[] = paying.namesOnly.map(
-    (payout: OutsidePayout): NamingPayout => namingPayout(obligation, payout),
-  );
-  if (ledger.paidOnce(invoiceId)) {
-    const paid: Attempt | undefined = ledger
-      .attempts(invoiceId)
-      .find((attempt: Attempt): boolean => attempt.state === "paid");
-    // A payment at a rate nobody approved is why it was not closed by itself.
-    return paid === undefined
-      ? undefined
-      : { kind: paid.kind, reference: paid.reference, reason: paid.rateMismatch ?? reason, emails, covered, namesOnly };
+  const attempts: Attempt[] = ledger.attempts(invoiceId);
+  const payouts: OutsidePayout[] = ledger.outsidePayouts(invoiceId);
+  const namesOnly: NamingPayout[] = payouts
+    .filter(payoutNamesOnly)
+    .map((payout: OutsidePayout): NamingPayout => namingPayout(obligation, payout));
+  const review = (kind: CloseReview["kind"], reference: string | null, why: string = reason): CloseReview => ({
+    kind,
+    reference,
+    reason: why,
+    emails,
+    covered,
+    namesOnly,
+  });
+  // Nothing for it is with the bank or paid when it is a duplicate or unpaid, so
+  // a person may close it without paying, whatever it waits on: held before
+  // paying, a failed payment with a request open, new bank details nobody can
+  // verify by calling back, or one a person closed before that a payment found
+  // since reopened.
+  switch (closeKindFor(obligation, attempts, payouts)) {
+    case "original":
+    case "replacement": {
+      const paid: Attempt | undefined = attempts.find((attempt: Attempt): boolean => attempt.state === "paid");
+      // A payment at a rate nobody approved is why it was not closed by itself.
+      return paid === undefined ? undefined : review(paid.kind, paid.reference, paid.rateMismatch ?? reason);
+    }
+    case "outside": {
+      const paid: OutsidePayout | undefined = payouts.find(payoutPays);
+      return paid === undefined ? undefined : review("outside", paid.reference);
+    }
+    // Paid by a transfer under one of its request ids that does not match it: a
+    // person checks it and closes the invoice.
+    case "mismatched":
+      return review(
+        "mismatched",
+        attempts.find((attempt: Attempt): boolean => attempt.mismatchedStatus === "PAID")?.mismatchedReference ?? null,
+      );
+    case "duplicate":
+      return review("duplicate", listOf(obligation.duplicateOf));
+    case "unpaid":
+      return review("unpaid", null);
+    case undefined:
+      return undefined;
   }
-  if (ledger.paidOutside(invoiceId)) {
-    const paid: OutsidePayout | undefined = paying.pays.find(
-      (payout: OutsidePayout): boolean => payout.state === "paid",
-    );
-    return paid === undefined
-      ? undefined
-      : { kind: "outside", reference: paid.reference, reason, emails, covered, namesOnly };
-  }
-  // Paid by a transfer under one of its request ids that does not match it: a
-  // person checks it and closes the invoice.
-  if (ledger.paidMismatched(invoiceId)) {
-    const paid: Attempt | undefined = ledger
-      .attempts(invoiceId)
-      .find((attempt: Attempt): boolean => attempt.mismatchedStatus === "PAID");
-    return { kind: "mismatched", reference: paid?.mismatchedReference ?? null, reason, emails, covered, namesOnly };
-  }
-  // Not while anything for it may be paying it: a paid payout that only names it
-  // does not.
-  const naming: ReadonlySet<string> = new Set<string>(
-    paying.namesOnly.map((payout: OutsidePayout): string => payout.transferId),
-  );
-  const others: OutsidePayout[] = ledger
-    .outsidePayouts(invoiceId)
-    .filter((payout: OutsidePayout): boolean => !naming.has(payout.transferId));
-  if (anyLive(others) || ledger.attempts(invoiceId).some(liveAtBank)) {
-    return undefined;
-  }
-  // Nothing for it is with the bank or paid, so a person may close it without
-  // paying, whatever it waits on: held before paying, a failed payment with a
-  // request open, new bank details nobody can verify by calling back, or one a
-  // person closed before that a payment found since reopened.
-  return obligation.rejectedBy === null &&
-    heldBeforePaying(ledger, obligation) &&
-    obligation.duplicateOf.length > 0
-    ? { kind: "duplicate", reference: listOf(obligation.duplicateOf), reason, emails, covered, namesOnly }
-    : { kind: "unpaid", reference: null, reason, emails, covered, namesOnly };
 }
 
 // Records a person closing such an invoice. It moves no money, so it is not bound
@@ -319,7 +315,7 @@ export function pendingApproval(
   return {
     approval,
     terms,
-    barred: barredFrom(ledger, obligation, terms.accountKey),
+    barred: barredOnFile(ledger, obligation, terms.accountKey),
     expired: isExpired(approval),
   };
 }

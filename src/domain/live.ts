@@ -190,6 +190,41 @@ export function paidOnce(attempts: LiveTested[]): boolean {
   );
 }
 
+// What the engine's own close of a paid invoice reads of an attempt.
+type CloseTested = LiveTested & Pick<Attempt, "kind" | "requestId" | "rateMismatch" | "misdirected" | "mismatchedClearedAt">;
+
+// The look closes an invoice by itself (closeIfPaid) when its one paid payment
+// is a replacement and no payout sent outside PayOnce is live. A paid original
+// goes to the policy instead.
+export function paidByReplacement(attempts: CloseTested[], payouts: PayoutTested[]): boolean {
+  return (
+    paidOnce(attempts) &&
+    !attempts.some((attempt: CloseTested): boolean => attempt.kind === "original" && attempt.state === "paid") &&
+    !payouts.some(payoutNotFailed)
+  );
+}
+
+// What settle refuses PayOnce's own close for, the same tests it makes in its
+// write transaction, which stays the authority: a live payment at a rate nobody
+// approved or to other bank details, a transfer found late beside a live
+// payment, a live payout sent outside PayOnce, or a mismatched transfer no
+// person has cleared.
+export function closeRefusedBy(attempts: CloseTested[], payouts: PayoutTested[]): boolean {
+  return (
+    attempts.some(
+      (attempt: CloseTested): boolean => (attempt.rateMismatch !== null || attempt.misdirected) && liveAtBank(attempt),
+    ) ||
+    lateBesideLive(attempts, payouts) !== undefined ||
+    payouts.some(payoutNotFailed) ||
+    attempts.some(unrecognisedUncleared)
+  );
+}
+
+// PayOnce closes this paid invoice by itself on its next look.
+export function closesItself(attempts: CloseTested[], payouts: PayoutTested[]): boolean {
+  return paidByReplacement(attempts, payouts) && !closeRefusedBy(attempts, payouts);
+}
+
 export function paidOutside(attempts: LiveTested[], payouts: PayoutTested[]): boolean {
   return attempts.every(nothingWithBank) && payouts.some(payoutPays);
 }

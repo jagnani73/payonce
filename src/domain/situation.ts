@@ -4,6 +4,7 @@ import { FAILURE_WORDS, RESENDABLE_FAILURE_CODES } from "./failure-codes.js";
 import {
   approvedUnspent,
   awaitingSignoffs,
+  closesItself,
   couldStillPay,
   deadlineAt,
   expiryOf,
@@ -361,12 +362,20 @@ function requestKind(snapshot: InvoiceSnapshot, request: RequestSnapshot): "repl
   return request.terms?.action ?? (heldBeforePaying(snapshot.obligation, snapshot.attempts) ? "pay" : "replace");
 }
 
-// The body of the engine's pendingClose, over the snapshot: what a person's
-// close would record, or undefined while it cannot close it.
 export function closeKindOf(snapshot: InvoiceSnapshot): CloseKind | undefined {
-  const o: Obligation = snapshot.obligation;
-  const attempts: Attempt[] = snapshot.attempts;
-  const payouts: OutsidePayout[] = snapshot.payouts;
+  return closeKindFor(snapshot.obligation, snapshot.attempts, snapshot.payouts);
+}
+
+// What a person's close of the invoice would record, or undefined while it
+// cannot close it: paid by its one paid payment, by a payout sent outside
+// PayOnce, or by a mismatched transfer, else, once nothing for it that may pay it
+// is live, a held second bill or an unpaid close. The engine's pendingClose and
+// the views both read it.
+export function closeKindFor(
+  o: Pick<Obligation, "state" | "rejectedBy" | "duplicateOf">,
+  attempts: Attempt[],
+  payouts: OutsidePayout[],
+): CloseKind | undefined {
   if (o.state !== "escalated") {
     return undefined;
   }
@@ -623,6 +632,11 @@ function placed(f: Facts): Placed {
   }
   if (f.escalated && f.attempts.some(unrecognisedLive)) {
     return at("unrecognised-transfer");
+  }
+  // A paid replacement PayOnce closes by itself on its next look (the engine's
+  // close rule). An open invoice paid once is closing too, further down.
+  if (f.escalated && closesItself(f.attempts, f.payouts)) {
+    return at("closing");
   }
   if (f.escalated && paidKind(f.closeKind)) {
     return at("ready-to-close", closeVariant(f));

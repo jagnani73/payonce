@@ -1,6 +1,7 @@
 import { findTransferByRequestId, getTransfer, type Transfer } from "../airwallex/transfers.js";
 import { attemptStateOf, originalStateOf } from "../domain/assess.js";
 import { isOverdue } from "../domain/deadlines.js";
+import { paidByReplacement } from "../domain/live.js";
 import { debitCurrency } from "../domain/reserve.js";
 import { holdLine, railFailureSeen, waitingLine } from "../outages/outages.js";
 import {
@@ -31,7 +32,7 @@ import {
   type StepResult,
 } from "./engine.js";
 import { continueEscalated, escalate } from "./escalated.js";
-import { anyLive, heldBeforePaying, keptFailed, paidOriginal, paidTwice } from "./facts.js";
+import { heldBeforePaying, keptFailed, paidTwice } from "./facts.js";
 import { holdRefused, startFirst } from "./first-payment.js";
 import { continueHeld } from "./held.js";
 import { holdMismatched, holdPaidTwice, syncMismatched } from "./late-mismatched.js";
@@ -353,11 +354,7 @@ function waitOnKeptFailed(look: SentLook): StepResult {
 // the ledger since this look read it.
 function closeIfPaid(look: SentLook): StepResult {
   const { engine, invoiceId }: SentLook = look;
-  if (
-    !engine.ledger.paidOnce(invoiceId) ||
-    paidOriginal(engine.ledger, invoiceId) !== undefined ||
-    anyLive(look.outside)
-  ) {
+  if (!paidByReplacement(engine.ledger.attempts(invoiceId), look.outside)) {
     return CONTINUE;
   }
   return nextLookAt(close(engine, invoiceId, look.obligation.state) ? null : closeRefused(engine, invoiceId));

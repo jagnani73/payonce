@@ -51,19 +51,6 @@ export function keptFailed(attempt: Attempt): boolean {
   return attempt.state === "failed" && attempt.transferId !== null && liveAtBank(attempt);
 }
 
-// The original, when it is the one payment the invoice has been paid with.
-export function paidOriginal(ledger: Ledger, invoiceId: string): Attempt | undefined {
-  if (!ledger.paidOnce(invoiceId)) {
-    return undefined;
-  }
-  return ledger
-    .attempts(invoiceId)
-    .find(
-      (attempt: Attempt): boolean =>
-        attempt.kind === "original" && attempt.state === "paid",
-    );
-}
-
 // True for an invoice with a person that has sent nothing: PayOnce held it before
 // paying, or Airwallex refused every payment it was sent with.
 export function heldBeforePaying(ledger: Ledger, obligation: Obligation): boolean {

@@ -781,8 +781,8 @@ export class Ledger {
     return this.repos.bankChanges.callbackRecorders(invoiceId);
   }
 
-  appliedKeys(beneficiaryId: string): string[] {
-    return this.repos.bankChanges.appliedKeys(beneficiaryId);
+  callbacksFor(beneficiaryId: string): { detailsKey: string; recorders: string[] }[] {
+    return this.repos.bankChanges.callbacksFor(beneficiaryId);
   }
 
   paidOnce(invoiceId: string): boolean {

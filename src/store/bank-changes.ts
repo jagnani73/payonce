@@ -211,6 +211,16 @@ export class BankChangeStore {
     ).map((row: { called_by: string }): string => row.called_by);
   }
 
+  // Each set of bank details a callback applied to this beneficiary, with
+  // everyone who recorded a callback for that account (bankChangeRecorders): what
+  // barredFrom reads.
+  callbacksFor(beneficiaryId: string): { detailsKey: string; recorders: string[] }[] {
+    return this.appliedKeys(beneficiaryId).map((detailsKey: string): { detailsKey: string; recorders: string[] } => ({
+      detailsKey,
+      recorders: this.bankChangeRecorders(beneficiaryId, detailsKey),
+    }));
+  }
+
   // The applied callback whose record matches an approval's accountKey, keyed by
   // the hash the terms carry.
   appliedKeys(beneficiaryId: string): string[] {

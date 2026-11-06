@@ -1,5 +1,8 @@
 import type { ApprovalTerms, RunTerms } from "../domain/approval.js";
 import { knownName, type ApprovalPolicy, type Barred } from "../domain/approvers.js";
+import { knownRoute } from "../domain/assess.js";
+import { barredFrom, type BarFacts } from "../domain/barred.js";
+import { callbackBlocked } from "../domain/callback.js";
 import { deadlineMinutes } from "../domain/deadlines.js";
 import type {
   EmailsSnapshot,
@@ -11,8 +14,6 @@ import type {
   RunTurn,
   SnapshotTimes,
 } from "../domain/situation.js";
-import { blockedReason } from "../engine/bank-change.js";
-import { pendingApproval } from "../engine/person.js";
 import { invoiceIndex, type InvoiceIndex } from "../intake/intake.js";
 import { endRefusal, outageEnders } from "../outages/outages.js";
 import { runBarred } from "../runs/runs.js";
@@ -36,6 +37,7 @@ import {
   type RunApproval,
   type RunRow,
 } from "../store/ledger.js";
+import { callbackFacts } from "../store/read/callback.js";
 
 // Loads what situationOf and runSituationOf read, from the ledger alone, in one
 // read transaction, reading stored JSON soft as every view does. Nothing here
@@ -111,18 +113,21 @@ function emailsOf(ledger: Ledger, invoiceId: string): EmailsSnapshot {
   };
 }
 
-// Who may not approve the latest request: as pendingApproval bars them while it
-// waits for signoffs, else whoever started the payment. The second half copies
-// the starter rule of engine/requests.ts barredFrom, until barredFrom moves to
-// the domain.
+// Who may not approve the latest request: as pendingApproval bars them while an
+// escalated invoice waits for signoffs, else whoever started the payment.
 function barredOf(ledger: Ledger, obligation: Obligation, latest: RequestSnapshot | undefined): Barred[] {
+  const facts: BarFacts = {
+    startedBy: obligation.startedBy,
+    fromRun: obligation.runRowId !== null,
+    callbacks: ledger.callbacksFor(obligation.beneficiaryId),
+  };
   if (latest?.approval.state === "requested" && latest.terms !== null) {
-    return pendingApproval(ledger, obligation.invoiceId)?.barred ?? [];
+    const accountKey: string = latest.terms.accountKey;
+    return obligation.state === "escalated"
+      ? barredFrom(facts, accountKey, knownRoute(ledger.accountRoutes().get(accountKey)))
+      : [];
   }
-  const starter: string | null = knownName(obligation.startedBy);
-  return starter === null
-    ? []
-    : [{ name: starter, why: obligation.runRowId === null ? "started this incident" : "uploaded the pay run it came from" }];
+  return barredFrom(facts, undefined, null);
 }
 
 function turnOf(ledger: Ledger, shared: Shared, obligation: Obligation): RunTurn | null {
@@ -210,7 +215,7 @@ function invoiceSnapshot(
     run: row === undefined || run === undefined ? null : { run, row },
     turn: turnOf(ledger, shared, obligation),
     inbox: shared.inbox.get(invoiceId) ?? { offered: 0, named: 0 },
-    callbackBlocked: blockedReason(ledger, obligation, now),
+    callbackBlocked: callbackBlocked(callbackFacts(ledger, obligation, now)),
     signing: {
       policy: options.policy,
       barred: barredOf(ledger, obligation, requests.at(-1)),
