@@ -91,7 +91,7 @@ const TONES: Record<TransferState, Tone> = {
 };
 
 function transferState(attempt: Attempt): TransferState {
-  if (attempt.state === "paid") {
+  if (attempt.state === "paid" || (keptFailedLive(attempt) && attempt.bankStatus === "PAID")) {
     return "paid";
   }
   if (attempt.transferId === null) {

@@ -1218,13 +1218,18 @@ export function incidentOf(snapshot: InvoiceSnapshot): IncidentBrief | null {
   // out on a person's approval.
   const first: Attempt | undefined = attempts[0];
   const heldFirst: boolean = first === undefined || (first.kind === "original" && first.approvalId !== null);
+  // A transfer PayOnce had marked never sent that Airwallex listed later is with
+  // the bank, as the Transfers tab says, not failed.
+  const late: boolean = failed !== undefined && failed.foundLateAt !== null && liveAtBank(failed);
   const cause: string =
     failed !== undefined
-      ? failed.transferId !== null
-        ? `${capitalise(failed.kind)} failed: ${failureWords(failed.failureCode)}`
-        : failed.failureCode !== null
-          ? `Airwallex refused the ${failed.kind} (${failed.failureCode})`
-          : `${capitalise(failed.kind)} was never sent`
+      ? late
+        ? `${capitalise(failed.kind)} turned up late at the bank`
+        : failed.transferId !== null
+          ? `${capitalise(failed.kind)} failed: ${failureWords(failed.failureCode)}`
+          : failed.failureCode !== null
+            ? `Airwallex refused the ${failed.kind} (${failed.failureCode})`
+            : `${capitalise(failed.kind)} was never sent`
       : o.origin === "outside"
         ? "Found: a payout sent outside PayOnce"
         : heldFirst && label !== null

@@ -1,3 +1,4 @@
+import { keptFailedLive } from "../domain/live.js";
 import { reasonText } from "../domain/reasons.js";
 import type { InvoiceSnapshot, Situation } from "../domain/situation.js";
 import { timeAt, timed, type Timed, type TimePart } from "../domain/timed.js";
@@ -27,7 +28,21 @@ function refsOf(...references: (string | null)[]): SummaryBullet["refs"] {
     .map((reference: string): { reference: string } => ({ reference: shownReference(reference) }));
 }
 
+// A transfer the ledger keeps failed that the bank has live or paid, as the
+// Transfers tab shows it: most often one Airwallex listed only after PayOnce had
+// marked it never sent.
+function lateText(attempt: Attempt): Timed {
+  const where: string = attempt.bankStatus === "PAID" ? "was paid by the bank after all" : "is with the bank after all";
+  return attempt.foundLateAt === null
+    ? [`${named(attempt)} ${where}, though PayOnce had marked it failed.`]
+    : timed(`${named(attempt)} ${where}: Airwallex listed it`, atTime(attempt.foundLateAt), " after PayOnce had marked it as never sent.");
+}
+
 function happened(snapshot: InvoiceSnapshot): SummaryBullet | null {
+  const late: Attempt | undefined = snapshot.attempts.find(keptFailedLive);
+  if (late !== undefined) {
+    return { lead: "Happened", text: lateText(late), refs: refsOf(late.reference) };
+  }
   const failed: Attempt | undefined = snapshot.attempts.find((attempt: Attempt): boolean => attempt.state === "failed");
   if (failed !== undefined) {
     const index: number = snapshot.attempts.indexOf(failed);
