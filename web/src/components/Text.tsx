@@ -27,7 +27,7 @@ export function Money(props: { money: MoneyView | null | undefined; class?: stri
     <span class={props.class === undefined ? "money" : `money ${props.class}`}>
       {money.text}
       {money.estimated === true ? (
-        <span class="money__estimated" title="Estimated: from a quote, or a fee PayOnce has not read yet">
+        <span class="money__estimated" title="Estimated from a quote, or a fee PayOnce hasn't read yet">
           {" ≈"}
         </span>
       ) : null}

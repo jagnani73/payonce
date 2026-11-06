@@ -119,7 +119,7 @@ export function Timeline(props: { timeline: TimelineView; empty?: string }): JSX
 
   return (
     <div class="tl">
-      <div class="chips" role="group" aria-label="Show lines of one kind">
+      <div class="chips" role="group" aria-label="Filter lines">
         {FILTERS.map(
           ([key, label]: [Filter, string]): JSX.Element => (
             <button key={key} type="button" class="filter-chip" aria-pressed={filter === key} onClick={(): void => setFilter(key)}>
@@ -164,7 +164,7 @@ export function AuditLine(props: { audit: AuditLineView }): JSX.Element {
         <Icon name={audit.intact ? "lock" : "warning"} />
         {audit.intact
           ? `Intact · ${audit.lines === 1 ? "1 line" : `${audit.lines} lines`} · running hash matches`
-          : `Broken: ${audit.problem ?? "the chain does not check out"}`}
+          : `Broken: ${audit.problem ?? "the hash chain doesn't verify"}`}
       </span>
       <span class="audit-line__exports">
         <a class="btn btn--secondary" href={audit.exports.json} download>

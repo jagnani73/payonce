@@ -70,7 +70,7 @@ export function App(): JSX.Element {
   return (
     <>
       <button type="button" class="skip-link" onClick={(): void => document.getElementById("content")?.focus()}>
-        Skip to the content
+        Skip to content
       </button>
       <TopBar route={page} status={status} />
       <Banners status={status.data} />

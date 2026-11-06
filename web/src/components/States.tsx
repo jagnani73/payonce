@@ -67,7 +67,7 @@ export function NotBuilt(props: { title: string; children?: ComponentChildren })
         <h1 class="screen__title">{props.title}</h1>
       </header>
       <Empty title="This screen isn't built yet.">
-        <p class="muted">It is part of the new page and comes in a later step.</p>
+        <p class="muted">It comes in a later step of the new page.</p>
         {props.children}
       </Empty>
     </div>

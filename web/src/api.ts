@@ -19,7 +19,7 @@ export class ApiError extends Error {
 }
 
 const NO_ANSWER: string = "PayOnce's server did not answer. Check that pnpm ui is still running.";
-const UNREADABLE: string = "The server sent an answer this page could not read.";
+const UNREADABLE: string = "This page couldn't read the server's answer.";
 
 export function asApiError(error: unknown): ApiError {
   if (error instanceof ApiError) {

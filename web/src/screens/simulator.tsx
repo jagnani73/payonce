@@ -35,7 +35,7 @@ export function Simulator(props: { under: Route }): JSX.Element {
         </div>
         <p class="muted">Plays the bank and the supplier in the Airwallex sandbox. Nothing here exists in production.</p>
         <Empty title="This screen isn't built yet.">
-          <p class="muted">It is part of the new page and comes in a later step.</p>
+          <p class="muted">It comes in a later step of the new page.</p>
         </Empty>
       </aside>
     </div>
