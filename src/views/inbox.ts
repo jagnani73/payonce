@@ -2,7 +2,8 @@ import { situationOf, type InvoiceSnapshot, type Situation } from "../domain/sit
 import { MAX_EMAIL_BYTES, noteTexts } from "../intake/eml.js";
 import { candidatesFor, invoiceIndex, type Candidate, type InvoiceIndex, type Match } from "../intake/intake.js";
 import type { Settings } from "../settings.js";
-import { readingSoft, type Ledger, type Upload, type UploadState } from "../store/ledger.js";
+import { readingSoft, storedObject, type Ledger, type Upload, type UploadState } from "../store/ledger.js";
+import { capitalise } from "../text/printable.js";
 import type { CandidateView, Can, InboxItemView, InboxListView, UploadRow } from "./contract.js";
 import { readerOf, snapshotOptions } from "./context.js";
 import { allowed, money, refused } from "./parts.js";
@@ -100,6 +101,16 @@ function candidateView(candidate: Candidate, match: Match, situation: Situation 
   };
 }
 
+// Whether PayOnce has read the open payment an upload was delivered to, and once
+// it has, what the reader found. The findings are the payment's, from all its emails.
+function readingOf(ledger: Ledger, target: InvoiceSnapshot): { state: "unread" } | { state: "read"; summary: string; readBy: string | null } {
+  const stored: string | undefined = target.emails.unread ? undefined : ledger.findings(target.obligation.invoiceId);
+  const findings: { summary?: string; readBy?: string } | null = stored === undefined ? null : storedObject<{ summary?: string; readBy?: string }>(stored);
+  return findings === null
+    ? { state: "unread" }
+    : { state: "read", summary: capitalise(findings.summary ?? ""), readBy: findings.readBy ?? null };
+}
+
 export function inboxItemView(ledger: Ledger, settings: Settings, now: number, uploadId: number): InboxItemView | null {
   return readingSoft((): InboxItemView | null => {
     const upload: Upload | undefined = ledger.upload(uploadId);
@@ -115,6 +126,7 @@ export function inboxItemView(ledger: Ledger, settings: Settings, now: number, u
     const target: InvoiceSnapshot | undefined = snapshots.find(
       (snapshot: InvoiceSnapshot): boolean => snapshot.obligation.invoiceId === upload.invoiceId,
     );
+    const closed: boolean = target !== undefined && situations.get(target.obligation.invoiceId)?.group === "closed";
     const waiting: boolean = upload.state === "waiting";
     const notWaiting: Can = refused("not-waiting", `The email is ${upload.state === "delivered" ? "delivered" : "dismissed"} already.`);
     return {
@@ -140,11 +152,12 @@ export function inboxItemView(ledger: Ledger, settings: Settings, now: number, u
       afterDelivery:
         upload.state !== "delivered" || target === undefined
           ? null
-          : situations.get(target.obligation.invoiceId)?.group === "closed"
+          : closed
             ? `${target.obligation.invoiceId} is closed, so the email stays on file and changes nothing.`
             : target.emails.unread
               ? "PayOnce reads it at its next check."
               : "PayOnce has read it with the payment's other emails.",
+      reading: upload.state !== "delivered" || target === undefined || closed ? null : readingOf(ledger, target),
       can: { deliver: waiting ? allowed() : notWaiting, dismiss: waiting ? allowed() : notWaiting },
     };
   });

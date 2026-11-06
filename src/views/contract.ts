@@ -841,6 +841,10 @@ export interface InboxItemView {
   sameMessageId: UploadId[];
   // After delivery: what happens next.
   afterDelivery: string | null;
+  // After delivery to a payment that is not closed: whether PayOnce has read the
+  // payment's emails since, and once it has, what it found ("Supplier reports the
+  // payment has not arrived") and which reader read them.
+  reading: { state: "unread" } | { state: "read"; summary: string; readBy: string | null } | null;
   can: { deliver: Can; dismiss: Can };
 }
 
