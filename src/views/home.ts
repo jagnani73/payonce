@@ -85,6 +85,50 @@ function paidTile(report: MetricsReport): Tile {
 
 type RunItem = { snapshot: RunSnapshot; situation: RunSituation; item: RunRowItem };
 
+interface Queues {
+  rows: IncidentRow[];
+  runs: RunItem[];
+}
+
+function queuesOf(ledger: Ledger, settings: Settings, now: number, live: Live | null): Queues {
+  const board: BoardReport = boardReport(ledger, { group: null, currency: null, origin: null }, now);
+  const snapshots: InvoiceSnapshot[] = readInvoiceSnapshots(ledger, snapshotOptions(settings, live), now);
+  return {
+    rows: incidentRows(snapshots, board.entries, live, now),
+    runs: runItems(readRunSnapshots(ledger, snapshotOptions(settings, live), now), now),
+  };
+}
+
+function inGroups(rows: IncidentRow[], ...groups: string[]): IncidentRow[] {
+  return rows.filter((row: IncidentRow): boolean => groups.includes(row.situation.group));
+}
+
+function asItems(rows: IncidentRow[], runs: RunRowItem[]): QueueItem[] {
+  return [
+    ...rows.map((row: IncidentRow): QueueItem => ({ type: "payment", row })),
+    ...runs.map((row: RunRowItem): QueueItem => ({ type: "run", row })),
+  ];
+}
+
+// The payments and runs whose requests this name can sign now.
+function waitingOn(queues: Queues, me: string): QueueItem[] {
+  return asItems(
+    inGroups(queues.rows, "needs-you", "bank-late").filter((row: IncidentRow): boolean => waitingFor(row.situation, me)),
+    queues.runs
+      .filter(
+        (run: RunItem): boolean =>
+          run.situation.waitingOn.who === "approvers" &&
+          run.situation.waitingOn.names.some((name: string): boolean => sameName(name, me)),
+      )
+      .map((run: RunItem): RunRowItem => run.item),
+  );
+}
+
+// Home's waitingForMe alone, for a name as personName records it.
+export function waitingForMe(ledger: Ledger, settings: Settings, now: number, me: string, live: Live | null = null): QueueItem[] {
+  return waitingOn(queuesOf(ledger, settings, now, live), me);
+}
+
 // me: the name a person chose, for what waits on their signoff.
 export function homeView(
   ledger: Ledger,
@@ -95,15 +139,9 @@ export function homeView(
   live: Live | null = null,
   metrics: MetricsReport | null = null,
 ): HomeView {
-  const board: BoardReport = boardReport(ledger, { group: null, currency: null, origin: null }, now);
-  const snapshots: InvoiceSnapshot[] = readInvoiceSnapshots(ledger, snapshotOptions(settings, live), now);
-  const rows: IncidentRow[] = incidentRows(snapshots, board.entries, live, now);
-  const runs: RunItem[] = runItems(
-    readRunSnapshots(ledger, snapshotOptions(settings, live), now),
-    now,
-  );
-  const inGroup = (...groups: string[]): IncidentRow[] =>
-    rows.filter((row: IncidentRow): boolean => groups.includes(row.situation.group));
+  const queues: Queues = queuesOf(ledger, settings, now, live);
+  const { rows, runs }: Queues = queues;
+  const inGroup = (...groups: string[]): IncidentRow[] => inGroups(rows, ...groups);
   const needsYou: IncidentRow[] = inGroup("needs-you", "bank-late");
   const runsNeedingYou: RunRowItem[] = runs
     .filter((run: RunItem): boolean => run.situation.group === "needs-you")
@@ -115,10 +153,6 @@ export function homeView(
   const closedAt: number[] = inGroup("closed")
     .map((row: IncidentRow): number => (row.situation.since === null ? Number.NaN : Date.parse(row.situation.since)))
     .filter((at: number): boolean => Number.isFinite(at));
-  const asItems = (items: IncidentRow[], runItemsOf: RunRowItem[]): QueueItem[] => [
-    ...items.map((row: IncidentRow): QueueItem => ({ type: "payment", row })),
-    ...runItemsOf.map((row: RunRowItem): QueueItem => ({ type: "run", row })),
-  ];
   const urgent: number = needsYou.filter((row: IncidentRow): boolean => row.situation.urgent).length;
   const late: number = withBank.filter((row: IncidentRow): boolean => row.situation.group === "bank-late").length;
   return {
@@ -142,19 +176,7 @@ export function homeView(
       },
       paidTile(metrics ?? metricsReport(ledger, "7d", now)),
     ],
-    waitingForMe:
-      me === null
-        ? null
-        : asItems(
-            needsYou.filter((row: IncidentRow): boolean => waitingFor(row.situation, me)),
-            runs
-              .filter(
-                (run: RunItem): boolean =>
-                  run.situation.waitingOn.who === "approvers" &&
-                  run.situation.waitingOn.names.some((name: string): boolean => sameName(name, me)),
-              )
-              .map((run: RunItem): RunRowItem => run.item),
-          ),
+    waitingForMe: me === null ? null : waitingOn(queues, me),
     needsYou: asItems(needsYou, runsNeedingYou),
     inbox: { waiting: inbox.waiting, suggested: suggestedUploads(ledger) },
     handling: {
