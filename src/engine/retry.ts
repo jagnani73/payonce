@@ -1,4 +1,4 @@
-import { findTransferByRequestId, type Transfer } from "../airwallex/transfers.js";
+import { findTransferByRequestId, type Transfer, type TransferBankDetails } from "../airwallex/transfers.js";
 import { accountKeyOf, type ApprovalTerms } from "../domain/approval.js";
 import { deadlineMinutes } from "../domain/deadlines.js";
 import { reasonFor, type Reason } from "../domain/reasons.js";
@@ -23,6 +23,7 @@ import { note } from "./lines.js";
 import { holdForOutsidePayout } from "./outside.js";
 import { sendAttempt, wasRejected } from "./payments.js";
 import { AccountChangedError, requireAccount, type TransferChecks } from "./send.js";
+import { requestTerms } from "./stored.js";
 
 // A pending attempt is not sent again while a payout for the invoice sent outside
 // PayOnce is live. It stays pending under its request id, which keeps the
@@ -78,7 +79,11 @@ export type NeverSentCause =
   // held before paying for an original, or under the policy's bank-details rule
   // for a replacement, and pays only on an approval. The waiting line says so
   // until the next look, at once, says what the invoice waits on.
-  | { kind: "account-changed" };
+  | { kind: "account-changed" }
+  // Nothing on file says which account the attempt was decided or approved for,
+  // so it is never sent again: it is held, then marked failed, and the invoice
+  // pays only on a person's approval, as for a changed account.
+  | { kind: "account-unknown" };
 
 // A cause in PayOnce's words: payment says what pays the invoice, or why the
 // attempt is not sent, then what marking the attempt failed leaves, and reason
@@ -128,6 +133,12 @@ function causeText(obligation: Obligation, cause: NeverSentCause): CauseText {
         then: "a person decides how to pay the invoice, or closes it without paying",
         reason: reasonFor("account-changed-before-send"),
       };
+    case "account-unknown":
+      return {
+        payment: "PayOnce does not know which bank details it was decided or approved for",
+        then: "a person decides how to pay the invoice, or closes it without paying",
+        reason: reasonFor("account-unknown-before-send"),
+      };
   }
 }
 
@@ -147,6 +158,15 @@ function holdFor(engine: Engine, invoiceId: string, cause: NeverSentCause): Next
         invoiceId,
         "approval",
         "Waiting on a person. The bank details on file are not the ones this payment was decided or approved for, so PayOnce does not send it again. Restore those details in Airwallex and check again to send it",
+        "waiting",
+      );
+      return null;
+    case "account-unknown":
+      note(
+        engine.ledger,
+        invoiceId,
+        "approval",
+        "Waiting on a person. PayOnce does not know which bank details this payment was decided or approved for, so it does not send it again",
         "waiting",
       );
       return null;
@@ -172,6 +192,15 @@ function afterFail(engine: Engine, invoiceId: string, attempt: Attempt, cause: N
         "waiting",
       );
       return Date.now();
+    case "account-unknown":
+      note(
+        engine.ledger,
+        invoiceId,
+        "approval",
+        `Waiting on a person. The ${attempt.kind} was marked failed without being sent: paying this invoice now takes a person's approval, or a person closes it without paying`,
+        "waiting",
+      );
+      return Date.now();
   }
 }
 
@@ -184,6 +213,8 @@ function afterFail(engine: Engine, invoiceId: string, attempt: Attempt, cause: N
 // under way meanwhile, and a try another process made since this look read it
 // moves the deadline on. failAttempt changes only an attempt still pending with no
 // transfer. A transfer listed by then is recorded by the next look, due at once.
+// The invoice is escalated with the cause's reason on every look, and the row is
+// written only when that changes it.
 export async function failNeverSent(
   engine: Engine,
   obligation: Obligation,
@@ -193,7 +224,7 @@ export async function failNeverSent(
   const invoiceId: string = obligation.invoiceId;
   const kind: string = capitalise(attempt.kind);
   const text: CauseText = causeText(obligation, cause);
-  engine.ledger.escalate(invoiceId, text.reason);
+  engine.ledger.escalateIfChanged(invoiceId, text.reason);
   let deadline: number = neverSentAt(engine, obligation, attempt);
   if (Date.now() >= deadline) {
     const failed: boolean | number = await withCurrencyLock(
@@ -311,7 +342,8 @@ function quoteLapsed(obligation: Obligation, attempt: Attempt): boolean {
 
 // What sending a pending attempt again came to: Airwallex has its transfer
 // (sent); nothing was sent because the record no longer holds the account the
-// attempt keeps (account-changed); its quote had run out a bank deadline ago and
+// attempt keeps (account-changed), or nothing on file says which account that is
+// (account-unknown); its quote had run out a bank deadline ago and
 // Airwallex refused a last try and lists no transfer for it, so nothing was sent
 // and a person approves it on a new quote (lapsed); or nothing was sent because
 // the ledger changed while the look waited for the lock (changed): it shows a
@@ -323,6 +355,7 @@ function quoteLapsed(obligation: Obligation, attempt: Attempt): boolean {
 export type Retried =
   | { kind: "sent"; transfer: Transfer }
   | { kind: "account-changed" }
+  | { kind: "account-unknown" }
   | { kind: "lapsed" }
   | { kind: "changed" };
 
@@ -348,9 +381,13 @@ export function retryUnderLock(
 // from before the account was kept is checked as it was then: against the
 // approval it was opened on, so a request another process opened since does not
 // count, then the run row's account, since a person may have approved another
-// account after the row was held. Once its quote has run out a bank deadline
-// ago, a payment from another currency's wallet has one last try, which fails it
-// if Airwallex refuses its quote and lists no transfer for it.
+// account after the row was held. A replacement no approval covers goes where the
+// original the look has read so far went. One whose original showed no bank
+// details, or none read, and one approved on terms from before they named the
+// account, is never compared with an account nobody kept, and is not sent
+// (account-unknown). Once its quote has run out a bank deadline ago, a payment
+// from another currency's wallet has one last try, which fails it if Airwallex
+// refuses its quote and lists no transfer for it.
 async function retry(
   engine: Engine,
   obligation: Obligation,
@@ -360,7 +397,7 @@ async function retry(
 ): Promise<Retried> {
   const approval: Approval | undefined = engine.ledger.approvalOf(attempt);
   const approved: ApprovalTerms | undefined =
-    approval?.state === "used" ? (JSON.parse(approval.terms) as ApprovalTerms) : undefined;
+    approval?.state === "used" ? requestTerms(approval) : undefined;
   const row: RunRow | undefined =
     obligation.runRowId === null ? undefined : engine.ledger.runRow(obligation.runRowId);
   try {
@@ -372,14 +409,17 @@ async function retry(
         attempt.approvalId === null ? "payment was decided" : "payment was approved",
       );
     } else if (attempt.kind === "replacement") {
-      await requireAccount(
-        engine,
-        obligation,
+      const sentTo: TransferBankDetails | undefined = original?.beneficiary?.bank_details;
+      const decidedFor: string | undefined =
         approved?.action === "replace"
           ? approved.accountKey
-          : accountKeyOf(original?.beneficiary?.bank_details),
-        "replacement was approved",
-      );
+          : sentTo === undefined
+            ? undefined
+            : accountKeyOf(sentTo);
+      if (decidedFor === undefined) {
+        return { kind: "account-unknown" };
+      }
+      await requireAccount(engine, obligation, decidedFor, "replacement was approved");
     } else if (approved?.action === "pay") {
       await requireAccount(engine, obligation, approved.accountKey, "payment was approved");
     } else if (row?.accountKey !== undefined && row.accountKey !== null) {

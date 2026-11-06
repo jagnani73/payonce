@@ -90,7 +90,15 @@ export type {
   LiveTested,
 } from "./attempts.js";
 export type { BankChange, BankChangeState, NewBankChange } from "./bank-changes.js";
-export { LEDGER_PATH, readingSoft, storedList, storedObject, storedStrings } from "./db.js";
+export {
+  checkedObject,
+  LEDGER_PATH,
+  readingSoft,
+  storedList,
+  storedObject,
+  storedShape,
+  storedStrings,
+} from "./db.js";
 export { DraftOpenError } from "./drafts.js";
 export type { Draft, DraftMove, DraftState, NewDraft } from "./drafts.js";
 export { DuplicateUploadError } from "./inbox.js";
@@ -599,6 +607,10 @@ export class Ledger {
 
   escalate(invoiceId: string, reason: StoredReason | null): void {
     this.repos.invoices.escalate(invoiceId, reason);
+  }
+
+  escalateIfChanged(invoiceId: string, reason: StoredReason | null): void {
+    this.repos.invoices.escalateIfChanged(invoiceId, reason);
   }
 
   rewordEscalation(invoiceId: string, from: StoredReason | null, to: StoredReason): boolean {

@@ -97,6 +97,36 @@ export function storedObject<T>(json: string): T | null {
   return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as T) : null;
 }
 
+// Stored JSON that does not parse, or is not in the shape PayOnce writes. A
+// SyntaxError, as JSON.parse's own is, and its message names what it is, never
+// the stored text, since it goes on the timeline.
+class StoredShapeError extends SyntaxError {
+  constructor(what: string) {
+    super(`PayOnce cannot read ${what} in the ledger, so it stops here and sends nothing`);
+    this.name = "StoredShapeError";
+  }
+}
+
+// A stored object that shape accepts, read strict even inside readingSoft:
+// anything else throws a StoredShapeError naming what.
+export function checkedObject<T>(json: string, shape: (value: unknown) => value is T, what: string): T {
+  const parsed: unknown = parsedOf(json);
+  if (!shape(parsed)) {
+    throw new StoredShapeError(what);
+  }
+  return parsed;
+}
+
+// A stored object that shape accepts. Outside readingSoft anything else throws,
+// as checkedObject does; inside, it reads as none.
+export function storedShape<T>(json: string, shape: (value: unknown) => value is T, what: string): T | null {
+  if (softReads === 0) {
+    return checkedObject(json, shape, what);
+  }
+  const parsed: unknown = parsedOf(json);
+  return shape(parsed) ? parsed : null;
+}
+
 // The one connection every store shares, its transactions and the meta table.
 export class Db {
   private readonly db: DatabaseSync;

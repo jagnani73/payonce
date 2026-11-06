@@ -203,8 +203,8 @@ async function look(engine: Engine, invoiceId: string, options: LookOptions): Pr
       const paying: Obligation = look.obligation;
       const checks: TransferChecks = transferChecks(engine, paying, attempt);
       const retried: Retried = await retryUnderLock(engine, paying, attempt, look.original, checks);
-      if (retried.kind === "account-changed") {
-        return failNeverSent(engine, paying, attempt, { kind: "account-changed" });
+      if (retried.kind === "account-changed" || retried.kind === "account-unknown") {
+        return failNeverSent(engine, paying, attempt, retried);
       }
       // The next look, at once, holds or records it as the ledger now stands.
       if (retried.kind === "changed") {
