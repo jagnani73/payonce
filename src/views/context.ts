@@ -2,6 +2,8 @@ import { explainerFor } from "../explain/explainer.js";
 import { readerFor } from "../reader/reader.js";
 import { KEYWORD_READER_NAME, KeywordReader } from "../reader/keyword-reader.js";
 import type { EmailReader } from "../reader/emails.js";
+import { ModelReader } from "../reader/model-reader.js";
+import type { ServiceView } from "../reader/model-service.js";
 import { BENEFICIARY_ID_PATTERN } from "../runs/run-file.js";
 import { runKey } from "../runs/runs.js";
 import type { Settings } from "../settings.js";
@@ -40,9 +42,20 @@ export function askWhyOn(settings: Settings): boolean {
   return explainerFor(settings.models.askServices()) !== null;
 }
 
-export function readerOf(settings: Settings): { name: string; isModel: boolean } {
+const FREE_TIER_NOTICE: string = "A model on Google's free tier reads uploaded emails. Don't upload anything you can't share with Google.";
+
+// The email reader PayOnce reads with: its name, the hosts of its model services,
+// and the notice to give before an upload when a model on Google's free tier is
+// one of them.
+export function readerOf(settings: Settings): { name: string; isModel: boolean; hosts: string[]; notice: string | null } {
   const reader: EmailReader = readerFor(settings.models.readerServices());
-  return { name: readerLabel(reader.name), isModel: !(reader instanceof KeywordReader) };
+  const services: ServiceView[] = reader instanceof ModelReader ? reader.views : [];
+  return {
+    name: readerLabel(reader.name),
+    isModel: !(reader instanceof KeywordReader),
+    hosts: [...new Set<string>(services.map((service: ServiceView): string => service.host))],
+    notice: services.some((service: ServiceView): boolean => service.googleFreeTier) ? FREE_TIER_NOTICE : null,
+  };
 }
 
 // Who read emails, as a person reads it. The keyword reader's stored name stays

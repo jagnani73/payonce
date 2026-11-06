@@ -21,7 +21,6 @@ const TABS: { state: UploadState; label: string }[] = [
   { state: "dismissed", label: "Dismissed" },
 ];
 
-const READER_NOTICE: string = "A model on Google's free tier reads uploaded emails. Don't upload anything you can't share with Google.";
 
 function labelOf(upload: Upload, suggested: string | null): string {
   switch (upload.state) {
@@ -55,7 +54,7 @@ export function inboxView(ledger: Ledger, settings: Settings, _now: number, tab:
   return readingSoft((): InboxListView => {
     const uploads: Upload[] = ledger.uploads(OTHERS_SHOWN);
     let index: InvoiceIndex | undefined;
-    const reader: { name: string; isModel: boolean } = readerOf(settings);
+    const reader: { name: string; isModel: boolean; notice: string | null } = readerOf(settings);
     return {
       view: "inbox",
       tabs: TABS.map((item: { state: UploadState; label: string }) => ({
@@ -67,7 +66,7 @@ export function inboxView(ledger: Ledger, settings: Settings, _now: number, tab:
         .map((upload: Upload): UploadRow =>
           rowOf(upload, upload.state === "waiting" ? candidatesFor(ledger, upload, (index ??= invoiceIndex(ledger))).suggested : null),
         ),
-      limits: { maxEmailBytes: MAX_EMAIL_BYTES, readerIsModel: reader.isModel, readerNotice: reader.isModel ? READER_NOTICE : null },
+      limits: { maxEmailBytes: MAX_EMAIL_BYTES, readerIsModel: reader.isModel, readerNotice: reader.notice },
     };
   });
 }
