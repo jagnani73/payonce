@@ -6,47 +6,6 @@ import type { Assessment, Engine } from "./engine.js";
 import { note } from "./lines.js";
 import { termsOf } from "./terms.js";
 
-// An email delivered before the first payment is read by a person first.
-export const EMAILS_BEFORE_PAYMENT_REASON: string =
-  "supplier emails arrived before the first payment, so a person reads them before PayOnce pays it";
-
-// Why an invoice waits for a person when a transfer Airwallex listed late under
-// the request id of a payment PayOnce had marked failed may pay it a second time.
-// A fixed string, because alerts post escalation reasons.
-export const LATE_TRANSFER_REASON: string =
-  "a payment PayOnce marked as never sent reached the bank, so the supplier may have been paid twice";
-
-// Why an invoice waits for a person when Airwallex lists a transfer under the
-// request id of a payment PayOnce marked failed with none, and that transfer does
-// not carry the invoice's number, amount and currency. A fixed string, because
-// alerts post escalation reasons.
-export const MISMATCHED_TRANSFER_REASON: string =
-  "Airwallex lists a transfer under the request id of a payment PayOnce marked as never sent, and it does not match this invoice";
-
-// The same reason once the bank has failed every such transfer for the invoice.
-export const MISMATCHED_FAILED_REASON: string =
-  "Airwallex listed a transfer under the request id of a payment PayOnce marked as never sent that did not match this invoice, and the bank has failed it";
-
-export const REPLACEMENT_DEADLINE_REASON: string =
-  "the bank has not paid or failed the replacement by its deadline";
-
-// Why a pending payment with no transfer goes to a person when the record no
-// longer holds the account it was decided or approved for. A fixed string, as
-// alerts post it.
-export const ACCOUNT_CHANGED_REASON: string =
-  "the supplier's bank details on file changed after this payment was decided or approved, so PayOnce does not send it again";
-
-// The reason a pay run row is held at send when paying it would take cash below
-// the floor. It stays the same whatever the numbers, so it does not void an
-// approval by its wording.
-export const CASH_HOLD_REASON: string =
-  "paying it now would take cash below the reserve floor";
-
-// Why a pay run row waits for a person when the record no longer holds the
-// account the run was approved for. A fixed string, as the supplier view tests it.
-export const RUN_ACCOUNT_CHANGED_REASON: string =
-  "its bank details changed after the pay run was approved";
-
 // Why a held invoice needs two approvers when PayOnce has paid the beneficiary
 // only with payments no person approved. A fixed string, which why-facts reads.
 export const PAID_ONLY_BY_ITSELF: string = "PayOnce has never paid this beneficiary on a person's approval";

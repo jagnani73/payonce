@@ -46,7 +46,7 @@ import {
 } from "../domain/decide.js";
 import { heldBeforePaying } from "../engine/facts.js";
 import { pendingApproval, pendingClose, type CloseReview, type PendingApproval } from "../engine/person.js";
-import { LATE_TRANSFER_REASON, REPLACEMENT_DEADLINE_REASON } from "../engine/reason-text.js";
+import { LATE_TRANSFER_REASON, REPLACEMENT_DEADLINE_REASON } from "../domain/reasons.js";
 import {
   isExpired,
   type Alert,

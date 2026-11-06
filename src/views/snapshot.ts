@@ -13,7 +13,7 @@ import type {
   RunTurn,
   SnapshotTimes,
 } from "../domain/situation.js";
-import { pendingApproval } from "../engine/engine.js";
+import { pendingApproval } from "../engine/person.js";
 import { candidatesFor, invoiceIndex, type InvoiceIndex, type Match } from "../intake/intake.js";
 import { endRefusal, outageEnders } from "../outages/outages.js";
 import { runBarred } from "../runs/runs.js";

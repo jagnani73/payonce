@@ -3,7 +3,7 @@ import { liveAtBank, mismatchedLive, type Attempt, type Ledger, type ObligationS
 import type { Engine, NextLook } from "./engine.js";
 import { anyLive, coveredByClose, type CoveredTransfer } from "./facts.js";
 import { listOf, note } from "./lines.js";
-import { MISMATCHED_FAILED_REASON, MISMATCHED_TRANSFER_REASON } from "./reason-text.js";
+import { MISMATCHED_FAILED_REASON, MISMATCHED_TRANSFER_REASON } from "../domain/reasons.js";
 
 // Closes the incident on the state the look read the invoice in. False, with
 // nothing changed, when the ledger refuses (see settle).

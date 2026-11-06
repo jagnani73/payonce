@@ -10,7 +10,7 @@ import {
   ORIGINAL_DEADLINE_REASON,
 } from "../domain/decide.js";
 import type { EmailFindings } from "../reader/emails.js";
-import { REPLACEMENT_DEADLINE_REASON } from "../engine/reason-text.js";
+import { REPLACEMENT_DEADLINE_REASON } from "../domain/reasons.js";
 import {
   crossCurrency,
   type Approval,

@@ -22,7 +22,7 @@ import { holdMismatched, holdPaidTwice } from "./late-mismatched.js";
 import { note } from "./lines.js";
 import { holdForOutsidePayout } from "./outside.js";
 import { sendAttempt, wasRejected } from "./payments.js";
-import { ACCOUNT_CHANGED_REASON, LATE_TRANSFER_REASON, MISMATCHED_TRANSFER_REASON } from "./reason-text.js";
+import { ACCOUNT_CHANGED_REASON, LATE_TRANSFER_REASON, MISMATCHED_TRANSFER_REASON } from "../domain/reasons.js";
 import { AccountChangedError, requireAccount, type TransferChecks } from "./send.js";
 
 // A pending attempt is not sent again while a payout for the invoice sent outside

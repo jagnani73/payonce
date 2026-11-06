@@ -38,7 +38,8 @@ import { holdMismatched, holdPaidTwice, syncMismatched } from "./late-mismatched
 import { describe, lineWanted, note } from "./lines.js";
 import { linkUnseenPayouts, syncOutsidePayouts } from "./outside.js";
 import { syncTransfer } from "./payments.js";
-import { MISMATCHED_FAILED_REASON, MISMATCHED_TRANSFER_REASON, withFloorReason } from "./reason-text.js";
+import { MISMATCHED_FAILED_REASON, MISMATCHED_TRANSFER_REASON } from "../domain/reasons.js";
+import { withFloorReason } from "./reason-text.js";
 import { replaceUnderLock } from "./replacement.js";
 import { failNeverSent, holdPending, retryUnderLock, type Retried } from "./retry.js";
 import { noteChecks, replacementOverdue, transferChecks, waitForBank, type TransferChecks } from "./send.js";

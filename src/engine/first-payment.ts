@@ -27,7 +27,12 @@ import { RETRY_FAILED_LOOK_MS, type Engine, type LookOptions, type NextLook } fr
 import { anyLive } from "./facts.js";
 import { listOf, messageOf, note } from "./lines.js";
 import { linkUnseenPayouts } from "./outside.js";
-import { CASH_HOLD_REASON, EMAILS_BEFORE_PAYMENT_REASON, RUN_ACCOUNT_CHANGED_REASON } from "./reason-text.js";
+import {
+  BENEFICIARY_MISSING_REASON,
+  CASH_HOLD_REASON,
+  EMAILS_BEFORE_PAYMENT_REASON,
+  RUN_ACCOUNT_CHANGED_REASON,
+} from "../domain/reasons.js";
 import { deadlineLook, send, waitForBank } from "./send.js";
 
 function waitingForFirst(ledger: Ledger, invoiceId: string): Obligation | undefined {
@@ -73,7 +78,7 @@ async function accountProblem(
   );
   const details: TransferBankDetails | undefined = record?.beneficiary?.bank_details;
   if (details === undefined) {
-    return { problem: "the beneficiary is no longer in Airwallex", route: null };
+    return { problem: BENEFICIARY_MISSING_REASON, route: null };
   }
   return accountKeyOf(details) === account.accountKey
     ? { problem: null, route: routeKeyOf(details) }
@@ -187,7 +192,7 @@ export async function startPayment(
         account !== null
           ? await accountProblem(engine, obligation, account)
           : record === undefined
-            ? { problem: "the beneficiary is no longer in Airwallex", route: null }
+            ? { problem: BENEFICIARY_MISSING_REASON, route: null }
             : { problem: null, route: routeKeyOf(record) };
       const wrongAccount: string | null = checked.problem;
       const decidedKey: string | null = account?.accountKey ?? (record === undefined ? null : accountKeyOf(record));

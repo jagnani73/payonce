@@ -51,7 +51,7 @@ import {
   MISMATCHED_TRANSFER_REASON,
   REPLACEMENT_DEADLINE_REASON,
   RUN_ACCOUNT_CHANGED_REASON,
-} from "../engine/reason-text.js";
+} from "../domain/reasons.js";
 import { quoteValidity } from "../domain/fx.js";
 import { currentSettings } from "../settings.js";
 import {

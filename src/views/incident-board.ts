@@ -18,7 +18,7 @@ import {
 import { deadlineMinutes } from "../domain/deadlines.js";
 import { heldBeforePaying } from "../engine/facts.js";
 import { pendingClose } from "../engine/person.js";
-import { REPLACEMENT_DEADLINE_REASON } from "../engine/reason-text.js";
+import { REPLACEMENT_DEADLINE_REASON } from "../domain/reasons.js";
 import { candidatesFor, invoiceIndex, type InvoiceIndex, type Match } from "../intake/intake.js";
 import {
   isExpired,

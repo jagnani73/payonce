@@ -10,7 +10,7 @@ import { capitalise } from "../text/printable.js";
 import type { Engine, NextLook } from "./engine.js";
 import { messageOf, note } from "./lines.js";
 import { sendAttempt, wasRejected, type Decide } from "./payments.js";
-import { REPLACEMENT_DEADLINE_REASON } from "./reason-text.js";
+import { REPLACEMENT_DEADLINE_REASON } from "../domain/reasons.js";
 
 // The beneficiary record no longer holds the account a payment was decided or
 // approved for.

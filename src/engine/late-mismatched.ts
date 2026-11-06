@@ -7,7 +7,7 @@ import type { Engine, NextLook } from "./engine.js";
 import { anyLive, paidTwice } from "./facts.js";
 import { describe, note } from "./lines.js";
 import { syncTransfer } from "./payments.js";
-import { LATE_TRANSFER_REASON, MISMATCHED_TRANSFER_REASON } from "./reason-text.js";
+import { LATE_TRANSFER_REASON, MISMATCHED_TRANSFER_REASON } from "../domain/reasons.js";
 import { noteChecks, transferChecks, type TransferChecks } from "./send.js";
 
 // The attempt a transfer Airwallex lists belongs to, when the ledger has no
