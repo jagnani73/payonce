@@ -8,7 +8,7 @@ import {
   type Outbox,
 } from "../../outbox/drafts.js";
 import { loadEnvIfPresent } from "../../env-file.js";
-import { loadSettings } from "../../settings.js";
+import { loadSettings, type Settings } from "../../settings.js";
 import { INVOICE_ID_PATTERN, Ledger, LEDGER_PATH, type Obligation } from "../../store/ledger.js";
 import { say } from "../../text/printable.js";
 
@@ -93,7 +93,7 @@ function draftId(raw: string | undefined): number | null {
 function main(): void {
   // For the bank deadlines. Without a .env the defaults apply.
   loadEnvIfPresent();
-  loadSettings();
+  const settings: Settings = loadSettings();
   const [invoiceId, action, arg, name, ...rest] = process.argv.slice(2);
   if (invoiceId === undefined || !INVOICE_ID_PATTERN.test(invoiceId)) {
     fail(USAGE);
@@ -109,16 +109,16 @@ function main(): void {
   const person: string = (name ?? "").trim();
   try {
     if (action === undefined) {
-      list(outboxOf(ledger, obligation), invoiceId);
+      list(outboxOf(ledger, obligation, settings.bankDeadlineMinutes), invoiceId);
     } else if (action === "draft") {
       if (!isTemplate(arg) || person === "") {
         fail(USAGE);
         return;
       }
-      printDraft(createDraft(ledger, obligation, arg, person));
+      printDraft(createDraft(ledger, obligation, arg, person, settings.bankDeadlineMinutes));
     } else if (action === "show") {
       const id: number | null = draftId(arg);
-      const draft: DraftView | undefined = outboxOf(ledger, obligation).drafts.find(
+      const draft: DraftView | undefined = outboxOf(ledger, obligation, settings.bankDeadlineMinutes).drafts.find(
         (item: DraftView): boolean => item.id === id,
       );
       if (draft === undefined) {
@@ -133,7 +133,15 @@ function main(): void {
         fail(USAGE);
         return;
       }
-      markDraft(ledger, obligation, id, action === "sent" ? "sent" : "dismissed", person, note === "" ? null : note);
+      markDraft(
+        ledger,
+        obligation,
+        id,
+        action === "sent" ? "sent" : "dismissed",
+        person,
+        settings.bankDeadlineMinutes,
+        note === "" ? null : note,
+      );
     } else {
       fail(USAGE);
     }

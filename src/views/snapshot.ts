@@ -3,6 +3,7 @@ import { knownName, type ApprovalPolicy, type Barred } from "../domain/approvers
 import { knownRoute } from "../domain/assess.js";
 import { barredFrom, type BarFacts } from "../domain/barred.js";
 import { callbackBlocked } from "../domain/callback.js";
+import { deadlineMinutes, type BankDeadlineMinutes } from "../domain/deadlines.js";
 import type {
   EmailsSnapshot,
   InvoiceSnapshot,
@@ -16,7 +17,6 @@ import type {
 import { invoiceIndex, type InvoiceIndex } from "../intake/intake.js";
 import { endRefusal, outageEnders } from "../outages/outages.js";
 import { runBarred } from "../runs/runs.js";
-import { deadlineMinutes } from "../settings.js";
 import { inboxNames, runOutage, type InboxNames } from "./incident-board.js";
 import {
   readingSoft,
@@ -45,6 +45,7 @@ import { callbackFacts } from "../store/read/callback.js";
 
 export interface SnapshotOptions {
   policy: ApprovalPolicy;
+  deadlines: BankDeadlineMinutes;
   askWhy: boolean;
   // The engine's last look at an invoice, where the process keeps one.
   lastCheck?: (invoiceId: string) => LastCheck | null;
@@ -221,7 +222,7 @@ function invoiceSnapshot(
       barred: barredOf(ledger, obligation, requests.at(-1)),
       startedKnown: knownName(obligation.startedBy) !== null,
     },
-    deadlineMinutes: deadlineMinutes(obligation.transferMethod),
+    deadlineMinutes: deadlineMinutes(obligation.transferMethod, options.deadlines),
     nextCheckAt: checkAt(ledger.nextCheckAt(invoiceId)),
     lastCheck: options.lastCheck?.(invoiceId) ?? null,
     busy: options.busy?.(invoiceId) ?? false,

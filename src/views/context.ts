@@ -64,9 +64,12 @@ export function readerLabel(name: string): string {
 }
 
 export function snapshotOptions(settings: Settings, live: Live | null): SnapshotOptions {
-  return live === null
-    ? { policy: settings.approvals, askWhy: askWhyOn(settings) }
-    : { policy: settings.approvals, askWhy: askWhyOn(settings), busy: live.busy };
+  const options: SnapshotOptions = {
+    policy: settings.approvals,
+    deadlines: settings.bankDeadlineMinutes,
+    askWhy: askWhyOn(settings),
+  };
+  return live === null ? options : { ...options, busy: live.busy };
 }
 
 // The beneficiary id a supplier record is keyed by, or null for one the page

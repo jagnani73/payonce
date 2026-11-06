@@ -2,6 +2,7 @@ import { OFFLINE_HOST } from "../airwallex/client.js";
 import { alertMessage, type AlertFacts } from "../alerts/alert-payloads.js";
 import type { AlertTarget } from "../alerts/alerts.js";
 import { APPROVED_USE_WITHIN_MS, type ApprovalPolicy, type Approver } from "../domain/approvers.js";
+import { deadlineMinutes } from "../domain/deadlines.js";
 import { FAILURE_CODES, type FailureCode } from "../domain/failure-codes.js";
 import { describeQuotes } from "../domain/fx.js";
 import { formatAmount, formatMoney } from "../domain/money.js";
@@ -10,7 +11,7 @@ import { MAX_EMAIL_BYTES } from "../intake/eml.js";
 import { outageRuleText } from "../outages/outages.js";
 import { serviceView, type ModelService } from "../reader/model-service.js";
 import { MAX_RUN_FILE_CHARS, MAX_RUN_ROWS } from "../runs/run-file.js";
-import { deadlineMinutes, type Settings } from "../settings.js";
+import type { Settings } from "../settings.js";
 import type { Alert, Ledger } from "../store/ledger.js";
 import type { Money, SettingRow, SettingsView } from "./contract.js";
 import { readerOf } from "./context.js";
@@ -111,8 +112,8 @@ export function settingsView(ledger: Ledger, settings: Settings, _now: number, s
       ],
     },
     bankDeadlines: [
-      row("Local transfers", `${deadlineMinutes("LOCAL")} minutes, then PayOnce says the bank is late`, ["BANK_DEADLINE_LOCAL_MINUTES"]),
-      row("SWIFT transfers", `${deadlineMinutes("SWIFT")} minutes, then PayOnce says the bank is late`, ["BANK_DEADLINE_SWIFT_MINUTES"]),
+      row("Local transfers", `${deadlineMinutes("LOCAL", settings.bankDeadlineMinutes)} minutes, then PayOnce says the bank is late`, ["BANK_DEADLINE_LOCAL_MINUTES"]),
+      row("SWIFT transfers", `${deadlineMinutes("SWIFT", settings.bankDeadlineMinutes)} minutes, then PayOnce says the bank is late`, ["BANK_DEADLINE_SWIFT_MINUTES"]),
     ],
     outages: [
       row("Rule", outageRuleText(settings.outageRule), ["OUTAGE_FAILURES", "OUTAGE_WINDOW_MINUTES"], settings.outageRule.problem),

@@ -1,6 +1,6 @@
 import type { ApprovalTerms } from "../domain/approval.js";
+import { deadlineMinutes, type BankDeadlineMinutes } from "../domain/deadlines.js";
 import { isExpired, withBank } from "../domain/live.js";
-import { deadlineMinutes } from "../settings.js";
 import {
   cashLines,
   FIRM_KINDS,
@@ -341,15 +341,15 @@ function isLive(attempt: Attempt): boolean {
 
 // When the bank should have paid or failed the payment, counted from the creation
 // time Airwallex gave, as the watcher counts it. NaN when none is on file.
-function deadlineOf(obligation: Obligation, attempt: Attempt): number {
+function deadlineOf(obligation: Obligation, attempt: Attempt, deadlines: BankDeadlineMinutes): number {
   const created: number = attempt.bankCreatedAt === null ? Number.NaN : Date.parse(attempt.bankCreatedAt);
-  return created + deadlineMinutes(obligation.transferMethod) * MS_PER_MINUTE;
+  return created + deadlineMinutes(obligation.transferMethod, deadlines) * MS_PER_MINUTE;
 }
 
 // Past its deadline by its creation time, or, with none on file, when the
 // invoice went to a person for a deadline, as the outbox's trace request counts it.
-function pastDeadline(obligation: Obligation, attempt: Attempt, now: number): boolean {
-  const deadline: number = deadlineOf(obligation, attempt);
+function pastDeadline(obligation: Obligation, attempt: Attempt, deadlines: BankDeadlineMinutes, now: number): boolean {
+  const deadline: number = deadlineOf(obligation, attempt, deadlines);
   if (Number.isNaN(deadline)) {
     return DEADLINE_REASONS.some((reason: string): boolean => obligation.escalationReason.startsWith(reason));
   }
@@ -573,6 +573,7 @@ function invoiceEntry(
   lines: CashLine[],
   inbox: InboxNames,
   held: ReadonlySet<string>,
+  deadlines: BankDeadlineMinutes,
   now: number,
 ): Ranked {
   const invoiceId: string = obligation.invoiceId;
@@ -580,7 +581,7 @@ function invoiceEntry(
   const live: Attempt[] = ledger.attempts(invoiceId).filter(isLive);
   const overdue: Attempt | undefined = [...live]
     .reverse()
-    .find((attempt: Attempt): boolean => pastDeadline(obligation, attempt, now));
+    .find((attempt: Attempt): boolean => pastDeadline(obligation, attempt, deadlines, now));
   const latest: Attempt | undefined = live.at(-1);
   const outside: boolean = ledger
     .outsidePayouts(invoiceId)
@@ -641,7 +642,7 @@ function invoiceEntry(
       also,
       atRisk,
       rankMinor: rankOf(atRisk),
-      deadlineAt: timed === undefined ? null : iso(deadlineOf(obligation, timed)),
+      deadlineAt: timed === undefined ? null : iso(deadlineOf(obligation, timed, deadlines)),
       waitingSince: first?.at ?? null,
       outage: mark,
     },
@@ -761,14 +762,21 @@ interface Scope {
 // invoices in the scope. The board is a view, so it reads stored JSON soft.
 function rankedBoard(
   ledger: Ledger,
+  deadlines: BankDeadlineMinutes,
   now: number,
   scope: Scope | null = null,
   indexOf: () => InvoiceIndex = (): InvoiceIndex => invoiceIndex(ledger),
 ): Board {
-  return readingSoft((): Board => boardOf(ledger, now, scope, indexOf));
+  return readingSoft((): Board => boardOf(ledger, deadlines, now, scope, indexOf));
 }
 
-function boardOf(ledger: Ledger, now: number, scope: Scope | null, indexOf: () => InvoiceIndex): Board {
+function boardOf(
+  ledger: Ledger,
+  deadlines: BankDeadlineMinutes,
+  now: number,
+  scope: Scope | null,
+  indexOf: () => InvoiceIndex,
+): Board {
   const run: Run | undefined = ledger.waitingRun();
   const byInvoice: Map<string, CashLine[]> = new Map<string, CashLine[]>();
   const byRow: Map<string, CashLine[]> = new Map<string, CashLine[]>();
@@ -797,7 +805,7 @@ function boardOf(ledger: Ledger, now: number, scope: Scope | null, indexOf: () =
     }
     const id: string = obligation.invoiceId;
     ranked.push(
-      invoiceEntry(ledger, obligation, byInvoice.get(id) ?? [], inbox.get(id) ?? NO_NAMES, held, now),
+      invoiceEntry(ledger, obligation, byInvoice.get(id) ?? [], inbox.get(id) ?? NO_NAMES, held, deadlines, now),
     );
   }
   if (run !== undefined) {
@@ -896,10 +904,10 @@ function holdingOf(outage: Outage, ranked: Ranked[]): OutageHolding {
 
 // What each active outage holds now, as the board lists it, for the Outages card
 // and for the end of an outage. The board is read once, on the first call.
-export function outageHolding(ledger: Ledger, now: number = Date.now()): HoldingOf {
+export function outageHolding(ledger: Ledger, deadlines: BankDeadlineMinutes, now: number = Date.now()): HoldingOf {
   let ranked: Ranked[] | undefined;
   return (outage: Outage): OutageHolding => {
-    ranked ??= rankedBoard(ledger, now).ranked;
+    ranked ??= rankedBoard(ledger, deadlines, now).ranked;
     return holdingOf(outage, ranked);
   };
 }
@@ -999,10 +1007,11 @@ export function boardEntriesFor(
   ledger: Ledger,
   obligations: Obligation[],
   beneficiaryId: string | null,
+  deadlines: BankDeadlineMinutes,
   now: number,
   indexOf: () => InvoiceIndex,
 ): { entries: BoardEntry[]; totals: BoardTotal[] } {
-  const { ranked }: Board = rankedBoard(ledger, now, { obligations, beneficiaryId }, indexOf);
+  const { ranked }: Board = rankedBoard(ledger, deadlines, now, { obligations, beneficiaryId }, indexOf);
   return { entries: ranked.map((item: Ranked): BoardEntry => item.entry), totals: totalsOf(ranked, null) };
 }
 
@@ -1011,10 +1020,11 @@ export function boardEntriesFor(
 export function boardReport(
   ledger: Ledger,
   filters: BoardFilters,
+  deadlines: BankDeadlineMinutes,
   now: number = Date.now(),
   keep: (entry: BoardEntry) => boolean = (): boolean => true,
 ): BoardReport {
-  const { ranked, invoices, outages }: Board = rankedBoard(ledger, now);
+  const { ranked, invoices, outages }: Board = rankedBoard(ledger, deadlines, now);
   const others: Ranked[] = ranked.filter(
     (item: Ranked): boolean =>
       (filters.currency === null || inCurrency(item.entry, filters.currency)) &&

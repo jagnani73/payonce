@@ -49,7 +49,7 @@ export function outboxRoutes(app: HttpApp): Route[] {
     const createdBy: string = name(body, "createdBy", "Enter your name");
     const chosen: DraftTemplate = template;
     const draft: DraftView = await inOutboxTurn(invoiceId, (): DraftView =>
-      createDraft(engine.ledger, requireObligation(invoiceId), chosen, createdBy),
+      createDraft(engine.ledger, requireObligation(invoiceId), chosen, createdBy, engine.bankDeadlineMinutes),
     );
     return {
       draftId: draft.id,
@@ -83,7 +83,7 @@ export function outboxRoutes(app: HttpApp): Route[] {
       throw new HttpError(400, "The note is too long");
     }
     await inOutboxTurn(invoiceId, (): void =>
-      markDraft(engine.ledger, requireObligation(invoiceId), draft.id, move, by, note === "" ? null : note),
+      markDraft(engine.ledger, requireObligation(invoiceId), draft.id, move, by, engine.bankDeadlineMinutes, note === "" ? null : note),
     );
     return { view: incident(invoiceId), notice: { tone: "success", text: MOVE_NOTICES[move] } };
   }

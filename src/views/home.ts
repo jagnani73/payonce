@@ -101,7 +101,7 @@ interface Queues {
 }
 
 function queuesOf(ledger: Ledger, settings: Settings, now: number, live: Live | null): Queues {
-  const board: BoardReport = boardReport(ledger, { group: null, currency: null, origin: null }, now);
+  const board: BoardReport = boardReport(ledger, { group: null, currency: null, origin: null }, settings.bankDeadlineMinutes, now);
   const snapshots: InvoiceSnapshot[] = readInvoiceSnapshots(ledger, snapshotOptions(settings, live), now);
   return {
     rows: incidentRows(snapshots, board.entries, live, now),

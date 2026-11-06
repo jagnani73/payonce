@@ -235,7 +235,7 @@ function cardOf(view: OutageView, report: OutagesReport): OutageCardView {
 }
 
 export function outagesView(ledger: Ledger, settings: Settings, now: number): OutagesView {
-  const report: OutagesReport = outagesReport(ledger, settings.approvals, outageHolding(ledger, now));
+  const report: OutagesReport = outagesReport(ledger, settings.approvals, outageHolding(ledger, settings.bankDeadlineMinutes, now));
   return {
     view: "outages",
     rule: { text: outageRuleText(settings.outageRule), problem: report.rule.problem },

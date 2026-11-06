@@ -128,6 +128,7 @@ export function incidentsView(
   const board: BoardReport = boardReport(
     ledger,
     { group: null, currency: query.currency, origin: query.origin },
+    settings.bankDeadlineMinutes,
     now,
     (entry: BoardEntry): boolean => (entry.kind === "invoice" ? shown.has(entry.invoiceId) : runPasses(entry)),
   );

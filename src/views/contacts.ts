@@ -1,4 +1,5 @@
 import { CONTACT_NOTICE, lapseLine, proposalWaits, type Contact } from "../domain/contacts.js";
+import type { BankDeadlineMinutes } from "../domain/deadlines.js";
 import type { Ledger } from "../store/ledger.js";
 import type {
   Can,
@@ -170,8 +171,13 @@ export function incidentPhone(ledger: Ledger, detail: SupplierDetail | null, cal
 }
 
 // GET /api/suppliers/:key/contact, or null for a record nothing names.
-export function contactDetailView(ledger: Ledger, key: string, now: number): SupplierContactDetail | null {
-  const detail: SupplierDetail | null = supplierDetail(ledger, key, now);
+export function contactDetailView(
+  ledger: Ledger,
+  key: string,
+  deadlines: BankDeadlineMinutes,
+  now: number,
+): SupplierContactDetail | null {
+  const detail: SupplierDetail | null = supplierDetail(ledger, key, deadlines, now);
   if (detail === null) {
     return null;
   }

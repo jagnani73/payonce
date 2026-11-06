@@ -1,3 +1,4 @@
+import type { BankDeadlineMinutes } from "../domain/deadlines.js";
 import { situationOf, type InvoiceSnapshot, type Situation } from "../domain/situation.js";
 import { sendsText, type HoldingOf, type OutageSend } from "../outages/outages.js";
 import type { Settings } from "../settings.js";
@@ -79,8 +80,8 @@ function hintOf(country: string | null, currencies: string[], methods: string[])
 }
 
 // Every supplier record as a list row, newest first.
-export function supplierRows(ledger: Ledger, now: number): SupplierListRow[] {
-  const list: SupplierList = supplierList(ledger, now);
+export function supplierRows(ledger: Ledger, deadlines: BankDeadlineMinutes, now: number): SupplierListRow[] {
+  const list: SupplierList = supplierList(ledger, deadlines, now);
   const byRecord: Map<string, Obligation[]> = new Map();
   for (const obligation of ledger.obligations()) {
     byRecord.set(obligation.beneficiaryId, [...(byRecord.get(obligation.beneficiaryId) ?? []), obligation]);
@@ -110,13 +111,13 @@ const ENDING_SEARCH_MIN: number = 3;
 
 // q matches a record's name, its id, and the last characters of the account it
 // holds, typed with or without the "···" the page writes before them.
-export function suppliersView(ledger: Ledger, _settings: Settings, now: number, q: string | null = null): SuppliersView {
+export function suppliersView(ledger: Ledger, settings: Settings, now: number, q: string | null = null): SuppliersView {
   return readingSoft((): SuppliersView => {
     const lower: string | null = q === null ? null : q.trim().toLowerCase();
     const ending: string = (lower ?? "").replace(/^[·.\s]+/, "");
     return {
       view: "suppliers",
-      rows: supplierRows(ledger, now).filter(
+      rows: supplierRows(ledger, settings.bankDeadlineMinutes, now).filter(
         (row: SupplierListRow): boolean =>
           lower === null ||
           row.name.toLowerCase().includes(lower) ||
@@ -152,7 +153,7 @@ function runRowLabel(row: RecordRunRow): string {
 
 export function supplierView(ledger: Ledger, settings: Settings, now: number, key: string, live: Live | null = null): SupplierView | null {
   return readingSoft((): SupplierView | null => {
-    const detail: SupplierDetail | null = supplierDetail(ledger, key, now);
+    const detail: SupplierDetail | null = supplierDetail(ledger, key, settings.bankDeadlineMinutes, now);
     if (detail === null) {
       return null;
     }
@@ -169,11 +170,12 @@ export function supplierView(ledger: Ledger, settings: Settings, now: number, ke
       ledger,
       mine.map((snapshot: InvoiceSnapshot): Obligation => snapshot.obligation),
       key,
+      settings.bankDeadlineMinutes,
       now,
       (): InvoiceIndex => invoiceIndex(ledger),
     ).entries;
     const rows: IncidentRow[] = incidentRows(mine, entries, live, now);
-    const holding: HoldingOf = outageHolding(ledger, now);
+    const holding: HoldingOf = outageHolding(ledger, settings.bankDeadlineMinutes, now);
     return {
       view: "supplier",
       generatedAt: new Date(now).toISOString(),

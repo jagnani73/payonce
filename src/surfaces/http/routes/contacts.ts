@@ -115,7 +115,7 @@ export function contactRoutes(app: HttpApp): Route[] {
   }
 
   function detail(raw: string): SupplierContactDetail {
-    const found: SupplierContactDetail | null = contactDetailView(engine.ledger, recordKey(raw), Date.now());
+    const found: SupplierContactDetail | null = contactDetailView(engine.ledger, recordKey(raw), engine.bankDeadlineMinutes, Date.now());
     if (found === null) {
       throw new HttpError(404, `No invoice or pay run row in the ledger names supplier record ${raw.slice(0, 20)}`);
     }

@@ -158,7 +158,12 @@ function main(): void {
       : new Alerts(
           engine.ledger,
           (invoiceIds: string[], now: number): InvoiceSnapshot[] =>
-            readInvoiceSnapshots(engine.ledger, { policy: engine.approvals, askWhy: false }, now, invoiceIds),
+            readInvoiceSnapshots(
+              engine.ledger,
+              { policy: engine.approvals, deadlines: engine.bankDeadlineMinutes, askWhy: false },
+              now,
+              invoiceIds,
+            ),
           alertSetting.target,
           `http://${HOST}:${port}`,
           alertCash,

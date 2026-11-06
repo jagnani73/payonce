@@ -113,7 +113,7 @@ function main(): void {
     return;
   }
   try {
-    const ended: EndedOutage = endOutage(ledger, policy, id, name, note, outageHolding(ledger));
+    const ended: EndedOutage = endOutage(ledger, policy, id, name, note, outageHolding(ledger, settings.bankDeadlineMinutes));
     say(pickedUpText(ledger, ended.holds));
   } catch (error: unknown) {
     say(error instanceof Error ? error.message : String(error));

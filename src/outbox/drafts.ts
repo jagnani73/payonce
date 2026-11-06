@@ -2,10 +2,10 @@ import { createHash } from "node:crypto";
 import type { ApprovalTerms } from "../domain/approval.js";
 import { personName } from "../domain/approvers.js";
 import { today, type ArrivalTerms } from "../domain/arrival.js";
+import { deadlineMinutes, type BankDeadlineMinutes } from "../domain/deadlines.js";
 import type { EmailFindings } from "../domain/emails.js";
 import { inFlight, pastDeadline } from "../domain/live.js";
 import { aboutBankDetailsReason, type StoredReason } from "../domain/reasons.js";
-import { deadlineMinutes } from "../settings.js";
 import {
   crossCurrency,
   type Approval,
@@ -54,6 +54,7 @@ interface Context {
   reason: StoredReason | null;
   findings: EmailFindings | null;
   emails: number;
+  deadlines: BankDeadlineMinutes;
   now: number;
   // Reconciliation's newest refund missing break on each of the invoice's own
   // transfers, newest first.
@@ -158,7 +159,7 @@ function phoneEnding(obligation: Obligation): string | null {
 // One with no creation time on file counts when the invoice went to a person for
 // a deadline.
 function overdue(context: Context): Attempt | undefined {
-  const minutes: number = deadlineMinutes(context.obligation.transferMethod);
+  const minutes: number = deadlineMinutes(context.obligation.transferMethod, context.deadlines);
   return [...context.attempts]
     .reverse()
     .find((attempt: Attempt): boolean => inFlight(attempt) && pastDeadline(attempt, minutes, context.reason, context.now));
@@ -529,7 +530,7 @@ export function templateLabel(template: string): string | null {
   return isTemplate(template) ? TEMPLATES[template].label : null;
 }
 
-function contextOf(ledger: Ledger, obligation: Obligation, now: number): Context {
+function contextOf(ledger: Ledger, obligation: Obligation, deadlines: BankDeadlineMinutes, now: number): Context {
   const findings: string | undefined = ledger.findings(obligation.invoiceId);
   const attempts: Attempt[] = ledger.attempts(obligation.invoiceId);
   return {
@@ -539,6 +540,7 @@ function contextOf(ledger: Ledger, obligation: Obligation, now: number): Context
     reason: ledger.reasonOf(obligation),
     findings: findings === undefined ? null : (JSON.parse(findings) as EmailFindings),
     emails: ledger.emails(obligation.invoiceId).length,
+    deadlines,
     now,
     // Matched by the invoice's own transfer ids only, never a kept transfer or a
     // payout sent outside PayOnce.
@@ -655,8 +657,13 @@ function sentAlready(drafts: Draft[], name: DraftTemplate, facts: Facts): boolea
 // the supplier's ask to hold, cancel or not pay is on file, no message to the
 // supplier is offered: each one that fits is withheld, and the trace request to
 // the bank is still offered.
-export function outboxOf(ledger: Ledger, obligation: Obligation, now: number = Date.now()): Outbox {
-  const context: Context = contextOf(ledger, obligation, now);
+export function outboxOf(
+  ledger: Ledger,
+  obligation: Obligation,
+  deadlines: BankDeadlineMinutes,
+  now: number = Date.now(),
+): Outbox {
+  const context: Context = contextOf(ledger, obligation, deadlines, now);
   const drafts: Draft[] = ledger.drafts(obligation.invoiceId);
   const open: Set<string> = new Set(
     drafts
@@ -731,11 +738,12 @@ export function createDraft(
   obligation: Obligation,
   name: DraftTemplate,
   creator: string,
+  deadlines: BankDeadlineMinutes,
   now: number = Date.now(),
 ): DraftView {
   const createdBy: string = personName(creator);
   const template: Template = TEMPLATES[name];
-  const context: Context = contextOf(ledger, obligation, now);
+  const context: Context = contextOf(ledger, obligation, deadlines, now);
   const facts: Facts | string = template.facts(context);
   if (typeof facts === "string") {
     throw new DraftNotFitError(facts);
@@ -786,6 +794,7 @@ export function markDraft(
   draftId: number,
   move: DraftMove,
   person: string | null,
+  deadlines: BankDeadlineMinutes,
   note: string | null = null,
   now: number = Date.now(),
 ): void {
@@ -798,7 +807,7 @@ export function markDraft(
   if (move === "copied" && draft.state === "copied") {
     return;
   }
-  const view: DraftView = viewOf(contextOf(ledger, obligation, now), draft);
+  const view: DraftView = viewOf(contextOf(ledger, obligation, deadlines, now), draft);
   const since: string =
     view.noLongerFits !== null
       ? `. Since it was drafted, it no longer fits: ${view.noLongerFits}`

@@ -1,6 +1,7 @@
 import type { FxTerms } from "../domain/approval.js";
 import { today } from "../domain/arrival.js";
 import { failedStatus } from "../domain/assess.js";
+import type { BankDeadlineMinutes } from "../domain/deadlines.js";
 import { unverifiedSenders, type SupplierEmail } from "../domain/emails.js";
 import { deadlineAt, inFlight, keptFailedLive, pastDeadline, watching } from "../domain/live.js";
 import { railWords } from "../domain/patterns.js";
@@ -437,15 +438,16 @@ export function incidentView(
     );
     const request: RequestView | null = requestView(snapshot, others, now);
     const cautions: Caution[] = cautionsOf(snapshot, situation, request);
-    const outbox: Outbox = outboxOf(ledger, o, now);
-    const sends: OutageSend[] = snapshot.outage === null ? [] : outageHolding(ledger, now)(snapshot.outage.outage).sends;
+    const deadlines: BankDeadlineMinutes = settings.bankDeadlineMinutes;
+    const outbox: Outbox = outboxOf(ledger, o, deadlines, now);
+    const sends: OutageSend[] = snapshot.outage === null ? [] : outageHolding(ledger, deadlines, now)(snapshot.outage.outage).sends;
     const headroom: HeadroomLine | null = headroomOf(snapshot, settings, cash);
-    const entry: BoardEntry | undefined = boardEntriesFor(ledger, [o], o.beneficiaryId, now, (): InvoiceIndex => invoiceIndex(ledger)).entries.find(
+    const entry: BoardEntry | undefined = boardEntriesFor(ledger, [o], o.beneficiaryId, deadlines, now, (): InvoiceIndex => invoiceIndex(ledger)).entries.find(
       (item: BoardEntry): boolean => item.kind === "invoice" && item.invoiceId === o.invoiceId,
     );
     const wallet: BoardMoney | undefined = entry?.atRisk.find((item: BoardMoney): boolean => item.currency === debitCurrency(o));
     const key: string | null = supplierKeyOf(o.beneficiaryId);
-    const detail: SupplierDetail | null = key === null ? null : supplierDetail(ledger, key, now);
+    const detail: SupplierDetail | null = key === null ? null : supplierDetail(ledger, key, deadlines, now);
     return {
       view: "incident",
       generatedAt: new Date(now).toISOString(),

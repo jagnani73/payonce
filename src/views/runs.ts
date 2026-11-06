@@ -1,4 +1,5 @@
 import { feeSeenText, type ArrivalTerms } from "../domain/arrival.js";
+import type { BankDeadlineMinutes } from "../domain/deadlines.js";
 import { watching } from "../domain/live.js";
 import { CURRENCY_PATTERN, railWords } from "../domain/patterns.js";
 import {
@@ -186,7 +187,14 @@ function cashView(cash: RunCash): RunCashView {
   };
 }
 
-function decisionOf(ledger: Ledger, snapshot: RunSnapshot, situation: RunSituation, request: RunRequestView | null, now: number): RunView["decision"] {
+function decisionOf(
+  ledger: Ledger,
+  snapshot: RunSnapshot,
+  situation: RunSituation,
+  request: RunRequestView | null,
+  deadlines: BankDeadlineMinutes,
+  now: number,
+): RunView["decision"] {
   if (snapshot.run.state !== "waiting") {
     return null;
   }
@@ -231,7 +239,7 @@ function decisionOf(ledger: Ledger, snapshot: RunSnapshot, situation: RunSituati
     suggested: situation.state === "nothing-to-pay",
   });
   if (outage !== undefined && situation.state === "paused-by-outage") {
-    const sends: OutageSend[] = outageHolding(ledger, now)(outage).sends;
+    const sends: OutageSend[] = outageHolding(ledger, deadlines, now)(outage).sends;
     options.push({
       kind: "end-outage",
       title: `End outage ${outage.id} on ${railWords(outage.currency, outage.method)}`,
@@ -295,7 +303,7 @@ export function runView(ledger: Ledger, settings: Settings, now: number, runId: 
       },
       situation,
       counts: { pay: counts.pay, held: counts.held, skip: counts.skip },
-      decision: decisionOf(ledger, snapshot, situation, request, now),
+      decision: decisionOf(ledger, snapshot, situation, request, settings.bankDeadlineMinutes, now),
       rows: snapshot.rows.map((row: RunRow): RunRowView => rowView(ledger, run.state === "waiting", row, released, live, now)),
       skippedSummary: [...skipped.values()],
       cash: { checkedAt: run.checkedAt, currencies: storedList<RunCash>(run.cash).map(cashView) },

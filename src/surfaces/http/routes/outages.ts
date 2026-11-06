@@ -44,7 +44,7 @@ export function outageRoutes(app: HttpApp): Route[] {
         Number(raw),
         typed(body, "endedBy"),
         text(body, "note"),
-        outageHolding(engine.ledger),
+        outageHolding(engine.ledger, engine.bankDeadlineMinutes),
       );
     } catch (error: unknown) {
       if (!(error instanceof EndRefusedError)) {

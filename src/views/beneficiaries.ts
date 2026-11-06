@@ -99,13 +99,13 @@ function matches(option: BeneficiaryOption, q: string): boolean {
   );
 }
 
-export function beneficiaryPicker(ledger: Ledger, _settings: Settings, now: number, q: string, read: BeneficiaryRead): BeneficiaryPickerView {
+export function beneficiaryPicker(ledger: Ledger, settings: Settings, now: number, q: string, read: BeneficiaryRead): BeneficiaryPickerView {
   return readingSoft((): BeneficiaryPickerView => {
     if (!read.ok) {
       return { view: "beneficiaries", q, options: [], problem: why("airwallex-unreadable", read.problem), readAt: iso(read.readAt) };
     }
     const summaries: Map<string, SupplierSummary> = new Map(
-      supplierList(ledger, now).suppliers.flatMap((summary: SupplierSummary): [string, SupplierSummary][] =>
+      supplierList(ledger, settings.bankDeadlineMinutes, now).suppliers.flatMap((summary: SupplierSummary): [string, SupplierSummary][] =>
         summary.key === null ? [] : [[summary.key, summary]],
       ),
     );

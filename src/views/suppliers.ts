@@ -2,6 +2,7 @@ import type { TransferBankDetails } from "../airwallex/transfers.js";
 import { endingOf, keyHash } from "../domain/approval.js";
 import { knownRoute, routeKeyOf, routeOfDetailsKey } from "../domain/assess.js";
 import { knownName, policyFromEnv } from "../domain/approvers.js";
+import type { BankDeadlineMinutes } from "../domain/deadlines.js";
 import { summarise, unverifiedSenders, type SupplierEmail } from "../domain/emails.js";
 import { liveAtBank } from "../domain/live.js";
 import { templateLabel } from "../outbox/drafts.js";
@@ -1240,9 +1241,9 @@ function wordsFor(table: Readonly<Record<string, string>>, code: string | null):
 // The situation of each open invoice, by invoice number. The cautions read only
 // states the approver list does not decide (paid-twice and needs-phone come
 // before any that does), so no approver list is loaded for them.
-function situationsOf(ledger: Ledger, invoiceIds: string[], now: number): Map<string, Situation> {
+function situationsOf(ledger: Ledger, invoiceIds: string[], deadlines: BankDeadlineMinutes, now: number): Map<string, Situation> {
   return new Map(
-    invoiceSnapshotsWithin(ledger, { policy: policyFromEnv({}), askWhy: false }, now, invoiceIds).map(
+    invoiceSnapshotsWithin(ledger, { policy: policyFromEnv({}), deadlines, askWhy: false }, now, invoiceIds).map(
       (snapshot: InvoiceSnapshot): [string, Situation] => [snapshot.obligation.invoiceId, situationOf(snapshot, now)],
     ),
   );
@@ -2231,11 +2232,11 @@ function entriesByInvoice(entries: BoardEntry[]): Map<string, BoardEntry> {
 // name and key. The board's entries are built for the invoices that are not
 // closed and the waiting run's pay rows only, each as the whole board has it.
 // A view, so it reads stored JSON soft.
-export function supplierList(ledger: Ledger, now: number = Date.now()): SupplierList {
-  return readingSoft((): SupplierList => listOfRecords(ledger, now));
+export function supplierList(ledger: Ledger, deadlines: BankDeadlineMinutes, now: number = Date.now()): SupplierList {
+  return readingSoft((): SupplierList => listOfRecords(ledger, deadlines, now));
 }
 
-function listOfRecords(ledger: Ledger, now: number): SupplierList {
+function listOfRecords(ledger: Ledger, deadlines: BankDeadlineMinutes, now: number): SupplierList {
   return ledger.readSnapshot((): SupplierList => {
     const read: SupplierListRead = ledger.supplierListRead();
     const records: Map<string, RecordFacts> = recordsOf(read);
@@ -2245,10 +2246,11 @@ function listOfRecords(ledger: Ledger, now: number): SupplierList {
       [...records.values()].flatMap((facts: RecordFacts): string[] =>
         facts.obligations.filter(open).map((obligation: SupplierObligation): string => obligation.invoiceId),
       ),
+      deadlines,
       now,
     );
     const entries: BoardEntry[] = needsBoard([...records.values()])
-      ? boardEntriesFor(ledger, ledger.openObligations(), null, now, lazyIndex(ledger)).entries
+      ? boardEntriesFor(ledger, ledger.openObligations(), null, deadlines, now, lazyIndex(ledger)).entries
       : [];
     const entriesOf: Map<string, BoardEntry[]> = grouped(entries, (entry: BoardEntry): string => entry.beneficiaryId);
     const summaries: Ranked[] = [...records.values()].map(
@@ -2277,14 +2279,19 @@ function listOfRecords(ledger: Ledger, now: number): SupplierList {
 // One supplier record, or null when the key breaks the pattern or nothing in the
 // ledger names it. The board's entries are built for its own invoices and pay
 // rows only. A view, so it reads stored JSON soft.
-export function supplierDetail(ledger: Ledger, key: string, now: number = Date.now()): SupplierDetail | null {
+export function supplierDetail(
+  ledger: Ledger,
+  key: string,
+  deadlines: BankDeadlineMinutes,
+  now: number = Date.now(),
+): SupplierDetail | null {
   if (!SUPPLIER_KEY_PATTERN.test(key)) {
     return null;
   }
-  return readingSoft((): SupplierDetail | null => detailOf(ledger, key, now));
+  return readingSoft((): SupplierDetail | null => detailOf(ledger, key, deadlines, now));
 }
 
-function detailOf(ledger: Ledger, key: string, now: number): SupplierDetail | null {
+function detailOf(ledger: Ledger, key: string, deadlines: BankDeadlineMinutes, now: number): SupplierDetail | null {
   return ledger.readSnapshot((): SupplierDetail | null => {
     const read: SupplierRead = ledger.supplierRead(key);
     const facts: RecordFacts | undefined = recordsOf(read).get(key);
@@ -2305,7 +2312,7 @@ function detailOf(ledger: Ledger, key: string, now: number): SupplierDetail | nu
     const accounts: Accounts = accountsOf(ledger, facts, owners);
     const indexOf: () => InvoiceIndex = lazyIndex(ledger);
     const board: { entries: BoardEntry[]; totals: BoardTotal[] } | null = needsBoard([facts])
-      ? boardEntriesFor(ledger, read.obligations, key, now, indexOf)
+      ? boardEntriesFor(ledger, read.obligations, key, deadlines, now, indexOf)
       : null;
     const entries: Map<string, BoardEntry> = entriesByInvoice(board?.entries ?? []);
     const attemptsBy: Map<string, SupplierPayment[]> = grouped(
@@ -2373,6 +2380,7 @@ function detailOf(ledger: Ledger, key: string, now: number): SupplierDetail | nu
         situationsOf(
           ledger,
           facts.obligations.filter(open).map((obligation: SupplierObligation): string => obligation.invoiceId),
+          deadlines,
           now,
         ),
         now,

@@ -23,7 +23,7 @@ export function searchView(ledger: Ledger, settings: Settings, now: number, q: s
     let hint: Map<string, string> | undefined;
     const hints = (): Map<string, string> =>
       (hint ??= new Map<string, string>(
-        supplierRows(ledger, now).flatMap((row: SupplierListRow): [string, string][] =>
+        supplierRows(ledger, settings.bankDeadlineMinutes, now).flatMap((row: SupplierListRow): [string, string][] =>
           row.key === null ? [] : [[row.key, [row.hint, row.accountEnding === null ? "" : `···${row.accountEnding}`].filter((part: string): boolean => part !== "").join(" · ")]],
         ),
       ));

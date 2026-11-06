@@ -54,11 +54,6 @@ const ALLOWED = [
     why: "The preview checks the payee and builds the invoice with the start's own code, for the same reason",
   },
   {
-    from: ["views/incident-board.ts", "views/settings-view.ts", "views/snapshot.ts", "outbox/drafts.ts"],
-    to: "settings.ts",
-    why: "deadlineMinutes(method) from the loaded settings, until these views, and the view that asks outboxOf, pass settings.bankDeadlineMinutes to domain/deadlines.ts",
-  },
-  {
     from: ["outages/outages.ts"],
     to: "settings.ts",
     why: "outagesReport reads the outage rule from the loaded settings, because views/treasury.ts asks for the report without it",

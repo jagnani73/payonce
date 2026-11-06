@@ -56,7 +56,7 @@ export function statusView(
   return readingSoft((): StatusView => {
     const airwallex: AirwallexHealth = server === null ? NO_READ : airwallexHealth(ledger, server.host, server.balances);
     const active: Outage[] = ledger.outages().filter((outage: Outage): boolean => outage.state === "active").reverse();
-    const holding: HoldingOf = outageHolding(ledger, now);
+    const holding: HoldingOf = outageHolding(ledger, settings.bankDeadlineMinutes, now);
     const outages: OutageStrip[] = active.map((outage: Outage): OutageStrip => stripOf(outage, holding));
     const recon: ReconReport = reconReport(ledger, server?.reconRunner ?? null);
     const waitingRun: Run | undefined = ledger.waitingRun();
