@@ -50,21 +50,30 @@ The policy is `decide` in `src/domain/decide.ts`. It is a pure function from an 
 
 ## Layers
 
-`src/` is split by what a module may do.
+`src/` is split by what a module may do. `pnpm check:layers` runs `scripts/check-layers.mjs`, which fails when an import reaches the wrong way. The table starts at the bottom layer, and each layer imports only from the rows before it, as its last column says.
 
-| Folder | Holds | Imports at runtime |
+| Layer | Holds | Imports at runtime |
 |---|---|---|
-| `domain/` | The policy, terms and bindings, approver rules, account keys, money, reasons, situations. No I/O of its own: a few functions, such as `likelyDuplicates`, read a `Ledger` passed in. | `text/printable.ts` and `settings.ts` only. Row types from `store/` and Airwallex types come in as `import type`. |
-| `store/` | The SQLite ledger: one `Db` connection, one store class per group of tables, the hash chains, the schema and its upgrades. `store/ledger.ts` is the `Ledger` facade the rest of the code uses. | `domain/` and `text/`. Never the engine, views or surfaces. |
-| `engine/` | The agent: the look and its steps, the `Dispatcher`, the watcher, the sweep, sending, the currency lock, the cash lines, the sandbox bank. | `domain/`, `store/` (through `store/ledger.ts`, plus `store/read/callback.ts`), `airwallex/`, `text/`, `settings.ts`, and the `outages/`, `reader/` and `runs/` subsystems. |
-| `views/` | Typed, read-only view builders and the view contract (`views/contract.ts`). They write nothing. | `domain/`, `store/`, `text/`, the subsystems, and a few read-only engine helpers: `engine/cash-position.ts`, `pendingClose`, `pendingApproval` and two wording helpers from `engine/person.ts`, `heldBeforePaying` from `engine/facts.ts`, and `UNNAMED_PAYEE` from `engine/sweep.ts`. |
+| `domain/` | The policy, terms and bindings, approver rules, account keys, money, reasons, the tests for what is live, the email facts and the sender check, situations. No I/O of its own: a few functions, such as `likelyDuplicates`, read a `Ledger` passed in. | Nothing of ours. Row types from `store/`, Airwallex payloads and subsystem records come in as `import type`. |
+| `text/` | Printing and cleaning text for a terminal, secret redaction, fixed words, the UTC formatter. | `domain/`. |
+| The email parser | `intake/eml.ts`, `html-text.ts`, `css-text.ts` and `parse-worker.ts`: a raw email in, its text out. It sits beside `text/`, so the Airwallex client and the readers can clean text with `cleanLine`. | `domain/` and `text/`. |
+| `store/` | The SQLite ledger: one `Db` connection, one store class per group of tables, the hash chains, the schema and its upgrades, and the shapes stored JSON is checked against (`store/stored.ts`). `store/ledger.ts` is the `Ledger` facade the rest of the code uses. `store/read/` holds the read-only helpers built on it: the cash lines (`cash.ts`), an invoice's facts (`facts.ts`), what a person reads before a close or an approval (`reviews.ts`), the callback facts, and the metrics, search and supplier reads. | `domain/`, `text/` and the parser. |
+| `airwallex/` | The HTTP client and one module per API area. | `domain/money.ts`, `text/`, and `cleanLine` from the parser. |
+| `engine/` | The agent: the look and its steps, the `Dispatcher`, the watcher, the sweep, sending, the currency lock, the sandbox bank. | The rows before it, and the `outages/` and `reader/` subsystems. |
+| `runs/`, `outages/`, `recon/`, `intake/`, `reader/`, `outbox/`, `alerts/`, `explain/` | Pay runs, rail outages, reconciliation, the upload queue, the email readers, message drafts, alerts and Ask why. They sit beside the engine. | The rows before the engine, and each other and the engine one way only. `runs/` and `intake/` use the engine, and the engine uses `outages/` and `reader/`. |
+| `views/` | Typed, read-only view builders and the view contract (`views/contract.ts`). They write nothing. | Every row before them but the engine. They read Airwallex with GETs only, for the beneficiary picker and the New payment preview. |
 | `surfaces/` | `http/` (the server, its routes and the webhook receiver), `mcp/` (the read-only MCP server) and `cli/` (one file per command). | Anything. |
-| `text/` | Printing and cleaning text for a terminal, secret redaction, fixed words. | `domain/patterns.ts`. |
-| `airwallex/` | The HTTP client and one module per API area. | `domain/money.ts`, `text/`, and `cleanLine` from `intake/eml.ts`. |
-| `runs/`, `outages/`, `recon/`, `intake/`, `reader/`, `outbox/`, `alerts/`, `explain/` | Pay runs, rail outages, reconciliation, the email parser, the email readers, message drafts, alerts and Ask why. | Varies. `runs/` uses the engine's currency lock and cash lines; `alerts/` reads situations through `views/snapshot.ts`. |
-| `settings.ts` | Every environment setting, read once by `loadSettings`. `engine/create.ts` `createEngine` builds the `Engine` from it. | |
+| `settings.ts`, `env-file.ts` | Every environment setting, read once by `loadSettings`, and the `.env` loader. `engine/create.ts` `createEngine` builds the `Engine` from the settings. | Anything. |
 
-No tool enforces these rules. `tsconfig.json` is a single project and there is no import check, so the table describes the imports as they are. There are two exceptions: `views/mcp-views.ts` imports helpers from a surface, `surfaces/mcp/mcp-text.ts`, and `views/beneficiaries.ts`, which backs the supplier picker, reads Airwallex's beneficiary list with a GET.
+Layers that sit beside each other (`text/` and the parser, the store and the Airwallex client, the engine and its subsystems) may import each other in one direction only, and the check fails on a cycle among them. A type-only import may also name a row, an Airwallex payload, a subsystem's record or the settings from any layer, but it never reaches into the engine, the views or a surface.
+
+Settings reach the code as arguments. The `Engine` carries the approval policy, the reserve floors, the bank deadlines, the quote validity and the outage rule, and their callers hand reconciliation and Ask why what they read. Alerts get the situations they alert on from a reader the server passes in (`SnapshotsOf`), which loads them the way the views do.
+
+The check keeps a short list of imports that break the rule on purpose, each with its reason in the script:
+
+- `views/payment-check.ts` imports `engine/first-payment.ts` and `engine/new-payment.ts`. The New payment preview runs the same outage gate, holds and payee check as `startPayment`, on facts read without a lease, so it says what the start would do.
+- `views/incident-board.ts`, `views/settings-view.ts`, `views/snapshot.ts` and `outbox/drafts.ts` take a bank deadline from `deadlineMinutes` in `settings.ts`, which reads the loaded settings, because their callers do not pass settings yet. `outagesReport` in `outages/outages.ts` reads the outage rule the same way. These are the last callers of `currentSettings`.
+- `domain/situation.ts` imports `capitalise` from `text/printable.ts`.
 
 The engine and the policy never read the views, reconciliation, metrics, the supplier view, Ask why or the MCP server. Those read the ledger and move no money.
 
