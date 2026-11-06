@@ -7,14 +7,7 @@ import type { EmailFindings, SupplierEmail } from "../../../domain/emails.js";
 import { isExpired } from "../../../domain/live.js";
 import { bankChangeForm, recordBankChange, type BankChangeForm, type CallbackInput } from "../../../engine/bank-change.js";
 import { noteError } from "../../../engine/lines.js";
-import {
-  approvePayment,
-  closeIncident,
-  payAgain,
-  pendingApproval,
-  pendingClose,
-  type PayAgainResult,
-} from "../../../engine/person.js";
+import { approvePayment, closeIncident, payAgain, type PayAgainResult } from "../../../engine/person.js";
 import { DEFAULT_SCENARIO, newInvoiceId, openScenario, runScenario, SCENARIOS, type ScenarioDef } from "../../../engine/scenario.js";
 import { noteTexts } from "../../../intake/eml.js";
 import { outageView } from "../../../outages/outages.js";
@@ -38,6 +31,7 @@ import {
   type RunRow,
   type Signoff,
 } from "../../../store/ledger.js";
+import { pendingApproval, pendingClose } from "../../../store/read/reviews.js";
 import { SANDBOX_OUTCOMES } from "../../../text/words.js";
 import { boardGroups, type BoardGroupOf } from "../../../views/incident-board.js";
 import { adviceFor, isLive, type AuditSummary, type HttpApp } from "../app.js";

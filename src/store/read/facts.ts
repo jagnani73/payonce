@@ -1,6 +1,9 @@
-import { likelyDuplicates } from "../domain/duplicates.js";
-import { lateBesideLive, neverSent, payoutNotFailed } from "../domain/live.js";
-import type { Attempt, AttemptKind, Ledger, Obligation, OutsidePayout, ScannedObligation } from "../store/ledger.js";
+import { likelyDuplicates } from "../../domain/duplicates.js";
+import { lateBesideLive, neverSent, payoutNotFailed } from "../../domain/live.js";
+import type { Attempt, AttemptKind } from "../attempts.js";
+import type { Obligation, ScannedObligation } from "../invoices.js";
+import type { Ledger } from "../ledger.js";
+import type { OutsidePayout } from "../payouts.js";
 
 // A status PayOnce does not recognise counts as live.
 export function anyLive(payouts: OutsidePayout[]): boolean {

@@ -1,9 +1,10 @@
 import { existsSync } from "node:fs";
 import { loadSettings, type Settings } from "../../settings.js";
-import type { CoveredTransfer } from "../../engine/facts.js";
-import { closeIncident, pendingClose, type CloseReview } from "../../engine/person.js";
+import { closeIncident } from "../../engine/person.js";
 import { personName } from "../../domain/approvers.js";
 import { Ledger, LEDGER_PATH } from "../../store/ledger.js";
+import type { CoveredTransfer } from "../../store/read/facts.js";
+import { pendingClose, type CloseReview } from "../../store/read/reviews.js";
 import { say, shownReference } from "../../text/printable.js";
 import { notAnInvoiceText } from "../../runs/runs.js";
 import type { CoveredTransferView, DecisionOption, EmailsTab, IncidentView, NamingPayoutView } from "../../views/contract.js";

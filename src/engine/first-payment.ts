@@ -30,9 +30,9 @@ import {
   type ScannedObligation,
 } from "../store/ledger.js";
 import { committedAcross, committedByInvoice } from "../store/read/cash.js";
+import { anyLive } from "../store/read/facts.js";
 import { withCurrencyLock } from "./currency-lock.js";
 import { RETRY_FAILED_LOOK_MS, type Engine, type LookOptions, type NextLook } from "./engine.js";
-import { anyLive } from "./facts.js";
 import { messageOf, note } from "./lines.js";
 import { linkUnseenPayouts } from "./outside.js";
 import { deadlineLook, send, waitForBank } from "./send.js";

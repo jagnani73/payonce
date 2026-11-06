@@ -15,6 +15,7 @@ import {
   type Outage,
   type OutsidePayout,
 } from "../store/ledger.js";
+import { heldBeforePaying, paidTwice } from "../store/read/facts.js";
 import { capitalise, say } from "../text/printable.js";
 import { assess } from "./assessment.js";
 import { close, closeRefused } from "./close.js";
@@ -31,7 +32,6 @@ import {
   type StepResult,
 } from "./engine.js";
 import { continueEscalated, escalate } from "./escalated.js";
-import { heldBeforePaying, paidTwice } from "./facts.js";
 import { holdRefused, startFirst } from "./first-payment.js";
 import { continueHeld } from "./held.js";
 import { holdMismatched, holdPaidTwice, syncMismatched } from "./late-mismatched.js";

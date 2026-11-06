@@ -15,12 +15,12 @@ import {
   type Obligation,
   type Outage,
 } from "../store/ledger.js";
+import { anyLive, paidDuplicate } from "../store/read/facts.js";
 import { assess } from "./assessment.js";
 import { closeWaitingLine } from "./close.js";
 import { withCurrencyLock } from "./currency-lock.js";
 import { noteEvidenceUpgrade } from "./emails.js";
 import type { Assessment, Engine, NextLook } from "./engine.js";
-import { anyLive, paidDuplicate } from "./facts.js";
 import { note } from "./lines.js";
 import { holdForOutsidePayout, linkUnseenPayouts } from "./outside.js";
 import { asRequested, withFloorReason } from "./reason-text.js";

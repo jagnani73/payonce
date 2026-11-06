@@ -93,6 +93,13 @@ export function capitalise(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+// Invoice numbers as a timeline names them: "A", "A and B", "A, B and C".
+export function listOf(invoiceIds: string[]): string {
+  return invoiceIds.length <= 1
+    ? (invoiceIds[0] ?? "")
+    : `${invoiceIds.slice(0, -1).join(", ")} and ${invoiceIds.at(-1)}`;
+}
+
 // JSON with every character a terminal could act on written as \uXXXX.
 // JSON.stringify escapes C0 controls already, so the text parses back to the same
 // value and stays safe to print.
