@@ -1,12 +1,12 @@
 import type { TransferBankDetails } from "../airwallex/transfers.js";
 import { endingOf, keyHash } from "../domain/approval.js";
 import { knownRoute, routeKeyOf, routeOfDetailsKey } from "../domain/assess.js";
-import { knownName } from "../domain/approvers.js";
-import { CHANGED_BANK_DETAILS_REASON, LAST_PAID_CHANGED_REASON } from "../domain/decide.js";
+import { knownName, policyFromEnv } from "../domain/approvers.js";
 import { templateLabel } from "../outbox/drafts.js";
 import { numberOf, numbersOf, sameInvoiceNumber, supplierNameKey } from "../domain/duplicates.js";
 import { summarise, unverifiedSenders, type SupplierEmail } from "../reader/emails.js";
-import { ACCOUNT_CHANGED_REASON, LATE_TRANSFER_REASON, RUN_ACCOUNT_CHANGED_REASON } from "../domain/reasons.js";
+import { accountChangedReason } from "../domain/reasons.js";
+import { situationOf, type InvoiceSnapshot, type PaymentState, type Situation } from "../domain/situation.js";
 import {
   boardEntriesFor,
   GROUP_LABELS,
@@ -15,6 +15,7 @@ import {
   type BoardMoney,
   type BoardTotal,
 } from "./incident-board.js";
+import { invoiceSnapshotsWithin } from "./snapshot.js";
 import { candidatesFor, invoiceIndex, type InvoiceIndex, type Match } from "../intake/intake.js";
 import {
   liveAtBank,
@@ -71,13 +72,6 @@ const LINKS_LISTED: number = 25;
 // their own forms, and the last four characters of an account only as letters
 // and digits.
 const ENDING: RegExp = /^[A-Za-z0-9]{1,4}$/;
-
-const ACCOUNT_REASONS: readonly string[] = [
-  CHANGED_BANK_DETAILS_REASON,
-  LAST_PAID_CHANGED_REASON,
-  ACCOUNT_CHANGED_REASON,
-  RUN_ACCOUNT_CHANGED_REASON,
-];
 
 export type CautionCode =
   | "account-changed"
@@ -1141,10 +1135,15 @@ function wordsFor(table: Readonly<Record<string, string>>, code: string | null):
   return code !== null && FAILURE_CODE_PATTERN.test(code) && Object.hasOwn(table, code) ? (table[code] ?? null) : null;
 }
 
-// An invoice the engine sent to a person because the record's bank details
-// changed, by the fixed reasons it gives for that.
-function heldForAccount(obligation: SupplierObligation): boolean {
-  return ACCOUNT_REASONS.some((reason: string): boolean => obligation.escalationReason.startsWith(reason));
+// The situation of each open invoice, by invoice number. The cautions read only
+// states the approver list does not decide (paid-twice and needs-phone come
+// before any that does), so no approver list is loaded for them.
+function situationsOf(ledger: Ledger, invoiceIds: string[], now: number): Map<string, Situation> {
+  return new Map(
+    invoiceSnapshotsWithin(ledger, { policy: policyFromEnv({}), askWhy: false }, now, invoiceIds).map(
+      (snapshot: InvoiceSnapshot): [string, Situation] => [snapshot.obligation.invoiceId, situationOf(snapshot, now)],
+    ),
+  );
 }
 
 // A time in a caution's text, to the minute and labelled UTC as pnpm supplier
@@ -1154,9 +1153,18 @@ function utcMinute(at: string | null): string | null {
   return known === null ? null : `${known.slice(0, 10)} ${known.slice(11, 16)} UTC`;
 }
 
-function cautionsOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts, owners: Owners, now: number): Caution[] {
+function cautionsOf(
+  ledger: Ledger,
+  facts: RecordFacts,
+  accounts: Accounts,
+  owners: Owners,
+  situations: Map<string, Situation>,
+  now: number,
+): Caution[] {
   const found: CautionDraft[] = [];
   const openOnes: SupplierObligation[] = facts.obligations.filter(open);
+  const inState = (state: PaymentState): SupplierObligation[] =>
+    openOnes.filter((obligation: SupplierObligation): boolean => situations.get(obligation.invoiceId)?.state === state);
   const ids = (list: SupplierObligation[]): string[] =>
     list.map((obligation: SupplierObligation): string => obligation.invoiceId);
   const label = (key: string | undefined | null): string[] => {
@@ -1172,8 +1180,10 @@ function cautionsOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts, owne
   // pay run rows only: a replacement whose original went to the same details is
   // not held by them, so the sentence promises nothing about replacements.
   // Whatever the callbacks, any open invoice the engine sent to a person because
-  // the details changed.
-  const held: SupplierObligation[] = openOnes.filter(heldForAccount);
+  // the details changed, by its reason's code.
+  const held: SupplierObligation[] = openOnes.filter((obligation: SupplierObligation): boolean =>
+    accountChangedReason(ledger.reasonOf(obligation)),
+  );
   const storedChanged: boolean =
     stored !== null && lastPaid !== undefined && stored.key !== lastPaid.accountKey && appliedKey !== stored.key;
   if (held.length > 0 || storedChanged) {
@@ -1310,17 +1320,14 @@ function cautionsOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts, owne
       invoices: ids(newDetails),
     });
   }
-  const twice: SupplierObligation[] = openOnes.filter((obligation: SupplierObligation): boolean =>
-    obligation.escalationReason.startsWith(LATE_TRANSFER_REASON),
-  );
+  // While two payments may both pay an invoice, not once that has passed.
+  const twice: SupplierObligation[] = inState("paid-twice");
   if (twice.length > 0) {
     found.push({ code: "paid-twice", text: "PayOnce may have paid these invoices twice.", invoices: ids(twice) });
   }
-  // A callback is recorded on the escalated invoice itself, from its own phone.
-  const noPhone: SupplierObligation[] = openOnes.filter(
-    (obligation: SupplierObligation): boolean =>
-      obligation.state === "escalated" && (obligation.supplierPhone ?? "").trim() === "",
-  );
+  // A callback is recorded on the escalated invoice itself, from its own phone,
+  // and only an invoice about the supplier's bank details needs one.
+  const noPhone: SupplierObligation[] = inState("needs-phone");
   if (noPhone.length > 0) {
     found.push({
       code: "no-phone",
@@ -1931,10 +1938,11 @@ function summaryOf(
   facts: RecordFacts,
   entries: BoardEntry[],
   owners: Owners,
+  situations: Map<string, Situation>,
   now: number,
 ): SupplierSummary & { mustCaution: boolean } {
   const accounts: Accounts = accountsOf(ledger, facts, owners);
-  const cautions: Caution[] = cautionsOf(ledger, facts, accounts, owners, now);
+  const cautions: Caution[] = cautionsOf(ledger, facts, accounts, owners, situations, now);
   const groups: Record<BoardGroup, number> = { person: 0, deadline: 0, bank: 0, open: 0 };
   for (const entry of entries) {
     groups[entry.group] += 1;
@@ -2007,12 +2015,19 @@ function listOfRecords(ledger: Ledger, now: number): SupplierList {
     const read: SupplierListRead = ledger.supplierListRead();
     const records: Map<string, RecordFacts> = recordsOf(read);
     const owners: Owners = ownersOf(linksOf(read));
+    const situations: Map<string, Situation> = situationsOf(
+      ledger,
+      [...records.values()].flatMap((facts: RecordFacts): string[] =>
+        facts.obligations.filter(open).map((obligation: SupplierObligation): string => obligation.invoiceId),
+      ),
+      now,
+    );
     const entries: BoardEntry[] = needsBoard([...records.values()])
       ? boardEntriesFor(ledger, ledger.openObligations(), null, now, lazyIndex(ledger)).entries
       : [];
     const entriesOf: Map<string, BoardEntry[]> = grouped(entries, (entry: BoardEntry): string => entry.beneficiaryId);
     const summaries: (SupplierSummary & { mustCaution: boolean })[] = [...records.values()].map(
-      (facts: RecordFacts) => summaryOf(ledger, facts, entriesOf.get(facts.id) ?? [], owners, now),
+      (facts: RecordFacts) => summaryOf(ledger, facts, entriesOf.get(facts.id) ?? [], owners, situations, now),
     );
     summaries.sort(
       (a: SupplierSummary & { mustCaution: boolean }, b: SupplierSummary & { mustCaution: boolean }): number =>
@@ -2119,7 +2134,18 @@ function detailOf(ledger: Ledger, key: string, now: number): SupplierDetail | nu
               runLine: stored.runLine,
               account: accounts.labelOf.get(stored.key) ?? "",
             },
-      cautions: cautionsOf(ledger, facts, accounts, owners, now),
+      cautions: cautionsOf(
+        ledger,
+        facts,
+        accounts,
+        owners,
+        situationsOf(
+          ledger,
+          facts.obligations.filter(open).map((obligation: SupplierObligation): string => obligation.invoiceId),
+          now,
+        ),
+        now,
+      ),
       money: board?.totals ?? [],
       accounts: accounts.views,
       invoices: listed.map(

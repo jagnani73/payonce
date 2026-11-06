@@ -272,7 +272,17 @@ export function readInvoiceSnapshots(
   now: number,
   invoiceIds: string[] | null = null,
 ): InvoiceSnapshot[] {
-  return read(ledger, (): InvoiceSnapshot[] => invoiceSnapshots(ledger, sharedOf(ledger, now), options, invoiceIds, now));
+  return read(ledger, (): InvoiceSnapshot[] => invoiceSnapshotsWithin(ledger, options, now, invoiceIds));
+}
+
+// The same, for a view already reading soft inside its own read snapshot.
+export function invoiceSnapshotsWithin(
+  ledger: Ledger,
+  options: SnapshotOptions,
+  now: number,
+  invoiceIds: string[] | null,
+): InvoiceSnapshot[] {
+  return invoiceSnapshots(ledger, sharedOf(ledger, now), options, invoiceIds, now);
 }
 
 function runSnapshot(ledger: Ledger, options: SnapshotOptions, shared: () => Shared, run: Run, now: number): RunSnapshot {
