@@ -121,10 +121,11 @@ export function viewRoutes(app: HttpApp, sweepEveryMs: number): Route[] {
     response.end(body);
   }
 
-  // At most one read at a time, and none while the last is under a minute old.
+  // At most one read at a time, and none while the last good one is under a
+  // minute old. A failed read is answered once and not kept, so Try again reads.
   async function beneficiaryList(params: URLSearchParams): Promise<BeneficiaryPickerView> {
     const q: string = (params.get("q") ?? "").trim().slice(0, MAX_QUERY_LENGTH);
-    if (beneficiaries === null || Date.now() - beneficiaries.readAt >= BENEFICIARIES_EVERY_MS) {
+    if (beneficiaries === null || !beneficiaries.ok || Date.now() - beneficiaries.readAt >= BENEFICIARIES_EVERY_MS) {
       reading ??= readBeneficiaries(engine.client).finally((): void => {
         reading = null;
       });

@@ -4,6 +4,7 @@ import type { TransferBankDetails } from "../airwallex/transfers.js";
 import type { Settings } from "../settings.js";
 import { readingSoft, type LastPaid, type Ledger, type TransferMethod } from "../store/ledger.js";
 import type { BeneficiaryOption, BeneficiaryPickerView } from "./contract.js";
+import { REFERENCE_PATTERN } from "../domain/patterns.js";
 import { supplierKeyOf } from "./context.js";
 import { iso, why } from "./parts.js";
 import { CAUTION_LABELS } from "./supplier-pages.js";
@@ -50,10 +51,26 @@ function nameOf(record: BeneficiaryRecord): string {
   return record.beneficiary?.bank_details?.account_name ?? (typeof company === "string" ? company : (record.nickname ?? "A beneficiary with no name"));
 }
 
+// The payment PayOnce last paid to the record, by Ledger.lastPaidTransfer, with
+// when the bank paid it and the ending of the details it went to.
+function lastPaidOf(ledger: Ledger, beneficiaryId: string): BeneficiaryOption["lastPaid"] {
+  const lastPaid: LastPaid | undefined = ledger.lastPaidTransfer(beneficiaryId);
+  if (lastPaid === undefined) {
+    return null;
+  }
+  const paid: { paidAt: string | null; ending: string | null } | undefined = ledger.paidTransfer(lastPaid.transferId);
+  const at: number = paid?.paidAt === null || paid === undefined ? Number.NaN : Date.parse(paid.paidAt);
+  const ending: string | null = paid?.ending ?? null;
+  return {
+    at: Number.isFinite(at) ? iso(at) : null,
+    reference: lastPaid.reference !== null && REFERENCE_PATTERN.test(lastPaid.reference) ? lastPaid.reference : null,
+    ending: ending !== null && /^[A-Za-z0-9]{1,4}$/.test(ending) ? ending : null,
+  };
+}
+
 function optionOf(ledger: Ledger, record: BeneficiaryRecord & { id: string }, summaries: Map<string, SupplierSummary>): BeneficiaryOption {
   const details: TransferBankDetails | undefined = record.beneficiary?.bank_details;
   const ending: string | null = endingOf(details);
-  const lastPaid: LastPaid | undefined = ledger.lastPaidTransfer(record.id);
   const country: unknown = details?.["bank_country_code"];
   return {
     key: record.id,
@@ -66,15 +83,20 @@ function optionOf(ledger: Ledger, record: BeneficiaryRecord & { id: string }, su
       ending === null && details?.bank_name === undefined
         ? null
         : { label: [details?.bank_name, ending === null ? null : `account ending ${ending}`].filter((part: string | null | undefined): part is string => typeof part === "string").join(", "), ending },
-    lastPaid: lastPaid === undefined ? null : { at: null, reference: lastPaid.reference, ending: null },
+    lastPaid: lastPaidOf(ledger, record.id),
     cautions: (summaries.get(record.id)?.cautions ?? []).map((code: SupplierSummary["cautions"][number]): string => CAUTION_LABELS[code]),
     onRecord: summaries.has(record.id),
   };
 }
 
+// The name, the nickname and the account ending, never inside the record's id,
+// which every sandbox record shares most of. A whole id still finds its record.
 function matches(option: BeneficiaryOption, q: string): boolean {
   const lower: string = q.toLowerCase();
-  return [option.name, option.nickname ?? "", option.account?.ending ?? "", option.key].some((text: string): boolean => text.toLowerCase().includes(lower));
+  return (
+    option.key.toLowerCase() === lower ||
+    [option.name, option.nickname ?? "", option.account?.ending ?? ""].some((text: string): boolean => text.toLowerCase().includes(lower))
+  );
 }
 
 export function beneficiaryPicker(ledger: Ledger, _settings: Settings, now: number, q: string, read: BeneficiaryRead): BeneficiaryPickerView {

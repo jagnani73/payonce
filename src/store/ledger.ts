@@ -912,6 +912,10 @@ export class Ledger {
     return this.repos.suppliers.supplierNamed(beneficiaryId);
   }
 
+  paidTransfer(transferId: string): { paidAt: string | null; ending: string | null } | undefined {
+    return this.repos.suppliers.paidTransfer(transferId);
+  }
+
   supplierLinks(except: string): SupplierLinks {
     return this.repos.suppliers.supplierLinks(except);
   }

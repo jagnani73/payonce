@@ -662,6 +662,16 @@ export class SupplierReads {
     return { approvals, callbacks, contacts: this.contacts.of(beneficiaryId), emails, findings, failures, runRows };
   }
 
+  // When the bank paid one of PayOnce's transfers, by the paid_at trigger, and
+  // the last four characters of the details Airwallex said it went to. Each is
+  // null when not kept.
+  paidTransfer(transferId: string): { paidAt: string | null; ending: string | null } | undefined {
+    const row: { paid_at: string | null; sent_ending: string | null } | undefined = this.db
+      .prepare("SELECT paid_at, sent_ending FROM attempts WHERE transfer_id = ? AND state = 'paid' LIMIT 1")
+      .get(transferId) as unknown as { paid_at: string | null; sent_ending: string | null } | undefined;
+    return row === undefined ? undefined : { paidAt: row.paid_at || null, ending: row.sent_ending ?? null };
+  }
+
   // Whether an invoice, or a pay row of the waiting run, names this beneficiary
   // record, which is when the supplier view has a record for it.
   supplierNamed(beneficiaryId: string): boolean {
