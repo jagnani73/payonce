@@ -786,7 +786,7 @@ export class DraftMoveError extends Error {
   }
 }
 
-const MOVES_FROM: Record<DraftMove, DraftState[]> = {
+export const MOVES_FROM: Record<DraftMove, DraftState[]> = {
   copied: ["draft"],
   sent: ["draft", "copied"],
   dismissed: ["draft", "copied"],
