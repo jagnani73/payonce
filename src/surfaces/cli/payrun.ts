@@ -1,46 +1,62 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { airwallexAdvice, AirwallexError, AirwallexUnreachableError, withAdvice } from "../../airwallex/client.js";
-import type { RunTotal } from "../../domain/approval.js";
-import { arrivalAdvice, feeSeenText, HOLIDAYS_NOTE, type ArrivalAdvice } from "../../domain/arrival.js";
-import { describePolicy, personName, type ApprovalPolicy } from "../../domain/approvers.js";
+import { describePolicy, personName } from "../../domain/approvers.js";
+import { formatMoney } from "../../domain/money.js";
+import { describeFloors } from "../../domain/reserve.js";
 import { createEngine, type EngineBuild } from "../../engine/create.js";
 import type { Engine } from "../../engine/engine.js";
 import { loadEnvIfPresent } from "../../env-file.js";
+import { parseRunFile, type FileProblem, type ParsedRunFile } from "../../runs/run-file.js";
+import {
+  approveRun,
+  cancelRun,
+  pendingRunApproval,
+  recheckRun,
+  uploadRun,
+  type PendingRunApproval,
+} from "../../runs/runs.js";
+import { loadSettings, type Settings } from "../../settings.js";
 import {
   Ledger,
   LEDGER_PATH,
   NothingToPayError,
   SameFileError,
-  signersOf,
   WaitingRunError,
   type CheckedRow,
-  type LedgerEvent,
   type Run,
   type RunApproval,
-  type RunRow,
 } from "../../store/ledger.js";
-import { formatMoney } from "../../domain/money.js";
-import { printable, say, utcTime } from "../../text/printable.js";
-import { describeFloors } from "../../domain/reserve.js";
-import { parseRunFile, type FileProblem, type ParsedRunFile } from "../../runs/run-file.js";
-import { loadSettings, type Settings } from "../../settings.js";
+import { say } from "../../text/printable.js";
+import type {
+  ArrivalView,
+  RunCashView,
+  RunDecisionOption,
+  RunRequestView,
+  RunRowView,
+  RunTermsView,
+  RunView,
+} from "../../views/contract.js";
+import { runView } from "../../views/runs.js";
 import { readableRunTerms } from "./terms-shape.js";
 import {
-  approveRun,
-  cancelRun,
-  domainChecks,
-  domainText,
-  pendingRunApproval,
-  recheckRun,
-  runCounts,
-  runStatus,
-  uploadRun,
-  type PendingRunApproval,
-  type RunCash,
-  type RunCounts,
-  type RunStatus,
-} from "../../runs/runs.js";
+  count,
+  heading,
+  listOf,
+  money,
+  put,
+  putAll,
+  putCautions,
+  putFields,
+  putConsequence,
+  putOption,
+  putRows,
+  putTimeline,
+  signingFields,
+  utc,
+  type Field,
+  type Listed,
+} from "./view-text.js";
 
 const USAGE: string[] = [
   "pnpm payrun upload <FILE> <NAME>            check the file and store the run",
@@ -50,16 +66,7 @@ const USAGE: string[] = [
   "pnpm payrun cancel <RUN> <NAME> <NOTE>      cancel a run that is waiting",
 ];
 
-const STATUS_WORDS: Record<RunStatus, string> = {
-  "waiting-approval": "waiting for approval",
-  approved: "approved, and the server releases it on its next check",
-  expired: "its approval request expired. Check it again",
-  "needs-check": "waiting on a person",
-  released: "released",
-  cancelled: "cancelled",
-};
-
-const EVENTS_SHOWN: number = 8;
+const TIMELINE_SHOWN: number = 8;
 
 function fail(message: string): void {
   say(message);
@@ -84,117 +91,121 @@ function runOf(ledger: Ledger, raw: string | undefined): Run | undefined {
   return run;
 }
 
-function totalsText(totals: { currency: string; amountMinor: number }[]): string {
-  return totals.length === 0
-    ? "nothing"
-    : totals
-        .map((total: { currency: string; amountMinor: number }): string =>
-          formatMoney(total.amountMinor, total.currency),
-        )
-        .join(" and ");
+// ---------- the run view ----------
+
+function arrivalLines(arrival: ArrivalView | null): string[] {
+  return arrival === null ? [] : [arrival.text, ...(arrival.sentToday === null ? [] : [arrival.sentToday.text])];
 }
 
-function rowText(row: CheckedRow | RunRow): string {
-  const money: string =
-    row.amountMinor === null || row.currency === null ? "" : ` ${formatMoney(row.amountMinor, row.currency)}`;
-  const state: string = "state" in row && row.state !== "waiting" ? ` (${row.state})` : "";
-  const outcome: string = row.sandboxOutcome === "PAID" ? "" : `, sandbox ${row.sandboxOutcome}`;
-  return `  row ${String(row.line).padEnd(3)} ${(row.invoiceId ?? "?").padEnd(16)}${money} ${row.action}${state}${outcome}`;
+function rowListed(row: RunRowView): Listed {
+  const to: string[] = [
+    ...(row.account === null ? [] : [`To ${row.account.label}`]),
+    ...(row.newPayee ? ["a payee PayOnce has never paid on a person's approval"] : []),
+    ...(row.callbackVerified ? ["account verified by a callback"] : []),
+  ];
+  return {
+    head: [`Row ${row.line}`, row.invoiceId ?? "no invoice number", row.payee ?? row.supplier ?? "", row.amount === null ? "" : row.amount.text, row.label],
+    lines: [
+      ...(to.length === 0 ? [] : [to.join(", ")]),
+      ...arrivalLines(row.arrival).map((line: string, index: number): string => (index === 0 && row.feeSeen !== null ? `${line}; ${row.feeSeen}` : line)),
+      ...row.skipReasons.map((reason: { text: string }): string => reason.text),
+    ],
+  };
 }
 
-function printRows(ledger: Ledger, rows: (CheckedRow | RunRow)[]): void {
-  let arriving: boolean = false;
-  for (const row of rows) {
-    say(rowText(row));
-    if (row.payTo !== null && row.action === "pay") {
-      say(`           to ${printable(row.payTo)}${row.newPayee ? ", a payee PayOnce has never paid on a person's approval" : ""}`);
-    }
-    if (row.arrival !== null && row.currency !== null) {
-      const advice: ArrivalAdvice = arrivalAdvice(row.arrival);
-      say(`           ${advice.text}; ${feeSeenText(ledger, row.currency, row.arrival.method)}`);
-      if (advice.sentToday !== null) {
-        say(`           ${advice.sentToday.text}`);
-      }
-      arriving = true;
-    }
-    // A reason can hold an Airwallex name, so each prints as one line.
-    for (const reason of row.reasons) {
-      say(`           ${printable(reason)}`);
-    }
-    if (row.heldFor.length > 0) {
-      say(`           held for a person when sent: looks like a second bill for ${row.heldFor.join(", ")}`);
-    }
-    if ("note" in row && row.note !== null) {
-      say(`           ${printable(row.note)}`);
+function cashLine(cash: RunCashView): Field {
+  const parts: string[] = [
+    `available ${cash.balance === null ? "not known" : money(cash.balance)}`,
+    `promised elsewhere ${money(cash.committedElsewhere)}`,
+    `rows ${money(cash.rows)}`,
+    `fees ${money(cash.fees)}`,
+    `left ${cash.left === null ? "not known" : money(cash.left)}`,
+    cash.floor === null ? `no reserve floor is set for ${cash.currency}` : `floor ${money(cash.floor)}`,
+    ...(cash.short === null ? [] : [`short ${money(cash.short)}`]),
+  ];
+  return [cash.currency, parts.join(", ")];
+}
+
+function termsFields(terms: RunTermsView): Field[] {
+  const rows = (lines: number[]): string => `${lines.length === 1 ? "row" : "rows"} ${listOf(lines.map(String))}`;
+  return [
+    [
+      "Pays",
+      terms.totals.map(
+        (total: RunTermsView["totals"][number]): string =>
+          `${money(total.total)} in ${count(total.payments, "payment", "payments")}, ${total.floor === null ? `no reserve floor is set for ${total.total.currency}` : `reserve floor ${money(total.floor)}`}`,
+      ),
+    ],
+    ["Limits", `checked against ${money(terms.largest)}, the largest total`],
+    ...(terms.newPayees.length === 0 ? [] : [["New payees", rows(terms.newPayees)] as Field]),
+    ...(terms.callbackRows.length === 0 ? [] : [["Callbacks", `${rows(terms.callbackRows)} pay bank details a callback confirmed`] as Field]),
+    ...(terms.domains.length === 0
+      ? []
+      : [["Domains", terms.domains.map((domain: RunTermsView["domains"][number]): string => `${domain.caution ? "! " : ""}${domain.text}`)] as Field]),
+    ...(terms.arrivals.length === 0
+      ? []
+      : [
+          [
+            "Arrival",
+            terms.arrivals.flatMap((item: RunTermsView["arrivals"][number]): string[] =>
+              arrivalLines(item.advice).map((line: string, index: number): string => (index === 0 ? `row ${item.line} ${item.invoiceId}: ${line}` : line)),
+            ),
+          ] as Field,
+        ]),
+  ];
+}
+
+function putRequest(request: RunRequestView): void {
+  heading(`Request #${request.id}: pay ${count(request.terms.payments, "payment", "payments")}`);
+  putFields([["State", request.label], ...termsFields(request.terms), ...signingFields(request)]);
+}
+
+function putOptions(view: RunView): void {
+  const options: RunDecisionOption[] = view.decision?.options ?? [];
+  if (options.length > 0) {
+    heading("What you can do");
+    for (const option of options) {
+      putOption(option);
     }
   }
-  if (arriving) {
-    say(`  ${HOLIDAYS_NOTE}`);
-  }
 }
 
-function printCash(cash: RunCash[]): void {
-  for (const entry of cash) {
-    const floor: string =
-      entry.floorMinor === null ? `no reserve floor is set for ${entry.currency}` : `floor ${formatMoney(entry.floorMinor, entry.currency)}`;
-    const available: string =
-      entry.availableMinor === null ? "unknown" : formatMoney(entry.availableMinor, entry.currency);
-    const after: string = entry.afterMinor === null ? "unknown" : formatMoney(entry.afterMinor, entry.currency);
-    say(
-      `  cash     ${entry.currency}: ${formatMoney(entry.payMinor, entry.currency)} to pay, available ${available}, committed elsewhere ${formatMoney(entry.committedMinor, entry.currency)}, ${floor}, after the run ${after}${entry.feeUnknown > 0 ? ", fee not known" : ""}`,
-    );
-    if (entry.problem !== null) {
-      say(`           ${entry.problem}`);
-    }
+function show(view: RunView): void {
+  const run: RunView["run"] = view.run;
+  put(`Pay run ${run.id} · ${run.fileName} · uploaded by ${run.uploadedBy} at ${utc(run.uploadedAt)}`);
+  put(view.situation.label);
+  put(view.situation.next);
+  if (view.situation.why !== null) {
+    put(`Why: ${view.situation.why}`);
   }
-}
-
-function printApproval(ledger: Ledger, pending: PendingRunApproval): void {
-  const approval: RunApproval = pending.approval;
-  const totals: RunTotal[] = pending.terms.totals;
-  const payments: number = pending.terms.rows.length;
-  say(
-    `Request ${approval.id}: pay ${totalsText(totals)} in ${payments} ${payments === 1 ? "payment" : "payments"}`,
+  put(
+    `${view.counts.pay} to pay${view.counts.held === 0 ? "" : `, ${count(view.counts.held, "possible second bill", "possible second bills")} checked again at send`}, ${view.counts.skip} skipped`,
   );
-  // As on the page's card, so an approver sees a currency with no floor.
-  for (const total of totals) {
-    say(
-      `  ${total.currency.padEnd(8)} ${formatMoney(total.amountMinor, total.currency)} in ${total.payments} ${total.payments === 1 ? "payment" : "payments"}, ${total.reserveFloorMinor === null ? `no reserve floor is set for ${total.currency}` : `reserve floor ${formatMoney(total.reserveFloorMinor, total.currency)}`}`,
-    );
+  heading("Rows");
+  putRows(view.rows.map(rowListed), 3);
+  const note: string | undefined = view.rows.find((row: RunRowView): boolean => row.arrival !== null)?.arrival?.note;
+  if (note !== undefined) {
+    put(note, 1);
   }
-  // When each row with a due date usually arrives, as the terms carry it.
-  let arriving: boolean = false;
-  for (const row of pending.terms.rows) {
-    if (row.arrival !== undefined) {
-      const advice: ArrivalAdvice = arrivalAdvice(row.arrival);
-      say(`  arrival  row ${row.line} ${row.invoiceId}: ${advice.text}`);
-      if (advice.sentToday !== null) {
-        say(`           ${advice.sentToday.text}`);
-      }
-      arriving = true;
+  if (view.skippedSummary.length > 0) {
+    heading("Skipped");
+    putAll(view.skippedSummary.map((item: { label: string; count: number }): string => `${item.label}: ${item.count}`), 1);
+  }
+  heading(`Cash when the run was checked, at ${utc(view.cash.checkedAt)}`);
+  putFields(view.cash.currencies.map(cashLine));
+  if (view.decision !== null) {
+    if (view.decision.request !== null) {
+      putRequest(view.decision.request);
     }
+    putCautions(view.decision.cautions);
+    putOptions(view);
   }
-  if (arriving) {
-    say(`           ${HOLIDAYS_NOTE}`);
-  }
-  say(
-    `  needs    ${approval.needed === 1 ? "one approver" : `${approval.needed} approvers, because ${approval.neededWhy}`}`,
-  );
-  say(`  limits   checked against ${formatMoney(pending.largest.amountMinor, pending.largest.currency)}, the largest total`);
-  // The sender check trusts these domains, so the approvers see each one.
-  for (const check of domainChecks(ledger, pending.terms)) {
-    const changed: boolean = check.caution;
-    say(`  ${changed ? "caution " : "domain  "} ${domainText(check)}`);
-  }
-  if (approval.signoffs.length > 0) {
-    say(`  so far   approved by ${signersOf(approval.signoffs)}`);
-  }
-  for (const bar of pending.barred) {
-    say(`  not      ${printable(bar.name)}, who ${bar.why}`);
-  }
-  say(
-    `  expires  ${utcTime(approval.expiresAt)}${pending.expired ? " (expired)" : ""}`,
-  );
+  heading("Timeline, newest last");
+  putTimeline(view.timeline.lines, TIMELINE_SHOWN);
+}
+
+function viewOf(settings: Settings, ledger: Ledger, runId: number): RunView | null {
+  return runView(ledger, settings, Date.now(), runId);
 }
 
 // The run's waiting request, or undefined when none waits. Null when its stored
@@ -221,28 +232,15 @@ function unreadableText(run: Run, ledger: Ledger): string {
   return `${id === undefined ? "The approval request" : `Request ${id}`} for run ${run.id} holds terms PayOnce cannot read, so there is nothing to show or approve`;
 }
 
-function show(ledger: Ledger, run: Run): void {
-  const rows: RunRow[] = ledger.runRows(run.id);
-  const counts: RunCounts = runCounts(rows);
-  say(
-    `Pay run ${run.id}, ${run.fileName}, uploaded by ${run.uploadedBy} at ${utcTime(run.uploadedAt)}: ${STATUS_WORDS[runStatus(ledger, run)]}`,
-  );
-  say(
-    `  ${counts.pay} to pay (${totalsText(counts.totals)})${counts.held === 0 ? "" : `, ${counts.held} held for a person when sent`}, ${counts.skip} skipped`,
-  );
-  printRows(ledger, rows);
-  printCash(JSON.parse(run.cash) as RunCash[]);
-  const pending: PendingRunApproval | undefined | null = waitingRequest(ledger, run);
-  if (pending === null) {
+// The run as its page shows it. A waiting request with terms PayOnce cannot read
+// is refused instead.
+function showRun(settings: Settings, ledger: Ledger, run: Run): void {
+  const view: RunView | null = waitingRequest(ledger, run) === null ? null : viewOf(settings, ledger, run.id);
+  if (view === null) {
     fail(unreadableText(run, ledger));
-  } else if (pending !== undefined) {
-    printApproval(ledger, pending);
+    return;
   }
-  const events: LedgerEvent[] = ledger.runEvents(run.id).slice(-EVENTS_SHOWN);
-  // One line each, as the ledger now stores them, for lines written before.
-  for (const event of events) {
-    say(`  ${event.kind.padEnd(8)} ${printable(event.message)}`);
-  }
+  show(view);
 }
 
 function problemsText(problems: FileProblem[]): string {
@@ -251,6 +249,21 @@ function problemsText(problems: FileProblem[]): string {
       problem.line === null ? `  ${problem.message}` : `  line ${problem.line}: ${problem.message}`,
     )
     .join("\n");
+}
+
+// The rows of a file with nothing to pay, which is not stored, with why each is
+// skipped.
+function skippedRows(rows: CheckedRow[]): Listed[] {
+  return rows.map(
+    (row: CheckedRow): Listed => ({
+      head: [
+        `Row ${row.line}`,
+        row.invoiceId ?? "no invoice number",
+        row.amountMinor === null || row.currency === null ? "" : formatMoney(row.amountMinor, row.currency),
+      ],
+      lines: row.reasons,
+    }),
+  );
 }
 
 // Upload and check read Airwallex, GETs only. Show, approve and cancel do not.
@@ -292,16 +305,18 @@ async function upload(settings: Settings, ledger: Ledger, path: string | undefin
     const runId: number = await uploadRun(engine, parsed.file, uploadedBy);
     const run: Run | undefined = ledger.run(runId);
     if (run !== undefined) {
-      show(ledger, run);
+      say();
+      showRun(settings, ledger, run);
       const pending: PendingRunApproval | undefined = pendingRunApproval(ledger, runId);
       if (pending !== undefined) {
+        say();
         say(`To approve: pnpm payrun approve ${runId} ${pending.approval.id} <NAME>`);
       }
     }
   } catch (error: unknown) {
     if (error instanceof NothingToPayError) {
       fail(error.message);
-      printRows(ledger, error.rows);
+      putRows(skippedRows(error.rows));
     } else if (error instanceof WaitingRunError || error instanceof SameFileError) {
       fail(error.message);
     } else {
@@ -317,7 +332,7 @@ async function upload(settings: Settings, ledger: Ledger, path: string | undefin
 // Without a name it shows the terms. With the request number it showed and a
 // name, it records that person's approval of that request under the approval
 // policy. The server releases the run.
-function approve(ledger: Ledger, policy: ApprovalPolicy, run: Run, requestRaw: string | undefined, approver: string): void {
+function approve(settings: Settings, ledger: Ledger, run: Run, requestRaw: string | undefined, approver: string): void {
   const pending: PendingRunApproval | undefined | null = waitingRequest(ledger, run);
   if (pending === null) {
     fail(unreadableText(run, ledger));
@@ -327,8 +342,21 @@ function approve(ledger: Ledger, policy: ApprovalPolicy, run: Run, requestRaw: s
     fail(`No approval is waiting for run ${run.id}`);
     return;
   }
-  printApproval(ledger, pending);
-  say(describePolicy(policy));
+  const view: RunView | null = viewOf(settings, ledger, run.id);
+  const request: RunRequestView | null = view?.decision?.request ?? null;
+  if (view === null || request === null) {
+    fail(unreadableText(run, ledger));
+    return;
+  }
+  put(`Pay run ${run.id} · ${view.run.fileName} · ${view.situation.label}`);
+  putRequest(request);
+  putCautions(view.decision?.cautions ?? []);
+  const option: RunDecisionOption | undefined = view.decision?.options.find((item: RunDecisionOption): boolean => item.kind === "approve");
+  if (option !== undefined) {
+    heading("If you approve");
+    putConsequence(option);
+  }
+  say();
   // An expired request can no longer be approved, and a run's request is not
   // renewed by itself, so the next step is a check.
   if (pending.expired) {
@@ -350,12 +378,12 @@ function approve(ledger: Ledger, policy: ApprovalPolicy, run: Run, requestRaw: s
     return;
   }
   try {
-    const after: RunApproval = approveRun(ledger, policy, run.id, approver, requestId);
+    const after: RunApproval = approveRun(ledger, settings.approvals, run.id, approver, requestId);
     const left: number = after.needed - after.signoffs.length;
     say(
       after.state === "approved"
         ? "Approved. pnpm ui releases the run on its next check"
-        : `Recorded. It needs ${left} more approver${left === 1 ? "" : "s"} before PayOnce releases it`,
+        : `Recorded. It needs ${left} more ${left === 1 ? "signoff" : "signoffs"} before PayOnce releases it`,
     );
   } catch (error: unknown) {
     fail(error instanceof Error ? error.message : String(error));
@@ -387,9 +415,9 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "show") {
-    show(ledger, run);
+    showRun(settings, ledger, run);
   } else if (command === "approve") {
-    approve(ledger, settings.approvals, run, second, rest.join(" ").trim());
+    approve(settings, ledger, run, second, rest.join(" ").trim());
   } else if (command === "check") {
     const built: EngineBuild = createEngine(settings, ledger);
     if (built.problem !== null) {
@@ -401,7 +429,7 @@ async function main(): Promise<void> {
         fail(airwallexDown(error) ?? (error instanceof Error ? error.message : String(error)));
       }
     }
-    show(ledger, ledger.run(run.id) ?? run);
+    showRun(settings, ledger, ledger.run(run.id) ?? run);
   } else {
     const note: string = rest.join(" ").trim();
     if (second === undefined || note === "") {

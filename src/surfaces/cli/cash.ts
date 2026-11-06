@@ -1,148 +1,65 @@
 import { getBalances, type BalanceState } from "../../airwallex/balances.js";
 import { airwallexAdvice, type AirwallexClient, AirwallexError, AirwallexUnreachableError } from "../../airwallex/client.js";
-import {
-  cashReport,
-  payRunLines,
-  type CashKind,
-  type CashLine,
-  type CashReport,
-  type CurrencyCash,
-} from "../../engine/cash-position.js";
 import { loadEnvIfPresent } from "../../env-file.js";
-import { Ledger, LEDGER_PATH, readingSoft } from "../../store/ledger.js";
+import { Ledger, LEDGER_PATH } from "../../store/ledger.js";
 import { recordMissingFees } from "../../engine/payments.js";
 import { say } from "../../text/printable.js";
-import { describeFloors, type ReservePolicy } from "../../domain/reserve.js";
 import { loadSettings, type Settings } from "../../settings.js";
-import { formatAmount } from "../../domain/money.js";
+import type { CashView, CashWorksheetGroup, Money, WalletCashView } from "../../views/contract.js";
+import { cashView } from "../../views/treasury.js";
+import { count, heading, money, put, putAll, table, utc } from "./view-text.js";
 
-const LABEL_WIDTH: number = 34;
-const DETAIL_WIDTH: number = 30;
-const AMOUNT_WIDTH: number = 16;
 const INVOICES_SHOWN: number = 3;
 
-function amount(minor: number | null): string {
-  return minor === null ? "Unknown" : formatAmount(minor);
+function minus(amount: Money | null): string {
+  return amount === null ? "not known" : `- ${money(amount)}`;
 }
 
-// A detail too long for its column goes on a line of its own under the label, so
-// the amounts stay in one column.
-function row(label: string, detail: string, value: string): string {
-  const left: string = `${label.padEnd(LABEL_WIDTH)}${detail}`;
-  if (detail === "" || left.length <= LABEL_WIDTH + DETAIL_WIDTH) {
-    return `  ${left.padEnd(LABEL_WIDTH + DETAIL_WIDTH)}${value.padStart(AMOUNT_WIDTH)}`.trimEnd();
-  }
-  return `${row(label, "", value)}\n  ${" ".repeat(LABEL_WIDTH)}${detail}`;
+function shown(amount: Money | null): string {
+  return amount === null ? "not known" : money(amount);
 }
 
-function linesOf(currency: CurrencyCash, kinds: CashKind[]): CashLine[] {
-  return currency.lines.filter((line: CashLine): boolean => kinds.includes(line.kind));
+function invoices(group: CashWorksheetGroup): string {
+  const ids: string[] = [...new Set(group.lines.map((line: CashWorksheetGroup["lines"][number]): string => line.invoiceId))];
+  const listed: string = ids.slice(0, INVOICES_SHOWN).join(", ");
+  const more: string = ids.length > INVOICES_SHOWN ? ` and ${ids.length - INVOICES_SHOWN} more` : "";
+  return `${listed}${more}${group.feeUnknown === 0 ? "" : `, fee not known for ${group.feeUnknown}`}`;
 }
 
-function invoices(lines: CashLine[]): string {
-  const ids: string[] = [...new Set(lines.map((line: CashLine): string => line.invoiceId))];
-  const shown: string = ids.slice(0, INVOICES_SHOWN).join(", ");
-  return ids.length > INVOICES_SHOWN ? `${shown} and ${ids.length - INVOICES_SHOWN} more` : shown;
+// The worksheet's groups in one bucket, each with the payments it holds.
+function bucketRows(wallet: WalletCashView, bucket: CashWorksheetGroup["bucket"], sign: string): string[][] {
+  return wallet.worksheet
+    .filter((group: CashWorksheetGroup): boolean => group.bucket === bucket)
+    .map((group: CashWorksheetGroup): string[] => [`  ${group.label}`, invoices(group), `${sign}${money(group.total)}`]);
 }
 
-function total(lines: CashLine[]): number {
-  return lines.reduce((sum: number, line: CashLine): number => sum + line.amountMinor + line.feeMinor, 0);
-}
-
-function feeNote(lines: CashLine[]): string {
-  const unknown: number = lines.filter((line: CashLine): boolean => !line.feeKnown).length;
-  return unknown === 0 ? "" : `, fee not known for ${unknown}`;
-}
-
-// A line of money with the invoices it is for. sign is "- " for money headroom
-// takes off.
-function moneyRow(currency: CurrencyCash, label: string, kinds: CashKind[], sign: string): string {
-  const lines: CashLine[] = linesOf(currency, kinds);
-  return row(label, `${invoices(lines)}${lines.length === 0 ? "" : feeNote(lines)}`, `${sign}${amount(total(lines))}`);
-}
-
-function printCurrency(currency: CurrencyCash, report: CashReport): void {
-  const code: string = currency.currency;
-  const headroom: string = `Headroom ${amount(currency.headroomMinor)}`;
-  say(`${code.padEnd(LABEL_WIDTH + DETAIL_WIDTH + AMOUNT_WIDTH + 2 - headroom.length)}${headroom}`);
-
-  const balance: CurrencyCash["airwallex"] = currency.airwallex;
-  say(report.airwallex.readAt === null ? "Airwallex, not read" : "Airwallex, read just now");
-  say(
-    row(
-      "Available",
-      balance === null && report.airwallex.readAt !== null ? `no ${code} balance` : "",
-      balance === null ? "Not read" : amount(balance.availableMinor),
-    ),
-  );
-  // Shown when Airwallex sent them. None of them is part of available.
-  if (balance !== null && balance.reservedMinor !== null) {
-    say(row("Held for outgoing payments", "(reserved)", amount(balance.reservedMinor)));
+// One wallet from what Airwallex says is available down to the headroom above
+// its floor, as Treasury's Cash tab works it out.
+function putWallet(wallet: WalletCashView): void {
+  const fees: CashWorksheetGroup | undefined = wallet.worksheet.find((group: CashWorksheetGroup): boolean => group.bucket === "fees-kept");
+  heading(`${wallet.wallet}: headroom ${shown(wallet.headroom)}${wallet.tone === "ok" ? "" : wallet.tone === "below" ? ", below the floor" : ", below the floor if everything waiting is approved"}`);
+  const rows: string[][] = [
+    ["Available at Airwallex", "", shown(wallet.available)],
+    ["Reserve floor", wallet.floor.source === "setting" ? "" : wallet.floor.source === "not-set" ? "not set" : "cannot be read", wallet.floor.amount === null ? "" : minus(wallet.floor.amount)],
+    ["Promised", "", minus(wallet.promised)],
+    ...bucketRows(wallet, "promised", "- "),
+    ["= Headroom", "", shown(wallet.headroom)],
+    ["Waiting on people", "", minus(wallet.waitingOnPeople)],
+    ...bucketRows(wallet, "waiting-on-people", "- "),
+    ["= Headroom if everything waiting is approved", "", shown(wallet.headroomIfApproved)],
+    ["With the bank (already left the available balance)", "", money(wallet.withBank)],
+    ...bucketRows(wallet, "with-bank", ""),
+    ["Fees kept on failed transfers", fees === undefined ? "" : invoices(fees), money(wallet.feesKept)],
+  ];
+  putAll(table(rows, [2]), 1);
+  if (wallet.floor.source !== "setting") {
+    put(wallet.floor.text, 1);
   }
-  if (balance !== null && balance.pendingMinor !== null) {
-    say(row("Settling in", "(pending conversions)", amount(balance.pendingMinor)));
-  }
-  if (balance !== null && balance.prepaymentMinor !== null && balance.prepaymentMinor !== 0) {
-    say(row("Held for future-dated payments", "(prepayment)", amount(balance.prepaymentMinor)));
-  }
-  if (balance !== null && balance.totalMinor !== null) {
-    say(row("Total", "", amount(balance.totalMinor)));
-  }
-
-  say("Setting: RESERVE_FLOORS");
-  if (currency.floor.source === "setting") {
-    say(row("Reserve floor", "", `- ${amount(currency.floor.minor)}`));
-  } else if (currency.floor.source === "not-set") {
-    say(row("Reserve floor", "not set", "- 0.00"));
-    say(`  With no floor set, every automatic replacement in ${code} goes to a person.`);
-  } else {
-    say(row("Reserve floor", "could not be read", "Unknown"));
-  }
-  for (const own of currency.floor.invoiceFloors) {
-    say(`  ${own.invoiceId} has a stricter floor of its own: ${amount(own.floorMinor)}`);
-  }
-
-  say("PayOnce ledger, payment states as PayOnce last recorded them");
-  say(moneyRow(currency, "Being sent, no transfer yet", ["sending"], "- "));
-  say(moneyRow(currency, "Approved, not sent yet", ["approved"], "- "));
-  say(
-    report.payRuns === null
-      ? row("Approved pay runs not sent yet", "(pay runs are not built yet)", "")
-      : moneyRow(currency, "Approved pay runs not sent yet", ["pay-run"], "- "),
-  );
-  say(row("= Headroom", "", amount(currency.headroomMinor)));
-  say(moneyRow(currency, "Waiting on a person", ["awaiting-approval", "awaiting-person"], "- "));
-  say(moneyRow(currency, "Waiting on an outage", ["waiting-outage"], "- "));
-  say(
-    row("= Headroom if every waiting payment is approved", "", amount(currency.headroomIfApprovedMinor)),
-  );
-
-  say("Already out of available, not subtracted again");
-  say(moneyRow(currency, "With the bank", ["with-bank"], ""));
-  say(moneyRow(currency, "Payouts sent outside PayOnce", ["outside"], ""));
-  const fees: CashLine[] = linesOf(currency, ["fee-lost"]);
-  const unknown: number = fees.filter((line: CashLine): boolean => !line.feeKnown).length;
-  const known: number = fees.length - unknown;
-  say(
-    row(
-      "Fees on failed transfers",
-      known === 0 ? "" : `${known} ${known === 1 ? "transfer" : "transfers"}`,
-      amount(total(fees)),
-    ),
-  );
-  if (unknown > 0) {
-    say(
-      `  ${unknown} failed ${unknown === 1 ? "transfer has" : "transfers have"} no fee recorded yet.`,
-    );
-  }
-  if (known > 0) {
-    say("  The sandbox keeps the fee when a transfer fails.");
-  }
-  say("");
+  putAll(wallet.invoiceFloors.map((floor: WalletCashView["invoiceFloors"][number]): string => floor.text), 1);
 }
 
 // Reads the balances once, fresh, fills in fees the ledger is missing, and prints
-// each currency from the balance down to the headroom above its floor. It writes
+// each wallet from the balance down to the headroom above its floor. It writes
 // nothing but fees. Exits 1 when Airwallex could not be read, the floors are
 // unreadable, or any headroom is below 0.
 async function main(): Promise<void> {
@@ -159,7 +76,6 @@ async function main(): Promise<void> {
     return;
   }
   const ledger: Ledger = new Ledger(LEDGER_PATH);
-  const reserve: ReservePolicy = settings.reserve;
   const state: BalanceState = {
     readAt: null,
     balances: [],
@@ -181,41 +97,31 @@ async function main(): Promise<void> {
   if (state.readAt !== null) {
     const recorded: number = await recordMissingFees(client, ledger);
     if (recorded > 0) {
-      say(`Recorded the fee of ${recorded} failed ${recorded === 1 ? "transfer" : "transfers"}`);
+      say(`Recorded the fee of ${count(recorded, "failed transfer", "failed transfers")}`);
     }
   }
 
-  // The panel is a view, so it reads stored JSON soft.
-  const report: CashReport = readingSoft(
-    (): CashReport =>
-      cashReport({
-        ledger,
-        reserve,
-        balances: state,
-        statesCheckedAt: null,
-        payRunLines: payRunLines(ledger),
-      }),
-  );
-  say(describeFloors(reserve));
+  const view: CashView = cashView(ledger, settings, Date.now(), state);
+  put(view.balances.readAt === null ? "Balances not read" : `Balances read from Airwallex at ${utc(view.balances.readAt)}`);
   if (state.error !== null) {
-    say(`Airwallex could not be read: ${state.error.message}. PayOnce's own figures below are current.`);
+    put(`Airwallex could not be read: ${state.error.message}. PayOnce's own figures below are current.`);
     if (advice !== "") {
-      say(advice);
+      put(advice);
     }
   }
-  say("");
-  for (const currency of report.currencies) {
-    printCurrency(currency, report);
+  if (view.floorsProblem !== null) {
+    put(`Reserve floors cannot be read: ${view.floorsProblem}`);
   }
-  if (report.currencies.length === 0) {
-    say("No currency has a floor, a balance or a payment in the ledger");
+  for (const wallet of view.wallets) {
+    putWallet(wallet);
   }
+  if (view.wallets.length === 0) {
+    heading("No wallet has a floor, a balance or a payment in the ledger");
+  }
+  say();
 
-  const below: boolean = report.currencies.some(
-    (currency: CurrencyCash): boolean =>
-      currency.headroomMinor !== null && currency.headroomMinor < 0,
-  );
-  if (state.readAt === null || reserve.problem !== null || below) {
+  const below: boolean = view.wallets.some((wallet: WalletCashView): boolean => wallet.headroom !== null && wallet.headroom.minor < 0);
+  if (view.balances.readAt === null || view.floorsProblem !== null || below) {
     process.exitCode = 1;
   }
 }

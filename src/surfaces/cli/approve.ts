@@ -1,82 +1,73 @@
 import { existsSync } from "node:fs";
-import { describeRate, markupOf, type ApprovalTerms, type DuplicateEvidence } from "../../domain/approval.js";
-import { arrivalAdvice, type ArrivalAdvice } from "../../domain/arrival.js";
-import { describePolicy, type ApprovalPolicy } from "../../domain/approvers.js";
 import { approvePayment, pendingApproval, type PendingApproval } from "../../engine/person.js";
 import { loadEnvIfPresent } from "../../env-file.js";
-import { Ledger, LEDGER_PATH, signersOf, type Approval, type Obligation, type Outage } from "../../store/ledger.js";
-import { formatMoney } from "../../domain/money.js";
-import { railOf } from "../../outages/outages.js";
-import { printable, say, shownFailureCode, shownReference, utcTime } from "../../text/printable.js";
 import { notAnInvoiceText } from "../../runs/runs.js";
 import { loadSettings, type Settings } from "../../settings.js";
+import { Ledger, LEDGER_PATH, type Approval, type Obligation } from "../../store/ledger.js";
+import { say, shownReference } from "../../text/printable.js";
+import type { DecisionOption, DuplicateView, IncidentView, RequestView, TermsView } from "../../views/contract.js";
+import { incidentView } from "../../views/incident.js";
 import { readableTerms } from "./terms-shape.js";
-
-function describeDuplicate(duplicate: DuplicateEvidence): string {
-  const paid: string = duplicate.paidBy === null ? "" : `, paid by ${shownReference(duplicate.paidBy)}`;
-  return `${printable(duplicate.invoiceId)}, ${duplicate.state}${paid}`;
-}
+import { heading, money, putCautions, putConsequence, putFields, putPayment, signingFields, utc, type Field } from "./view-text.js";
 
 function unreadableText(invoiceId: string, requestId: number | null): string {
   return `${requestId === null ? "The approval request" : `Request ${requestId}`} for ${invoiceId} holds terms PayOnce cannot read, so there is nothing to show or approve`;
 }
 
-function show(pending: PendingApproval): void {
-  const terms: ApprovalTerms = pending.terms;
-  const approval: Approval = pending.approval;
-  say(
-    `${terms.action === "replace" ? "Replacement payment for" : "Payment of held invoice"} ${terms.invoiceId}, request ${approval.id}`,
-  );
-  say(`  pay      ${formatMoney(terms.amountMinor, terms.currency)}`);
-  if (terms.fx !== undefined) {
-    say(
-      `  from     ${formatMoney(terms.fx.sellAmountMinor, terms.fx.sellCurrency)} at ${describeRate(terms.fx)} (${markupOf(terms.fx)} from mid-market ${String(terms.fx.midRate)})`,
+function duplicateText(duplicate: DuplicateView): string {
+  const paid: string = duplicate.paidBy === null ? "" : `, paid by ${shownReference(duplicate.paidBy)}`;
+  const account: string = duplicate.sameAccount === null ? "" : duplicate.sameAccount ? ", same account" : ", another account";
+  return `${duplicate.invoiceId}, ${duplicate.label}${paid}${account}`;
+}
+
+// What an approval covers: who is paid, how much, to which account, at which
+// rate and why.
+function termsFields(terms: TermsView): Field[] {
+  const fields: Field[] = [["Pay", money(terms.pay)]];
+  if (terms.fx !== null) {
+    fields.push(
+      ["Rate", `${terms.fx.rate} (${terms.fx.markup ?? "no mid-market rate"})`],
+      ["From", `${money(terms.fx.takes)} from the ${terms.fx.takes.currency} wallet`],
+      ["Quote", `${terms.fx.quoteId}, until ${utc(terms.fx.validTo)}`],
+      ["Fee", terms.feeEstimate === null ? `charged in ${terms.fx.takes.currency} when it is sent` : `about ${money(terms.feeEstimate)}`],
     );
-    say(
-      `  quote    ${printable(terms.fx.quoteId)}, holds until ${utcTime(terms.fx.validTo)}`,
-    );
-    say(
-      `  fee      ${terms.fx.feeEstimateMinor === null ? `charged in ${terms.fx.sellCurrency} when it is sent` : `about ${formatMoney(terms.fx.feeEstimateMinor, terms.fx.sellCurrency)}`}`,
-    );
   }
-  // The account name and the bank name come from Airwallex, so they print as one line.
-  say(`  to       ${printable(terms.payTo)} (the account on file)`);
-  if (terms.arrival !== undefined) {
-    const advice: ArrivalAdvice = arrivalAdvice(terms.arrival);
-    say(`  arrival  ${advice.text}`);
-    if (advice.sentToday !== null) {
-      say(`           ${advice.sentToday.text}`);
-    }
-    say(`           ${advice.note}`);
+  fields.push(["To", `${terms.account.label} (${terms.accountOnFile ? "the account on file" : "the details a callback confirmed"})`]);
+  if (terms.callback !== null) {
+    const callback: NonNullable<TermsView["callback"]> = terms.callback;
+    fields.push([
+      "Callback",
+      `${callback.calledBy} called ${callback.numberEnding === null ? "the number on file" : `the number ending ${callback.numberEnding}`} at ${utc(callback.calledAt)}, spoke to ${callback.spokeTo} and confirmed ${callback.confirmed}`,
+    ]);
   }
-  if (terms.action === "replace") {
-    const failure: string =
-      terms.evidence.failureCode === null ? "" : ` (${shownFailureCode(terms.evidence.failureCode)})`;
-    say(
-      `  because  original ${shownReference(terms.evidence.originalReference)} ${terms.evidence.originalState}${failure}: ${terms.evidence.reason}`,
-    );
-    say(`  emails   ${terms.evidence.emails}`);
-  } else {
-    say(`  held     ${terms.evidence.reason}`);
-    for (const duplicate of terms.evidence.duplicates) {
-      say(`  like     ${describeDuplicate(duplicate)}`);
-    }
-    if (terms.evidence.emails !== undefined) {
-      say(`  emails   ${terms.evidence.emails}`);
-    }
+  if (terms.arrival !== null) {
+    fields.push(["Arrival", [terms.arrival.text, ...(terms.arrival.sentToday === null ? [] : [terms.arrival.sentToday.text]), terms.arrival.note]]);
   }
-  say(
-    `  needs    ${approval.needed === 1 ? "one approver" : `${approval.needed} approvers, because ${approval.neededWhy}`}`,
-  );
-  if (approval.signoffs.length > 0) {
-    say(`  so far   approved by ${signersOf(approval.signoffs)}`);
+  fields.push(["Because", terms.reason.text]);
+  if (terms.original !== null) {
+    const failure: string = terms.original.failure === null ? "" : ` (${terms.original.failure.code}, ${terms.original.failure.words})`;
+    fields.push(["Original", `${terms.original.reference === null ? "no reference" : shownReference(terms.original.reference)}, ${terms.original.stateLabel}${failure}`]);
   }
-  for (const bar of pending.barred) {
-    say(`  not      ${printable(bar.name)}, who ${bar.why}`);
+  if (terms.emails !== null) {
+    fields.push(["Emails", terms.emails]);
   }
-  say(
-    `  expires  ${approval.expiresAt === null ? "already" : utcTime(approval.expiresAt)}${pending.expired ? " (expired)" : ""}`,
-  );
+  if (terms.duplicates.length > 0) {
+    fields.push(["Looks like", terms.duplicates.map(duplicateText)]);
+  }
+  return fields;
+}
+
+function show(view: IncidentView, request: RequestView): void {
+  putPayment(view);
+  heading(`Request #${request.id}: ${request.terms.title}`);
+  putFields([["State", request.label], ...termsFields(request.terms), ...signingFields(request)]);
+  putCautions(view.decision.open?.cautions ?? [], view.situation.also);
+  const option: DecisionOption | undefined = view.decision.open?.options.find((item: DecisionOption): boolean => item.kind === "approve");
+  if (option !== undefined) {
+    heading("If you approve");
+    putConsequence(option);
+  }
+  say();
 }
 
 // Without a name it only shows the terms. With the request number it showed and
@@ -84,7 +75,7 @@ function show(pending: PendingApproval): void {
 // policy. A request opened since is refused, so nobody approves terms they did
 // not see.
 function main(): void {
-  // For APPROVERS. Without it every approval is refused, and the policy line says so.
+  // For APPROVERS. Without it every approval is refused, and the approvers say so.
   loadEnvIfPresent();
   const settings: Settings = loadSettings();
   const invoiceId: string | undefined = process.argv[2];
@@ -102,7 +93,6 @@ function main(): void {
     process.exitCode = 1;
     return;
   }
-  const policy: ApprovalPolicy = settings.approvals;
   const ledger: Ledger = new Ledger(LEDGER_PATH);
   let obligation: Obligation | undefined;
   let pending: PendingApproval | undefined;
@@ -127,23 +117,19 @@ function main(): void {
     process.exitCode = 1;
     return;
   }
-  if (!readableTerms(pending.terms as unknown)) {
+  // The view prints the terms, and approving reads them, only in their shape.
+  const view: IncidentView | null = readableTerms(pending.terms as unknown) ? incidentView(ledger, settings, Date.now(), invoiceId) : null;
+  const request: RequestView | null = view?.decision.open?.request ?? null;
+  if (view === null || request === null) {
     say(unreadableText(invoiceId, pending.approval.id));
     process.exitCode = 1;
     return;
   }
 
-  show(pending);
-  const outage: Outage | undefined = ledger.activeOutage(obligation.currency, obligation.transferMethod);
-  if (outage !== undefined) {
-    say(
-      `  outage   Outage ${outage.id} on ${railOf(outage)} is active. An approval given now is kept until a person ends it and still expires when it would`,
-    );
-  }
-  say(describePolicy(policy));
+  show(view, request);
   // An expired request can no longer be approved, so no command is offered for it.
   if (pending.expired) {
-    say("This request has expired. PayOnce opens a new request on its next look, and pnpm approve shows it then");
+    say("This request has expired. PayOnce opens a new request at its next check, and pnpm approve shows it then");
     if (approver !== undefined) {
       process.exitCode = 1;
     }
@@ -154,17 +140,11 @@ function main(): void {
     return;
   }
   try {
-    const after: Approval = approvePayment(
-      ledger,
-      policy,
-      invoiceId,
-      approver,
-      requestId,
-    );
+    const after: Approval = approvePayment(ledger, settings.approvals, invoiceId, approver, requestId);
     say(
       after.state === "approved"
         ? "Approved. The approval covers these terms only"
-        : `Recorded. It needs ${after.needed - after.signoffs.length} more approver before PayOnce sends it`,
+        : `Recorded. It needs ${after.needed - after.signoffs.length} more signoff before PayOnce sends it`,
     );
   } catch (error: unknown) {
     say(error instanceof Error ? error.message : String(error));

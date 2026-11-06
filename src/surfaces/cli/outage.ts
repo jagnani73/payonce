@@ -2,53 +2,62 @@ import type { ApprovalPolicy } from "../../domain/approvers.js";
 import { loadEnvIfPresent } from "../../env-file.js";
 import { outageHolding } from "../../views/incident-board.js";
 import { Ledger, LEDGER_PATH, type OutageHold } from "../../store/ledger.js";
-import {
-  describeOutageRule,
-  endOutage,
-  outagesReport,
-  sendsText,
-  type CountedPayout,
-  type EndedOutage,
-  type HeldItem,
-  type OutagesReport,
-  type OutageView,
-} from "../../outages/outages.js";
+import { endOutage, type EndedOutage } from "../../outages/outages.js";
 import { loadSettings, type Settings } from "../../settings.js";
-import { printable, say, shownFailureCode, shownReference } from "../../text/printable.js";
+import { say, shownReference } from "../../text/printable.js";
+import type { OutageCardView, OutagesView } from "../../views/contract.js";
+import { outagesView } from "../../views/treasury.js";
+import { heading, listOf, put, putFields, utc, whyNot, type Field } from "./view-text.js";
 
 const ENDED_SHOWN: number = 5;
 
-function show(view: OutageView): void {
-  say(`Outage ${view.id} on ${view.rail}, ${view.state}`);
-  // It names the stored codes, so it prints as one line.
-  say(`  ${printable(view.text)}`);
-  say(`  declared ${view.declaredAt}`);
-  for (const payout of view.counted) {
-    say(`  counted  ${describeCounted(payout)}`);
-  }
-  for (const item of view.held) {
-    say(`  held     ${describeHeld(item)}`);
-  }
-  if (view.state === "active") {
-    say(`  ending   sends ${sendsText(view.sends)}`);
-  }
-  if (view.state === "ended") {
-    say(`  ended    by ${view.endedBy ?? ""} at ${view.endedAt ?? ""}: ${view.endNote ?? ""}`);
-  }
+function countedText(counted: OutageCardView["counted"][number]): string {
+  const failure: string = counted.failure === null ? "no failure code" : `${counted.failure.code} (${counted.failure.words})`;
+  return `${shownReference(counted.reference)}, ${counted.invoiceId ?? "no invoice"}, ${failure}, failed ${utc(counted.failedAt)}`;
 }
 
-function describeCounted(payout: CountedPayout): string {
-  const invoice: string = payout.invoiceId === null ? "no invoice" : payout.invoiceId;
-  return `${shownReference(payout.reference)} (${invoice}, ${payout.origin === "payonce" ? "sent by PayOnce" : "sent outside PayOnce"}), ${shownFailureCode(payout.code)}, failed ${payout.failedAt}, seen ${payout.seenAt}`;
+function endersText(card: OutageCardView): string {
+  const refused: string | null = whyNot(card.end);
+  if (refused !== null) {
+    return refused;
+  }
+  return card.end.enders === null
+    ? "any named person, because no approver list is set"
+    : card.end.enders.length === 0
+      ? "nobody on the approver list"
+      : listOf(card.end.enders);
 }
 
-function describeHeld(item: HeldItem): string {
-  const what: string = item.invoiceId !== null ? item.invoiceId : `pay run ${item.runId ?? ""}`;
-  return `${what}: ${item.what}, now ${item.state ?? "not in the ledger"}`;
+// One outage as the Outages card shows it.
+function show(card: OutageCardView): void {
+  heading(
+    card.state === "active"
+      ? `Outage ${card.id} on ${card.rail}, active since ${utc(card.declaredAt)}`
+      : `Outage ${card.id} on ${card.rail}, ended at ${utc(card.endedAt)} by ${card.endedBy ?? "a person"}: ${card.endNote ?? ""}`,
+  );
+  put(card.text, 1);
+  const fields: Field[] = [
+    ["Declared", utc(card.declaredAt)],
+    ["Counted", card.counted.length === 0 ? "none" : card.counted.map(countedText)],
+    [
+      card.state === "active" ? "Pausing" : "Paused",
+      card.pausing.length === 0 ? "nothing" : card.pausing.map((item: OutageCardView["pausing"][number]): string => item.label),
+    ],
+  ];
+  if (card.state === "active") {
+    fields.push(["Who can end", endersText(card)]);
+  }
+  putFields(fields);
+  if (card.sendsText !== null) {
+    put(card.sendsText, 1);
+  }
+  if (card.state === "active" && card.end.allowed) {
+    put(`End it with pnpm outage end ${card.id} NAME NOTE`, 1);
+  }
 }
 
 // What the end leaves for PayOnce to look at: the open and escalated invoices it
-// held, whose next look the end made due, and the pay runs still waiting, which
+// held, whose next check the end made due, and the pay runs still waiting, which
 // only the server releases. A closed invoice or a run released or cancelled since
 // gets nothing.
 function pickedUpText(ledger: Ledger, holds: OutageHold[]): string {
@@ -60,18 +69,19 @@ function pickedUpText(ledger: Ledger, holds: OutageHold[]): string {
     (hold: OutageHold): boolean => hold.runId !== null && ledger.run(hold.runId)?.state === "waiting",
   ).length;
   if (invoices === 0 && runs === 0) {
-    return "Ended. Nothing it held is still waiting, so PayOnce has nothing to pick up";
+    return "Ended. Nothing it paused is still waiting, so PayOnce has nothing to pick up";
   }
   const what: string[] = [
-    ...(invoices === 0 ? [] : [`${invoices} ${invoices === 1 ? "invoice" : "invoices"}`]),
+    ...(invoices === 0 ? [] : [`${invoices} ${invoices === 1 ? "payment" : "payments"}`]),
     ...(runs === 0 ? [] : [`${runs} ${runs === 1 ? "pay run" : "pay runs"}`]),
   ];
-  return `Ended. The server's watcher picks up the ${what.join(" and ")} it held on its next check, or the next ${runs === 0 ? "pnpm ui or pnpm recover" : "pnpm ui"} does`;
+  return `Ended. The server picks up the ${what.join(" and ")} it paused at its next check, or the next ${runs === 0 ? "pnpm ui or pnpm recover" : "pnpm ui"} does`;
 }
 
-// pnpm outage lists the active outages and the last few ended. pnpm outage end
-// <ID> <NAME> <NOTE> ends one, as the page's button does. It writes only the
-// ledger: the server's watcher picks up what the outage held on its next check.
+// pnpm outage lists the active outages and the last few ended, as Treasury's
+// Outages tab does. pnpm outage end <ID> <NAME> <NOTE> ends one, as the page's
+// button does. It writes only the ledger: the server's watcher picks up what the
+// outage paused at its next check.
 function main(): void {
   // Without a .env no approver list is set and the default rule applies, and
   // nothing is printed about it.
@@ -81,21 +91,17 @@ function main(): void {
   const policy: ApprovalPolicy = settings.approvals;
   const ledger: Ledger = new Ledger(LEDGER_PATH);
   if (command === undefined) {
-    const report: OutagesReport = outagesReport(ledger, policy, outageHolding(ledger));
-    say(describeOutageRule(settings.outageRule));
-    if (report.active.length === 0) {
-      say("No outage is active");
+    const view: OutagesView = outagesView(ledger, settings, Date.now());
+    put(view.rule.text);
+    if (view.rule.problem !== null) {
+      put(view.rule.problem);
     }
-    for (const view of [...report.active, ...report.recent.slice(0, ENDED_SHOWN)]) {
-      show(view);
+    if (view.active.length === 0) {
+      put("No outage is active");
     }
-    say(
-      report.endRefused !== null
-        ? report.endRefused
-        : report.enders === null
-          ? "Any named person may end an outage, because no approver list is set"
-          : `An outage is ended by a name in APPROVERS: ${report.enders.join(", ")}`,
-    );
+    for (const card of [...view.active, ...view.ended.slice(0, ENDED_SHOWN)]) {
+      show(card);
+    }
     return;
   }
   const id: number = Number(process.argv[3]);
