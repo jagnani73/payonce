@@ -3,10 +3,13 @@ import type { Transfer, TransferBankDetails } from "../airwallex/transfers.js";
 import type { FxTerms } from "../domain/approval.js";
 import type { ApprovalPolicy } from "../domain/approvers.js";
 import type { ArrivalTerms } from "../domain/arrival.js";
+import type { BankDeadlineMinutes } from "../domain/deadlines.js";
 import type { SupplierEmail } from "../domain/emails.js";
+import type { QuoteSetting } from "../domain/fx.js";
 import type { Decision, Incident } from "../domain/incident.js";
 import type { Clause, Reason } from "../domain/reasons.js";
 import type { ReservePolicy } from "../domain/reserve.js";
+import type { OutageRule } from "../outages/outages.js";
 import type { EmailReader } from "../reader/emails.js";
 import type { AttemptKind, BankChange, Ledger } from "../store/ledger.js";
 import type { StoredFindings } from "../store/stored.js";
@@ -25,6 +28,9 @@ export interface Engine {
   reader: EmailReader;
   approvals: ApprovalPolicy;
   reserve: ReservePolicy;
+  bankDeadlineMinutes: BankDeadlineMinutes;
+  fxQuotes: QuoteSetting;
+  outageRule: OutageRule;
   bank?: Bank;
 }
 

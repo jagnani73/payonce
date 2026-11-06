@@ -2,10 +2,10 @@ import { createHash } from "node:crypto";
 import type { ApprovalTerms } from "../domain/approval.js";
 import { personName } from "../domain/approvers.js";
 import { today, type ArrivalTerms } from "../domain/arrival.js";
-import { deadlineMinutes } from "../domain/deadlines.js";
 import type { EmailFindings } from "../domain/emails.js";
 import { inFlight, pastDeadline } from "../domain/live.js";
 import { aboutBankDetailsReason, type StoredReason } from "../domain/reasons.js";
+import { deadlineMinutes } from "../settings.js";
 import {
   crossCurrency,
   type Approval,

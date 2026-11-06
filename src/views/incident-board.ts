@@ -1,5 +1,6 @@
 import type { ApprovalTerms } from "../domain/approval.js";
 import { isExpired, withBank } from "../domain/live.js";
+import { deadlineMinutes } from "../settings.js";
 import {
   cashLines,
   FIRM_KINDS,
@@ -16,7 +17,6 @@ import {
   ORIGINAL_DEADLINE_REASON,
   OUTAGE_REASON,
 } from "../domain/decide.js";
-import { deadlineMinutes } from "../domain/deadlines.js";
 import { heldBeforePaying } from "../store/read/facts.js";
 import { pendingClose } from "../store/read/reviews.js";
 import { REPLACEMENT_DEADLINE_REASON } from "../domain/reasons.js";

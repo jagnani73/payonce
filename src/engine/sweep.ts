@@ -165,7 +165,7 @@ async function sweepOne(engine: Engine, agent: Dispatcher, transfer: Transfer): 
     }
     return;
   }
-  if (state === "failed" || (state === "in_flight" && isOverdue(transfer))) {
+  if (state === "failed" || (state === "in_flight" && isOverdue(transfer, engine.bankDeadlineMinutes))) {
     const invoiceId: string | undefined = adopt(engine, transfer, state);
     if (invoiceId !== undefined) {
       if (nearClosed && match !== undefined) {
@@ -202,6 +202,6 @@ export async function sweep(engine: Engine, agent: Dispatcher): Promise<void> {
     }
     // After the payout was tied or taken on, so the failure names its invoice.
     // PayOnce's own failures count here too, when no look has seen them yet.
-    railFailureSeen(engine.ledger, transfer, "sweep");
+    railFailureSeen(engine.ledger, transfer, "sweep", engine.outageRule, engine.bankDeadlineMinutes);
   }
 }

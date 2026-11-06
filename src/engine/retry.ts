@@ -1,6 +1,6 @@
 import { findTransferByRequestId, type Transfer, type TransferBankDetails } from "../airwallex/transfers.js";
 import { accountKeyOf, type ApprovalTerms } from "../domain/approval.js";
-import { deadlineMinutes } from "../domain/deadlines.js";
+import { deadlineMinutes, type BankDeadlineMinutes } from "../domain/deadlines.js";
 import { liveAtBank, mismatchedLive } from "../domain/live.js";
 import { reasonFor, type Reason } from "../domain/reasons.js";
 import { debitCurrency } from "../domain/reserve.js";
@@ -50,7 +50,7 @@ function neverSentAt(engine: Engine, obligation: Obligation, attempt: Attempt): 
     from = Date.now();
     engine.ledger.tried(attempt.requestId, from);
   }
-  return from + deadlineMinutes(obligation.transferMethod) * 60_000;
+  return from + deadlineMinutes(obligation.transferMethod, engine.bankDeadlineMinutes) * 60_000;
 }
 
 // Why a pending attempt with no transfer may never be sent: something else pays
@@ -330,12 +330,12 @@ export function holdPending(
 // True for an attempt sent on a quote that ran out a bank deadline ago. Airwallex
 // refuses to create a transfer on a quote that has run out, and a transfer
 // created before then has had that long to show.
-function quoteLapsed(obligation: Obligation, attempt: Attempt): boolean {
+function quoteLapsed(obligation: Obligation, attempt: Attempt, deadlines: BankDeadlineMinutes): boolean {
   if (attempt.quoteValidTo === null) {
     return false;
   }
   const deadline: number =
-    Date.parse(attempt.quoteValidTo) + deadlineMinutes(obligation.transferMethod) * 60_000;
+    Date.parse(attempt.quoteValidTo) + deadlineMinutes(obligation.transferMethod, deadlines) * 60_000;
   return !(Date.now() < deadline);
 }
 
@@ -430,7 +430,7 @@ async function retry(
     }
     throw error;
   }
-  const lapsed: boolean = quoteLapsed(obligation, attempt);
+  const lapsed: boolean = quoteLapsed(obligation, attempt, engine.bankDeadlineMinutes);
   const invoiceId: string = obligation.invoiceId;
   const state: ObligationState | undefined = engine.ledger.obligation(invoiceId)?.state;
   const attempts: Attempt[] = engine.ledger.attempts(invoiceId);

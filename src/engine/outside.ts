@@ -142,7 +142,7 @@ export async function syncOutsidePayouts(
       note(engine.ledger, invoiceId, "bank", `Payout sent outside PayOnce ${describe(transfer)}`);
     }
     if (state === "failed") {
-      railFailureSeen(engine.ledger, transfer, "look");
+      railFailureSeen(engine.ledger, transfer, "look", engine.outageRule, engine.bankDeadlineMinutes);
     }
   }
   await judgePayouts(engine, invoiceId);

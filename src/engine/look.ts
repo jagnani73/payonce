@@ -292,7 +292,7 @@ function notePayment(look: Look, attempt: Attempt, transfer: Transfer): void {
   }
   // After the bank line, so an outage this failure declares reads after it.
   if (state === "failed") {
-    railFailureSeen(engine.ledger, transfer, "look");
+    railFailureSeen(engine.ledger, transfer, "look", engine.outageRule, engine.bankDeadlineMinutes);
   }
   // The original the policy goes by is the latest the bank has not failed, so a
   // transfer found late that is live is never taken for a failed one and
@@ -367,7 +367,7 @@ function followReplacement(look: SentLook): StepResult {
     return CONTINUE;
   }
   return nextLookAt(
-    isOverdue(replacement)
+    isOverdue(replacement, look.engine.bankDeadlineMinutes)
       ? replacementOverdue(look.engine, look.invoiceId, replacement)
       : waitForBank(look.engine, look.invoiceId, "replacement", replacement),
   );

@@ -24,7 +24,7 @@ export function reconcileRoutes(app: HttpApp): Route[] {
     if (!CURRENCY_PATTERN.test(currency)) {
       throw new HttpError(400, "Name a wallet by its three capital letters, such as USD");
     }
-    return { currency, movements: movementsView(engine.ledger, currency) };
+    return { currency, movements: movementsView(engine.ledger, currency, engine.bankDeadlineMinutes) };
   }
 
   function checkNow(): unknown {

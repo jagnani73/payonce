@@ -3,7 +3,6 @@ import { knownName, type ApprovalPolicy, type Barred } from "../domain/approvers
 import { knownRoute } from "../domain/assess.js";
 import { barredFrom, type BarFacts } from "../domain/barred.js";
 import { callbackBlocked } from "../domain/callback.js";
-import { deadlineMinutes } from "../domain/deadlines.js";
 import type {
   EmailsSnapshot,
   InvoiceSnapshot,
@@ -17,6 +16,7 @@ import type {
 import { invoiceIndex, type InvoiceIndex } from "../intake/intake.js";
 import { endRefusal, outageEnders } from "../outages/outages.js";
 import { runBarred } from "../runs/runs.js";
+import { deadlineMinutes } from "../settings.js";
 import { inboxNames, runOutage, type InboxNames } from "./incident-board.js";
 import {
   readingSoft,

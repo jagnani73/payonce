@@ -5,6 +5,7 @@ import { HISTORY_WINDOW_MS, listBalanceHistory, type HistoryItem } from "../airw
 import { getTransfer, listTransfersSince, type Transfer } from "../airwallex/transfers.js";
 import { knownName, personName } from "../domain/approvers.js";
 import { debitOf, failedStatus, feeOf, type Debit, type Fee } from "../domain/assess.js";
+import type { BankDeadlineMinutes } from "../domain/deadlines.js";
 import { reconChainProblem, reconChainReport, type ReconChainReport } from "../store/audit-trail.js";
 import { cleanLine } from "../intake/eml.js";
 import type { Ledger } from "../store/ledger.js";
@@ -398,7 +399,12 @@ export interface RunSummary {
   unread: number;
 }
 
-function matchSnapshot(snapshot: ReconSnapshot, now: number, balances: Map<string, BalancePair> | null): MatchResult {
+function matchSnapshot(
+  snapshot: ReconSnapshot,
+  now: number,
+  balances: Map<string, BalancePair> | null,
+  deadlines: BankDeadlineMinutes,
+): MatchResult {
   return match({
     now,
     startedMs: snapshot.startedMs,
@@ -409,15 +415,17 @@ function matchSnapshot(snapshot: ReconSnapshot, now: number, balances: Map<strin
     refused: snapshot.refused,
     balances,
     prior: snapshot.prior,
+    deadlines,
   });
 }
 
 function decideWith(
   now: number,
   balances: Map<string, BalancePair> | null,
+  deadlines: BankDeadlineMinutes,
 ): (snapshot: ReconSnapshot) => { result: MatchResult; summary: string } {
   return (snapshot: ReconSnapshot) => {
-    const result: MatchResult = matchSnapshot(snapshot, now, balances);
+    const result: MatchResult = matchSnapshot(snapshot, now, balances, deadlines);
     const summary: RunSummary = {
       wallets: result.wallets,
       waiting: result.waiting,
@@ -429,8 +437,13 @@ function decideWith(
   };
 }
 
-function rules(at: number, balances: Map<string, BalancePair> | null, live: boolean): CommitRules {
-  return { decide: decideWith(at, balances), atOnce: opensAtOnce, cleared: clearReason, describe: breakText, live };
+function rules(
+  at: number,
+  balances: Map<string, BalancePair> | null,
+  live: boolean,
+  deadlines: BankDeadlineMinutes,
+): CommitRules {
+  return { decide: decideWith(at, balances, deadlines), atOnce: opensAtOnce, cleared: clearReason, describe: breakText, live };
 }
 
 export type RunOutcome =
@@ -455,11 +468,17 @@ export function fullReadDue(ledger: Ledger, now: number): boolean {
 // Records what a run read, unless a run that started later has already been
 // recorded. With no read it matches as of the last live run, so a window that has
 // run out since cannot open a break from what was read then, and it opens nothing.
-export function commitRun(ledger: Ledger, run: ReconRun, read: ReconRead | null, now: number = Date.now()): RunOutcome {
+export function commitRun(
+  ledger: Ledger,
+  run: ReconRun,
+  read: ReconRead | null,
+  deadlines: BankDeadlineMinutes,
+  now: number = Date.now(),
+): RunOutcome {
   const at: number = read !== null ? now : (ledger.recon().lastLiveAt() ?? Date.parse(ledger.startedAt()));
   const committed: CommitResult = ledger
     .recon()
-    .commit(run.id, read?.write ?? null, now, rules(at, read?.balances ?? null, read !== null));
+    .commit(run.id, read?.write ?? null, now, rules(at, read?.balances ?? null, read !== null, deadlines));
   if (committed.stale) {
     return { outcome: "stale", run };
   }
@@ -470,6 +489,7 @@ export function commitRun(ledger: Ledger, run: ReconRun, read: ReconRead | null,
 export async function reconcileOnce(
   client: AirwallexClient,
   ledger: Ledger,
+  deadlines: BankDeadlineMinutes,
   ranFrom: RanFrom,
   now: () => number = Date.now,
 ): Promise<RunOutcome> {
@@ -485,16 +505,21 @@ export async function reconcileOnce(
       error instanceof AirwallexError || error instanceof AirwallexUnreachableError ? airwallexAdvice(error) : "";
     return { outcome: "failed", run, error: text, advice };
   }
-  return commitRun(ledger, run, read, now());
+  return commitRun(ledger, run, read, deadlines, now());
 }
 
 // Matches what the ledger already holds again, with no Airwallex call, as of the
 // last live run. The closing balance is not checked, since no balance is read,
 // and nothing opens or is found once: what it finds new waits for the next live
 // run to find it.
-export function reconcileOffline(ledger: Ledger, ranFrom: RanFrom, now: number = Date.now()): RunOutcome {
+export function reconcileOffline(
+  ledger: Ledger,
+  deadlines: BankDeadlineMinutes,
+  ranFrom: RanFrom,
+  now: number = Date.now(),
+): RunOutcome {
   const run: ReconRun = beginRun(ledger, ranFrom, "offline", now);
-  return commitRun(ledger, run, null, now);
+  return commitRun(ledger, run, null, deadlines, now);
 }
 
 // The server's runs: one a minute after start, then on the setting's interval,
@@ -502,13 +527,15 @@ export function reconcileOffline(ledger: Ledger, ranFrom: RanFrom, now: number =
 export class ReconRunner {
   private readonly client: AirwallexClient;
   private readonly ledger: Ledger;
+  private readonly deadlines: BankDeadlineMinutes;
   readonly everyMs: number | null;
   private busy: boolean = false;
   private lastStart: number = Number.NEGATIVE_INFINITY;
 
-  constructor(client: AirwallexClient, ledger: Ledger, everyMs: number | null) {
+  constructor(client: AirwallexClient, ledger: Ledger, deadlines: BankDeadlineMinutes, everyMs: number | null) {
     this.client = client;
     this.ledger = ledger;
+    this.deadlines = deadlines;
     this.everyMs = everyMs;
   }
 
@@ -552,7 +579,7 @@ export class ReconRunner {
     this.busy = true;
     this.lastStart = Date.now();
     try {
-      await reconcileOnce(this.client, this.ledger, "server");
+      await reconcileOnce(this.client, this.ledger, this.deadlines, "server");
     } catch {
       // The run's own row says why. A ledger that cannot be written is the same
       // for every step, and the next run tries again.
@@ -771,10 +798,15 @@ export interface MovementView {
 
 // One wallet's stored movements, newest first, with what explains each now. The
 // matcher runs again on what the ledger holds, so no balance is read.
-export function movementsView(ledger: Ledger, currency: string, now: number = Date.now()): MovementView[] {
+export function movementsView(
+  ledger: Ledger,
+  currency: string,
+  deadlines: BankDeadlineMinutes,
+  now: number = Date.now(),
+): MovementView[] {
   const store: ReconStore = ledger.recon();
   const snapshot: ReconSnapshot = store.snapshot();
-  const result: MatchResult = matchSnapshot(snapshot, now, null);
+  const result: MatchResult = matchSnapshot(snapshot, now, null, deadlines);
   const open: ReconBreak[] = store.breaks(["open"]);
   const bySubject: Map<string, number> = new Map();
   for (const item of open) {

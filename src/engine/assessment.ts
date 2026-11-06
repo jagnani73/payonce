@@ -85,7 +85,7 @@ export async function assess(
     sourceAmountMinor: converts ? (rate?.fx.sellAmountMinor ?? Number.NaN) : obligation.amountMinor,
     transferFeeMinor: feeMinor,
     originalState,
-    bankOverdue: originalState === "in_flight" && isOverdue(original),
+    bankOverdue: originalState === "in_flight" && isOverdue(original, engine.bankDeadlineMinutes),
     resendCanFix: resendCanFix(original),
     sentOutsidePayOnce: obligation.origin === "outside",
     // The look that called this has just read them from Airwallex.

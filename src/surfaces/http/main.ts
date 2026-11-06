@@ -71,6 +71,7 @@ function main(): void {
   // A pay run row's original gets the row's sandbox outcome, kept in the ledger.
   const bank: SandboxBank = new SandboxBank(
     client,
+    built.engine.bankDeadlineMinutes,
     (invoiceId: string, error: unknown): void => noteError(ledger, invoiceId, error),
     (invoiceId: string): string | null => ledger.runRowOf(invoiceId)?.sandboxOutcome ?? null,
   );
@@ -105,7 +106,7 @@ function main(): void {
   // Reconciliation reads Airwallex on its own timer, never in an invoice's turn,
   // and takes no currency lease, because it moves no money and changes no invoice.
   const reconSetting: ReconSetting = settings.recon;
-  const reconRunner: ReconRunner = new ReconRunner(client, ledger, reconSetting.everyMs);
+  const reconRunner: ReconRunner = new ReconRunner(client, ledger, settings.bankDeadlineMinutes, reconSetting.everyMs);
   // After each read it fills in the fees of failed transfers the ledger has none for.
   // That writes only fee columns, so it runs outside the invoices' turns.
   const balances: BalanceCache = new BalanceCache(

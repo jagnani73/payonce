@@ -336,7 +336,7 @@ export async function startPayment(
         // The look at its deadline is planned as soon as it is with the bank, so it
         // comes even if nothing wakes the invoice before, for example when the
         // sandbox bank's script fails.
-        engine.ledger.lookAt(invoiceId, deadlineLook(original));
+        engine.ledger.lookAt(invoiceId, deadlineLook(original, engine.bankDeadlineMinutes));
         return original;
       } catch (error: unknown) {
         const refused: Attempt | undefined = engine.ledger.attempts(invoiceId).at(-1);

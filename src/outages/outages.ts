@@ -2,7 +2,7 @@ import type { Transfer, TransferBankDetails } from "../airwallex/transfers.js";
 import { keyHash } from "../domain/approval.js";
 import { NameError, personName, sameName, type ApprovalPolicy, type Approver } from "../domain/approvers.js";
 import { originalStateOf } from "../domain/assess.js";
-import { deadlineMinutes } from "../domain/deadlines.js";
+import { deadlineMinutes, type BankDeadlineMinutes } from "../domain/deadlines.js";
 import { cleanLine } from "../intake/eml.js";
 import { formatMoney } from "../domain/money.js";
 import {
@@ -102,6 +102,8 @@ export function railFailureSeen(
   ledger: Ledger,
   transfer: Transfer,
   seenBy: FailureSeenBy,
+  rule: OutageRule,
+  deadlines: BankDeadlineMinutes,
   now: number = Date.now(),
 ): Outage | undefined {
   try {
@@ -113,7 +115,6 @@ export function railFailureSeen(
     ) {
       return undefined;
     }
-    const rule: OutageRule = currentSettings().outageRule;
     const method: string = transfer.transfer_method.toUpperCase();
     // A failure is dated by the transfer's updated_at, when Airwallex last changed
     // it, which for a failed transfer is when it failed or was cancelled after.
@@ -130,7 +131,7 @@ export function railFailureSeen(
       (Number.isFinite(created) && created < Date.parse(ledger.outagesSince())) ||
       (dated
         ? updated <= now - rule.windowMinutes * MINUTE_MS
-        : Number.isFinite(created) && now > created + (deadlineMinutes(method) + rule.windowMinutes) * MINUTE_MS)
+        : Number.isFinite(created) && now > created + (deadlineMinutes(method, deadlines) + rule.windowMinutes) * MINUTE_MS)
     ) {
       return undefined;
     }

@@ -27,6 +27,9 @@ export function createEngine(settings: Settings, ledger?: Ledger): EngineBuild {
       reader: readerFor(settings.models.readerServices()),
       approvals: settings.approvals,
       reserve: settings.reserve,
+      bankDeadlineMinutes: settings.bankDeadlineMinutes,
+      fxQuotes: settings.fxQuotes,
+      outageRule: settings.outageRule,
     },
     problem: null,
   };

@@ -3,7 +3,7 @@ import type { Transfer, TransferBankDetails } from "../airwallex/transfers.js";
 import { accountKeyOf, conversionText, type FxTerms } from "../domain/approval.js";
 import { arrivalFor, atRisk, sentArrivalText, today, type ArrivalTerms } from "../domain/arrival.js";
 import { routeKeyOf } from "../domain/assess.js";
-import { deadlineOf, describeDeadline } from "../domain/deadlines.js";
+import { deadlineOf, describeDeadline, type BankDeadlineMinutes } from "../domain/deadlines.js";
 import { formatMoney, invoiceMoney, toMinor } from "../domain/money.js";
 import { accountMismatchOf, rateMismatchOf, reasonFor, reasonText, type Reason } from "../domain/reasons.js";
 import type { Approval, Attempt, AttemptKind, Obligation } from "../store/ledger.js";
@@ -185,17 +185,17 @@ export function waitForBank(
     invoiceId,
     "payment",
     kind === "replacement"
-      ? `Waiting for the bank to pay replacement ${transfer.short_reference_id}. If it has not paid or failed it within ${describeDeadline(transfer)} of sending, a person hears about it`
-      : `Waiting for the bank to pay or fail original ${transfer.short_reference_id}. If it has done neither within ${describeDeadline(transfer)} of sending, a person hears about it`,
+      ? `Waiting for the bank to pay replacement ${transfer.short_reference_id}. If it has not paid or failed it within ${describeDeadline(transfer, engine.bankDeadlineMinutes)} of sending, a person hears about it`
+      : `Waiting for the bank to pay or fail original ${transfer.short_reference_id}. If it has done neither within ${describeDeadline(transfer, engine.bankDeadlineMinutes)} of sending, a person hears about it`,
     "waiting",
   );
-  return deadlineLook(transfer);
+  return deadlineLook(transfer, engine.bankDeadlineMinutes);
 }
 
 // The look at a transfer's deadline. A deadline that cannot be read is due now,
 // and the look then finds the transfer overdue.
-export function deadlineLook(transfer: Transfer): number {
-  const deadline: number = deadlineOf(transfer);
+export function deadlineLook(transfer: Transfer, deadlines: BankDeadlineMinutes): number {
+  const deadline: number = deadlineOf(transfer, deadlines);
   return Number.isFinite(deadline) ? deadline : Date.now();
 }
 

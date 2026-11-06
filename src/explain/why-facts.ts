@@ -13,7 +13,7 @@ import { HOLIDAYS_NOTE, type ArrivalTerms } from "../domain/arrival.js";
 import { setterBarWhy } from "../domain/contacts.js";
 import { emailEvidence, type SupplierEmail } from "../domain/emails.js";
 import { isExpired } from "../domain/live.js";
-import { deadlineMinutes } from "../domain/deadlines.js";
+import { deadlineMinutes, type BankDeadlineMinutes } from "../domain/deadlines.js";
 import { EMAILS_UNREAD_REASON } from "../domain/decide.js";
 import {
   clauseText,
@@ -24,8 +24,7 @@ import {
   type Slots,
   type StoredReason,
 } from "../domain/reasons.js";
-import { quoteValidity } from "../domain/fx.js";
-import { currentSettings } from "../settings.js";
+import { quoteValidity, type QuoteSetting } from "../domain/fx.js";
 import {
   crossCurrency,
   INVOICE_ID_PATTERN,
@@ -73,6 +72,8 @@ export interface WhySettings {
   approvals: ApprovalPolicy;
   reserve: ReservePolicy;
   readers: readonly string[];
+  bankDeadlineMinutes: BankDeadlineMinutes;
+  fxQuotes: QuoteSetting;
 }
 
 export interface LegendEntry {
@@ -1400,11 +1401,17 @@ function standIn(kind: string): string {
   return `(${/^[aeiou]/.test(kind) ? "an" : "a"} ${kind} line PayOnce does not pass on)`;
 }
 
-function paymentFacts(ledger: Ledger, obligation: Obligation, attempt: Attempt, now: number): PaymentFacts {
+function paymentFacts(
+  ledger: Ledger,
+  obligation: Obligation,
+  attempt: Attempt,
+  deadlines: BankDeadlineMinutes,
+  now: number,
+): PaymentFacts {
   const createdAt: string | null = isoTime(attempt.bankCreatedAt);
   const live: boolean = attempt.state === "in_flight" || attempt.state === "pending";
   const deadlineAt: number | null =
-    createdAt === null ? null : Date.parse(createdAt) + deadlineMinutes(obligation.transferMethod) * 60_000;
+    createdAt === null ? null : Date.parse(createdAt) + deadlineMinutes(obligation.transferMethod, deadlines) * 60_000;
   const code: string | null = attempt.failureCode;
   const approval: Approval | undefined = attempt.quoteId === null ? undefined : ledger.approvalOf(attempt);
   const fx: FxTerms | undefined =
@@ -1597,7 +1604,7 @@ function policyFacts(obligation: Obligation, settings: WhySettings, builder: Fac
   let validity: string | null = null;
   if (crossCurrency(obligation)) {
     try {
-      validity = quoteValidity(currentSettings().fxQuotes);
+      validity = quoteValidity(settings.fxQuotes);
     } catch {
       validity = "the setting could not be read";
     }
@@ -1611,7 +1618,7 @@ function policyFacts(obligation: Obligation, settings: WhySettings, builder: Fac
     twoApproversAbove: formatAmount(settings.approvals.twoApproversAboveMinor),
     approvalRequestExpiresAfterMinutes: settings.approvals.expiresAfterMs / 60_000,
     approvalsRefused: settings.approvals.problem !== null,
-    bankDeadlineMinutes: deadlineMinutes(obligation.transferMethod),
+    bankDeadlineMinutes: deadlineMinutes(obligation.transferMethod, settings.bankDeadlineMinutes),
     fxQuoteValidity: validity,
   };
 }
@@ -1735,7 +1742,7 @@ export function whyFacts(
     const facts: WhyFacts = {
       question: WHY_QUESTION,
       invoice,
-      payments: ledger.attempts(invoiceId).map((attempt: Attempt): PaymentFacts => paymentFacts(ledger, obligation, attempt, now)),
+      payments: ledger.attempts(invoiceId).map((attempt: Attempt): PaymentFacts => paymentFacts(ledger, obligation, attempt, settings.bankDeadlineMinutes, now)),
       outsidePayouts: ledger.outsidePayouts(invoiceId).map(payoutFacts),
       emails: emailFacts(ledger, obligation, builder, settings.readers),
       approval: approvalFacts(ledger, obligation, builder),
