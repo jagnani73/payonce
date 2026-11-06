@@ -18,6 +18,12 @@ importers:
       '@types/node':
         specifier: ^26.6.4
         version: 26.6.4
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
+      preact:
+        specifier: 10.29.8
+        version: 10.29.8
       tsx:
         specifier: ^4.23.15
         version: 4.23.15
@@ -324,6 +330,14 @@ packages:
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
 
+  preact@10.29.8:
+    resolution: {integrity: sha512-ej2aVZ+vZ8WO7tvlQWRM9N63A0KzF9q4mWJfDUHgYaIofWY9hu74QdnQrjoPMmZi2/nZ5gN0bJCQF49xQqx09Q==}
+    peerDependencies:
+      preact-render-to-string: '>=5'
+    peerDependenciesMeta:
+      preact-render-to-string:
+        optional: true
+
   tsx@4.23.15:
     resolution: {integrity: sha512-Yiex1Ovn8z2xPpOWckIiysV1SSyRMY9BkLF++q0yKiDxCqRhosKfMg3janKkiLBwZ5c/YryloKwGZcrEmtwxKw==}
     engines: {node: '>=18.0.0'}
@@ -524,6 +538,8 @@ snapshots:
 
   fsevents@2.3.3:
     optional: true
+
+  preact@10.29.8: {}
 
   tsx@4.23.15:
     dependencies:
