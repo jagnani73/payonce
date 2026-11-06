@@ -85,7 +85,12 @@ function OptionCard(props: { option: BeneficiaryOption; picked: boolean; onPick:
 function countLine(view: BeneficiaryPickerView): string {
   const n: number = view.options.length;
   if (view.q !== "") {
-    return n === 0 ? "" : `${n === SHOWN ? `The first ${SHOWN}` : String(n)} matching “${cleanLine(view.q)}”`;
+    const q: string = cleanLine(view.q);
+    return n === 0
+      ? ""
+      : n === SHOWN
+        ? `The first ${SHOWN} beneficiaries that match “${q}”`
+        : `${n} ${n === 1 ? "beneficiary matches" : "beneficiaries match"} “${q}”`;
   }
   return n === SHOWN
     ? `The first ${SHOWN} beneficiaries in this Airwallex account. Search to find others.`
@@ -161,7 +166,7 @@ export function BeneficiaryPicker(props: {
           <p class="np-picker__count" aria-live="polite">
             {countLine(view)}
           </p>
-          {options.length === 0 && !(picked !== null && !pickedShown) ? (
+          {options.length === 0 ? (
             <p class="np-picker__none">
               {view.q === ""
                 ? "No beneficiaries in this Airwallex account. Add one in the Airwallex web app, then search again."

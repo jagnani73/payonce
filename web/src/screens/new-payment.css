@@ -42,6 +42,12 @@
   background: var(--line-soft);
 }
 
+/* The reason Start is off wraps beside it, and Cancel keeps the row's end. */
+.np-actions .action {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
 .np-next {
   grid-area: next;
   position: sticky;

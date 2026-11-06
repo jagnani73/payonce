@@ -52,7 +52,7 @@ function HeadroomText(props: { headroom: HeadroomLine }): JSX.Element {
     <>
       {`${wallet} headroom now: `}
       <Money money={now} />
-      {`. The amount it takes from this wallet is known once a person approves the exchange rate.${floorNote}`}
+      {`. PayOnce knows how much it takes from this wallet once a person approves the exchange rate.${floorNote}`}
     </>
   );
 }
