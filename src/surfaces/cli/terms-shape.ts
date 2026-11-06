@@ -6,8 +6,9 @@ import { CURRENCY_PATTERN } from "../../domain/patterns.js";
 // The stored approval terms pnpm approve and pnpm payrun print through the views
 // and approve, checked field by field in the type and form each is read in.
 // Terms that do not parse into their shape were changed outside PayOnce, so the
-// commands show and approve nothing for them. The engine reads terms as it
-// always has.
+// commands show and approve nothing for them. The engine and the pay runs check
+// the same terms against the shapes in store/stored.ts before they act on them;
+// these checks also test the form of each field the commands print.
 
 type Fields = Record<string, unknown>;
 
