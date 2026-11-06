@@ -193,8 +193,9 @@ function bodyOf(service: ModelService, model: string, request: ModelRequest): st
       system: request.system,
       messages: [{ role: "user", content: request.prompt }],
       // No thinking setting: low effort lets the model skip thinking, and the
-      // same body works on every Claude model CLAUDE_MODEL or CLAUDE_ASK_MODEL
-      // may name.
+      // same body works on Haiku 5.5 and Sonnet 5.5, whose thinking settings
+      // differ. A model that rejects effort, such as Haiku 4.5 or Sonnet 4.5,
+      // answers 400, which counts as a refused request and moves on to the next.
       output_config: { effort: "low", format: { type: "json_schema", schema: request.schema } },
     });
   }
