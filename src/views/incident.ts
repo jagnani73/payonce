@@ -33,6 +33,7 @@ import { boardEntriesFor, outageHolding, type BoardEntry, type BoardMoney } from
 import { invoiceIndex, type InvoiceIndex } from "../intake/intake.js";
 import { supplierDetail, type AccountView as SupplierAccount, type Caution as SupplierCaution, type SupplierDetail } from "./suppliers.js";
 import type {
+  AccountView,
   Can,
   Caution,
   DraftOfferView,
@@ -123,7 +124,20 @@ function stateLabel(state: TransferState, attempt: { failureCode: string | null 
   }
 }
 
-function ownTransfer(snapshot: InvoiceSnapshot, attempt: Attempt, now: number): TransferView {
+// The account a transfer was decided or approved for: as the approved terms
+// name it, else by its ending where the supplier record knows the account, else
+// in PayOnce's words for an account it kept but cannot name.
+function keptAccount(attempt: Attempt, payTo: string | null, detail: SupplierDetail | null): AccountView | null {
+  const named: AccountView | null = accountView(payTo);
+  if (named !== null || attempt.accountKey === null) {
+    return named;
+  }
+  const key: string = attempt.routeKey ?? attempt.accountKey;
+  const known: SupplierAccount | undefined = detail?.accounts.find((account: SupplierAccount): boolean => account.accountKey === key);
+  return accountView(null, known?.ending ?? null) ?? { label: "the account on file when it was sent", ending: null };
+}
+
+function ownTransfer(snapshot: InvoiceSnapshot, attempt: Attempt, detail: SupplierDetail | null, now: number): TransferView {
   const state: TransferState = transferState(attempt);
   const due: number | null = deadlineAt(attempt, snapshot.deadlineMinutes);
   const request: RequestSnapshot | undefined = snapshot.requests.find(
@@ -147,7 +161,7 @@ function ownTransfer(snapshot: InvoiceSnapshot, attempt: Attempt, now: number): 
       attempt.transferId === null
         ? null
         : {
-            ...(accountView(payTo) ?? { label: "an account PayOnce did not keep", ending: null }),
+            ...(keptAccount(attempt, payTo, detail) ?? { label: "an account PayOnce did not keep", ending: null }),
             check: attempt.misdirected ? "misdirected" : attempt.accountKey === null ? "not-kept" : "matches",
           },
     onRequest:
@@ -226,9 +240,11 @@ function payoutTransfer(snapshot: InvoiceSnapshot, payout: OutsidePayout, index:
 
 // Original, replacement, unrecognised transfers and payouts sent outside
 // PayOnce, newest first.
-function transfersOf(snapshot: InvoiceSnapshot, now: number): TransferView[] {
+function transfersOf(snapshot: InvoiceSnapshot, detail: SupplierDetail | null, now: number): TransferView[] {
   const own: TransferView[] = snapshot.attempts.flatMap((attempt: Attempt): TransferView[] =>
-    attempt.mismatchedTransferId === null ? [ownTransfer(snapshot, attempt, now)] : [ownTransfer(snapshot, attempt, now), unrecognisedTransfer(attempt)],
+    attempt.mismatchedTransferId === null
+      ? [ownTransfer(snapshot, attempt, detail, now)]
+      : [ownTransfer(snapshot, attempt, detail, now), unrecognisedTransfer(attempt)],
   );
   const payouts: TransferView[] = snapshot.payouts.map((payout: OutsidePayout, index: number): TransferView => payoutTransfer(snapshot, payout, index));
   return [...own, ...payouts].reverse();
@@ -429,6 +445,7 @@ export function incidentView(
     );
     const wallet: BoardMoney | undefined = entry?.atRisk.find((item: BoardMoney): boolean => item.currency === debitCurrency(o));
     const key: string | null = supplierKeyOf(o.beneficiaryId);
+    const detail: SupplierDetail | null = key === null ? null : supplierDetail(ledger, key, now);
     return {
       view: "incident",
       generatedAt: new Date(now).toISOString(),
@@ -437,12 +454,12 @@ export function incidentView(
       incident: incidentOf(snapshot),
       summary: summaryOf(snapshot, situation, headroom),
       decision: decisionPanel({ snapshot, situation, request, cautions, outbox, sends, headroom }),
-      transfers: transfersOf(snapshot, now),
+      transfers: transfersOf(snapshot, detail, now),
       emails: emailsTab(ledger, snapshot),
       messages: messagesTab(outbox),
       timeline: timelineView(ledger.events(o.invoiceId)),
       audit: invoiceAuditLine(ledger, o.invoiceId, now),
-      supplier: supplierBrief(ledger, snapshot, key === null ? null : supplierDetail(ledger, key, now), request, now),
+      supplier: supplierBrief(ledger, snapshot, detail, request, now),
       money: {
         amount: money(o.amountMinor, o.currency),
         fromWallet: wallet === undefined ? null : money(wallet.minor, wallet.currency, wallet.estimated || wallet.feeUnknown > 0),
