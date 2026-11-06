@@ -559,9 +559,11 @@ interface Placed {
   variant: string | null;
 }
 
+// Held because the bank details on file are not, or may not be, the ones the
+// payment was decided or approved for.
 function detailsChanged(snapshot: InvoiceSnapshot): boolean {
   const code: string | undefined = snapshot.reason?.code;
-  return code === "account-changed-before-send" || code === "run-account-changed";
+  return code === "account-changed-before-send" || code === "account-unknown-before-send" || code === "run-account-changed";
 }
 
 function decisionVariant(f: Facts): string {
@@ -795,6 +797,9 @@ function decisionNext(f: Facts, variant: string): string {
     case "replacement-failed":
       return "Both transfers failed. PayOnce never sends a third. Pay outside PayOnce and close it later, or close without paying.";
     case "details-changed":
+      if (f.s.reason?.code === "account-unknown-before-send") {
+        return "PayOnce doesn't know which bank details this payment was decided or approved for, so it won't send it again. Pay it another way, or close without paying.";
+      }
       return f.pending !== undefined
         ? "The supplier's bank details changed before PayOnce sent this. Restore them in Airwallex and press Check now."
         : "The supplier's bank details changed before PayOnce sent this. Restore them in Airwallex and press Check now, or close without paying.";
