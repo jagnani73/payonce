@@ -6,7 +6,7 @@ import { loadSettings, type Settings } from "../../settings.js";
 import { Ledger, LEDGER_PATH } from "../../store/ledger.js";
 import { formatMoney } from "../../domain/money.js";
 import { printable, say, sayError } from "../../text/printable.js";
-import { isBreakKind, shownCurrency, type WalletSummary } from "../../recon/recon-match.js";
+import { isBreakKind, shownCurrency, WALLET_STATUS_TEXT, type WalletSummary } from "../../recon/recon-match.js";
 import {
   breakView,
   explainBreaks,
@@ -44,16 +44,6 @@ const USAGE: string = `Usage:
   pnpm reconcile explain <ID[,ID...]> <NAME> <NOTE> --facts=<FP[,FP...]>`;
 
 const FACTS_SHOWN: number = 12;
-const STATUS_TEXT: Record<WalletSummary["status"], string> = {
-  "adds-up": "adds up to Airwallex's available balance",
-  gap: "its movements do not add up",
-  differs: "its movements do not end at Airwallex's available balance",
-  moved: "the balance moved while PayOnce read it, so the closing balance was not checked",
-  unchecked: "the movements add up, and the closing balance was not checked",
-  empty: "no movements since the ledger started",
-  "not-two-decimal": "not reconciled: PayOnce handles two-decimal currencies only",
-  unreadable: "a movement cannot be read, so the wallet is not checked",
-};
 
 function fail(message: string): void {
   say(message);
@@ -128,7 +118,7 @@ function printReport(report: ReconReport, currency: string | null, failedLive: R
   }
   for (const wallet of wallets) {
     const code: string = shownCurrency(wallet.currency) ?? "???";
-    say(`  ${code}  ${STATUS_TEXT[wallet.status]}`);
+    say(`  ${code}  ${WALLET_STATUS_TEXT[wallet.status]}`);
     if (wallet.movements > 0) {
       say(
         `       ${wallet.movements} movements: opening ${money(wallet.openingMinor, code)}, in ${money(wallet.inMinor, code)}, out ${money(Math.abs(wallet.outMinor), code)}, closing ${money(wallet.closingMinor, code)}`,

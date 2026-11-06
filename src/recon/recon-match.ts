@@ -365,6 +365,18 @@ export type WalletStatus =
   | "not-two-decimal"
   | "unreadable";
 
+// How a wallet stands, as pnpm reconcile show and the page say it.
+export const WALLET_STATUS_TEXT: Record<WalletStatus, string> = {
+  "adds-up": "adds up to Airwallex's available balance",
+  gap: "its movements do not add up",
+  differs: "its movements do not end at Airwallex's available balance",
+  moved: "the balance moved while PayOnce read it, so the closing balance was not checked",
+  unchecked: "the movements add up, and the closing balance was not checked",
+  empty: "no movements since the ledger started",
+  "not-two-decimal": "not reconciled: PayOnce handles two-decimal currencies only",
+  unreadable: "a movement cannot be read, so the wallet is not checked",
+};
+
 export interface WalletSummary {
   currency: string;
   movements: number;
