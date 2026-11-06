@@ -1,5 +1,6 @@
 import { RAIL_PATTERN, REFERENCE_PATTERN } from "../domain/patterns.js";
 import type { ReasonView } from "../domain/reasons.js";
+import { UNSHOWN_REFERENCE } from "../text/printable.js";
 import type { AuditExport, RunAuditExport } from "../store/audit-trail.js";
 import type {
   AccountView,
@@ -159,6 +160,11 @@ const FIXED_NEEDED_WHY: readonly string[] = [
 const WHY_TEXT: Checked = quotedUnless(codeIn(FIXED_WHY));
 const RAIL: Checked = { from: "unknown", plainWhen: fits(RAIL_PATTERN) };
 const REFERENCE: Checked = { from: "airwallex", plainWhen: fits(REFERENCE_PATTERN) };
+// A reference as shownReference gives it: in its own form, or PayOnce's words for one that is not.
+const SHOWN_REFERENCE: Checked = {
+  from: "airwallex",
+  plainWhen: (text: string): boolean => REFERENCE_PATTERN.test(text) || text === UNSHOWN_REFERENCE,
+};
 
 // The page's links, each in the one form PayOnce builds it from an invoice number
 // (INVOICE_ID_PATTERN) or a run's number. Any other text in these fields is wrapped.
@@ -295,13 +301,14 @@ export const INCIDENT_FIELDS = {
   "incident.cause": "quoted",
   "summary[].lead": "plain",
   "summary[].text": "quoted",
+  "summary[].refs[].reference": SHOWN_REFERENCE,
   ...under("decision.open.request", REQUEST),
   "decision.open.cautions[].text": "plain",
   ...under("decision.open.options[]", OPTION),
   "decision.closed.by": "person",
   "decision.closed.note": "person",
   ...under("decision.checkNow", CAN),
-  "transfers[].reference": "plain",
+  "transfers[].reference": SHOWN_REFERENCE,
   "transfers[].stateLabel": "plain",
   ...under("transfers[].failure", FAILURE),
   ...under("transfers[].account", ACCOUNT),
