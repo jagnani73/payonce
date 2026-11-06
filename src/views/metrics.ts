@@ -12,7 +12,8 @@ import {
 } from "../store/ledger.js";
 import { BREAK_KINDS, clearsByItself, KIND_LABELS, type BreakKind } from "../recon/recon-match.js";
 import type { BreakTimes } from "../store/recon-store.js";
-import { KNOWN_CODES, REASON_LEADS, type ReasonCode } from "../explain/why-facts.js";
+import { KNOWN_CODES } from "../explain/why-facts.js";
+import { familyOf, type ReasonFamily } from "../domain/reasons.js";
 import { CURRENCY_PATTERN } from "../domain/patterns.js";
 import { FAILURE_WORDS, RAIL_FAILURE_CODES, RESENDABLE_FAILURE_CODES } from "../domain/failure-codes.js";
 
@@ -36,7 +37,7 @@ export function isPeriod(value: string): value is Period {
   return (PERIODS as readonly string[]).includes(value);
 }
 
-export const REASON_LABELS: Record<ReasonCode, string> = {
+export const REASON_LABELS: Record<ReasonFamily, string> = {
   "bank-deadline": "Bank deadline passed",
   status: "Original still with the bank, or in a status PayOnce does not know",
   "not-resendable": "Failed in a way a resend cannot fix",
@@ -52,7 +53,7 @@ export const REASON_LABELS: Record<ReasonCode, string> = {
   "paid-twice": "May have been paid twice",
   other: "A reason PayOnce does not recognise",
 };
-const REASON_ORDER: readonly ReasonCode[] = Object.keys(REASON_LABELS) as ReasonCode[];
+const REASON_ORDER: readonly ReasonFamily[] = Object.keys(REASON_LABELS) as ReasonFamily[];
 
 const NO_CODE_LABEL: string = "no failure code on file";
 const OTHER_CODE_LABEL: string = "a code PayOnce does not pass on";
@@ -187,7 +188,7 @@ export interface GroupSpread extends Spread {
 }
 
 export interface ReasonRow {
-  code: ReasonCode;
+  code: ReasonFamily;
   label: string;
   paid: number;
   notPaid: number;
@@ -468,25 +469,6 @@ function failureLabel(code: string): string {
     return OTHER_CODE_LABEL;
   }
   return Object.hasOwn(FAILURE_WORDS, code) ? (FAILURE_WORDS[code] ?? NO_WORDS_LABEL) : NO_WORDS_LABEL;
-}
-
-// The code of the reason an invoice went to a person, from its leading part only,
-// matched against PayOnce's own reason grammar. Anything else is other, so a
-// reworded constant or a reason from an older PayOnce shows up instead of being
-// guessed. Only the code ever leaves this function.
-export function reasonCode(reason: string): ReasonCode {
-  for (const lead of REASON_LEADS) {
-    lead.test.lastIndex = 0;
-    const match: RegExpExecArray | null = lead.test.exec(reason);
-    if (match === null) {
-      continue;
-    }
-    const end: number = match[0].length;
-    if (end === reason.length || reason.startsWith(", and ", end)) {
-      return lead.code ?? "other";
-    }
-  }
-  return "other";
 }
 
 function byCurrency<T extends { currency: string }>(rows: Iterable<T>): T[] {
@@ -798,7 +780,7 @@ function incidentsOf(read: MetricsRead, index: Indexed, window: Window): Inciden
     CLOSE_GROUPS.map((group: CloseGroup) => [group, new Durations()]),
   );
   const withPerson: Durations = new Durations();
-  const reasons: Map<ReasonCode, ReasonRow> = new Map();
+  const reasons: Map<ReasonFamily, ReasonRow> = new Map();
   let notOnFile: number = 0;
   let leftOut: number = 0;
   let unreadable: number = 0;
@@ -859,7 +841,10 @@ function incidentsOf(read: MetricsRead, index: Indexed, window: Window): Inciden
     }
     if (group === "with-a-person") {
       measure(withPerson, seconds(obligation.escalatedAt, obligation.closedAt));
-      const code: ReasonCode = reasonCode(obligation.escalationReason);
+      // The family of the reason's lead. A reason PayOnce does not write is other,
+      // so a reworded constant or a reason from an older PayOnce shows up instead
+      // of being guessed. Only the family ever leaves this function.
+      const code: ReasonFamily = familyOf(obligation.reason?.code ?? "unrecognised");
       const reason: ReasonRow = rowFor(reasons, code, () => ({ code, label: REASON_LABELS[code], paid: 0, notPaid: 0 }));
       if (how === "person-paid") {
         reason.paid += 1;
@@ -883,7 +868,7 @@ function incidentsOf(read: MetricsRead, index: Indexed, window: Window): Inciden
     timeToClose: spreads(toClose),
     afterFailure: spreads(afterFailure),
     withPerson: withPerson.spread(),
-    reasons: REASON_ORDER.map((code: ReasonCode): ReasonRow | undefined => reasons.get(code)).filter(
+    reasons: REASON_ORDER.map((code: ReasonFamily): ReasonRow | undefined => reasons.get(code)).filter(
       (row: ReasonRow | undefined): row is ReasonRow => row !== undefined,
     ),
     notOnFile,

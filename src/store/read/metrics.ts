@@ -1,3 +1,4 @@
+import { storedReason, type StoredReason } from "../../domain/reasons.js";
 import type { ApprovalState } from "../approvals.js";
 import type { AttemptKind, LiveTested } from "../attempts.js";
 import type { Db } from "../db.js";
@@ -18,6 +19,8 @@ export interface MetricsObligation {
   fromRun: boolean;
   transferMethod: string;
   escalationReason: string;
+  // The reason as codes, read as Ledger.reasonOf reads them.
+  reason: StoredReason | null;
   heldDuplicate: boolean;
   escalatedAt: string | null;
   startedAt: string | null;
@@ -96,9 +99,12 @@ export interface MetricsRead {
 }
 
 // As SQLite gives them, with 0 or 1 for the booleans.
-interface MetricsObligationRow extends Omit<MetricsObligation, "fromRun" | "heldDuplicate"> {
+interface MetricsObligationRow extends Omit<MetricsObligation, "fromRun" | "heldDuplicate" | "reason"> {
   fromRun: number;
   heldDuplicate: number;
+  escalationCode: string;
+  escalationClauses: string;
+  escalationSlots: string;
 }
 
 interface MetricsAttemptRow extends Omit<MetricsAttempt, "approved"> {
@@ -141,6 +147,8 @@ export class MetricsReads {
           `SELECT o.invoice_id AS invoiceId, o.currency, COALESCE(o.source_currency, o.currency) AS wallet,
                   o.amount_minor AS amountMinor, o.state, o.origin, o.run_row_id IS NOT NULL AS fromRun,
                   o.transfer_method AS transferMethod, o.escalation_reason AS escalationReason,
+                  o.escalation_code AS escalationCode, o.escalation_clauses AS escalationClauses,
+                  o.escalation_slots AS escalationSlots,
                   CASE WHEN json_valid(o.duplicate_of) THEN json_array_length(o.duplicate_of) > 0 ELSE 0 END
                     AS heldDuplicate,
                   o.escalated_at AS escalatedAt,
@@ -153,8 +161,14 @@ export class MetricsReads {
         )
         .all() as unknown as MetricsObligationRow[]
     ).map(
-      (row: MetricsObligationRow): MetricsObligation => ({
+      ({ escalationCode, escalationClauses, escalationSlots, ...row }: MetricsObligationRow): MetricsObligation => ({
         ...row,
+        reason: storedReason({
+          text: row.escalationReason,
+          code: escalationCode,
+          clauses: escalationClauses,
+          slots: escalationSlots,
+        }),
         fromRun: row.fromRun === 1,
         heldDuplicate: row.heldDuplicate === 1,
       }),
