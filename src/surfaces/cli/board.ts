@@ -1,28 +1,27 @@
+import { CURRENCY_PATTERN } from "../../domain/patterns.js";
 import { loadEnvIfPresent } from "../../env-file.js";
-import { loadSettings } from "../../settings.js";
+import { loadSettings, type Settings } from "../../settings.js";
+import { Ledger, LEDGER_PATH } from "../../store/ledger.js";
+import { say } from "../../text/printable.js";
+import type { HomeView, IncidentRow, IncidentScope, IncidentsView, OutageStrip, QueueGroup, QueueItem, RunRowItem } from "../../views/contract.js";
+import { homeView } from "../../views/home.js";
 import {
   BOARD_GROUPS,
   BOARD_ORIGINS,
-  boardReport,
   isBoardGroup,
   isBoardOrigin,
-  type BoardEntry,
+  ORIGIN_LABELS,
   type BoardFilters,
-  type BoardMoney,
-  type BoardOutage,
-  type BoardReport,
-  type BoardTotal,
+  type BoardGroup,
 } from "../../views/incident-board.js";
-import { Ledger, LEDGER_PATH } from "../../store/ledger.js";
-import { formatAmount, formatMoney } from "../../domain/money.js";
-import { sendsText, type OutageCode } from "../../outages/outages.js";
-import { printable, say, shownFailureCode, utcTime } from "../../text/printable.js";
-import { CURRENCY_PATTERN } from "../../domain/patterns.js";
+import { incidentsView } from "../../views/incidents.js";
+import { heading, paymentRow, put, putAll, putRows, runRow, table, utc, walletLine, type Listed } from "./view-text.js";
 
-// The incident board in the terminal, ranked as the page ranks it. It reads only
-// the ledger, with no Airwallex call, and loads .env only if there is one, for the
-// bank deadlines. It loads the file itself, because Node's --env-file-if-exists
-// says the file is missing once for tsx and again for the script.
+// The incident board in the terminal, from the Incidents and Home views, ranked
+// as the page ranks them. It reads only the ledger, with no Airwallex call, and
+// loads .env only if there is one, for the bank deadlines and the approvers. It
+// loads the file itself, because Node's --env-file-if-exists says the file is
+// missing once for tsx and again for the script.
 const USAGE: string = `Usage: pnpm board [FILTER...]
 Filters, in any order: a group (${BOARD_GROUPS.join(", ")}), a currency such as USD, and an origin (${BOARD_ORIGINS.join(", ")})`;
 
@@ -31,10 +30,15 @@ Filters, in any order: a group (${BOARD_GROUPS.join(", ")}), a currency such as 
 // such as "pay", prints the usage.
 const KNOWN_CURRENCIES: ReadonlySet<string> = new Set<string>(Intl.supportedValuesOf("currency"));
 
-const ID_WIDTH: number = 16;
-const SUPPLIER_WIDTH: number = 28;
-const AMOUNT_WIDTH: number = 24;
-const INDENT: string = "    ";
+// The board's group words, as the Incidents screen's groups.
+const SCOPES: Record<BoardGroup, QueueGroup> = {
+  person: "needs-you",
+  deadline: "bank-late",
+  bank: "with-bank",
+  open: "payonce",
+};
+
+const OPEN_GROUPS: QueueGroup[] = ["needs-you", "bank-late", "with-bank", "payonce"];
 
 function fail(message: string): void {
   say(message);
@@ -58,157 +62,67 @@ function filtersOf(args: string[]): BoardFilters | null {
   return filters;
 }
 
-// How long since an ISO time, in the largest whole unit.
-function waited(since: string | null, now: string): string {
-  const at: number = since === null ? Number.NaN : Date.parse(since);
-  if (!Number.isFinite(at)) {
-    return "since not known";
-  }
-  const minutes: number = Math.max(0, Math.floor((Date.parse(now) - at) / 60_000));
-  if (minutes < 1) {
-    return "under a minute";
-  }
-  if (minutes < 60) {
-    return `${minutes} min`;
-  }
-  const hours: number = Math.floor(minutes / 60);
-  return hours < 48 ? `${hours} h` : `${Math.floor(hours / 24)} days`;
+// The pay runs that need someone, from Home, under the same filters.
+function runsShown(home: HomeView, filters: BoardFilters): RunRowItem[] {
+  return home.needsYou
+    .flatMap((item: QueueItem): RunRowItem[] => (item.type === "run" ? [item.row] : []))
+    .filter(
+      (run: RunRowItem): boolean =>
+        (filters.group === null || filters.group === "person") &&
+        (filters.origin === null || filters.origin === "pay-run") &&
+        (filters.currency === null || run.totals.some((total: { currency: string }): boolean => total.currency === filters.currency)),
+    );
 }
 
-function cut(text: string, width: number): string {
-  return text.length <= width ? text.padEnd(width) : `${text.slice(0, width - 3)}...`;
+function putOutage(outage: OutageStrip): void {
+  put(`Outage ${outage.id} on ${outage.rail}, pausing ${outage.pausing}`, 1);
+  put(outage.sendsText, 2);
+  put(`See it with pnpm outage, and end it with pnpm outage end ${outage.id} NAME NOTE`, 2);
 }
 
-function moneyText(money: BoardMoney): string {
-  const notes: string[] = [];
-  if (money.estimated) {
-    notes.push("estimated");
-  }
-  if (money.feeUnknown > 0) {
-    notes.push("fee not known");
-  }
-  return `${formatMoney(money.minor, money.currency)}${notes.length === 0 ? "" : ` (${notes.join(", ")})`}`;
-}
-
-function totalLine(total: BoardTotal): string {
-  const buckets: [number, string][] = [
-    [total.promisedMinor, "approved or being sent"],
-    [total.waitingMinor, "waiting on a person"],
-    [total.outageMinor, "waiting on an outage"],
-    [total.runWaitingMinor, "pay run waiting for approval"],
-    [total.withBankMinor, "with the bank"],
-  ];
-  const parts: string[] = buckets
-    .filter(([minor]: [number, string]): boolean => minor !== 0)
-    .map(([minor, what]: [number, string]): string => `${what} ${formatAmount(minor)}`);
-  const notes: string[] = [];
-  if (total.estimated) {
-    notes.push("part estimated");
-  }
-  if (total.feeUnknown > 0) {
-    notes.push(`fee not known for ${total.feeUnknown}`);
-  }
-  return `  ${formatMoney(total.minor, total.currency).padStart(AMOUNT_WIDTH)}  ${parts.join(", ")}${notes.length === 0 ? "" : ` (${notes.join(", ")})`}`;
-}
-
-function heldLine(label: string, items: string[]): string {
-  return `${INDENT}${label}: ${items.length === 0 ? "none" : items.join(", ")}`;
-}
-
-// An active outage, before everything else on the board: what it saw, what it
-// holds and how to end it.
-function outageLines(outage: BoardOutage): string[] {
-  const codes: string =
-    outage.codes.map((entry: OutageCode): string => `${shownFailureCode(entry.code)} (${entry.label})`).join(", ") ||
-    "a rail-level code";
-  return [
-    `  Outage ${outage.id} on ${outage.rail}, since ${utcTime(outage.declaredAt)}`,
-    `${INDENT}Payouts to ${outage.payees} payees failed within ${outage.windowMinutes} minutes with ${codes}. PayOnce opens no new payment on ${outage.rail} until a person ends it`,
-    heldLine("First payments waiting", outage.originals.map(printable)),
-    heldLine("Replacements escalated", outage.replacements.map(printable)),
-    heldLine("Approved payments waiting", outage.approved.map(printable)),
-    heldLine("Pay runs waiting", outage.runs.map((id: number): string => `pay run ${id}`)),
-    `${INDENT}${outage.atRisk.length === 0 ? "Nothing at risk" : `At risk ${outage.atRisk.map(moneyText).join(", ")}`}`,
-    `${INDENT}Ending it sends ${sendsText(outage.sends)}, each after the checks PayOnce makes before any payment`,
-    `${INDENT}End it with pnpm outage end ${outage.id} NAME NOTE, or with the form on the board in pnpm ui`,
-  ];
-}
-
-function entryLines(entry: BoardEntry, now: string): string[] {
-  const amount: string =
-    entry.wallet === entry.currency
-      ? formatMoney(entry.amountMinor, entry.currency)
-      : `${formatMoney(entry.amountMinor, entry.currency)} from ${entry.wallet}`;
-  const where: string =
-    entry.kind === "run-row"
-      ? `, pay run ${entry.runId ?? ""}, not released`
-      : entry.origin === "pay-run"
-        ? `, pay run ${entry.runId ?? ""}`
-        : entry.origin === "outside"
-          ? ", sent outside PayOnce"
-          : "";
-  const risk: string =
-    entry.atRisk.length === 0 ? "nothing at risk" : `at risk ${entry.atRisk.map(moneyText).join(", ")}`;
-  const deadline: string = entry.deadlineAt === null ? "" : `. Deadline ${utcTime(entry.deadlineAt)}`;
-  return [
-    `  ${cut(printable(entry.invoiceId), ID_WIDTH)} ${cut(printable(entry.supplier), SUPPLIER_WIDTH)}${amount.padStart(AMOUNT_WIDTH)}  ${risk}, waiting ${waited(entry.waitingSince, now)}${where}`,
-    `${INDENT}${entry.why}${deadline}`,
-    ...entry.also.map((line: string): string => `${INDENT}Also: ${line}`),
-  ];
-}
-
-function print(report: BoardReport): void {
+function print(view: IncidentsView, home: HomeView, filters: BoardFilters): void {
+  const label = (group: IncidentScope): string =>
+    view.scopes.find((scope: { scope: IncidentScope }): boolean => scope.scope === group)?.label ?? group;
   const applied: string[] = [
-    report.filters.group === null ? null : `group ${report.filters.group}`,
-    report.filters.currency,
-    report.filters.origin === null ? null : `origin ${report.filters.origin}`,
-  ].filter((part: string | null): part is string => part !== null);
-  say(`Incident board at ${utcTime(report.generatedAt)}, from the ledger only`);
+    ...(filters.group === null ? [] : [label(SCOPES[filters.group])]),
+    ...(filters.currency === null ? [] : [filters.currency]),
+    ...(filters.origin === null ? [] : [ORIGIN_LABELS[filters.origin]]),
+  ];
+  const runs: RunRowItem[] = runsShown(home, filters);
+  put(`Incidents at ${utc(view.generatedAt)}, from the ledger only`);
   if (applied.length > 0) {
-    say(`Showing ${report.entries.length} of ${report.all}: ${applied.join(", ")}`);
+    put(`Showing ${applied.join(", ")}`);
   }
-  if (report.outages.length > 0) {
-    say("");
-    say(`Active rail outages (${report.outages.length}), whatever the filters`);
-    for (const outage of report.outages) {
-      for (const line of outageLines(outage)) {
-        say(line);
-      }
-    }
+  if (view.outages.length > 0) {
+    heading(`Active rail outages (${view.outages.length}), whatever the filters`);
+    view.outages.forEach(putOutage);
   }
-  say("");
-  say("Money that could still leave a wallet");
-  if (report.totals.length === 0) {
-    say("  None");
+  heading(filters.group === null ? "Money by wallet" : "Money by wallet, all groups");
+  if (view.totals.length === 0) {
+    put("None", 1);
   }
-  for (const total of report.totals) {
-    say(totalLine(total));
-  }
-  for (const group of report.groups) {
-    const entries: BoardEntry[] = report.entries.filter((entry: BoardEntry): boolean => entry.group === group.group);
-    if (report.filters.group !== null && report.filters.group !== group.group) {
+  putAll(table(view.totals.map(walletLine)), 1);
+  const open: IncidentRow[] = view.rows.filter((row: IncidentRow): boolean => row.situation.group !== "closed");
+  for (const group of OPEN_GROUPS) {
+    if (filters.group !== null && SCOPES[filters.group] !== group) {
       continue;
     }
-    say("");
-    say(`${group.label} (${group.count})`);
-    if (entries.length === 0) {
-      say("  None");
+    const rows: Listed[] = [
+      ...open.filter((row: IncidentRow): boolean => row.situation.group === group).map((row: IncidentRow): Listed => paymentRow(row, view.generatedAt)),
+      ...(group === "needs-you" ? runs.map((run: RunRowItem): Listed => runRow(run, view.generatedAt)) : []),
+    ];
+    heading(`${label(group)} (${rows.length})`);
+    if (rows.length === 0) {
+      put("None", 1);
     }
-    for (const entry of entries) {
-      for (const line of entryLines(entry, report.generatedAt)) {
-        say(line);
-      }
-    }
+    putRows(rows);
   }
-  if (report.invoices === 0) {
-    say("");
-    say("No incidents yet. Start one with pnpm recover, or with the new incident form in pnpm ui");
-  } else if (report.all === 0) {
-    say("");
-    say("Every invoice in the ledger is closed, and no pay run waits for approval");
+  if (view.ledgerCount === 0) {
+    heading("No payments yet. Start one with pnpm recover, or with New payment in pnpm ui");
+  } else if (applied.length === 0 && open.length === 0 && runs.length === 0) {
+    heading("Every payment in the ledger is closed, and no pay run waits for approval");
   }
-  say("");
-  say("PayOnce has no exchange rates, so amounts in different currencies are ranked as plain numbers.");
+  heading("PayOnce has no exchange rates, so amounts in different currencies are ranked as plain numbers.");
 }
 
 function main(): void {
@@ -219,14 +133,23 @@ function main(): void {
   }
   // Without a .env the default deadlines apply, and nothing is printed about it.
   loadEnvIfPresent();
-  loadSettings();
-  const report: BoardReport = boardReport(new Ledger(LEDGER_PATH), filters);
+  const settings: Settings = loadSettings();
+  const ledger: Ledger = new Ledger(LEDGER_PATH);
+  const now: number = Date.now();
+  const view: IncidentsView = incidentsView(ledger, settings, now, {
+    scope: filters.group === null ? "all" : SCOPES[filters.group],
+    currency: filters.currency,
+    origin: filters.origin,
+    me: null,
+    clean: false,
+    q: null,
+  });
   const currency: string | null = filters.currency;
-  if (currency !== null && !KNOWN_CURRENCIES.has(currency) && !report.currencies.includes(currency)) {
+  if (currency !== null && !KNOWN_CURRENCIES.has(currency) && !view.wallets.includes(currency)) {
     fail(USAGE);
     return;
   }
-  print(report);
+  print(view, homeView(ledger, settings, now, null), filters);
 }
 
 main();
