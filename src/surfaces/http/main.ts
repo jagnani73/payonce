@@ -25,6 +25,7 @@ import { printableError, say, sayError } from "../../text/printable.js";
 import { httpApp, type HttpApp } from "./app.js";
 import { HOST, requestListener, type Route } from "./router.js";
 import { cashRoutes } from "./routes/cash.js";
+import { contactRoutes } from "./routes/contacts.js";
 import { inboxRoutes } from "./routes/inbox.js";
 import { incidentRoutes } from "./routes/incidents.js";
 import { optionsRoutes } from "./routes/options.js";
@@ -180,6 +181,7 @@ function main(): void {
     ...outboxRoutes(app),
     ...viewRoutes(app, SWEEP_EVERY_MS),
     ...paymentRoutes(app),
+    ...contactRoutes(app),
   ];
   const start: StartUp = startUp(app);
   const server: Server = createServer(requestListener(routes, port));
