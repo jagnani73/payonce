@@ -29,7 +29,7 @@ import { railWords } from "../domain/patterns.js";
 import { contactView } from "./contacts.js";
 import { snapshotOptions, type Live } from "./context.js";
 import { walletTotals } from "./incidents.js";
-import { failureView, plural, refused } from "./parts.js";
+import { allowed, failureView, plural } from "./parts.js";
 import { duplicateView } from "./requests.js";
 import { incidentRows } from "./rows.js";
 import { readInvoiceSnapshots } from "./snapshot.js";
@@ -246,7 +246,7 @@ export function supplierView(ledger: Ledger, settings: Settings, now: number, ke
       },
       related: detail.related.map((item: RelatedRecord) => ({ key: item.key, name: item.name, why: item.why })),
       money: detail.money.map(walletTotals),
-      can: { newPayment: refused("not-built", "Starting a payment from the supplier record comes with the New payment page.") },
+      can: { newPayment: { ...allowed(), href: `#new-payment?supplier=${encodeURIComponent(detail.key)}` } },
     };
   });
 }

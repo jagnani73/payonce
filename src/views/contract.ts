@@ -1153,7 +1153,8 @@ export interface SupplierView {
   outages: { active: OutageStrip[]; failures: { reference: Reference | null; failure: FailureView | null; at: Iso | null; outageId: OutageId | null }[] };
   related: { key: SupplierKey; name: Theirs; why: ("same-name" | "same-account")[] }[];
   money: WalletTotals[];
-  can: { newPayment: Can };
+  // href opens New payment with this record picked.
+  can: { newPayment: Can & { href: string } };
 }
 
 // ---------- Treasury ----------

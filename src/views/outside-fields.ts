@@ -135,7 +135,6 @@ const FIXED_WHY: readonly string[] = [
   "approvers-unset",
   "approvers-unreadable",
   "drafted",
-  "not-built",
   "draft",
   "copied",
   "sent",
@@ -476,6 +475,7 @@ export const SUPPLIER_FIELDS = {
   ...under("outages.failures[].failure", FAILURE),
   "related[].name": "supplier",
   ...under("can.newPayment", CAN),
+  "can.newPayment.href": link("#new-payment\\?supplier=[A-Za-z0-9-]{1,64}"),
 } as const satisfies Fields<SupplierView>;
 
 // ---------- treasury ----------

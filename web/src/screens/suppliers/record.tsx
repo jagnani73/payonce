@@ -1,5 +1,4 @@
 import type { JSX } from "preact";
-import { query } from "../../api";
 import { Details, LinkButton } from "../../components/Action";
 import { Icon } from "../../components/Icon";
 import { Card } from "../../components/Layout";
@@ -86,7 +85,7 @@ function Header(props: { view: SupplierView; others: Others }): JSX.Element {
       </div>
       <div class="sup-header__action">
         {view.can.newPayment.allowed ? (
-          <LinkButton href={query("#new-payment", { supplier: view.key })} kind="primary">
+          <LinkButton href={view.can.newPayment.href} kind="primary">
             <Icon name="plus" />
             New payment to this supplier
           </LinkButton>
