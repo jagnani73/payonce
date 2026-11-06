@@ -342,6 +342,7 @@ export const INCIDENT_FIELDS = {
   "emails.emails[].attachments[].type": "email",
   "emails.emails[].notes[]": "plain",
   "emails.emails[].uploadedBy": "person",
+  "emails.emails[].dateAsWritten": "email",
   "messages.drafts[].label": "plain",
   "messages.drafts[].subject": "quoted",
   "messages.drafts[].body": "quoted",

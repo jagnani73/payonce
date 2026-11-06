@@ -17,7 +17,16 @@ import { MOVES_FROM, outboxOf, type DraftOffer, type DraftView as StoredDraftVie
 import type { OutageSend } from "../outages/outages.js";
 import { unverifiedSenders, type SupplierEmail } from "../reader/emails.js";
 import type { Settings } from "../settings.js";
-import { crossCurrency, readingSoft, storedObject, type Attempt, type Ledger, type Obligation, type OutsidePayout } from "../store/ledger.js";
+import {
+  crossCurrency,
+  readingSoft,
+  storedObject,
+  type Attempt,
+  type Ledger,
+  type Obligation,
+  type OutsidePayout,
+  type Upload,
+} from "../store/ledger.js";
 import { shownReference } from "../text/printable.js";
 import { boardEntriesFor, outageHolding, type BoardEntry, type BoardMoney } from "./incident-board.js";
 import { invoiceIndex, type InvoiceIndex } from "../intake/intake.js";
@@ -267,8 +276,9 @@ function emailsTab(ledger: Ledger, snapshot: InvoiceSnapshot): EmailsTab {
         ? { count: unreadCount, text: `${plural(unreadCount, "email has", "emails have")} not been read yet. PayOnce reads ${unreadCount === 1 ? "it" : "them"} at its next check.` }
         : null,
     senderWarnings: flagged.map((sender: string): string => `${sender} does not match ${o.supplierDomain}, the email domain on file`),
-    emails: [...emails].reverse().map(
-      (email: SupplierEmail): EmailView => ({
+    emails: [...emails].reverse().map((email: SupplierEmail): EmailView => {
+      const upload: Upload | undefined = email.uploadId === undefined ? undefined : ledger.upload(email.uploadId);
+      return {
         from: email.from,
         fromName: email.fromName ?? null,
         replyTo: email.replyTo ?? [],
@@ -279,10 +289,12 @@ function emailsTab(ledger: Ledger, snapshot: InvoiceSnapshot): EmailsTab {
         notes: noteTexts(email.notes ?? []),
         partial: email.partial === true,
         senderMatches: !flagged.includes(email.from),
-        uploadedBy: email.uploadId === undefined ? null : (ledger.upload(email.uploadId)?.uploadedBy ?? null),
+        uploadedBy: upload?.uploadedBy ?? null,
         uploadId: email.uploadId ?? null,
-      }),
-    ),
+        dateAsWritten: upload === undefined || upload.dateAsWritten === "" ? null : upload.dateAsWritten,
+        uploadedAt: upload?.uploadedAt ?? null,
+      };
+    }),
   };
 }
 

@@ -436,6 +436,10 @@ export interface EmailView {
   senderMatches: boolean;
   uploadedBy: PersonName | null;
   uploadId: UploadId | null;
+  // An uploaded email's Date header as written, and when it was uploaded. Null
+  // for an email the sandbox simulator played.
+  dateAsWritten: Theirs | null;
+  uploadedAt: Iso | null;
 }
 
 export interface EmailsTab {
