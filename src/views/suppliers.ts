@@ -19,6 +19,7 @@ import {
   type ContactState,
 } from "../domain/contacts.js";
 import { situationOf, type InvoiceSnapshot, type PaymentState, type Situation } from "../domain/situation.js";
+import { UNNAMED_PAYEE } from "../text/words.js";
 import {
   boardEntriesFor,
   GROUP_LABELS,
@@ -59,7 +60,6 @@ import {
 } from "../store/ledger.js";
 import { railOf } from "../outages/outages.js";
 import { debitCurrency } from "../domain/reserve.js";
-import { UNNAMED_PAYEE } from "../engine/sweep.js";
 import {
   BENEFICIARY_ID_PATTERN,
   CURRENCY_PATTERN,

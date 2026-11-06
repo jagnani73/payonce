@@ -15,8 +15,8 @@ import {
   type TransferMethod,
 } from "../store/ledger.js";
 import { capitalise } from "../text/printable.js";
+import { UNNAMED_PAYEE } from "../text/words.js";
 import type { Engine } from "./engine.js";
-import { UNNAMED_PAYEE } from "./sweep.js";
 
 // A first payment a person or a scenario asks PayOnce to open: the invoice, how
 // much in which currency, the wallet the money leaves (the invoice's own
