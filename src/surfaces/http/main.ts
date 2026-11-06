@@ -4,6 +4,7 @@ import { describeAirwallex, type AirwallexClient } from "../../airwallex/client.
 import { Alerts, describeAlerts, type AlertCash, type AlertSetting } from "../../alerts/alerts.js";
 import { describePolicy } from "../../domain/approvers.js";
 import { describeQuotes } from "../../domain/fx.js";
+import { runKey } from "../../domain/patterns.js";
 import { describeFloors } from "../../domain/reserve.js";
 import { cashReport, payRunLines, type CashReport } from "../../engine/cash-position.js";
 import { createEngine, type EngineBuild } from "../../engine/create.js";
@@ -18,7 +19,7 @@ import { loadEnvIfPresent } from "../../env-file.js";
 import { explainerFor, ExplainLimiter, type Explainer } from "../../explain/explainer.js";
 import { describeOutageRule } from "../../outages/outages.js";
 import { describeReconSetting, ReconRunner, type ReconSetting } from "../../recon/reconcile.js";
-import { releaseRun, runKey, runNoteError } from "../../runs/runs.js";
+import { releaseRun, runNoteError } from "../../runs/runs.js";
 import { loadSettings, type Settings } from "../../settings.js";
 import { LeaseLostError, type Ledger } from "../../store/ledger.js";
 import { printableError, say, sayError } from "../../text/printable.js";

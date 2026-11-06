@@ -1,6 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { airwallexAdvice, AirwallexError, AirwallexUnreachableError } from "../../../airwallex/client.js";
-import { TRANSFER_METHODS } from "../../../domain/patterns.js";
+import { BENEFICIARY_ID_PATTERN, TRANSFER_METHODS } from "../../../domain/patterns.js";
 import { firstPaymentOutage } from "../../../engine/first-payment.js";
 import {
   openPayment,
@@ -13,7 +13,7 @@ import {
 } from "../../../engine/new-payment.js";
 import { newInvoiceId } from "../../../engine/scenario.js";
 import { railOf } from "../../../outages/outages.js";
-import { amountMinorOf, amountProblem, BENEFICIARY_ID_PATTERN } from "../../../runs/run-file.js";
+import { amountMinorOf, amountProblem } from "../../../runs/run-file.js";
 import { readingSoft, type Obligation, type Outage, type TransferMethod } from "../../../store/ledger.js";
 import { SANDBOX_OUTCOMES } from "../../../text/words.js";
 import { liveFrom, type Live } from "../../../views/context.js";

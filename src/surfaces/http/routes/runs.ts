@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { airwallexAdvice, AirwallexError, AirwallexUnreachableError, withAdvice } from "../../../airwallex/client.js";
 import type { RunRowTerms, RunTerms } from "../../../domain/approval.js";
 import { feeSeenText } from "../../../domain/arrival.js";
+import { runKey } from "../../../domain/patterns.js";
 import { outageView, type OutageView } from "../../../outages/outages.js";
 import { cleanFileName, MAX_RUN_FILE_CHARS, parseRunFile, type ParsedRunFile } from "../../../runs/run-file.js";
 import {
@@ -13,7 +14,6 @@ import {
   recheckRun,
   runBarred,
   runCounts,
-  runKey,
   runStatus,
   uploadRun,
   type DomainCheck,

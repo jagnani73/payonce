@@ -36,7 +36,7 @@ import {
 import type { CashReport, CurrencyCash } from "../engine/cash-position.js";
 import type { ApprovalPolicy } from "../domain/approvers.js";
 import { waiting, type Contact } from "../domain/contacts.js";
-import { BENEFICIARY_ID_PATTERN } from "../runs/run-file.js";
+import { BENEFICIARY_ID_PATTERN } from "../domain/patterns.js";
 import { approvedUnderway, heldBeforePaying } from "../domain/live.js";
 import { FLOOR_CLAUSES, reasonText, withoutClauses } from "../domain/reasons.js";
 import {

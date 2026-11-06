@@ -14,6 +14,8 @@ export const FAILURE_CODE_SOURCE: string = "[A-Za-z0-9_]{1,40}";
 export const STATUS_SOURCE: string = "[A-Z_]{1,30}";
 export const TRANSFER_METHODS: readonly TransferMethod[] = ["LOCAL", "SWIFT"];
 export const METHOD_SOURCE: string = TRANSFER_METHODS.join("|");
+// An Airwallex beneficiary id, as a pay run file or a form gives it.
+export const BENEFICIARY_ID_PATTERN: RegExp = /^[A-Za-z0-9-]{1,64}$/;
 
 export const REFERENCE_PATTERN: RegExp = whole(REFERENCE_SOURCE);
 export const CURRENCY_PATTERN: RegExp = whole(CURRENCY_SOURCE);
@@ -22,6 +24,12 @@ export const STATUS_PATTERN: RegExp = whole(STATUS_SOURCE);
 export const METHOD_PATTERN: RegExp = whole(`(?:${METHOD_SOURCE})`);
 // A rail: a currency and a transfer method, such as "USD LOCAL".
 export const RAIL_PATTERN: RegExp = whole(`${CURRENCY_SOURCE} [A-Z_]{1,20}`);
+
+// The Dispatcher key for a run's steps. A colon cannot be in an invoice number, so
+// it never names an invoice.
+export function runKey(runId: number): string {
+  return `run:${runId}`;
+}
 
 function whole(source: string): RegExp {
   return new RegExp(`^${source}$`);

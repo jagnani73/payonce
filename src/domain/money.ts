@@ -1,5 +1,6 @@
 // Airwallex sends amounts in major units. Only two-decimal currencies are handled here.
 const MINOR_UNITS_PER_MAJOR: number = 100;
+export const MINOR_DIGITS: number = 2;
 
 // Throws on a missing or non-numeric amount. A NaN would pass every "is cash
 // below the floor" comparison, so it must not reach the policy.
@@ -38,4 +39,16 @@ export function formatAmount(amountMinor: number): string {
 // An invoice's amount in its own currency.
 export function invoiceMoney(invoice: { amountMinor: number; currency: string }): string {
   return formatMoney(invoice.amountMinor, invoice.currency);
+}
+
+// True for a currency written with two decimals, the only kind PayOnce handles.
+export function twoDecimals(currency: string): boolean {
+  try {
+    return (
+      new Intl.NumberFormat("en", { style: "currency", currency }).resolvedOptions()
+        .maximumFractionDigits === MINOR_DIGITS
+    );
+  } catch {
+    return false;
+  }
 }

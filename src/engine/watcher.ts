@@ -14,7 +14,7 @@ import {
   type OutsidePayout,
 } from "../store/ledger.js";
 import { sayWarning } from "../text/printable.js";
-import { runKey } from "../runs/runs.js";
+import { runKey } from "../domain/patterns.js";
 import { sweep } from "./sweep.js";
 
 // A release that failed, for example because Airwallex could not be read, is

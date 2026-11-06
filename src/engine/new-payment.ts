@@ -2,9 +2,9 @@ import { findBeneficiary, type BeneficiaryRecord } from "../airwallex/beneficiar
 import type { TransferBankDetails } from "../airwallex/transfers.js";
 import { dueDateProblem } from "../domain/arrival.js";
 import { NameError, personName } from "../domain/approvers.js";
-import { CURRENCY_PATTERN, TRANSFER_METHODS } from "../domain/patterns.js";
+import { BENEFICIARY_ID_PATTERN, CURRENCY_PATTERN, TRANSFER_METHODS } from "../domain/patterns.js";
 import { BENEFICIARY_MISSING_REASON } from "../domain/reasons.js";
-import { BENEFICIARY_ID_PATTERN, twoDecimals } from "../runs/run-file.js";
+import { twoDecimals } from "../domain/money.js";
 import {
   alreadyInLedger,
   INVOICE_ID_PATTERN,
