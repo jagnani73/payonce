@@ -29,9 +29,10 @@ import {
   type RunRow,
   type ScannedObligation,
 } from "../store/ledger.js";
+import { storedFindings, type StoredFindings } from "../store/stored.js";
 import { withCurrencyLock } from "./currency-lock.js";
-import { emailsNotRead, readNewEmails, storedFindings } from "./emails.js";
-import { RETRY_FAILED_LOOK_MS, type Engine, type NextLook, type Rate, type StoredFindings } from "./engine.js";
+import { emailsNotRead, readNewEmails } from "./emails.js";
+import { RETRY_FAILED_LOOK_MS, type Engine, type NextLook, type Rate } from "./engine.js";
 import { anyLive } from "./facts.js";
 import { listOf, note } from "./lines.js";
 import { holdForOutsidePayout, linkUnseenPayouts, syncOutsidePayouts } from "./outside.js";

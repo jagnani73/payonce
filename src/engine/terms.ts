@@ -5,8 +5,8 @@ import { isExpired } from "../domain/live.js";
 import { reasonText } from "../domain/reasons.js";
 import { emailEvidence } from "../reader/emails.js";
 import type { Approval, Ledger, Obligation } from "../store/ledger.js";
+import { requestTerms } from "../store/stored.js";
 import type { Assessment } from "./engine.js";
-import { requestTerms } from "./stored.js";
 
 // The day an invoice's arrival estimate counts from. While an approval request is
 // requested or approved and has not expired, it is that request's day, so its

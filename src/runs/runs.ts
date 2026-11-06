@@ -27,7 +27,6 @@ import {
 import { arrivalFor, ifSentOn, today } from "../domain/arrival.js";
 import { routeKeyOf } from "../domain/assess.js";
 import { isExpired } from "../domain/live.js";
-import { committedAcross, committedByInvoice, type CommittedExcept } from "../engine/cash-position.js";
 import { withCurrencyLocks } from "../engine/currency-lock.js";
 import type { Dispatcher } from "../engine/dispatcher.js";
 import { likelyDuplicates, sameBillAndNumber, sameNumberExactly, sameSupplier, type Bill } from "../domain/duplicates.js";
@@ -60,6 +59,7 @@ import {
 } from "../store/ledger.js";
 import { formatAmount, formatMoney } from "../domain/money.js";
 import { runHoldLine, runWaitingLine } from "../outages/outages.js";
+import { committedAcross, committedByInvoice, type CommittedExcept } from "../store/read/cash.js";
 import { oneLine, printable, say, sayError } from "../text/printable.js";
 import { currencyFloor, type CurrencyFloor, type FloorSource } from "../domain/reserve.js";
 import { rowFromCells, type RunFile, type RunFileRow } from "./run-file.js";

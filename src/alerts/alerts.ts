@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import type { CashReport, CurrencyCash } from "../store/read/cash.js";
 import {
   alertMessage,
   payloadFor,
@@ -33,7 +34,6 @@ import {
   type RunChainReport,
   type RunLedgerReport,
 } from "../store/audit-trail.js";
-import type { CashReport, CurrencyCash } from "../engine/cash-position.js";
 import type { ApprovalPolicy } from "../domain/approvers.js";
 import { waiting, type Contact } from "../domain/contacts.js";
 import { BENEFICIARY_ID_PATTERN } from "../domain/patterns.js";

@@ -19,10 +19,10 @@ import { barredFrom } from "../domain/barred.js";
 import { expiryOf, isExpired } from "../domain/live.js";
 import { formatMoney, invoiceMoney } from "../domain/money.js";
 import { signersOf, type Approval, type Ledger, type Obligation, type Signoff } from "../store/ledger.js";
+import { requestTerms } from "../store/stored.js";
 import type { Engine, NextLook, Rate } from "./engine.js";
 import { note } from "./lines.js";
 import { quoteLine, requestExpiry } from "./rates.js";
-import { requestTerms } from "./stored.js";
 import { countedFromToday } from "./terms.js";
 
 // barredFrom, on the ledger as it is now. The account's routeKey is the one given

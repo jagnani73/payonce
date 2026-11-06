@@ -12,7 +12,6 @@ import { knownName, sameName, type ApprovalPolicy, type Barred } from "../domain
 import { HOLIDAYS_NOTE, type ArrivalTerms } from "../domain/arrival.js";
 import { setterBarWhy } from "../domain/contacts.js";
 import { isExpired } from "../domain/live.js";
-import { committedMinor } from "../engine/cash-position.js";
 import { deadlineMinutes } from "../domain/deadlines.js";
 import { EMAILS_UNREAD_REASON } from "../domain/decide.js";
 import { emailEvidence, type SupplierEmail } from "../reader/emails.js";
@@ -44,6 +43,7 @@ import {
 } from "../store/ledger.js";
 import { formatAmount, formatMoney } from "../domain/money.js";
 import { currencyFloor, debitCurrency, floorFor, type ReservePolicy } from "../domain/reserve.js";
+import { committedMinor } from "../store/read/cash.js";
 import { SANDBOX_BANK_AFTER, SANDBOX_BANK_RECOVER, SANDBOX_BANK_STOPPED, TRY_WORDS_SOURCE } from "../text/words.js";
 import { CURRENCY_PATTERN, CURRENCY_SOURCE, FAILURE_CODE_SOURCE, METHOD_PATTERN, METHOD_SOURCE, REFERENCE_PATTERN, REFERENCE_SOURCE, STATUS_PATTERN, STATUS_SOURCE } from "../domain/patterns.js";
 import { FAILURE_WORDS, RAIL_FAILURE_CODES, RESENDABLE_FAILURE_CODES } from "../domain/failure-codes.js";

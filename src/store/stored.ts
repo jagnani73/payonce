@@ -1,13 +1,37 @@
 import type { ApprovalTerms, FxTerms, LastQuote } from "../domain/approval.js";
 import type { ArrivalTerms } from "../domain/arrival.js";
-import { checkedObject, type Approval } from "../store/ledger.js";
-import type { StoredFindings } from "./engine.js";
+import type { EmailFindings, SupplierEmail } from "../reader/emails.js";
+import type { Approval } from "./approvals.js";
+import { checkedObject, storedShape } from "./db.js";
+import type { Ledger } from "./ledger.js";
 
 // Stored JSON the engine acts on, checked field by field against every shape
 // PayOnce has written it in, before any field is read. A row in another shape was
 // changed outside PayOnce, and the look fails closed on it as on one that does
 // not parse. A field later versions added is optional only where earlier rows
 // lack it.
+
+// What the reader found. unverifiedSenders is kept for display; the policy works
+// the sender check out again from the stored emails. unread marks a thread the
+// reader failed on. emailsRead is how many emails of the thread were read.
+export interface StoredFindings extends EmailFindings {
+  unverifiedSenders?: string[];
+  unread?: boolean;
+  emailsRead?: number;
+}
+
+const NO_FINDINGS: StoredFindings = {
+  claimsNonReceipt: false,
+  asksForNewBankDetails: false,
+  asksNotToPay: false,
+  summary: "no emails on file",
+};
+
+// Emails on file that no look has read yet.
+const NOT_READ_FINDINGS: StoredFindings = {
+  ...NO_FINDINGS,
+  summary: "the emails have not been read yet",
+};
 
 type Fields = Record<string, unknown>;
 
@@ -154,4 +178,19 @@ export function findingsOnFile(invoiceId: string): string {
 // The terms a request was opened on, read strict wherever it is read.
 export function requestTerms(approval: Pick<Approval, "id" | "invoiceId" | "terms">): ApprovalTerms {
   return checkedObject(approval.terms, isApprovalTerms, termsOnFile(approval));
+}
+
+// The stored findings, or what stands for them before anything was read. They are
+// read strict, so a look on findings that do not parse, or are not in the shape
+// PayOnce writes, throws and pays nothing. Only a view, such as the board's
+// pendingClose, reads them soft (readingSoft), and there such findings stand as
+// not read.
+export function storedFindings(ledger: Ledger, invoiceId: string, emails: SupplierEmail[]): { findings: StoredFindings; stored: boolean } {
+  const stored: string | undefined = ledger.findings(invoiceId);
+  const findings: StoredFindings | null =
+    stored === undefined ? null : storedShape(stored, isStoredFindings, findingsOnFile(invoiceId));
+  if (findings !== null) {
+    return { findings, stored: true };
+  }
+  return { findings: emails.length === 0 ? NO_FINDINGS : NOT_READ_FINDINGS, stored: false };
 }

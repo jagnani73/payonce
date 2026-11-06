@@ -8,7 +8,7 @@ import {
   waitingRunLines,
   type CashKind,
   type CashLine,
-} from "../engine/cash-position.js";
+} from "../store/read/cash.js";
 import {
   CHANGED_BANK_DETAILS_REASON,
   LAST_PAID_CHANGED_REASON,

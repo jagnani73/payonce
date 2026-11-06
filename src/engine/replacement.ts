@@ -7,7 +7,7 @@ import { reasonText } from "../domain/reasons.js";
 import { debitCurrency } from "../domain/reserve.js";
 import { holdLine } from "../outages/outages.js";
 import type { Attempt, Lease, Obligation, Outage } from "../store/ledger.js";
-import { committedAcross, committedByInvoice } from "./cash-position.js";
+import { committedAcross, committedByInvoice } from "../store/read/cash.js";
 import type { Assessment, Decided, Engine, NextLook } from "./engine.js";
 import { escalate } from "./escalated.js";
 import { anyLive, paidDuplicate } from "./facts.js";

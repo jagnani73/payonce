@@ -13,6 +13,7 @@ import {
   type OutsidePayout,
   type RunRow,
 } from "../store/ledger.js";
+import { requestTerms } from "../store/stored.js";
 import { capitalise } from "../text/printable.js";
 import { withCurrencyLock } from "./currency-lock.js";
 import { CONTINUE, nextLookAt, type Engine, type NextLook, type StepResult } from "./engine.js";
@@ -22,7 +23,6 @@ import { note } from "./lines.js";
 import { holdForOutsidePayout } from "./outside.js";
 import { sendAttempt, wasRejected } from "./payments.js";
 import { AccountChangedError, requireAccount, type TransferChecks } from "./send.js";
-import { requestTerms } from "./stored.js";
 
 // A pending attempt is not sent again while a payout for the invoice sent outside
 // PayOnce is live. It stays pending under its request id, which keeps the

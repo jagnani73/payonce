@@ -10,7 +10,6 @@ import {
   type RequestSnapshot,
   type Situation,
 } from "../domain/situation.js";
-import { attemptLostFee, type CashReport } from "../engine/cash-position.js";
 import { noteTexts } from "../intake/eml.js";
 import type { DraftMove } from "../store/ledger.js";
 import { MOVES_FROM, outboxOf, type DraftOffer, type DraftView as StoredDraftView, type NotOffered, type Outbox } from "../outbox/drafts.js";
@@ -18,6 +17,7 @@ import type { OutageSend } from "../outages/outages.js";
 import { unverifiedSenders, type SupplierEmail } from "../reader/emails.js";
 import type { Settings } from "../settings.js";
 import { crossCurrency, readingSoft, storedObject, type Attempt, type Ledger, type Obligation, type OutsidePayout } from "../store/ledger.js";
+import { attemptLostFee, type CashReport } from "../store/read/cash.js";
 import { shownReference } from "../text/printable.js";
 import { boardEntriesFor, outageHolding, type BoardEntry, type BoardMoney } from "./incident-board.js";
 import { invoiceIndex, type InvoiceIndex } from "../intake/intake.js";

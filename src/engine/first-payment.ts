@@ -29,7 +29,7 @@ import {
   type RunRow,
   type ScannedObligation,
 } from "../store/ledger.js";
-import { committedAcross, committedByInvoice } from "./cash-position.js";
+import { committedAcross, committedByInvoice } from "../store/read/cash.js";
 import { withCurrencyLock } from "./currency-lock.js";
 import { RETRY_FAILED_LOOK_MS, type Engine, type LookOptions, type NextLook } from "./engine.js";
 import { anyLive } from "./facts.js";

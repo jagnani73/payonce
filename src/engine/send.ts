@@ -7,11 +7,11 @@ import { deadlineOf, describeDeadline } from "../domain/deadlines.js";
 import { formatMoney, invoiceMoney, toMinor } from "../domain/money.js";
 import { accountMismatchOf, rateMismatchOf, reasonFor, reasonText, type Reason } from "../domain/reasons.js";
 import type { Approval, Attempt, AttemptKind, Obligation } from "../store/ledger.js";
+import { requestTerms } from "../store/stored.js";
 import { capitalise } from "../text/printable.js";
 import type { Engine, NextLook } from "./engine.js";
 import { messageOf, note } from "./lines.js";
 import { sendAttempt, wasRejected, type Decide } from "./payments.js";
-import { requestTerms } from "./stored.js";
 
 // The beneficiary record no longer holds the account a payment was decided or
 // approved for.

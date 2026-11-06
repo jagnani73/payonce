@@ -3,7 +3,6 @@ import type { BalanceCache } from "../../airwallex/balances.js";
 import type { Alerts, AlertSetting, AlertsStatus } from "../../alerts/alerts.js";
 import { arrivalAdvice, type ArrivalAdvice, type ArrivalTerms } from "../../domain/arrival.js";
 import { isExpired, withBank } from "../../domain/live.js";
-import type { CashReport } from "../../engine/cash-position.js";
 import type { Dispatcher } from "../../engine/dispatcher.js";
 import type { Engine } from "../../engine/engine.js";
 import type { SandboxBank } from "../../engine/sandbox-bank.js";
@@ -20,6 +19,7 @@ import {
   type OutsidePayout,
   type RunApproval,
 } from "../../store/ledger.js";
+import type { CashReport } from "../../store/read/cash.js";
 import { HttpError } from "./http.js";
 
 const EMAILS_DIR: URL = new URL("../../../fixtures/emails/", import.meta.url);
