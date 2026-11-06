@@ -1,4 +1,4 @@
-import type { ComponentChildren, JSX } from "preact";
+import type { JSX } from "preact";
 import { ActionButton } from "../../components/Action";
 import { Icon } from "../../components/Icon";
 import { Day, Money, Theirs, Time } from "../../components/Text";
@@ -6,31 +6,12 @@ import { SituationHeader } from "../../components/Tone";
 import { postJson } from "../../api";
 import { runHref, supplierHref } from "../../router";
 import { parseDay, useNow } from "../../time";
-import type { Acted, IncidentView, PaymentFacts, Situation } from "../../types";
+import type { Acted, IncidentView, PaymentFacts } from "../../types";
 import { Dotted, methodText, type Acts } from "./parts";
 
 // The payment page's header (ia.md 3.1): what the payment is, its one state with
 // the next step and what blocks it, the incident on it, and Check now.
 
-// The view writes the state's deadline into the detail in UTC ("open until 06:21
-// UTC", "due 09:03 UTC"). The page shows it in local time with how long is left.
-const UTC_DEADLINE: RegExp = /( · open until|, due) \d{2}:\d{2} UTC$/;
-
-function localised(situation: Situation): { situation: Situation; extra: ComponentChildren } {
-  const found: RegExpExecArray | null = situation.detail === null ? null : UTC_DEADLINE.exec(situation.detail);
-  if (found === null || situation.detail === null || situation.deadlineAt === null) {
-    return { situation, extra: undefined };
-  }
-  return {
-    situation: { ...situation, detail: situation.detail.slice(0, found.index) },
-    extra: (
-      <>
-        {`${found[1]} `}
-        <Time at={situation.deadlineAt} mode="until" />
-      </>
-    ),
-  };
-}
 
 function Due(props: { day: string }): JSX.Element {
   const now: Date = useNow();
@@ -93,7 +74,7 @@ function CheckNow(props: { view: IncidentView; acts: Acts }): JSX.Element | null
 export function Header(props: { view: IncidentView; acts: Acts }): JSX.Element {
   const v: IncidentView = props.view;
   const p: PaymentFacts = v.payment;
-  const shown: { situation: Situation; extra: ComponentChildren } = localised(v.situation);
+
   return (
     <header class="card pay-head">
       <div class="pay-head__top">
@@ -109,7 +90,7 @@ export function Header(props: { view: IncidentView; acts: Acts }): JSX.Element {
       </div>
       <h1 class="pay-head__id ref">{p.invoiceId}</h1>
       <Facts payment={p} />
-      <SituationHeader situation={shown.situation} extra={shown.extra} />
+      <SituationHeader situation={v.situation} />
       {p.run === null ? null : (
         <p class="pay-head__line">
           <a href={runHref(p.run.id)}>{`From pay run ${p.run.id}, row ${p.run.line}`}</a>

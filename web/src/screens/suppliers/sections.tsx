@@ -2,7 +2,7 @@ import type { ComponentChildren, JSX } from "preact";
 import { useId, useState } from "preact/hooks";
 import { Icon } from "../../components/Icon";
 import { Card } from "../../components/Layout";
-import { Money, Ref, Theirs, Time } from "../../components/Text";
+import { Money, Ref, Said, Theirs, Time } from "../../components/Text";
 import { Tag, ToneBadge } from "../../components/Tone";
 import { paymentHref, runHref, supplierHref } from "../../router";
 import type { IncidentRow, SupplierAccountView, SupplierListRow, SupplierView, WalletTotals } from "../../types";
@@ -147,7 +147,11 @@ function PaymentLink(props: { row: IncidentRow }): JSX.Element {
       <a class="sup-pay" href={paymentHref(row.invoiceId)}>
         <ToneBadge tone={row.situation.tone} label={row.situation.label} />
         <span class="ref sup-pay__id">{row.invoiceId}</span>
-        {row.situation.detail === null ? null : <span class="sup-pay__detail">{row.situation.detail}</span>}
+        {row.situation.detail === null ? null : (
+          <span class="sup-pay__detail">
+            <Said text={row.situation.detail} />
+          </span>
+        )}
         <Money money={row.amount} class="sup-pay__amount" />
       </a>
     </li>

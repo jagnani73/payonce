@@ -230,10 +230,10 @@ const OUTAGE_STRIP = { rail: RAIL, sendsText: "plain" } as const satisfies Field
 // stored reason, so they are quoted.
 const SITUATION = {
   label: "plain",
-  detail: "quoted",
-  next: "quoted",
+  "detail[]": "quoted",
+  "next[]": "quoted",
   ...under("why", REASON),
-  "blockers[].text": "plain",
+  "blockers[].text[]": "plain",
   "also[]": "quoted",
   "waitingOn.names[]": "person",
   ...under("can.approve", CAN),
@@ -245,7 +245,7 @@ const SITUATION = {
   ...under("can.checkNow", CAN),
 } as const satisfies Fields<Situation>;
 
-const RUN_SITUATION = { label: "plain", detail: "quoted", next: "quoted", why: "quoted", "waitingOn.names[]": "person" } as const satisfies Fields<RunSituation>;
+const RUN_SITUATION = { label: "plain", "detail[]": "quoted", "next[]": "quoted", why: "quoted", "waitingOn.names[]": "person" } as const satisfies Fields<RunSituation>;
 
 const INCIDENT_ROW = {
   supplier: "supplier",
@@ -259,7 +259,7 @@ const INCIDENT_ROW = {
 const RUN_ROW_ITEM = {
   fileName: "person",
   label: "plain",
-  next: "quoted",
+  "next[]": "quoted",
   "primary.label": "plain",
   "primary.href": ROW_LINK,
 } as const satisfies Fields<RunRowItem>;
@@ -313,10 +313,10 @@ export const INCIDENT_FIELDS = {
   ...under("situation", SITUATION),
   "incident.cause": "quoted",
   "summary[].lead": "plain",
-  "summary[].text": "quoted",
+  "summary[].text[]": "quoted",
   "summary[].refs[].reference": SHOWN_REFERENCE,
   ...under("decision.open.request", REQUEST),
-  "decision.open.cautions[].text": "plain",
+  "decision.open.cautions[].text[]": "plain",
   ...under("decision.open.options[]", OPTION),
   "decision.closed.by": "person",
   "decision.closed.note": "person",
@@ -432,7 +432,7 @@ export const RUN_FIELDS = {
   "run.cancelNote": "person",
   ...under("situation", RUN_SITUATION),
   ...under("decision.request", RUN_REQUEST),
-  "decision.cautions[].text": "plain",
+  "decision.cautions[].text[]": "plain",
   ...under("decision.options[]", RUN_OPTION),
   ...under("rows[]", RUN_ROW),
   "skippedSummary[].label": "plain",

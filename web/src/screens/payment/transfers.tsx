@@ -21,11 +21,9 @@ const FAILED: ReadonlySet<TransferView["state"]> = new Set<TransferView["state"]
 
 function StateLine(props: { transfer: TransferView }): JSX.Element {
   const t: TransferView = props.transfer;
-  // The view writes the deadline in UTC; the page shows it local.
-  const label: string = t.state === "with-bank" && t.deadlineAt !== null ? "With the bank" : t.stateLabel;
   return (
     <div class="pay-transfer__state">
-      <ToneBadge tone={t.tone} label={label} />
+      <ToneBadge tone={t.tone} label={t.stateLabel} />
       {t.state === "with-bank" && t.deadlineAt !== null ? (
         <span class={t.pastDeadline ? "pay-warn" : "muted"}>
           {t.pastDeadline ? "past its bank deadline, " : "due "}

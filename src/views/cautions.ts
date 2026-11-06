@@ -1,6 +1,7 @@
 import { debitCurrency } from "../domain/reserve.js";
 import type { ClauseCode } from "../domain/reasons.js";
 import type { Blocker, InvoiceSnapshot, Situation } from "../domain/situation.js";
+import { timeAt, timed, type TimePart } from "../domain/timed.js";
 import type { Caution, FxView, RequestView } from "./contract.js";
 
 // What a person should weigh before choosing an option, in PayOnce's words. Each
@@ -10,25 +11,25 @@ import type { Caution, FxView, RequestView } from "./contract.js";
 const SAME_ACCOUNT: string = "This replacement goes to the account the original failed on. Check the account with the supplier first.";
 const OTHER_DETAILS: string = "The supplier asked to be paid to other bank details. This request pays the account on file.";
 
-function utc(at: string): string {
-  return `${at.slice(11, 16)} UTC`;
+function said(code: Caution["code"], text: string): Caution {
+  return { code, text: [text] };
 }
 
 function clauseCaution(code: ClauseCode, wallet: string): Caution {
   switch (code) {
     case "below-floor":
-      return { code: "below-floor", text: `A replacement and its transfer fee take ${wallet} cash below the reserve floor.` };
+      return said("below-floor", `A replacement and its transfer fee take ${wallet} cash below the reserve floor.`);
     case "cash-unreadable":
-      return {
-        code: "floor-unreadable",
-        text: `PayOnce could not read the ${wallet} balance or its reserve floor when it decided, so it did not resend by itself.`,
-      };
+      return said(
+        "floor-unreadable",
+        `PayOnce could not read the ${wallet} balance or its reserve floor when it decided, so it did not resend by itself.`,
+      );
     case "no-floor":
-      return { code: "no-floor", text: `No reserve floor is set for ${wallet}, so PayOnce sends every replacement there to a person.` };
+      return said("no-floor", `No reserve floor is set for ${wallet}, so PayOnce sends every replacement there to a person.`);
     case "second-bill-paid":
-      return { code: "second-bill", text: "An invoice this one looks like a second bill of has been paid already." };
+      return said("second-bill", "An invoice this one looks like a second bill of has been paid already.");
     case "asks-not-to-pay":
-      return { code: "asks-not-to-pay", text: "The supplier asked to hold, cancel or not pay this invoice." };
+      return said("asks-not-to-pay", "The supplier asked to hold, cancel or not pay this invoice.");
   }
 }
 
@@ -45,36 +46,34 @@ export function cautionsOf(snapshot: InvoiceSnapshot, situation: Situation, requ
     add(clauseCaution(clause.code, wallet));
   }
   if (situation.also.includes(SAME_ACCOUNT)) {
-    add({ code: "same-account-failed", text: SAME_ACCOUNT });
+    add(said("same-account-failed", SAME_ACCOUNT));
   }
   if (situation.also.includes(OTHER_DETAILS)) {
-    add({ code: "bank-details-question", text: OTHER_DETAILS });
+    add(said("bank-details-question", OTHER_DETAILS));
   }
   if (request?.terms.callback !== null && request?.terms.callback !== undefined) {
-    add({
-      code: "new-account",
-      text: "This request pays bank details a callback verified, not the account the original went to. It needs two approvers.",
-    });
+    add(said("new-account", "This request pays bank details a callback verified, not the account the original went to. It needs two approvers."));
   }
   const outage: Blocker | undefined = situation.blockers.find((blocker: Blocker): boolean => blocker.code === "outage");
   if (outage !== undefined) {
     add({ code: "outage", text: outage.text });
   }
   if (snapshot.emails.asksNotToPay) {
-    add({ code: "asks-not-to-pay", text: "The supplier asked to hold, cancel or not pay this invoice." });
+    add(said("asks-not-to-pay", "The supplier asked to hold, cancel or not pay this invoice."));
   }
   if (situation.why?.code === "unverified-sender") {
-    add({
-      code: "domain",
-      text: "An email on this payment comes from an address that does not match the supplier's email domain on file.",
-    });
+    add(said("domain", "An email on this payment comes from an address that does not match the supplier's email domain on file."));
   }
   const fx: FxView | null = request?.state === "waiting" ? request.terms.fx : null;
-  const ends: number = fx === null ? Number.NaN : Date.parse(fx.validTo);
-  if (fx !== null && Number.isFinite(ends)) {
+  const ends: TimePart | null = fx === null ? null : timeAt(fx.validTo, true);
+  if (ends !== null) {
     add({
       code: "fx-quote-ends",
-      text: `The exchange-rate quote ends at ${utc(new Date(ends).toISOString())}. The request cannot be used after that, and PayOnce opens a new one on a new quote.`,
+      text: timed(
+        "The exchange-rate quote ends at ",
+        ends,
+        ". The request cannot be used after that, and PayOnce opens a new one on a new quote.",
+      ),
     });
   }
   return found;

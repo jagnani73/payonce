@@ -1,7 +1,7 @@
 import type { JSX } from "preact";
 import { useEffect, useId, useState } from "preact/hooks";
 import { Callout } from "../../components/Notice";
-import { Money, Theirs, Time } from "../../components/Text";
+import { Money, Said, Theirs, Time } from "../../components/Text";
 import { useMe } from "../../me";
 import type { Caution, DecisionOption, DecisionPanel, HeadroomLine, IncidentPhoneView, IncidentView, RequestView } from "../../types";
 import { CallbackForm } from "./callback";
@@ -270,7 +270,7 @@ export function Decision(props: { view: IncidentView; acts: Acts; want: Kind | n
               {open.cautions.map(
                 (caution: Caution): JSX.Element => (
                   <Callout tone="warning" key={caution.code}>
-                    {caution.text}
+                    <Said text={caution.text} />
                   </Callout>
                 ),
               )}

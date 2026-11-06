@@ -4,7 +4,7 @@ import type { Blocker, IncidentRow, Money as MoneyView, QueueItem, RowTag, RunRo
 import { waitingOnText } from "../words";
 import { LinkButton, type ButtonKind } from "./Action";
 import { Icon } from "./Icon";
-import { Money, Theirs, Time } from "./Text";
+import { Money, Said, saidKey, Theirs, Time } from "./Text";
 import { Tag, ToneBadge } from "./Tone";
 
 // One payment or one pay run as a row of a queue: Home's lists, and the cards
@@ -102,7 +102,11 @@ function PaymentRow(props: { row: IncidentRow; kind: ButtonKind; handling: boole
     <li class={props.handling ? "qrow qrow--handling" : "qrow"}>
       <div class="qrow__state">
         <ToneBadge tone={s.tone} label={s.label} />
-        {s.detail === null || props.handling ? null : <span class="qrow__detail">{s.detail}</span>}
+        {s.detail === null || props.handling ? null : (
+          <span class="qrow__detail">
+            <Said text={s.detail} />
+          </span>
+        )}
         {row.activity.busy ? (
           <span class="working">
             <span class="working__dot" aria-hidden="true" />
@@ -121,14 +125,19 @@ function PaymentRow(props: { row: IncidentRow; kind: ButtonKind; handling: boole
           <Theirs text={row.supplier} class="qrow__who" />
         </div>
         {props.handling && blocker !== undefined ? (
-          <p class="qrow__blocker">{`Blocked: ${blocker.text}`}</p>
+          <p class="qrow__blocker">
+            {"Blocked: "}
+            <Said text={blocker.text} />
+          </p>
         ) : (
           <>
-            <p class="qrow__next">{s.next}</p>
-            {blocker === undefined || blocker.text === s.next ? null : (
+            <p class="qrow__next">
+              <Said text={s.next} />
+            </p>
+            {blocker === undefined || saidKey(blocker.text) === saidKey(s.next) ? null : (
               <p class="qrow__blocker">
                 <Icon name="pause" />
-                {blocker.text}
+                <Said text={blocker.text} />
               </p>
             )}
           </>
@@ -175,7 +184,9 @@ function RunRow(props: { row: RunRowItem; kind: ButtonKind }): JSX.Element {
           </span>
           <Theirs text={row.fileName} class="qrow__who" />
         </div>
-        <p class="qrow__next">{row.next}</p>
+        <p class="qrow__next">
+          <Said text={row.next} />
+        </p>
         <div class="qrow__meta">
           <Meta
             parts={[

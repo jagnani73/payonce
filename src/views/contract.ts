@@ -7,6 +7,9 @@
 // Conventions:
 // - Every `...At` field is an ISO 8601 UTC string (Iso). Days are YYYY-MM-DD.
 // - Every amount is a Money: minor units, a currency, and PayOnce's own text.
+// - A sentence that names a time is a Timed (domain/timed.ts): its words, with
+//   each time as an ISO value between them, never a time written into the text.
+//   The page writes the time in the viewer's zone, the CLI in UTC.
 // - A field typed Theirs holds text PayOnce did not write (supplier names, email
 //   text, typed names and notes, Airwallex messages, pay run cells). The page puts
 //   it in text nodes through whyText, MCP wraps it as outside text, alerts defang
@@ -20,6 +23,7 @@
 // Types that carry over unchanged are imported by type only.
 
 import type { ReasonView } from "../domain/reasons.js";
+import type { Timed } from "../domain/timed.js";
 import type {
   Blocker,
   Can,
@@ -42,6 +46,7 @@ import type { AuditExport, RunAuditExport } from "../store/audit-trail.js";
 import type { MetricsReport } from "./metrics.js";
 
 export type { ClauseCode, ReasonCode, ReasonFamily, ReasonView } from "../domain/reasons.js";
+export type { Timed, TimedPart, TimePart } from "../domain/timed.js";
 export type {
   Blocker,
   BlockerCode,
@@ -167,7 +172,7 @@ export interface Caution {
     | "asks-not-to-pay"
     | "domain"
     | "fx-quote-ends";
-  text: string;
+  text: Timed;
 }
 
 export interface SupplierBrief {
@@ -285,7 +290,7 @@ export interface PaymentFacts {
 
 export interface SummaryBullet {
   lead: "Happened" | "PayOnce did" | "Now" | "Supplier" | "Cash";
-  text: string;
+  text: Timed;
   // Invoice numbers and references in the text, for links.
   refs: { invoiceId?: InvoiceId; reference?: Reference }[];
 }
@@ -403,7 +408,7 @@ export interface TransferView {
   kind: "original" | "replacement" | "outside-payout" | "unrecognised";
   reference: Reference | null;
   state: TransferState;
-  // "Failed: channel timeout", "With the bank, due 14:32"...
+  // "Failed: channel timeout", "With the bank"... The deadline is deadlineAt.
   stateLabel: string;
   tone: Tone;
   failure: FailureView | null;
@@ -617,7 +622,7 @@ export interface RunRowItem {
   fileName: Theirs;
   state: RunPhase;
   label: string;
-  next: string;
+  next: Timed;
   tone: Tone;
   payments: number;
   totals: Money[];

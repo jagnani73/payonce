@@ -1,4 +1,5 @@
 import { utcText } from "../../alerts/alert-payloads.js";
+import { timedText, type Timed } from "../../domain/timed.js";
 import { printable, say } from "../../text/printable.js";
 import type {
   ApproverChoice,
@@ -53,6 +54,11 @@ export function utc(at: string | null): string {
   return at === null ? "a time not on file" : utcText(at);
 }
 
+// A sentence that names times, each written in UTC.
+export function said(sentence: Timed): string {
+  return timedText(sentence, utc);
+}
+
 // How long since a time, in its largest whole unit.
 function age(since: string | null, now: string): string {
   const at: number = since === null ? Number.NaN : Date.parse(since);
@@ -87,18 +93,19 @@ function moneyList(items: Money[]): string {
 }
 
 // A situation's label and its detail, as the state chip and the line under it.
-function situationLine(situation: { label: string; detail: string | null }): string {
-  return situation.detail === null ? situation.label : `${situation.label} · ${situation.detail}`;
+export function situationLine(situation: { label: string; detail: Timed | null }): string {
+  return situation.detail === null ? situation.label : `${situation.label} · ${said(situation.detail)}`;
 }
 
 // What happens next, why, when the next line does not say it already, and what
 // stands in the way.
 function situationLines(situation: Situation): string[] {
   const why: string | null = situation.why?.text ?? null;
+  const next: string = said(situation.next);
   return [
-    situation.next,
-    ...(why === null || situation.next.toLowerCase().includes(why.toLowerCase()) ? [] : [`Why: ${why}`]),
-    ...situation.blockers.map((blocker: { text: string }): string => `Blocked: ${blocker.text}`),
+    next,
+    ...(why === null || next.toLowerCase().includes(why.toLowerCase()) ? [] : [`Why: ${why}`]),
+    ...situation.blockers.map((blocker: { text: Timed }): string => `Blocked: ${said(blocker.text)}`),
     ...situation.also.map((line: string): string => `Also: ${line}`),
   ];
 }
@@ -117,10 +124,10 @@ export function putPayment(view: IncidentView): void {
 
 // The cautions, less those the header printed already.
 export function putCautions(cautions: Caution[], shown: string[] = []): void {
-  const left: Caution[] = cautions.filter((caution: Caution): boolean => !shown.includes(caution.text));
+  const left: string[] = cautions.map((caution: Caution): string => said(caution.text)).filter((text: string): boolean => !shown.includes(text));
   if (left.length > 0) {
     heading("Cautions");
-    putAll(left.map((caution: Caution): string => `! ${caution.text}`), 1);
+    putAll(left.map((text: string): string => `! ${text}`), 1);
   }
 }
 
@@ -273,7 +280,7 @@ export function paymentRow(row: IncidentRow, now: string): Listed {
   return {
     head: [row.invoiceId, row.supplier, row.amount.text, situation.group === "closed" ? situation.label : `${situation.label}, waiting ${age(row.waitingSince, now)}`],
     lines: [
-      ...(situation.detail === null ? [] : [situation.detail]),
+      ...(situation.detail === null ? [] : [said(situation.detail)]),
       ...(row.fromWallet === null ? [] : [`From the ${row.fromWallet.currency} wallet: ${money(row.fromWallet)}`]),
       ...situationLines(situation),
       ...(tags.length === 0 ? [] : [tags.join(" · ")]),
@@ -285,7 +292,7 @@ export function paymentRow(row: IncidentRow, now: string): Listed {
 export function runRow(item: RunRowItem, now: string): Listed {
   return {
     head: [`Pay run ${item.runId}`, item.fileName, moneyList(item.totals), `${item.label}, waiting ${age(item.waitingSince, now)}`],
-    lines: [item.next, `Next step: ${runCommandOf(item)}`],
+    lines: [said(item.next), `Next step: ${runCommandOf(item)}`],
   };
 }
 

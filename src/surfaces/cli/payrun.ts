@@ -47,6 +47,8 @@ import {
   put,
   putAll,
   putCautions,
+  said,
+  situationLine,
   putFields,
   putConsequence,
   putOption,
@@ -173,8 +175,8 @@ function putOptions(view: RunView): void {
 function show(view: RunView): void {
   const run: RunView["run"] = view.run;
   put(`Pay run ${run.id} · ${run.fileName} · uploaded by ${run.uploadedBy} at ${utc(run.uploadedAt)}`);
-  put(view.situation.label);
-  put(view.situation.next);
+  put(situationLine(view.situation));
+  put(said(view.situation.next));
   if (view.situation.why !== null) {
     put(`Why: ${view.situation.why}`);
   }

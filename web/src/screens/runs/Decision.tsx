@@ -4,7 +4,7 @@ import { postJson } from "../../api";
 import { ActionButton } from "../../components/Action";
 import { Field, firstApprover, NameField, NamePicker, type ControlProps } from "../../components/Form";
 import { Callout } from "../../components/Notice";
-import { Theirs, Time } from "../../components/Text";
+import { Said, Theirs, Time } from "../../components/Text";
 import { sameMe, useMe, useNameDraft } from "../../me";
 import { notify } from "../../notices";
 import { joinNames } from "../../text";
@@ -142,7 +142,7 @@ function Cautions(props: { cautions: Caution[]; terms: RunTermsView | null }): J
       {props.cautions.map(
         (caution: Caution): JSX.Element => (
           <Callout tone="warning" key={caution.code}>
-            {caution.text}
+            <Said text={caution.text} />
           </Callout>
         ),
       )}

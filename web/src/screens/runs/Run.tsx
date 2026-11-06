@@ -4,12 +4,12 @@ import { Details } from "../../components/Action";
 import { Icon } from "../../components/Icon";
 import { Tabs } from "../../components/Layout";
 import { Empty, LoadError, Loading } from "../../components/States";
-import { Day, Money, Ref, Theirs, Time } from "../../components/Text";
+import { Day, Money, Ref, Said, Theirs, Time } from "../../components/Text";
 import { AuditLine, Timeline } from "../../components/Timeline";
 import { SituationHeader, Tag, ToneBadge } from "../../components/Tone";
 import { FAST_MS, SLOW_MS, usePoll, type Polled } from "../../poll";
 import { paymentHref, runHref } from "../../router";
-import type { Caution, RunCashView, RunRequestView, RunRowView, RunTermsView, RunView, Tone } from "../../types";
+import type { Caution, RunCashView, RunRowView, RunTermsView, RunView, Tone } from "../../types";
 import { useKept } from "../inbox/kept";
 import { RunDecision } from "./Decision";
 
@@ -42,7 +42,6 @@ function pace(view: RunView | null): number {
 function Header(props: { view: RunView }): JSX.Element {
   const view: RunView = props.view;
   const run: RunView["run"] = view.run;
-  const request: RunRequestView | null = view.decision?.request ?? null;
   const outage: Caution | undefined = view.decision?.cautions.find((caution: Caution): boolean => caution.code === "outage");
   return (
     <header class="card run-head">
@@ -57,21 +56,13 @@ function Header(props: { view: RunView }): JSX.Element {
           </span>
         ) : null}
       </div>
-      <SituationHeader
-        situation={view.situation}
-        extra={
-          request !== null && request.state === "waiting" ? (
-            <>
-              {`${request.signoffs.length} of ${request.needed} signoffs · open until `}
-              <Time at={request.expiresAt} mode="until" />
-            </>
-          ) : undefined
-        }
-      />
+      <SituationHeader situation={view.situation} />
       {outage === undefined || view.situation.state === "paused-by-outage" ? null : (
         <p class="situation__blocker">
           <Icon name="pause" />
-          <span>{outage.text}</span>
+          <span>
+            <Said text={outage.text} />
+          </span>
         </p>
       )}
       <p class="run-head__meta">

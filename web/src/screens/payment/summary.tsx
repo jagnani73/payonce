@@ -2,7 +2,7 @@ import type { JSX } from "preact";
 import { useId, useState } from "preact/hooks";
 import { postJson } from "../../api";
 import { ActionButton } from "../../components/Action";
-import { Theirs, Time } from "../../components/Text";
+import { Said, Theirs, Time } from "../../components/Text";
 import { useSettings } from "../../settings";
 import type { AskWhyAnswer, IncidentView, SettingsView, SummaryBullet } from "../../types";
 import { WithRefs, type Acts } from "./parts";
@@ -89,7 +89,10 @@ export function Summary(props: { view: IncidentView; acts: Acts }): JSX.Element 
                 <li key={bullet.lead}>
                   <strong>{bullet.lead}</strong>
                   {": "}
-                  <WithRefs text={bullet.text} refs={bullet.refs} self={v.payment.invoiceId} />
+                  <Said
+                    text={bullet.text}
+                    words={(text: string): JSX.Element => <WithRefs text={text} refs={bullet.refs} self={v.payment.invoiceId} />}
+                  />
                 </li>
               ),
             )}

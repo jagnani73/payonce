@@ -1,7 +1,7 @@
 import type { JSX } from "preact";
 import { Icon } from "../../components/Icon";
 import { HandlingRows, QueueRows } from "../../components/Rows";
-import { Day, Money, Theirs, Time } from "../../components/Text";
+import { Day, Money, Said, saidKey, Theirs, Time } from "../../components/Text";
 import { Tag, ToneBadge } from "../../components/Tone";
 import { navigate, paymentHref } from "../../router";
 import { count } from "../../text";
@@ -104,7 +104,11 @@ function TableRow(props: { row: IncidentRow }): JSX.Element {
       <td>
         <div class="itable__state">
           <ToneBadge tone={s.tone} label={s.label} />
-          {s.detail === null ? null : <span class="itable__detail">{s.detail}</span>}
+          {s.detail === null ? null : (
+            <span class="itable__detail">
+              <Said text={s.detail} />
+            </span>
+          )}
           {row.activity.busy ? (
             <span class="working">
               <span class="working__dot" aria-hidden="true" />
@@ -140,11 +144,15 @@ function TableRow(props: { row: IncidentRow }): JSX.Element {
         )}
       </td>
       <td>
-        <p class="itable__next">{s.next}</p>
-        {blocker === undefined || blocker.text === s.next ? null : (
+        <p class="itable__next">
+          <Said text={s.next} />
+        </p>
+        {blocker === undefined || saidKey(blocker.text) === saidKey(s.next) ? null : (
           <p class="itable__blocker">
             <Icon name="pause" />
-            <span>{blocker.text}</span>
+            <span>
+              <Said text={blocker.text} />
+            </span>
           </p>
         )}
       </td>

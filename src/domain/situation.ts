@@ -37,6 +37,7 @@ import {
   type ReasonView,
   type StoredReason,
 } from "./reasons.js";
+import { timeAt, timed, type Timed, type TimePart } from "./timed.js";
 import { capitalise } from "../text/printable.js";
 import type {
   Approval,
@@ -109,7 +110,7 @@ export type BlockerCode = "airwallex-unreachable" | "airwallex-error" | "outage"
 
 export interface Blocker {
   code: BlockerCode;
-  text: string;
+  text: Timed;
   since: string | null;
 }
 
@@ -127,11 +128,11 @@ export interface Situation {
   state: PaymentState;
   variant: string | null;
   label: string;
-  detail: string | null;
+  detail: Timed | null;
   tone: Tone;
   group: QueueGroup;
   waitingOn: WaitingOn;
-  next: string;
+  next: Timed;
   why: ReasonView | null;
   blockers: Blocker[];
   also: string[];
@@ -286,15 +287,9 @@ function iso(at: number | null): string | null {
   return at === null || !Number.isFinite(at) ? null : new Date(at).toISOString();
 }
 
-// "14:02 UTC", as the timeline writes times.
-function clock(at: number | string | null): string | null {
-  const ms: number = typeof at === "string" ? Date.parse(at) : (at ?? Number.NaN);
-  return Number.isFinite(ms) ? `${new Date(ms).toISOString().slice(11, 16)} UTC` : null;
-}
-
-function atNextCheck(nextCheckAt: number | null): string {
-  const at: string | null = clock(nextCheckAt);
-  return at === null ? "at its next check" : `at its next check (${at})`;
+function atNextCheck(nextCheckAt: number | null): Timed {
+  const at: TimePart | null = timeAt(nextCheckAt);
+  return at === null ? ["at its next check"] : timed("at its next check (", at, ")");
 }
 
 function plural(count: number, one: string, many: string): string {
@@ -829,8 +824,8 @@ function transferName(f: Facts, attempt: Attempt): string {
 }
 
 interface Copy {
-  next: string;
-  detail: string | null;
+  next: Timed;
+  detail: Timed | null;
   label: string;
 }
 
@@ -838,33 +833,30 @@ function copyOf(f: Facts, place: Placed): Copy {
   const kind: StateKind = STATES[place.state];
   const s: InvoiceSnapshot = f.s;
   const request: Approval | undefined = f.latest?.approval;
-  const expires: string | null = request === undefined ? null : clock(request.expiresAt);
-  const at: string = atNextCheck(s.nextCheckAt);
+  const expires: TimePart | null = request === undefined ? null : timeAt(request.expiresAt, true);
+  const at: Timed = atNextCheck(s.nextCheckAt);
+  const words = (next: string, detail: string | null = null): Copy => ({
+    label: kind.label,
+    detail: detail === null ? null : [detail],
+    next: [next],
+  });
   switch (place.state) {
     case "paid": {
       const by: RegExpExecArray | null = /^Incident closed by (.+?): /.exec(s.times.closedLine ?? "");
-      return { label: kind.label, detail: null, next: by === null ? "Closed by PayOnce" : `Closed by ${by[1] ?? ""}` };
+      return words(by === null ? "Closed by PayOnce" : `Closed by ${by[1] ?? ""}`);
     }
     case "closed-unpaid":
-      return {
-        label: kind.label,
-        detail: null,
-        next: f.o.rejectedBy === null ? "Closed without paying" : `Closed without paying by ${f.o.rejectedBy}`,
-      };
+      return words(f.o.rejectedBy === null ? "Closed without paying" : `Closed without paying by ${f.o.rejectedBy}`);
     case "paid-twice":
-      return {
-        label: kind.label,
-        detail: null,
-        next: "PayOnce sends nothing and closes nothing while two transfers may both pay the supplier. Check with the supplier which one arrived. Once the bank pays or fails one of them, close it here.",
-      };
+      return words(
+        "PayOnce sends nothing and closes nothing while two transfers may both pay the supplier. Check with the supplier which one arrived. Once the bank pays or fails one of them, close it here.",
+      );
     case "unrecognised-transfer":
-      return {
-        label: kind.label,
-        detail: null,
-        next: `Look up ${refOf(f.attempts.find(unrecognisedLive)?.mismatchedReference, "the transfer")} in Airwallex. It is listed under this payment's request id but does not match its number, amount or currency. If the bank pays it, close as paid here.`,
-      };
+      return words(
+        `Look up ${refOf(f.attempts.find(unrecognisedLive)?.mismatchedReference, "the transfer")} in Airwallex. It is listed under this payment's request id but does not match its number, amount or currency. If the bank pays it, close as paid here.`,
+      );
     case "ready-to-close":
-      return { label: kind.label, detail: null, next: closeNext(f, place.variant ?? "other") };
+      return words(closeNext(f, place.variant ?? "other"));
     case "paused-by-outage": {
       const outage: Outage | undefined = s.outage?.outage;
       const id: string = outage === undefined ? "" : ` ${outage.id}`;
@@ -872,9 +864,9 @@ function copyOf(f: Facts, place: Placed): Copy {
         label: `Paused by outage${id}`,
         detail:
           place.variant === "approved"
-            ? `Approved transfer paused${expires === null ? "" : ` (approval counts until ${expires})`}`
-            : "First transfer paused",
-        next: `Outage${id} on ${outage === undefined ? "its rail" : railName(outage)} stops new transfers there. Ending it sends this payment.`,
+            ? timed("Approved transfer paused", expires === null ? null : timed(" (approval counts until ", expires, ")"))
+            : ["First transfer paused"],
+        next: [`Outage${id} on ${outage === undefined ? "its rail" : railName(outage)} stops new transfers there. Ending it sends this payment.`],
       };
     }
     case "needs-approval": {
@@ -884,46 +876,50 @@ function copyOf(f: Facts, place: Placed): Copy {
       const lead: string = place.variant === "first-payment" ? "On hold before the first transfer" : "Replacement";
       return {
         label: kind.label,
-        detail: `${lead} · ${signed} of ${needed} signoffs${expires === null ? "" : ` · open until ${expires}`}`,
-        next:
+        detail: timed(`${lead} · ${signed} of ${needed} signoffs`, expires === null ? null : timed(" · open until ", expires)),
+        next: [
           names.length > 0
             ? `${listOf(names)} can approve it, or anyone can close it without paying.`
             : "Nobody left can approve it. Close it without paying, or wait for the request to expire.",
+        ],
       };
     }
     case "approved":
-      return { label: kind.label, detail: null, next: `PayOnce sends it ${at}.` };
+      return { label: kind.label, detail: null, next: timed("PayOnce sends it ", at, ".") };
     case "renewing-request":
       return {
         label: kind.label,
         detail: null,
-        next: `PayOnce opens a new request ${at}. Signoffs on request #${request?.id ?? ""} no longer count.`,
+        next: timed("PayOnce opens a new request ", at, `. Signoffs on request #${request?.id ?? ""} no longer count.`),
       };
     case "bank-late": {
       const attempt: Attempt | undefined = f.overdue;
       const name: string = attempt === undefined ? "the transfer" : transferName(f, attempt);
-      const due: string | null = attempt === undefined ? null : clock(deadlineAt(attempt, s.deadlineMinutes));
+      const due: TimePart | null = attempt === undefined ? null : timeAt(deadlineAt(attempt, s.deadlineMinutes), true);
       return {
         label: kind.label,
-        detail: `${capitalise(name)}${due === null ? "" : `, due ${due}`}`,
-        next: `The bank has not paid or failed ${name} by ${due ?? "its deadline"}. Ask Airwallex to trace it. PayOnce closes this if the bank pays it, and sends nothing else while it is live.`,
+        detail: timed(capitalise(name), due === null ? null : timed(", due ", due)),
+        next: timed(
+          `The bank has not paid or failed ${name} by `,
+          due ?? "its deadline",
+          ". Ask Airwallex to trace it. PayOnce closes this if the bank pays it, and sends nothing else while it is live.",
+        ),
       };
     }
     case "with-bank": {
       if (f.live === undefined) {
         const ref: string = refOf(f.livePayout?.reference, "on file");
-        return {
-          label: kind.label,
-          detail: `Payout ${ref} sent outside PayOnce`,
-          next: `A payout sent outside PayOnce (${ref}) is with the bank. PayOnce sends nothing for this payment while it is live.`,
-        };
+        return words(
+          `A payout sent outside PayOnce (${ref}) is with the bank. PayOnce sends nothing for this payment while it is live.`,
+          `Payout ${ref} sent outside PayOnce`,
+        );
       }
       const name: string = transferName(f, f.live);
-      const due: string | null = clock(deadlineAt(f.live, s.deadlineMinutes));
+      const due: TimePart | null = timeAt(deadlineAt(f.live, s.deadlineMinutes), true);
       return {
         label: kind.label,
-        detail: capitalise(name),
-        next: `Waiting for the bank to pay or fail ${name}${due === null ? "" : `, due by ${due}`}.`,
+        detail: [capitalise(name)],
+        next: timed(`Waiting for the bank to pay or fail ${name}`, due === null ? null : timed(", due by ", due), "."),
       };
     }
     case "sending":
@@ -932,59 +928,61 @@ function copyOf(f: Facts, place: Placed): Copy {
         detail: null,
         next:
           place.variant === "held-for-outside-payout"
-            ? "A payout sent outside PayOnce may pay this, so PayOnce does not send the transfer while it is live."
+            ? ["A payout sent outside PayOnce may pay this, so PayOnce does not send the transfer while it is live."]
             : place.variant === "retrying"
-              ? `Airwallex has not answered yet. PayOnce tries again ${at} under the same request id, so it cannot pay twice.`
-              : "PayOnce is creating the transfer.",
+              ? timed("Airwallex has not answered yet. PayOnce tries again ", at, " under the same request id, so it cannot pay twice.")
+              : ["PayOnce is creating the transfer."],
       };
     case "queued-in-run": {
       const turn: RunTurn | null = s.turn;
       return {
         label: turn === null ? kind.label : `Queued in pay run ${turn.runId}`,
         detail: null,
-        next: `Pay run ${turn?.runId ?? ""} sends its rows one at a time. ${turn?.after === null || turn === null ? "This one is next." : `This one is next after row ${turn.after}.`}`,
+        next: [
+          `Pay run ${turn?.runId ?? ""} sends its rows one at a time. ${turn?.after === null || turn === null ? "This one is next." : `This one is next after row ${turn.after}.`}`,
+        ],
       };
     }
     case "reading-emails":
       return {
         label: kind.label,
         detail: null,
-        next: `PayOnce reads the supplier's emails before it offers anything for approval. It tries again ${at}.`,
+        next: timed("PayOnce reads the supplier's emails before it offers anything for approval. It tries again ", at, "."),
       };
     case "needs-callback": {
       const ending: string | null = phoneEnding(f.o.supplierPhone);
-      return {
-        label: kind.label,
-        detail: null,
-        next: `Call the supplier on the number on file${ending === null ? "" : ` (ending ${ending})`} and record what they confirm. Or close without paying.`,
-      };
+      return words(
+        `Call the supplier on the number on file${ending === null ? "" : ` (ending ${ending})`} and record what they confirm. Or close without paying.`,
+      );
     }
     case "needs-phone":
-      return {
-        label: kind.label,
-        detail: null,
-        next: "PayOnce never takes bank details from an email. Add a phone number you trust to the supplier record, then record a callback. Or close without paying.",
-      };
+      return words(
+        "PayOnce never takes bank details from an email. Add a phone number you trust to the supplier record, then record a callback. Or close without paying.",
+      );
     case "no-approvers":
-      return { label: kind.label, detail: null, next: `${whyNoRequest(s)?.text ?? ""} Or close without paying.`.trim() };
+      return words(`${whyNoRequest(s)?.text ?? ""} Or close without paying.`.trim());
     case "needs-decision":
-      return { label: kind.label, detail: null, next: decisionNext(f, place.variant ?? "other") };
+      return words(decisionNext(f, place.variant ?? "other"));
     case "closing":
       return {
         label: kind.label,
         detail: null,
-        next: `The bank paid ${refOf(f.attempts.find((attempt: Attempt): boolean => attempt.state === "paid")?.reference, "the transfer")}. PayOnce closes this ${at}.`,
+        next: timed(
+          `The bank paid ${refOf(f.attempts.find((attempt: Attempt): boolean => attempt.state === "paid")?.reference, "the transfer")}. PayOnce closes this `,
+          at,
+          ".",
+        ),
       };
     case "deciding":
       return {
         label: kind.label,
         detail: null,
-        next: `The ${f.attempts.at(-1)?.kind ?? "original"} failed. PayOnce decides ${at} whether to resend it or ask a person.`,
+        next: timed(`The ${f.attempts.at(-1)?.kind ?? "original"} failed. PayOnce decides `, at, " whether to resend it or ask a person."),
       };
     case "starting":
-      return { label: kind.label, detail: null, next: "PayOnce checks the supplier record and sends the first transfer." };
+      return words("PayOnce checks the supplier record and sends the first transfer.");
     case "checking":
-      return { label: kind.label, detail: null, next: `PayOnce checks this payment again ${at}.` };
+      return { label: kind.label, detail: null, next: timed("PayOnce checks this payment again ", at, ".") };
   }
 }
 
@@ -995,13 +993,13 @@ function blockersOf(f: Facts, state: PaymentState): Blocker[] {
   if (check !== null && !check.ok && check.error === "airwallex-unreachable") {
     found.push({
       code: "airwallex-unreachable",
-      text: `PayOnce cannot reach Airwallex (since ${clock(check.at) ?? "its last check"}). It tries again every minute.`,
+      text: timed("PayOnce cannot reach Airwallex (since ", timeAt(check.at) ?? "its last check", "). It tries again every minute."),
       since: check.at,
     });
   } else if (check !== null && !check.ok && check.error === "airwallex-error") {
     found.push({
       code: "airwallex-error",
-      text: `Airwallex answered with an error at ${clock(check.at) ?? "its last check"}. PayOnce tries again ${atNextCheck(s.nextCheckAt)}.`,
+      text: timed("Airwallex answered with an error at ", timeAt(check.at) ?? "its last check", ". PayOnce tries again ", atNextCheck(s.nextCheckAt), "."),
       since: check.at,
     });
   }
@@ -1009,19 +1007,19 @@ function blockersOf(f: Facts, state: PaymentState): Blocker[] {
   if (state === "needs-approval" && outage !== undefined && (f.touch === "replacement" || f.touch === "approval")) {
     found.push({
       code: "outage",
-      text: `Outage ${outage.id} on ${railName(outage)} is active, so an approval given now waits until someone ends it.`,
+      text: [`Outage ${outage.id} on ${railName(outage)} is active, so an approval given now waits until someone ends it.`],
       since: outage.declaredAt,
     });
   }
   if (state === "reading-emails" && s.emails.readerFailed) {
     found.push({
       code: "reader",
-      text: `The email reader could not read an email. PayOnce tries again ${atNextCheck(s.nextCheckAt)}.`,
+      text: timed("The email reader could not read an email. PayOnce tries again ", atNextCheck(s.nextCheckAt), "."),
       since: null,
     });
   }
   if (!f.closed && !s.busy && s.nextCheckAt !== null && f.now - s.nextCheckAt > OVERDUE_CHECK_MS) {
-    found.push({ code: "overdue-check", text: "PayOnce's check is overdue. Press Check now.", since: iso(s.nextCheckAt) });
+    found.push({ code: "overdue-check", text: ["PayOnce's check is overdue. Press Check now."], since: iso(s.nextCheckAt) });
   }
   return found;
 }
@@ -1290,11 +1288,11 @@ export type RunPhase =
 export interface RunSituation {
   state: RunPhase;
   label: string;
-  detail: string | null;
+  detail: Timed | null;
   tone: Tone;
   group: QueueGroup;
   waitingOn: WaitingOn;
-  next: string;
+  next: Timed;
   why: string | null;
 }
 
@@ -1350,7 +1348,10 @@ export function runSituationOf(snapshot: RunSnapshot, now: number): RunSituation
     waitingOn: WaitingOn,
     next: string,
     why: string | null = null,
-  ): RunSituation => ({ state, label, detail: null, tone, group, waitingOn, next, why });
+    detail: Timed | null = null,
+  ): RunSituation => ({ state, label, detail, tone, group, waitingOn, next: [next], why });
+  const request: RunApproval | undefined = snapshot.request?.approval;
+  const expires: TimePart | null = request === undefined ? null : timeAt(request.expiresAt, true);
   if (status === "waiting-approval") {
     const names: string[] = runSigners(snapshot);
     const totals: string = runTotalsText(snapshot.request?.terms ?? null);
@@ -1362,6 +1363,8 @@ export function runSituationOf(snapshot: RunSnapshot, now: number): RunSituation
       "needs-you",
       { who: "approvers", names },
       `${names.length > 0 ? `${listOf(names)} can approve` : "Nobody left can approve"} ${payments}${totals === "" ? "" : ` (${totals})`}. Anyone can cancel the run.`,
+      null,
+      timed(`${request?.signoffs.length ?? 0} of ${request?.needed ?? 1} signoffs`, expires === null ? null : timed(" · open until ", expires)),
     );
   }
   const outage: Outage | undefined = snapshot.outage?.outage;
@@ -1373,6 +1376,8 @@ export function runSituationOf(snapshot: RunSnapshot, now: number): RunSituation
       "needs-you",
       { who: "outage-ender", names: snapshot.outage?.enders ?? null },
       `The run is released whole, and outage ${outage.id} on ${railName(outage)} is active. Ending it releases the run.`,
+      null,
+      timed("Approved release paused", expires === null ? null : timed(" (approval counts until ", expires, ")")),
     );
   }
   if (status === "approved") {

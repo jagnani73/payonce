@@ -1,4 +1,4 @@
-import type { JSX } from "preact";
+import { Fragment, type ComponentChildren, type JSX } from "preact";
 import { cleanBlock, cleanLine } from "../text";
 import {
   agoText,
@@ -12,7 +12,7 @@ import {
   timeText,
   useNow,
 } from "../time";
-import type { Money as MoneyView, Theirs as TheirsText } from "../types";
+import type { Money as MoneyView, Theirs as TheirsText, Timed, TimedPart } from "../types";
 
 // The small pieces every screen writes with: money, times and text PayOnce did
 // not write.
@@ -60,6 +60,33 @@ export function Time(props: { at: string | null | undefined; mode?: TimeMode; cl
       {text}
     </time>
   );
+}
+
+// A sentence the view gives with its times apart (contract.ts, Timed): its
+// words, and each time in the viewer's zone. A deadline or an expiry also says
+// how long is left. words renders each run of words, such as with its refs marked.
+export function Said(props: { text: Timed | null | undefined; words?: (text: string) => ComponentChildren }): JSX.Element | null {
+  if (props.text === null || props.text === undefined) {
+    return null;
+  }
+  const words: (text: string) => ComponentChildren = props.words ?? ((text: string): ComponentChildren => text);
+  return (
+    <>
+      {props.text.map(
+        (part: TimedPart, index: number): ComponentChildren =>
+          typeof part === "string" ? (
+            <Fragment key={index}>{words(part)}</Fragment>
+          ) : (
+            <Time key={index} at={part.at} mode={part.deadline === true ? "until" : "clock"} />
+          ),
+      )}
+    </>
+  );
+}
+
+// The words of a sentence with its times as given, to tell two sentences apart.
+export function saidKey(text: Timed): string {
+  return text.map((part: TimedPart): string => (typeof part === "string" ? part : part.at)).join("");
 }
 
 // A day as stored (YYYY-MM-DD): "8 Nov", "8 Nov 2027".

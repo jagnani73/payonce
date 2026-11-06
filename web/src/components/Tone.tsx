@@ -1,6 +1,7 @@
 import type { ComponentChildren, JSX } from "preact";
 import type { Blocker, RunSituation, Situation, Tone } from "../types";
 import { Icon } from "./Icon";
+import { Said, saidKey } from "./Text";
 
 // The state chip. Each tone has its own fill, border and glyph, so tones differ
 // in lightness and shape, not in hue alone: act is a filled dot on blue, urgent a
@@ -55,7 +56,7 @@ export function SituationHeader(props: {
   const situation: Situation | RunSituation = props.situation;
   // A blocked "Approved, sending" already says its blocker as the next step.
   const blockers: Blocker[] = isPayment(situation)
-    ? situation.blockers.filter((blocker: Blocker): boolean => blocker.text !== situation.next)
+    ? situation.blockers.filter((blocker: Blocker): boolean => saidKey(blocker.text) !== saidKey(situation.next))
     : [];
   const also: string[] = isPayment(situation) && props.compact !== true ? situation.also : [];
   return (
@@ -64,20 +65,22 @@ export function SituationHeader(props: {
         <ToneBadge tone={situation.tone} label={situation.label} size={props.compact === true ? "small" : "large"} />
         {situation.detail === null && props.extra === undefined ? null : (
           <span class="situation__detail">
-            {situation.detail}
+            <Said text={situation.detail} />
             {props.extra}
           </span>
         )}
       </div>
       <p class="situation__next">
         {props.compact === true ? null : <strong>Next: </strong>}
-        {situation.next}
+        <Said text={situation.next} />
       </p>
       {blockers.map(
         (blocker: Blocker): JSX.Element => (
           <p class="situation__blocker" key={blocker.code}>
             <Icon name="pause" />
-            <span>{blocker.text}</span>
+            <span>
+              <Said text={blocker.text} />
+            </span>
           </p>
         ),
       )}

@@ -77,9 +77,6 @@ import { summaryOf } from "./summary.js";
 // Decision panel, every transfer, the emails, the messages, the timeline and the
 // audit line, the supplier and the money.
 
-function utc(at: number | null): string {
-  return at === null ? "" : `${new Date(at).toISOString().slice(11, 16)} UTC`;
-}
 
 const TONES: Record<TransferState, Tone> = {
   "being-sent": "progress",
@@ -104,7 +101,7 @@ function transferState(attempt: Attempt): TransferState {
   return "with-bank";
 }
 
-function stateLabel(state: TransferState, attempt: { failureCode: string | null }, due: number | null): string {
+function stateLabel(state: TransferState, attempt: { failureCode: string | null }): string {
   switch (state) {
     case "paid":
       return "Paid";
@@ -119,7 +116,7 @@ function stateLabel(state: TransferState, attempt: { failureCode: string | null 
     case "being-sent":
       return "Being sent";
     case "with-bank":
-      return due === null ? "With the bank" : `With the bank, due ${utc(due)}`;
+      return "With the bank";
     case "unknown-status":
       return "In a status PayOnce does not know";
   }
@@ -137,7 +134,7 @@ function ownTransfer(snapshot: InvoiceSnapshot, attempt: Attempt, now: number): 
     kind: attempt.kind,
     reference: attempt.reference === null ? null : shownReference(attempt.reference),
     state,
-    stateLabel: stateLabel(state, attempt, due),
+    stateLabel: stateLabel(state, attempt),
     tone: TONES[state],
     failure: failureView(attempt.failureCode),
     took: attempt.amountMinor === null || attempt.currency === null ? null : money(attempt.amountMinor, attempt.currency),
@@ -172,7 +169,7 @@ function unrecognisedTransfer(attempt: Attempt): TransferView {
     kind: "unrecognised",
     reference: attempt.mismatchedReference === null ? null : shownReference(attempt.mismatchedReference),
     state,
-    stateLabel: state === "failed" ? "Failed" : stateLabel(state, { failureCode: null }, null),
+    stateLabel: state === "failed" ? "Failed" : stateLabel(state, { failureCode: null }),
     tone: state === "with-bank" ? "urgent" : TONES[state],
     failure: null,
     took:
@@ -207,7 +204,7 @@ function payoutTransfer(snapshot: InvoiceSnapshot, payout: OutsidePayout, index:
     kind: "outside-payout",
     reference: shownReference(payout.reference),
     state,
-    stateLabel: state === "failed" ? "Failed" : stateLabel(state, { failureCode: null }, null),
+    stateLabel: state === "failed" ? "Failed" : stateLabel(state, { failureCode: null }),
     tone: TONES[state],
     failure: null,
     took: payout.amountMinor === null || payout.currency === null ? null : money(payout.amountMinor, payout.currency),

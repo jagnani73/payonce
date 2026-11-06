@@ -168,7 +168,7 @@ function decisionOf(ledger: Ledger, snapshot: RunSnapshot, situation: RunSituati
   if (outage !== undefined) {
     cautions.push({
       code: "outage",
-      text: `Outage ${outage.id} on ${outage.currency} ${outage.method} is active. The run is released whole, so it waits until someone ends it.`,
+      text: [`Outage ${outage.id} on ${outage.currency} ${outage.method} is active. The run is released whole, so it waits until someone ends it.`],
     });
   }
   if (request !== null && request.state === "waiting") {
