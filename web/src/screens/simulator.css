@@ -1,0 +1,165 @@
+/* The sandbox simulator drawer (ia.md section 11). It is a tool, not part of
+   the product: a hazard band along the top, the dashed amber border the shell
+   gives the drawer, a dark "Sandbox tool" label, and dark buttons instead of the
+   product's blue. */
+
+.sim {
+  --sim-ink: #1f2430;
+  --sim-ink-hover: #343b4b;
+}
+
+.drawer__panel.sim__panel {
+  gap: 0;
+  padding: 0;
+}
+
+.sim__stripe {
+  display: block;
+  flex: 0 0 auto;
+}
+
+.sim__body {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 18px 22px 28px;
+}
+
+.sim__titles {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sim__tag {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: var(--sim-ink);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.sim__text {
+  color: var(--text-2);
+}
+
+.sim__section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.sim__heading {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.sim__pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.sim .field--name {
+  max-width: 260px;
+}
+
+.sim__invoice {
+  max-width: 260px;
+}
+
+.sim .btn--primary {
+  border-color: var(--sim-ink);
+  background: var(--sim-ink);
+  color: #ffffff;
+}
+
+.sim .btn--primary:hover {
+  border-color: var(--sim-ink-hover);
+  background: var(--sim-ink-hover);
+}
+
+.sim .btn--secondary {
+  border-color: var(--sim-ink);
+  color: var(--sim-ink);
+}
+
+.sim .btn:disabled {
+  border-color: var(--line);
+  background: var(--line-faint);
+  color: #5d6575;
+}
+
+.sim__result {
+  font-weight: 500;
+}
+
+.sim__line {
+  margin-top: 4px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.sim__code {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--muted-fill);
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.sim__log {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+
+.sim__log-row {
+  display: flex;
+  gap: 10px;
+  padding: 8px 0;
+  border-top: 1px solid var(--muted-fill);
+}
+
+.sim__log-row:first-child {
+  border-top: 0;
+}
+
+.sim__log-time {
+  flex: 0 0 auto;
+  min-width: 44px;
+  color: var(--text-3);
+}
+
+.sim__log-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sim__log-ref {
+  font-weight: 600;
+}
+
+@media (max-width: 899px) {
+  .sim__body {
+    padding: 14px 16px 24px;
+  }
+
+  .sim__section {
+    padding: 14px;
+  }
+}
