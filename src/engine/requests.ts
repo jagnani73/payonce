@@ -144,8 +144,10 @@ export function awaitApproval(
     // look read the day an open request kept, so it is compared again.
     request = requestMatch(latest, bindingOf(terms), rule);
   }
+  // The last request's quote, named on the timeline only when a request opens on
+  // a quote, so its terms are read only then.
   const previous: FxTerms | undefined =
-    latest === undefined ? undefined : requestTerms(latest).fx;
+    latest !== undefined && request.opening && terms.fx !== undefined ? requestTerms(latest).fx : undefined;
   noteReplacedRequest(engine, invoiceId, latest, terms, request);
   if (request.opening) {
     // Another process closed the invoice meanwhile.
