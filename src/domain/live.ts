@@ -4,10 +4,9 @@ import { deadlineReason, type StoredReason } from "./reasons.js";
 
 // Every notion of "live" PayOnce has, each defined once: per transfer, per
 // outside payout, per payment over its transfers and payouts, and per request.
-// The SQL guards in the ledger's write transactions are these tests over rows:
-// LIVE_ATTEMPT is liveAtBank, LIVE_OUTSIDE_PAYOUT payoutNotFailed,
-// BLOCKING_OUTSIDE_PAYOUT payoutBlocking, UNCLEARED_MISMATCH
-// unrecognisedUncleared and SENT_ATTEMPT sentSomething.
+// Three SQL guards in the ledger's write transactions are these tests over rows:
+// LIVE_ATTEMPT is liveAtBank, LIVE_OUTSIDE_PAYOUT payoutNotFailed and
+// UNCLEARED_MISMATCH unrecognisedUncleared.
 
 // What liveAtBank reads of an attempt.
 export type LiveTested = Pick<
@@ -68,11 +67,6 @@ export function inFlight(attempt: LiveTested): boolean {
   return attempt.transferId !== null && withBank(attempt);
 }
 
-// A transfer the bank has, in flight or paid.
-export function sentToBank(attempt: LiveTested): boolean {
-  return inFlight(attempt) || (attempt.transferId !== null && attempt.state === "paid");
-}
-
 // A transfer under the attempt's request id that does not match its invoice,
 // live and not paid.
 export function unrecognisedLive(attempt: LiveTested): boolean {
@@ -109,15 +103,6 @@ export function neverSent(attempt: Pick<Attempt, "state" | "transferId">): boole
   return attempt.transferId === null && attempt.state === "failed";
 }
 
-export function sentSomething(attempt: Pick<Attempt, "state" | "transferId">): boolean {
-  return attempt.transferId !== null || attempt.state !== "failed";
-}
-
-// A transfer the bank failed, with nothing left live under its request id.
-export function failedForGood(attempt: LiveTested): boolean {
-  return attempt.state === "failed" && attempt.transferId !== null && !liveAtBank(attempt);
-}
-
 // When the bank should have paid or failed the transfer, counted from the
 // creation time Airwallex gave, or null when none can be read.
 export function deadlineAt(attempt: Pick<Attempt, "bankCreatedAt">, deadlineMinutes: number): number | null {
@@ -150,11 +135,6 @@ export function payoutNotFailed(payout: PayoutTested): boolean {
 // Paid, and pays its invoice as the last look found.
 export function payoutPays(payout: PayoutTested): boolean {
   return payout.state === "paid" && payout.pays === true;
-}
-
-// Holds PayOnce's own payments and a person's close without paying.
-export function payoutBlocking(payout: PayoutTested): boolean {
-  return payout.state !== "failed" && (payout.state !== "paid" || payout.pays === true);
 }
 
 // Paid, and only names the invoice: it does not pay it, or no look could tell.

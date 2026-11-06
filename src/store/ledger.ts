@@ -825,10 +825,6 @@ export class Ledger {
     return this.repos.contactReads.proposal(beneficiaryId, field);
   }
 
-  contact(id: number): Contact | undefined {
-    return this.repos.contactReads.byId(id);
-  }
-
   // Every version of the record's contacts, oldest first, or of every record's.
   contactsOf(beneficiaryId: string | null): Contact[] {
     return this.repos.contactReads.of(beneficiaryId);
@@ -994,10 +990,6 @@ export class Ledger {
 
   voidOpenRunApprovals(runId: number): boolean {
     return this.repos.approvals.voidOpenRunApprovals(runId);
-  }
-
-  requestRunApproval(runId: number, request: ApprovalRequest): boolean {
-    return this.repos.approvals.requestRunApproval(runId, request);
   }
 
   addRunApproval(runId: number, request: ApprovalRequest): boolean {

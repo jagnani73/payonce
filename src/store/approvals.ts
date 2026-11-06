@@ -474,14 +474,10 @@ export class ApprovalStore {
     return this.runRequests.void(runId);
   }
 
-  // A new request voids any earlier one for the run that is still open. Only a
-  // run still waiting gets one. False when none was opened.
-  requestRunApproval(runId: number, request: ApprovalRequest): boolean {
-    return this.db.transaction((): boolean => this.addRunApproval(runId, request));
-  }
-
-  // requestRunApproval inside a transaction the caller holds, such as the one
-  // setRunRows opens, so a check's rows and its request are written together.
+  // Opens a run's request inside a transaction the caller holds, such as the one
+  // setRunRows opens, so a check's rows and its request are written together. A
+  // new request voids any earlier one for the run that is still open. Only a run
+  // still waiting gets one. False when none was opened.
   addRunApproval(runId: number, request: ApprovalRequest): boolean {
     if (!this.db.isTransaction) {
       throw new Error("A run's request is opened only inside a ledger transaction");
