@@ -11,11 +11,11 @@ import { trimmedLine } from "../text/printable.js";
 
 export type AlertFormat = "slack" | "discord";
 
-// What an invoice waits on, first match wins: an approval of paying a held
-// invoice, an approval of a replacement, a person checking a payment found late
-// that may pay it a second time, a person closing a paid one, a person deciding
-// on a held one nobody can approve yet, the bank's deadline, a payout sent
-// outside PayOnce, a call to the supplier, or anything else.
+// What an invoice waits on, from its situation: an approval of paying a held
+// invoice, an approval of a replacement, a person checking a payment that may
+// pay it a second time, a person closing a paid one, a person deciding on a held
+// one, the bank's deadline, a payout sent outside PayOnce, a call to the
+// supplier, a phone number to call the supplier on, or anything else.
 export type InvoiceNeed =
   | "approve-held"
   | "approve"
@@ -25,6 +25,7 @@ export type InvoiceNeed =
   | "bank"
   | "outside"
   | "callback"
+  | "phone"
   | "check";
 
 export interface InvoiceAlertFacts {
@@ -213,6 +214,7 @@ const NEED_TITLES: Record<InvoiceNeed, string> = {
   bank: "",
   outside: "may already be paid outside PayOnce",
   callback: "needs a call to the supplier",
+  phone: "needs a phone number before anyone can call the supplier",
   check: "needs a person",
 };
 

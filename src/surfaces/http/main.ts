@@ -148,7 +148,7 @@ function main(): void {
   const alerts: Alerts | null =
     alertSetting.target === null
       ? null
-      : new Alerts(engine.ledger, alertSetting.target, `http://${HOST}:${port}`, alertCash);
+      : new Alerts(engine.ledger, engine.approvals, alertSetting.target, `http://${HOST}:${port}`, alertCash);
 
   const app: HttpApp = httpApp({
     settings,

@@ -33,42 +33,37 @@ import {
   type RunLedgerReport,
 } from "../store/audit-trail.js";
 import type { CashReport, CurrencyCash } from "../engine/cash-position.js";
+import type { ApprovalPolicy } from "../domain/approvers.js";
+import { approvedUnderway, heldBeforePaying } from "../domain/live.js";
+import { FLOOR_CLAUSES, reasonText, withoutClauses } from "../domain/reasons.js";
 import {
-  BELOW_FLOOR_REASON,
-  CHANGED_BANK_DETAILS_REASON,
-  LAST_PAID_CHANGED_REASON,
-  NEW_BANK_DETAILS_REASON,
-  NO_FLOOR_CLAUSE,
-  NOT_TO_PAY_CLAUSE,
-  ORIGINAL_DEADLINE_REASON,
-  OUTSIDE_PAYOUT_REASON,
-  UNREADABLE_CASH_REASON,
-} from "../domain/decide.js";
-import { heldBeforePaying } from "../engine/facts.js";
-import { pendingApproval, pendingClose, type CloseReview, type PendingApproval } from "../engine/person.js";
-import { LATE_TRANSFER_REASON, REPLACEMENT_DEADLINE_REASON } from "../domain/reasons.js";
-import {
-  isExpired,
-  type Alert,
-  type AlertFinish,
-  type Approval,
-  type Attempt,
-  type FoundCondition,
-  type InboxWaiting,
-  type Ledger,
-  type Obligation,
-  type Outage,
-  type OutageHold,
-  type OutsidePayout,
-  type RecordedConditions,
-  type Run,
-  type RunApproval,
+  aboutBankDetails,
+  situationOf,
+  type InvoiceSnapshot,
+  type RequestSnapshot,
+  type Situation,
+} from "../domain/situation.js";
+import type {
+  Alert,
+  AlertFinish,
+  Attempt,
+  FoundCondition,
+  InboxWaiting,
+  Ledger,
+  Obligation,
+  Outage,
+  OutageHold,
+  OutsidePayout,
+  RecordedConditions,
+  Run,
+  RunApproval,
 } from "../store/ledger.js";
 import { formatMoney } from "../domain/money.js";
 import { say, sayWarning } from "../text/printable.js";
 import { shownCurrency, shownInvoice, shownReference } from "../recon/recon-match.js";
 import type { KindTotal, ReconAlertState, ReconBreak } from "../store/recon-store.js";
 import { runStatus } from "../runs/runs.js";
+import { readInvoiceSnapshots } from "../views/snapshot.js";
 
 // How often the server looks for conditions that need a person, how long a new
 // alert waits before it is posted (so a request opened a moment after an
@@ -95,13 +90,6 @@ const OUTAGE_REFERENCES_SHOWN: number = 5;
 const SUMMARY_KEY: string = "summary";
 const INBOX_KEY: string = "inbox";
 const RECON_KEY: string = "recon";
-const DEADLINE_REASONS: readonly string[] = [ORIGINAL_DEADLINE_REASON, REPLACEMENT_DEADLINE_REASON];
-const BANK_DETAILS_REASONS: readonly string[] = [
-  NEW_BANK_DETAILS_REASON,
-  CHANGED_BANK_DETAILS_REASON,
-  LAST_PAID_CHANGED_REASON,
-];
-const FLOOR_CLAUSES: readonly string[] = [BELOW_FLOOR_REASON, UNREADABLE_CASH_REASON, NO_FLOOR_CLAUSE];
 // Answers that mean the address is wrong or the webhook is gone, so posting again
 // cannot help.
 const GONE: readonly number[] = [401, 403, 404, 410];
@@ -145,92 +133,75 @@ function condition(key: string, identity: unknown, facts: AlertFacts): FoundCond
   return { key, kind: facts.kind, fingerprint: hashOf(identity), facts: JSON.stringify(facts) };
 }
 
-// The reason without a floor clause the agent adds or drops as the balance moves,
-// so the floor alone does not alert an invoice again.
-export function baseReason(reason: string): string {
-  for (const clause of FLOOR_CLAUSES) {
-    const suffix: string = `, and ${clause}`;
-    const at: number = reason.indexOf(suffix);
-    if (at > 0) {
-      return reason.slice(0, at) + reason.slice(at + suffix.length);
-    }
+// What the situation asks a person to do about an escalated invoice, or null:
+// the approvers sign, a person checks a payment that may pay it twice, closes a
+// paid one, decides on a held one, calls the supplier or finds a phone number,
+// the bank's deadline passed, or a payout sent outside PayOnce is with the bank.
+// An escalated payment whose own transfer is with the bank keeps the need its
+// reason gives, a call when the supplier's bank details are in question and a
+// phone is on file, as an alert for a fraud signal while money is in flight.
+function situationNeed(snapshot: InvoiceSnapshot, situation: Situation): InvoiceNeed | null {
+  switch (situation.state) {
+    case "needs-approval":
+      return situation.variant === "first-payment" ? "approve-held" : "approve";
+    case "paid-twice":
+    case "unrecognised-transfer":
+      return "twice";
+    case "bank-late":
+      return "bank";
+    case "ready-to-close":
+      return "close";
+    case "needs-decision":
+      return snapshot.obligation.rejectedBy !== null || heldBeforePaying(snapshot.obligation, snapshot.attempts)
+        ? "held"
+        : "check";
+    case "no-approvers":
+      return "check";
+    case "needs-callback":
+      return "callback";
+    case "needs-phone":
+      return "phone";
+    case "with-bank":
+      return situation.variant === "outside"
+        ? "outside"
+        : aboutBankDetails(snapshot) && snapshot.obligation.supplierPhone !== null
+          ? "callback"
+          : "check";
+    default:
+      return null;
   }
-  return reason;
 }
 
-// heldBefore is true for an invoice held before paying, or one a person closed
-// without paying that a payment found since reopened.
-function needOf(
-  obligation: Obligation,
-  base: string,
-  pending: PendingApproval | undefined,
-  review: CloseReview | undefined,
-  heldBefore: boolean,
-): InvoiceNeed {
-  if (pending !== undefined) {
-    return pending.terms.action === "pay" ? "approve-held" : "approve";
-  }
-  if (base.startsWith(LATE_TRANSFER_REASON)) {
-    return "twice";
-  }
-  if (review !== undefined && review.kind !== "duplicate" && review.kind !== "unpaid") {
-    return "close";
-  }
-  // Any invoice with nothing live at the bank can be closed without paying, but
-  // one that sent a payment keeps the need its reason gives.
-  if (review !== undefined && heldBefore) {
-    return "held";
-  }
-  // The ask not to pay stays in the reason, and so in the fingerprint, but does
-  // not change what the person is asked to do.
-  const core: string = base.replace(`, and ${NOT_TO_PAY_CLAUSE}`, "");
-  if (DEADLINE_REASONS.includes(core)) {
-    return "bank";
-  }
-  if (core.startsWith(OUTSIDE_PAYOUT_REASON)) {
-    return "outside";
-  }
-  return BANK_DETAILS_REASONS.includes(core) && obligation.supplierPhone !== null ? "callback" : "check";
+// The need, unless a person already approved and PayOnce is sending that payment
+// or it is with the bank: then only a payment that may pay twice and a bank that
+// is late are news.
+function needOf(snapshot: InvoiceSnapshot, situation: Situation, now: number): InvoiceNeed | null {
+  const need: InvoiceNeed | null = situationNeed(snapshot, situation);
+  return need === null ||
+    need === "approve" ||
+    need === "approve-held" ||
+    need === "bank" ||
+    need === "twice" ||
+    !approvedUnderway(snapshot.requests.at(-1)?.approval, snapshot.attempts, now)
+    ? need
+    : null;
 }
 
-// True when a person already approved and the agent is using it: the approval is
-// approved and not expired, or used with its payment still with the bank.
-function approvedAndUnderway(ledger: Ledger, invoiceId: string): boolean {
-  const latest: Approval | undefined = ledger.latestApproval(invoiceId);
-  if (latest?.state === "approved") {
-    return !isExpired(latest);
-  }
-  return (
-    latest?.state === "used" &&
-    ledger
-      .attempts(invoiceId)
-      .some(
-        (attempt: Attempt): boolean =>
-          attempt.approvalId === latest.id && (attempt.state === "pending" || attempt.state === "in_flight"),
-      )
-  );
-}
-
-function invoiceCondition(ledger: Ledger, obligation: Obligation): FoundCondition | null {
+function invoiceCondition(snapshot: InvoiceSnapshot, now: number): FoundCondition | null {
+  const obligation: Obligation = snapshot.obligation;
   if (obligation.state !== "escalated") {
     return null;
   }
-  const invoiceId: string = obligation.invoiceId;
-  const pending: PendingApproval | undefined = pendingApproval(ledger, invoiceId);
-  const review: CloseReview | undefined = pending === undefined ? pendingClose(ledger, invoiceId) : undefined;
-  const base: string = baseReason(obligation.escalationReason);
-  const need: InvoiceNeed = needOf(
-    obligation,
-    base,
-    pending,
-    review,
-    obligation.rejectedBy !== null || heldBeforePaying(ledger, obligation),
-  );
-  // A payment found late is news even while an approved one is with the bank.
-  if (need !== "bank" && need !== "twice" && pending === undefined && approvedAndUnderway(ledger, invoiceId)) {
+  const situation: Situation = situationOf(snapshot, now);
+  const need: InvoiceNeed | null = needOf(snapshot, situation, now);
+  if (need === null) {
     return null;
   }
-  const terms: ApprovalTerms | undefined = pending?.terms;
+  const invoiceId: string = obligation.invoiceId;
+  // The request the approvers are asked to sign.
+  const pending: RequestSnapshot | undefined =
+    situation.state === "needs-approval" ? snapshot.requests.at(-1) : undefined;
+  const terms: ApprovalTerms | null = pending?.terms ?? null;
   const facts: InvoiceAlertFacts = {
     kind: "invoice",
     invoice: invoiceId,
@@ -242,10 +213,13 @@ function invoiceCondition(ledger: Ledger, obligation: Obligation): FoundConditio
     openUntil: pending?.approval.expiresAt ?? null,
     newAccount: terms?.action === "replace" && terms.evidence.bankChange !== null,
   };
-  // A request renewed on the same terms is the same need. The fingerprint never
-  // leaves the ledger.
+  // A request renewed on the same terms is the same need. The reason leaves out
+  // the floor clause the agent adds or drops as the balance moves, so the floor
+  // alone does not alert an invoice again. The fingerprint never leaves the
+  // ledger.
+  const base: string = snapshot.reason === null ? "" : reasonText(withoutClauses(snapshot.reason, FLOOR_CLAUSES));
   const request: unknown =
-    terms === undefined
+    terms === null
       ? null
       : {
           action: terms.action,
@@ -619,6 +593,7 @@ export interface AlertsStatus {
 // the server's next check sees what it did.
 export class Alerts {
   private readonly ledger: Ledger;
+  private readonly policy: ApprovalPolicy;
   private readonly target: AlertTarget;
   private readonly base: string;
   private readonly cash: () => AlertCash;
@@ -630,9 +605,11 @@ export class Alerts {
   private audit: FoundCondition[] = [];
   private timer: NodeJS.Timeout | null = null;
 
-  // base is the local page the links point to. cash is the panel's report.
-  constructor(ledger: Ledger, target: AlertTarget, base: string, cash: () => AlertCash) {
+  // policy is the approval policy the situations read. base is the local page
+  // the links point to. cash is the panel's report.
+  constructor(ledger: Ledger, policy: ApprovalPolicy, target: AlertTarget, base: string, cash: () => AlertCash) {
     this.ledger = ledger;
+    this.policy = policy;
     this.target = target;
     this.base = base;
     this.cash = cash;
@@ -682,8 +659,21 @@ export class Alerts {
       this.auditAt = now;
     }
     const found: FoundCondition[] = [];
-    for (const obligation of this.ledger.obligations()) {
-      const invoice: FoundCondition | null = invoiceCondition(this.ledger, obligation);
+    const obligations: Obligation[] = this.ledger.obligations();
+    // Only an invoice with a person can need one, so only those are read whole.
+    const snapshots: Map<string, InvoiceSnapshot> = new Map(
+      readInvoiceSnapshots(
+        this.ledger,
+        { policy: this.policy, askWhy: false },
+        now,
+        obligations
+          .filter((obligation: Obligation): boolean => obligation.state === "escalated")
+          .map((obligation: Obligation): string => obligation.invoiceId),
+      ).map((snapshot: InvoiceSnapshot): [string, InvoiceSnapshot] => [snapshot.obligation.invoiceId, snapshot]),
+    );
+    for (const obligation of obligations) {
+      const snapshot: InvoiceSnapshot | undefined = snapshots.get(obligation.invoiceId);
+      const invoice: FoundCondition | null = snapshot === undefined ? null : invoiceCondition(snapshot, now);
       if (invoice !== null) {
         found.push(invoice);
       }
