@@ -113,7 +113,9 @@ function emailsOf(ledger: Ledger, invoiceId: string): EmailsSnapshot {
 }
 
 // Who may not approve the latest request: as pendingApproval bars them while it
-// waits for signoffs, else whoever started the payment.
+// waits for signoffs, else whoever started the payment. The second half copies
+// the starter rule of engine/requests.ts barredFrom, until barredFrom moves to
+// the domain.
 function barredOf(ledger: Ledger, obligation: Obligation, latest: RequestSnapshot | undefined): Barred[] {
   if (latest?.approval.state === "requested" && latest.terms !== null) {
     return pendingApproval(ledger, obligation.invoiceId)?.barred ?? [];

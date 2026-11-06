@@ -2,12 +2,12 @@ import { currencyFloor, debitCurrency, type CurrencyFloor } from "../domain/rese
 import { payoutNamesOnly, unrecognisedPaid, unrecognisedUncleared } from "../domain/live.js";
 import { aboutBankDetails, closeKindOf, type CloseKind, type InvoiceSnapshot, type Situation } from "../domain/situation.js";
 import { WAITING_KINDS, type CashLine, type CashReport, type CurrencyCash } from "../engine/cash-position.js";
+import type { CoveredTransfer } from "../engine/facts.js";
+import { coveredText, namingText, type NamingPayout } from "../engine/person.js";
 import { sendsText, type OutageSend } from "../outages/outages.js";
 import type { Outbox } from "../outbox/drafts.js";
 import type { Settings } from "../settings.js";
-import { payoutVerdict, type Attempt, type AttemptKind, type Obligation, type OutsidePayout } from "../store/ledger.js";
-import { STATUS_PATTERN } from "../domain/patterns.js";
-import { formatMoney } from "../domain/money.js";
+import { payoutVerdict, type Attempt, type Obligation, type OutsidePayout } from "../store/ledger.js";
 import { shownReference } from "../text/printable.js";
 import type {
   Caution,
@@ -23,41 +23,6 @@ import { allowed, listOf, money, refused } from "./parts.js";
 // The Decision panel: the request, the cautions, and every option that fits the
 // payment now, each with what confirming it does and why it cannot be chosen
 // when it cannot. The situation's can says what is allowed; this only words it.
-
-const TRANSFER_ID: RegExp = /^[A-Za-z0-9-]{1,64}$/;
-
-// Copy of engine/person.ts coveredText, so the panel words a covered transfer as
-// pnpm close does. Fold when the close rule moves to the domain.
-interface CoveredTransfer {
-  transferId: string;
-  reference: string;
-  status: string | null;
-  kind: AttemptKind;
-}
-
-interface NamingPayout {
-  reference: string;
-  amountMinor: number | null;
-  currency: string | null;
-  ending: string | null;
-  checked: boolean;
-}
-
-function coveredText(transfer: CoveredTransfer): string {
-  const id: string = TRANSFER_ID.test(transfer.transferId) ? transfer.transferId : "a transfer id PayOnce cannot show";
-  const status: string =
-    transfer.status === null ? "status not read" : STATUS_PATTERN.test(transfer.status) ? transfer.status : "a status PayOnce cannot show";
-  return `${shownReference(transfer.reference)} (${id}), ${status}, under the ${transfer.kind}'s request id`;
-}
-
-// Copy of engine/person.ts namingText, for the same reason.
-function namingText(payout: NamingPayout): string {
-  const amount: string =
-    payout.amountMinor === null || payout.currency === null
-      ? "an amount PayOnce did not read"
-      : formatMoney(payout.amountMinor, payout.currency);
-  return `${payout.reference}, ${amount}, to ${payout.ending === null ? "an account PayOnce did not read" : `the account ending ${payout.ending}`}, paid, ${payout.checked ? "and does not match this invoice" : "and PayOnce could not check it yet"}`;
-}
 
 export function coveredOf(snapshot: InvoiceSnapshot): CoveredTransferView[] {
   return snapshot.attempts.filter(unrecognisedUncleared).map((attempt: Attempt): CoveredTransferView => {
