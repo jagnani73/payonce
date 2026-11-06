@@ -58,7 +58,14 @@ function readerSection(settings: Settings): SettingsView["reader"] {
     name: reader.name,
     isModel: reader instanceof ModelReader,
     notice: free ? "A model on Google's free tier reads uploaded emails. Don't upload anything you can't share with Google." : null,
-    askWhy: { on: explainer !== null, models: explainer?.name ?? "", perMinute: ASKS_PER_MINUTE, perDay: ASKS_PER_DAY },
+    askWhy: {
+      on: explainer !== null,
+      models: explainer?.name ?? "",
+      perMinute: ASKS_PER_MINUTE,
+      perDay: ASKS_PER_DAY,
+      variables: ["CLAUDE_API_KEY", "CLAUDE_ASK_MODEL", "READER_API_KEY", "READER_MODEL"],
+    },
+    variables: ["CLAUDE_API_KEY", "CLAUDE_MODEL", "READER_API_KEY", "READER_MODEL", "READER_BASE_URL"],
   };
 }
 
@@ -122,6 +129,7 @@ export function settingsView(ledger: Ledger, settings: Settings, _now: number, s
         createdAt: alert.createdAt,
         sentAt: alert.sentAt,
       })),
+      variables: { target: ["ALERT_WEBHOOK_URL", "ALERT_FORMAT"], test: ["ALERT_TEST_RECEIVER_URL"] },
     },
     reader: readerSection(settings),
     airwallex:
@@ -138,6 +146,7 @@ export function settingsView(ledger: Ledger, settings: Settings, _now: number, s
             checksEverySeconds: server.checksEverySeconds,
             listingEverySeconds: server.listingEverySeconds,
             reconEveryMinutes: settings.recon.everyMs === null ? null : settings.recon.everyMs / MINUTE_MS,
+            variables: { host: ["AWX_BASE_URL"], webhooks: ["WEBHOOKS", "WEBHOOK_URL"], recon: ["RECON_EVERY_MINUTES"] },
           },
     people: { noLogin: NO_LOGIN, names: ledger.knownNames(NAMES_SHOWN) },
     failureCodes: Object.entries(FAILURE_CODES).map(([code, failure]: [string, FailureCode]) => ({

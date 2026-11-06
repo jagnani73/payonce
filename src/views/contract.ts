@@ -36,6 +36,7 @@ import type {
   Why,
 } from "../domain/situation.js";
 import type { BreakKind } from "../recon/recon-match.js";
+import type { MovementView } from "../recon/reconcile.js";
 import type { BreakState } from "../store/recon-store.js";
 import type { AuditExport, RunAuditExport } from "../store/audit-trail.js";
 import type { MetricsReport } from "./metrics.js";
@@ -1189,6 +1190,14 @@ export interface ReconView {
   can: { checkNow: Can; explain: Can };
 }
 
+// GET /api/reconcile/movements?currency=: one wallet's stored movements, newest
+// first, as the route has always answered them.
+export type { MovementView } from "../recon/reconcile.js";
+export interface ReconMovementsView {
+  currency: string;
+  movements: MovementView[];
+}
+
 export interface OutageCardView {
   id: OutageId;
   rail: string;
@@ -1265,8 +1274,16 @@ export interface SettingsView {
     problem: string | null;
     stopped: string | null;
     recent: { id: number; kind: string; title: string; state: string; tries: number; lastError: string | null; createdAt: Iso; sentAt: Iso | null }[];
+    // The .env variables behind the address and the test receiver, shown small.
+    variables: { target: string[]; test: string[] };
   };
-  reader: { name: string; isModel: boolean; notice: string | null; askWhy: { on: boolean; models: string; perMinute: number; perDay: number } };
+  reader: {
+    name: string;
+    isModel: boolean;
+    notice: string | null;
+    askWhy: { on: boolean; models: string; perMinute: number; perDay: number; variables: string[] };
+    variables: string[];
+  };
   // Null outside pnpm ui, which alone holds the client and its timers.
   airwallex: {
     host: string;
@@ -1276,6 +1293,7 @@ export interface SettingsView {
     checksEverySeconds: number;
     listingEverySeconds: number;
     reconEveryMinutes: number | null;
+    variables: { host: string[]; webhooks: string[]; recon: string[] };
   } | null;
   people: { noLogin: string; names: string[] };
   // The one failure-code table, for any client that needs words for a code.
