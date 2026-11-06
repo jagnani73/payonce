@@ -7,7 +7,7 @@
 import { isBreakKind, KIND_LABELS } from "../recon/recon-match.js";
 import { CURRENCY_PATTERN, REFERENCE_PATTERN } from "../domain/patterns.js";
 import { RAIL_FAILURE_CODES } from "../domain/failure-codes.js";
-import { trimmedLine } from "../text/printable.js";
+import { trimmedLine, utcText } from "../text/printable.js";
 
 export type AlertFormat = "slack" | "discord";
 
@@ -303,27 +303,6 @@ function discordSpan(part: AlertText, max: number): string {
   return text.outside
     ? `\`${capped(defanged(text.text), max - 2, (char: string): string => char)}\``
     : capped(trimmedLine(text.text), max, discordChar);
-}
-
-// "28 Oct 2026, 15:05 UTC"
-export function utcText(iso: string): string {
-  const at: Date = new Date(iso);
-  if (Number.isNaN(at.getTime())) {
-    return "not known";
-  }
-  const day: string = at.toLocaleDateString("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    timeZone: "UTC",
-  });
-  const time: string = at.toLocaleTimeString("en-GB", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-    timeZone: "UTC",
-  });
-  return `${day}, ${time} UTC`;
 }
 
 function plural(count: number, one: string, many: string): string {

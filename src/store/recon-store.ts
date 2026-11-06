@@ -1,12 +1,11 @@
 import type { StatementSync } from "node:sqlite";
 import {
   restartOf,
-  storable,
   type ChainedReconEvent,
   type ReconAuditSnapshot,
   type ReconEventFields,
 } from "./audit-trail.js";
-import { oneLine } from "../text/printable.js";
+import { oneLine, storable } from "../text/printable.js";
 import { GENESIS, RECON_CHAIN } from "./chain.js";
 import type { Db } from "./db.js";
 import type {

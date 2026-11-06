@@ -150,15 +150,6 @@ export interface RunLedgerReport {
   intact: boolean;
 }
 
-// SQLite keeps text as UTF-8, which cannot hold half of a surrogate pair, such as
-// an emoji cut in two, so it reads back as U+FFFD. A line is hashed as it will
-// read back, or its own text would no longer match its hash.
-const LONE_SURROGATE: RegExp = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
-
-export function storable(text: string): string {
-  return text.replace(LONE_SURROGATE, "�");
-}
-
 // Reconciliation's record is one chain over every break, with a running hash of
 // its own, so a line removed from its end is caught too.
 export const RECON_HASH_METHOD: string =

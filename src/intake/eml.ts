@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { storable } from "../store/audit-trail.js";
+import { storable } from "../text/printable.js";
 import type { EmailAttachment } from "../reader/emails.js";
 import { htmlToText, type HtmlText } from "./html-text.js";
 

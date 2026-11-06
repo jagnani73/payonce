@@ -29,13 +29,25 @@ export function shownFailureCode(value: unknown): string {
   return typeof value === "string" && FAILURE_CODE_PATTERN.test(value) ? value : UNSHOWN_FAILURE_CODE;
 }
 
-// A time as the terminal commands print it, "2026-11-03 01:49 UTC", whatever
-// zone the stored time was written in.
-export function utcTime(at: string | number): string {
-  const time: number = typeof at === "number" ? at : Date.parse(at);
-  return Number.isFinite(time)
-    ? `${new Date(time).toISOString().slice(0, 16).replace("T", " ")} UTC`
-    : "a time PayOnce cannot read";
+// "28 Oct 2026, 15:05 UTC"
+export function utcText(iso: string): string {
+  const at: Date = new Date(iso);
+  if (Number.isNaN(at.getTime())) {
+    return "not known";
+  }
+  const day: string = at.toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+  const time: string = at.toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "UTC",
+  });
+  return `${day}, ${time} UTC`;
 }
 
 // One line: a line break or any other control character becomes a space, and a
@@ -64,6 +76,15 @@ export function oneLine(text: string): string {
 // The same, trimmed, for the fields of an alert.
 export function trimmedLine(text: string): string {
   return oneLine(text).trim();
+}
+
+// SQLite keeps text as UTF-8, which cannot hold half of a surrogate pair, such as
+// an emoji cut in two, so it reads back as U+FFFD. A line is hashed as it will
+// read back, or its own text would no longer match its hash.
+const LONE_SURROGATE: RegExp = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+export function storable(text: string): string {
+  return text.replace(LONE_SURROGATE, "�");
 }
 
 // The text with its first character in capitals, such as a clause that starts a
