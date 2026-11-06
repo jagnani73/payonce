@@ -217,6 +217,10 @@ export function NewPayment(props: ScreenProps): JSX.Element {
     const fields: unknown = error.body?.fields;
     if ((error.status === 400 || error.status === 409) && typeof fields === "object" && fields !== null) {
       setRefused({ body, fields: fields as Record<string, string> });
+      // Someone took the number PayOnce made before this start: make another.
+      if (invoice.trim() === "" && (fields as Record<string, unknown>)["invoiceId"] !== undefined) {
+        setMade(null);
+      }
     }
   }
 
