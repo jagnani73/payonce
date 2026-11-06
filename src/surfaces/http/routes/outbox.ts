@@ -1,14 +1,22 @@
 import type { IncomingMessage } from "node:http";
 import { createDraft, DraftMoveError, DraftNotFitError, isTemplate, markDraft, type DraftTemplate, type DraftView } from "../../../outbox/drafts.js";
 import { DraftOpenError, type Draft, type DraftMove } from "../../../store/ledger.js";
+import type { Acted, IncidentView } from "../../../views/contract.js";
 import type { HttpApp } from "../app.js";
 import { HttpError, MAX_FINDING_LENGTH, name, readJson, RUN_ID_PATTERN, sendJson, text } from "../http.js";
 import type { Route } from "../router.js";
 
+const MOVE_NOTICES: Record<DraftMove, string> = {
+  copied: "Marked as copied.",
+  sent: "Marked as sent.",
+  dismissed: "Draft dismissed.",
+};
+
 // The outbox: a person drafts a message to send themselves, then copies it,
-// marks it sent or dismisses it. PayOnce sends nothing.
+// marks it sent or dismisses it. PayOnce sends nothing. Each step answers the
+// payment page as it is after it.
 export function outboxRoutes(app: HttpApp): Route[] {
-  const { engine, agent, requireObligation } = app;
+  const { engine, agent, requireObligation, incident } = app;
 
   // A person's step on a draft waits its turn on the invoice like any other. The
   // known refusals answer 409 or 422. Anything else is PayOnce's own failure and
@@ -31,7 +39,7 @@ export function outboxRoutes(app: HttpApp): Route[] {
   }
 
   // Renders a message for a person to send and records it. PayOnce sends nothing.
-  async function draftByPerson(request: IncomingMessage, invoiceId: string): Promise<unknown> {
+  async function draftByPerson(request: IncomingMessage, invoiceId: string): Promise<Acted<IncidentView> & { draftId: number }> {
     requireObligation(invoiceId);
     const body: Record<string, unknown> = await readJson(request);
     const template: unknown = body["template"];
@@ -43,7 +51,11 @@ export function outboxRoutes(app: HttpApp): Route[] {
     const draft: DraftView = await inOutboxTurn(invoiceId, (): DraftView =>
       createDraft(engine.ledger, requireObligation(invoiceId), chosen, createdBy),
     );
-    return { draftId: draft.id };
+    return {
+      draftId: draft.id,
+      view: incident(invoiceId),
+      notice: { tone: "success", text: "Draft written. Copy it and send it yourself: PayOnce never sends it." },
+    };
   }
 
   // Records a person copying a draft, marking it sent or dismissing it.
@@ -52,7 +64,7 @@ export function outboxRoutes(app: HttpApp): Route[] {
     invoiceId: string,
     rawId: string,
     move: DraftMove,
-  ): Promise<unknown> {
+  ): Promise<Acted<IncidentView>> {
     requireObligation(invoiceId);
     const draft: Draft | undefined = RUN_ID_PATTERN.test(rawId) ? engine.ledger.draft(Number(rawId)) : undefined;
     if (draft === undefined || draft.invoiceId !== invoiceId) {
@@ -73,7 +85,7 @@ export function outboxRoutes(app: HttpApp): Route[] {
     await inOutboxTurn(invoiceId, (): void =>
       markDraft(engine.ledger, requireObligation(invoiceId), draft.id, move, by, note === "" ? null : note),
     );
-    return { ok: true };
+    return { view: incident(invoiceId), notice: { tone: "success", text: MOVE_NOTICES[move] } };
   }
 
   return [

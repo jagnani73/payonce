@@ -1,103 +1,91 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { airwallexAdvice, AirwallexError, AirwallexUnreachableError } from "../../../airwallex/client.js";
-import type { ApprovalTerms } from "../../../domain/approval.js";
-import { dueDateProblem } from "../../../domain/arrival.js";
-import type { Barred } from "../../../domain/approvers.js";
+import { CURRENCY_PATTERN } from "../../../domain/patterns.js";
 import { bankChangeForm, recordBankChange, type BankChangeForm, type CallbackInput } from "../../../engine/bank-change.js";
-import { noteError } from "../../../engine/lines.js";
-import {
-  approvePayment,
-  closeIncident,
-  payAgain,
-  pendingApproval,
-  pendingClose,
-  type PayAgainResult,
-} from "../../../engine/person.js";
-import { DEFAULT_SCENARIO, newInvoiceId, openScenario, runScenario, SCENARIOS, type ScenarioDef } from "../../../engine/scenario.js";
-import { noteTexts } from "../../../intake/eml.js";
-import { outageView } from "../../../outages/outages.js";
-import { outboxOf } from "../../../outbox/drafts.js";
-import type { EmailFindings, SupplierEmail } from "../../../reader/emails.js";
-import {
-  auditCsv,
-  auditExport,
-  chainReport,
-  describeBreaks,
-  describeLedger,
-  type AuditExport,
-  type ChainReport,
-  type LedgerReport,
-} from "../../../store/audit-trail.js";
-import {
-  INVOICE_ID_PATTERN,
-  isExpired,
-  readingSoft,
-  type Approval,
-  type Obligation,
-  type Outage,
-  type RunRow,
-  type Signoff,
-} from "../../../store/ledger.js";
-import { SANDBOX_OUTCOMES } from "../../../text/words.js";
-import { boardGroups, type BoardGroupOf } from "../../../views/incident-board.js";
-import { adviceFor, isLive, type AuditSummary, type HttpApp } from "../app.js";
-import { HttpError, MAX_FINDING_LENGTH, name, readJson, sendJson, text } from "../http.js";
+import { approvePayment, closeIncident, pendingClose, type CloseReview } from "../../../engine/person.js";
+import { auditCsv, auditExport, type AuditExport } from "../../../store/audit-trail.js";
+import type { Approval, Obligation } from "../../../store/ledger.js";
+import type { Acted, IncidentScope, IncidentsQuery, IncidentsView, IncidentView, Notice } from "../../../views/contract.js";
+import { isBoardGroup, isBoardOrigin, type BoardGroup } from "../../../views/incident-board.js";
+import { incidentsView, isScope } from "../../../views/incidents.js";
+import { MAX_QUERY_LENGTH } from "../../../views/search.js";
+import type { HttpApp } from "../app.js";
+import { HttpError, MAX_FINDING_LENGTH, name, queryName, readJson, sendJson, text } from "../http.js";
 import type { Route } from "../router.js";
-import { capitalise } from "../../../text/printable.js";
 
 // The transfers a close card can cover, one per attempt at most.
 const MAX_COVERED: number = 50;
 const MAX_TRANSFER_ID_LENGTH: number = 64;
 
-// The incident list, one incident, its audit, starting one, and a person
-// approving, closing, paying again, recording a callback or asking for a look.
+// The board's groups as the incident list's scopes, for the old board URL.
+const BOARD_SCOPES: Record<BoardGroup, IncidentScope> = {
+  person: "needs-you",
+  deadline: "bank-late",
+  bank: "with-bank",
+  open: "payonce",
+};
+
+// The incident list, one incident, its audit, and a person approving, closing,
+// recording a callback or asking for a check. Every action answers the payment
+// page as it is after it, with a notice.
 export function incidentRoutes(app: HttpApp): Route[] {
-  const { engine, agent, bank, isBusy, isWatching, watchedInvoices, requireObligation, inTurn, emailThreads } = app;
+  const { engine, settings, agent, live, requireObligation, incident, inTurn } = app;
 
-  // The page polls this, so it reads the ledger a few times in all, never once per
-  // invoice. The headline says how the incident stands: the board's reason for an
-  // open invoice, and otherwise the latest decision, close or standing line, never
-  // an error, an email or a message draft. A view, so it reads stored JSON soft.
-  function listIncidents(): unknown {
-    return readingSoft(incidentList);
-  }
-
-  function incidentList(): unknown {
-    const groups: Map<string, BoardGroupOf> = boardGroups(engine.ledger);
-    const headlines: Map<string, string> = engine.ledger.headlines();
-    const runs: Map<string, number> = engine.ledger.runIdsByInvoice();
-    const watched: Set<string> = watchedInvoices();
+  // The list's filters from the query. An empty value is no filter, and one the
+  // list does not know answers 400.
+  function incidentsQuery(params: URLSearchParams): IncidentsQuery {
+    const scope: string = params.get("scope") ?? "";
+    const currency: string = params.get("currency") ?? "";
+    const origin: string = params.get("origin") ?? "";
+    const clean: string = params.get("clean") ?? "";
+    const q: string = (params.get("q") ?? "").trim();
+    if (scope !== "" && !isScope(scope)) {
+      throw new HttpError(400, "The scope is needs-you, bank-late, with-bank, payonce, closed or all");
+    }
+    if (currency !== "" && !CURRENCY_PATTERN.test(currency)) {
+      throw new HttpError(400, "The currency is a three-letter code such as USD");
+    }
+    if (origin !== "" && !isBoardOrigin(origin)) {
+      throw new HttpError(400, "The origin is payonce, outside or pay-run");
+    }
+    if (clean !== "" && clean !== "true" && clean !== "false") {
+      throw new HttpError(400, "clean is true or false");
+    }
+    if (q.length > MAX_QUERY_LENGTH) {
+      throw new HttpError(400, `Search for 1 to ${MAX_QUERY_LENGTH} characters`);
+    }
     return {
-      incidents: engine.ledger.obligations().map((obligation: Obligation) => {
-        const group: BoardGroupOf | undefined = groups.get(obligation.invoiceId);
-        return {
-          invoiceId: obligation.invoiceId,
-          supplier: obligation.supplier,
-          currency: obligation.currency,
-          amountMinor: obligation.amountMinor,
-          state: obligation.state,
-          headline: group?.why ?? headlines.get(obligation.invoiceId) ?? "",
-          busy: isBusy(obligation.invoiceId),
-          watching: watched.has(obligation.invoiceId),
-          runId: runs.get(obligation.invoiceId) ?? null,
-          board: group === undefined ? null : { group: group.group, label: group.label },
-        };
-      }),
+      scope: scope === "" ? "all" : scope,
+      currency: currency === "" ? null : currency,
+      origin: origin === "" ? null : origin,
+      me: queryName(params, "me"),
+      clean: clean === "true",
+      q: q === "" ? null : q,
     };
   }
 
-  // The page polls an incident, so the running hash is checked by runningHashCheck,
-  // which hashes only the lines added since its last check and every line once a
-  // minute. The audit export and pnpm run audit hash every line every time.
-  function auditSummary(invoiceId: string): AuditSummary {
-    const report: ChainReport = chainReport(invoiceId, engine.ledger.chainedEvents(invoiceId));
-    const ledger: LedgerReport = engine.ledger.runningHashCheck();
-    const problem: string | null =
-      describeBreaks(report.breaks) ?? (ledger.intact ? null : describeLedger(ledger));
-    return {
-      lines: report.lines,
-      problem: problem === null ? null : capitalise(problem),
-    };
+  function incidents(params: URLSearchParams): IncidentsView {
+    return incidentsView(engine.ledger, settings, Date.now(), incidentsQuery(params), live);
+  }
+
+  // The incident board's old address sends the page to the incident list, its
+  // group as the list's scope.
+  function boardRedirect(response: ServerResponse, params: URLSearchParams): void {
+    const group: string = params.get("group") ?? "";
+    if (group !== "" && !isBoardGroup(group)) {
+      throw new HttpError(400, "The group is person, deadline, bank or open");
+    }
+    const target: URLSearchParams = new URLSearchParams();
+    if (group !== "") {
+      target.set("scope", BOARD_SCOPES[group]);
+    }
+    for (const field of ["currency", "origin"]) {
+      const value: string = params.get(field) ?? "";
+      if (value !== "") {
+        target.set(field, value);
+      }
+    }
+    const location: string = `/api/incidents${target.size === 0 ? "" : `?${target.toString()}`}`;
+    sendJson(response, 307, { location }, { Location: location });
   }
 
   // The invoice's timeline with every line's hashes and the result of checking
@@ -122,132 +110,18 @@ export function incidentRoutes(app: HttpApp): Route[] {
     response.end(auditCsv(audit));
   }
 
-  function incidentDetail(invoiceId: string): unknown {
-    const obligation: Obligation = requireObligation(invoiceId);
-    const findings: string | undefined = engine.ledger.findings(invoiceId);
-    const approval: Approval | undefined = engine.ledger.latestApproval(invoiceId);
-    // The approval card shows who may not approve, and that is the same for any request.
-    const barred: Barred[] = pendingApproval(engine.ledger, invoiceId)?.barred ?? [];
-    const row: RunRow | undefined = engine.ledger.runRowOf(invoiceId);
-    const terms: ApprovalTerms | undefined =
-      approval === undefined ? undefined : (JSON.parse(approval.terms) as ApprovalTerms);
-    const outage: Outage | undefined = engine.ledger.activeOutage(obligation.currency, obligation.transferMethod);
+  function approvedNotice(approval: Approval): Notice {
+    if (approval.state === "approved") {
+      return { tone: "success", text: "Approved. PayOnce sends it at its next check." };
+    }
+    const left: number = Math.max(0, approval.needed - approval.signoffs.length);
     return {
-      obligation,
-      run: row === undefined ? null : { id: row.runId, line: row.line },
-      // The active outage on the rail this invoice pays on, or null.
-      outage: outage === undefined ? null : outageView(engine.ledger, outage),
-      attempts: engine.ledger.attempts(invoiceId),
-      emails: engine.ledger.emails(invoiceId).map((email: SupplierEmail) =>
-        email.uploadId === undefined
-          ? email
-          : {
-              ...email,
-              notes: noteTexts(email.notes ?? []),
-              uploadedBy: engine.ledger.upload(email.uploadId)?.uploadedBy ?? null,
-            },
-      ),
-      findings: findings === undefined ? null : (JSON.parse(findings) as EmailFindings),
-      approval:
-        approval === undefined
-          ? null
-          : {
-              id: approval.id,
-              state: approval.state,
-              approver: approval.approver,
-              terms,
-              // How the page words the estimate the terms carry, kept out of them.
-              arrivalAdvice:
-                terms?.arrival === undefined ? null : adviceFor(terms.arrival, isLive(approval)),
-              needed: approval.needed,
-              neededWhy: approval.neededWhy,
-              signoffs: approval.signoffs.map((signoff: Signoff) => ({
-                approver: signoff.approver,
-                at: signoff.at,
-              })),
-              expiresAt: approval.expiresAt,
-              expired: isExpired(approval),
-              barred,
-            },
-      review: pendingClose(engine.ledger, invoiceId) ?? null,
-      outbox: outboxOf(engine.ledger, obligation),
-      events: engine.ledger.events(invoiceId),
-      audit: auditSummary(invoiceId),
-      busy: isBusy(invoiceId),
-      watching: isWatching(invoiceId),
+      tone: "success",
+      text: `Signed off. Request #${approval.id} needs ${left} more ${left === 1 ? "approver" : "approvers"}.`,
     };
   }
 
-  async function startIncident(request: IncomingMessage): Promise<unknown> {
-    const body: Record<string, unknown> = await readJson(request);
-    const bankOutcome: unknown = body["bankOutcome"];
-    const emailsName: unknown = body["emails"];
-    if (typeof bankOutcome !== "string" || !SANDBOX_OUTCOMES.includes(bankOutcome)) {
-      throw new HttpError(400, "Unknown bank outcome");
-    }
-    if (typeof emailsName !== "string" || !emailThreads().includes(emailsName)) {
-      throw new HttpError(400, "Unknown email thread");
-    }
-    const startedBy: string = name(body, "startedBy", "Enter your name");
-    const scenarioId: unknown = body["scenario"] ?? DEFAULT_SCENARIO;
-    if (
-      typeof scenarioId !== "string" ||
-      !SCENARIOS.some((scenario: ScenarioDef): boolean => scenario.id === scenarioId)
-    ) {
-      throw new HttpError(400, "Unknown scenario");
-    }
-    // Optional. A date in the past is taken, and the arrival estimates say it has
-    // passed.
-    if (body["dueDate"] !== undefined && typeof body["dueDate"] !== "string") {
-      throw new HttpError(400, "The due date is not a date written like 2026-11-02");
-    }
-    const dueDate: string = typeof body["dueDate"] === "string" ? body["dueDate"].trim() : "";
-    const badDue: string | null = dueDate === "" ? null : dueDateProblem(dueDate);
-    if (badDue !== null) {
-      throw new HttpError(400, badDue);
-    }
-
-    // The supplier's invoice number when the person gives one, so a second bill
-    // under a near-identical number can be caught.
-    const given: string = typeof body["invoiceId"] === "string" ? body["invoiceId"].trim() : "";
-    if (given !== "" && !INVOICE_ID_PATTERN.test(given)) {
-      throw new HttpError(400, "An invoice number has up to 40 letters, digits and dashes");
-    }
-    if (given !== "" && engine.ledger.obligation(given) !== undefined) {
-      throw new HttpError(409, `${given} is already in the ledger, and PayOnce pays an invoice number once`);
-    }
-    const waitingRow: RunRow | undefined = given === "" ? undefined : engine.ledger.waitingRunRow(given);
-    if (waitingRow !== undefined) {
-      throw new HttpError(
-        409,
-        `${given} is on pay run ${waitingRow.runId}, which is waiting for approval, and PayOnce pays an invoice number once`,
-      );
-    }
-    const invoiceId: string = given === "" ? newInvoiceId(engine.ledger) : given;
-    let obligation: Obligation;
-    try {
-      obligation = await openScenario(engine, invoiceId, scenarioId, startedBy, dueDate === "" ? null : dueDate);
-    } catch (error: unknown) {
-      // Airwallex is read before the invoice is written, so nothing is stored. The
-      // person reads PayOnce's words first and Airwallex's after them.
-      if (error instanceof AirwallexUnreachableError || error instanceof AirwallexError) {
-        const what: string =
-          error instanceof AirwallexUnreachableError ? "Airwallex could not be reached" : "Airwallex answered with an error";
-        const advice: string = airwallexAdvice(error);
-        throw new HttpError(502, `${what}, so nothing was sent or stored.${advice === "" ? "" : ` ${advice}`} ${error.message}`);
-      }
-      throw error;
-    }
-    runScenario(engine, agent, bank, obligation, { bankOutcome, emailsName }).catch(
-      (error: unknown): void => noteError(engine.ledger, invoiceId, error),
-    );
-    return { invoiceId };
-  }
-
-  async function approveIncident(
-    request: IncomingMessage,
-    invoiceId: string,
-  ): Promise<unknown> {
+  async function approveIncident(request: IncomingMessage, invoiceId: string): Promise<Acted<IncidentView>> {
     requireObligation(invoiceId);
     const body: Record<string, unknown> = await readJson(request);
     const approver: string = name(body, "approver", "Enter the approver's name");
@@ -255,19 +129,33 @@ export function incidentRoutes(app: HttpApp): Route[] {
     if (typeof approvalId !== "number" || !Number.isInteger(approvalId)) {
       throw new HttpError(400, "Say which approval request is being approved");
     }
-    await inTurn(invoiceId, (): Approval =>
+    const after: Approval = await inTurn(invoiceId, (): Approval =>
       approvePayment(engine.ledger, engine.approvals, invoiceId, approver, approvalId),
     );
     agent.wake(invoiceId);
-    return { ok: true };
+    return { view: incident(invoiceId), notice: approvedNotice(after) };
   }
 
-  // A person closes an escalated incident whose original the bank reports as paid.
-  // Nothing is sent, so there is no background step to wait for.
-  async function closeByPerson(
-    request: IncomingMessage,
-    invoiceId: string,
-  ): Promise<unknown> {
+  // The option the person chose on the page, paid or unpaid, must still be how
+  // PayOnce would close it, so nobody closes as paid what nothing paid. When
+  // nothing can close it, closeIncident gives its own refusal.
+  function closeKindRefusal(invoiceId: string, as: "paid" | "unpaid"): void {
+    const kind: CloseReview["kind"] | undefined = pendingClose(engine.ledger, invoiceId)?.kind;
+    if (kind === undefined || (kind !== "duplicate" && kind !== "unpaid") === (as === "paid")) {
+      return;
+    }
+    throw new HttpError(
+      409,
+      as === "paid"
+        ? `Nothing on file has paid ${invoiceId}, so it can only be closed without paying. Look at the payment again before closing it`
+        : `${invoiceId} is paid, so it can only be closed as paid. Look at the payment again before closing it`,
+      { code: "close-kind-changed" },
+    );
+  }
+
+  // A person closes an escalated incident as paid, or without paying. Nothing is
+  // sent, so there is no background step to wait for.
+  async function closeByPerson(request: IncomingMessage, invoiceId: string): Promise<Acted<IncidentView>> {
     requireObligation(invoiceId);
     const body: Record<string, unknown> = await readJson(request);
     const closedBy: string = name(body, "closedBy", "Enter your name");
@@ -287,17 +175,24 @@ export function incidentRoutes(app: HttpApp): Route[] {
     ) {
       throw new HttpError(400, "Say which transfers the close card covered");
     }
-    await inTurn(invoiceId, (): void =>
-      closeIncident(engine.ledger, invoiceId, closedBy, finding, covered as string[] | null),
-    );
-    return { ok: true };
-  }
-
-  // A person asks to pay the invoice again. The lock refuses it while a payment is
-  // live, and nothing reaches Airwallex either way.
-  async function payAgainByPerson(invoiceId: string): Promise<PayAgainResult> {
-    requireObligation(invoiceId);
-    return inTurn(invoiceId, (): PayAgainResult => payAgain(engine.ledger, invoiceId));
+    const as: unknown = body["as"] ?? null;
+    if (as !== null && as !== "paid" && as !== "unpaid") {
+      throw new HttpError(400, "Say whether you are closing it as paid or without paying");
+    }
+    await inTurn(invoiceId, (): void => {
+      if (as !== null) {
+        closeKindRefusal(invoiceId, as);
+      }
+      closeIncident(engine.ledger, invoiceId, closedBy, finding, covered as string[] | null);
+    });
+    const view: IncidentView = incident(invoiceId);
+    return {
+      view,
+      notice: {
+        tone: "success",
+        text: view.decision.closed?.kind === "unpaid" ? `${invoiceId} closed without paying.` : `${invoiceId} closed as paid.`,
+      },
+    };
   }
 
   // What a person needs to record a callback about new bank details: the number on
@@ -309,10 +204,7 @@ export function incidentRoutes(app: HttpApp): Route[] {
   // A person records calling the supplier back on the number on file, with the new
   // bank details the supplier confirmed. PayOnce updates the supplier's record in
   // Airwallex, and the agent then looks at the invoice again.
-  async function bankChangeByPerson(
-    request: IncomingMessage,
-    invoiceId: string,
-  ): Promise<unknown> {
+  async function bankChangeByPerson(request: IncomingMessage, invoiceId: string): Promise<Acted<IncidentView>> {
     requireObligation(invoiceId);
     const body: Record<string, unknown> = await readJson(request);
     const raw: unknown = body["details"];
@@ -320,11 +212,11 @@ export function incidentRoutes(app: HttpApp): Route[] {
       throw new HttpError(400, "Enter the new bank details");
     }
     const details: Record<string, string> = {};
-    for (const [name, value] of Object.entries(raw)) {
+    for (const [field, value] of Object.entries(raw)) {
       if (typeof value !== "string") {
         throw new HttpError(400, "Enter the new bank details");
       }
-      details[name] = value;
+      details[field] = value;
     }
     const input: CallbackInput = {
       calledBy: name(body, "calledBy", "Enter your name"),
@@ -340,28 +232,27 @@ export function incidentRoutes(app: HttpApp): Route[] {
       // A change that failed part way may still have reached the record.
       agent.wake(invoiceId);
     }
-    return { ok: true };
+    return {
+      view: incident(invoiceId),
+      notice: { tone: "success", text: "Callback recorded. PayOnce updated the supplier's bank details in Airwallex and is checking the payment again." },
+    };
   }
 
   // Has the agent look at an incident again. It cannot send a second live payment,
   // and an escalated invoice still needs its approval.
-  function resume(invoiceId: string): unknown {
+  function check(invoiceId: string): Acted<IncidentView> {
     requireObligation(invoiceId);
     agent.wake(invoiceId);
-    return { ok: true };
+    return { view: incident(invoiceId), notice: { tone: "info", text: `PayOnce is checking ${invoiceId}.` } };
   }
 
   return [
-    { method: "GET", pattern: "/api/incidents", handler: ({ response }): void => sendJson(response, 200, listIncidents()) },
-    {
-      method: "POST",
-      pattern: "/api/incidents",
-      handler: async ({ request, response }): Promise<void> => sendJson(response, 202, await startIncident(request)),
-    },
+    { method: "GET", pattern: "/api/incidents", handler: ({ response, url }): void => sendJson(response, 200, incidents(url.searchParams)) },
+    { method: "GET", pattern: "/api/board", handler: ({ response, url }): void => boardRedirect(response, url.searchParams) },
     {
       method: "GET",
       pattern: "api/incidents/:id",
-      handler: ({ response }, id: string): void => sendJson(response, 200, incidentDetail(id)),
+      handler: ({ response }, id: string): void => sendJson(response, 200, incident(id)),
     },
     {
       method: "GET",
@@ -382,13 +273,13 @@ export function incidentRoutes(app: HttpApp): Route[] {
     },
     {
       method: "POST",
-      pattern: "api/incidents/:id/resume",
-      handler: ({ response }, id: string): void => sendJson(response, 200, resume(id)),
+      pattern: "api/incidents/:id/check",
+      handler: ({ response }, id: string): void => sendJson(response, 200, check(id)),
     },
     {
       method: "POST",
-      pattern: "api/incidents/:id/pay-again",
-      handler: async ({ response }, id: string): Promise<void> => sendJson(response, 200, await payAgainByPerson(id)),
+      pattern: "api/incidents/:id/resume",
+      handler: ({ response }, id: string): void => sendJson(response, 200, check(id)),
     },
     {
       method: "GET",

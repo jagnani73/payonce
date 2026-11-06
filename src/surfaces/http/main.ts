@@ -24,15 +24,16 @@ import { LeaseLostError, type Ledger } from "../../store/ledger.js";
 import { printableError, say, sayError } from "../../text/printable.js";
 import { httpApp, type HttpApp } from "./app.js";
 import { HOST, requestListener, type Route } from "./router.js";
+import { alertRoutes } from "./routes/alerts.js";
 import { cashRoutes } from "./routes/cash.js";
 import { inboxRoutes } from "./routes/inbox.js";
 import { incidentRoutes } from "./routes/incidents.js";
-import { optionsRoutes } from "./routes/options.js";
 import { outageRoutes } from "./routes/outages.js";
 import { outboxRoutes } from "./routes/outbox.js";
 import { reconcileRoutes } from "./routes/reconcile.js";
-import { reportRoutes } from "./routes/reports.js";
 import { runRoutes } from "./routes/runs.js";
+import { sandboxRoutes } from "./routes/sandbox.js";
+import { supplierRoutes } from "./routes/suppliers.js";
 import { viewRoutes } from "./routes/views.js";
 import { whyRoutes } from "./routes/why.js";
 import { CHECK_EVERY_MS, startUp, type StartUp } from "./start.js";
@@ -167,16 +168,17 @@ function main(): void {
     cash,
   });
   const routes: Route[] = [
-    ...optionsRoutes(app),
+    ...alertRoutes(app),
     ...outageRoutes(app),
     ...cashRoutes(app),
-    ...reportRoutes(app),
+    ...supplierRoutes(app),
     ...reconcileRoutes(app),
     ...inboxRoutes(app),
     ...runRoutes(app),
     ...incidentRoutes(app),
     ...whyRoutes(app),
     ...outboxRoutes(app),
+    ...sandboxRoutes(app),
     ...viewRoutes(app, SWEEP_EVERY_MS),
   ];
   const start: StartUp = startUp(app);

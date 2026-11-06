@@ -118,3 +118,10 @@ export function name(body: Record<string, unknown>, field: string, missing: stri
     throw error;
   }
 }
+
+// A name a person chose, given in the query, as personName records it, or null
+// when none is given.
+export function queryName(params: URLSearchParams, field: string): string | null {
+  const raw: string = params.get(field) ?? "";
+  return raw.trim() === "" ? null : name({ [field]: raw }, field, "");
+}

@@ -1,23 +1,22 @@
 import type { IncomingMessage } from "node:http";
 import { NameError } from "../../../domain/approvers.js";
-import {
-  explainBreaks,
-  ExplainInputError,
-  explainItems,
-  movementsView,
-  reconReport,
-  type BreakView,
-} from "../../../recon/reconcile.js";
+import { CURRENCY_PATTERN } from "../../../domain/patterns.js";
+import { explainBreaks, ExplainInputError, explainItems, movementsView, type BreakView } from "../../../recon/reconcile.js";
 import { ReconChangedError, ReconKindsError, ReconUnknownError } from "../../../store/recon-store.js";
+import type { Acted, ReconView } from "../../../views/contract.js";
+import { reconView } from "../../../views/treasury.js";
 import type { HttpApp } from "../app.js";
 import { HttpError, readJson, sendJson, typed } from "../http.js";
 import type { Route } from "../router.js";
-import { CURRENCY_PATTERN } from "../../../domain/patterns.js";
 
 // Reconciliation's routes. The report and the movements read the ledger alone.
 // A person explains breaks of one kind, bound to the facts the page showed.
 export function reconcileRoutes(app: HttpApp): Route[] {
-  const { engine, reconRunner } = app;
+  const { engine, settings, reconRunner } = app;
+
+  function report(): ReconView {
+    return reconView(engine.ledger, settings, Date.now(), reconRunner);
+  }
 
   function movements(url: URL): unknown {
     const currency: string = url.searchParams.get("currency") ?? "";
@@ -38,16 +37,16 @@ export function reconcileRoutes(app: HttpApp): Route[] {
     return { started: true };
   }
 
-  async function explain(request: IncomingMessage): Promise<unknown> {
+  async function explain(request: IncomingMessage): Promise<Acted<ReconView>> {
     const body: Record<string, unknown> = await readJson(request);
+    let explained: BreakView[];
     try {
-      const explained: BreakView[] = explainBreaks(
+      explained = explainBreaks(
         engine.ledger,
         explainItems(body["breaks"]),
         typed(body, "explainedBy"),
         typed(body, "note"),
       );
-      return { explained: explained.map((item: BreakView): number => item.id) };
     } catch (error: unknown) {
       if (error instanceof NameError || error instanceof ExplainInputError || error instanceof ReconKindsError) {
         throw new HttpError(400, error.message);
@@ -60,14 +59,17 @@ export function reconcileRoutes(app: HttpApp): Route[] {
       }
       throw error;
     }
+    return {
+      view: report(),
+      notice: {
+        tone: "success",
+        text: `${explained.length} ${explained.length === 1 ? "break" : "breaks"} explained.`,
+      },
+    };
   }
 
   return [
-    {
-      method: "GET",
-      pattern: "api/reconcile",
-      handler: ({ response }): void => sendJson(response, 200, reconReport(engine.ledger, reconRunner)),
-    },
+    { method: "GET", pattern: "api/reconcile", handler: ({ response }): void => sendJson(response, 200, report()) },
     {
       method: "GET",
       pattern: "api/reconcile/movements",

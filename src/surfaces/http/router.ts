@@ -21,7 +21,7 @@ export interface RouteCall {
   url: URL;
 }
 
-// pattern "/api/options" matches that whole path and nothing else.
+// pattern "/api/home" matches that whole path and nothing else.
 // "api/incidents/:id/audit", with no leading slash, matches the path's non-empty
 // segments, each :name standing for any one segment, which the handler gets in
 // order after the call.

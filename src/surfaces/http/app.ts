@@ -1,7 +1,6 @@
 import { readdirSync } from "node:fs";
 import type { BalanceCache } from "../../airwallex/balances.js";
 import type { Alerts, AlertSetting, AlertsStatus } from "../../alerts/alerts.js";
-import { arrivalAdvice, type ArrivalAdvice, type ArrivalTerms } from "../../domain/arrival.js";
 import type { CashReport } from "../../engine/cash-position.js";
 import type { Dispatcher } from "../../engine/dispatcher.js";
 import type { Engine } from "../../engine/engine.js";
@@ -13,14 +12,15 @@ import type { ReconRunner } from "../../recon/reconcile.js";
 import type { Settings } from "../../settings.js";
 import {
   INVOICE_ID_PATTERN,
-  isExpired,
+  readingSoft,
   withBank,
-  type Approval,
   type Attempt,
   type Obligation,
   type OutsidePayout,
-  type RunApproval,
 } from "../../store/ledger.js";
+import { liveFrom, type Live } from "../../views/context.js";
+import type { IncidentView } from "../../views/contract.js";
+import { incidentView } from "../../views/incident.js";
 import { HttpError } from "./http.js";
 
 const EMAILS_DIR: URL = new URL("../../../fixtures/emails/", import.meta.url);
@@ -48,22 +48,27 @@ export interface HttpParts {
 
 // The parts and the helpers more than one area of routes uses.
 export interface HttpApp extends HttpParts {
-  isBusy: (invoiceId: string) => boolean;
+  // What the views call busy: the agent or the sandbox bank working on an
+  // invoice, or on a run's own step.
+  live: Live;
   isWatching: (invoiceId: string) => boolean;
-  watchedInvoices: () => Set<string>;
   requireObligation: (invoiceId: string) => Obligation;
+  incident: (invoiceId: string) => IncidentView;
   inTurn: <T>(invoiceId: string, step: () => T) => Promise<T>;
   emailThreads: () => string[];
   alertsStatus: () => AlertsStatus;
 }
 
 export function httpApp(parts: HttpParts): HttpApp {
-  const { engine, agent, bank, alerts, alertSetting } = parts;
+  const { settings, engine, agent, bank, alerts, alertSetting, cash } = parts;
 
-  // True while the agent or the sandbox bank is working on the invoice.
-  function isBusy(invoiceId: string): boolean {
-    return agent.isBusy(invoiceId) || bank.isBusy(invoiceId);
+  // True while the agent or the sandbox bank is working on the invoice or the
+  // run's key.
+  function isBusy(key: string): boolean {
+    return agent.isBusy(key) || bank.isBusy(key);
   }
+
+  const live: Live = liveFrom(isBusy);
 
   // True while a payment is with the bank, so news can arrive at any moment. That
   // includes a payout for the invoice sent outside PayOnce.
@@ -102,24 +107,28 @@ export function httpApp(parts: HttpParts): HttpApp {
     return obligation;
   }
 
-  // The invoices with a payment with the bank, the test isWatching makes, for every
-  // invoice at once.
-  function watchedInvoices(): Set<string> {
-    const watched: Set<string> = engine.ledger.invoicesWithPayoutInFlight();
-    for (const attempt of engine.ledger.attemptsMaybeWithBank()) {
-      if (withBank(attempt)) {
-        watched.add(attempt.invoiceId);
-      }
+  // The payment page as it is now, its headroom lines from the balance cache as it
+  // is. A view, so the cash panel is read soft too.
+  function incident(invoiceId: string): IncidentView {
+    const view: IncidentView | null = INVOICE_ID_PATTERN.test(invoiceId)
+      ? incidentView(engine.ledger, settings, Date.now(), invoiceId, live, readingSoft(cash))
+      : null;
+    if (view === null) {
+      throw new HttpError(404, `${invoiceId} is not in the ledger`);
     }
-    return watched;
+    return view;
   }
 
   // A person's action waits its turn behind whatever the agent is doing on the
-  // invoice, so it never lands in the middle of a step.
+  // invoice, so it never lands in the middle of a step. A refusal the step gives
+  // as an HttpError keeps its own status.
   async function inTurn<T>(invoiceId: string, step: () => T): Promise<T> {
     try {
       return await agent.run(invoiceId, step);
     } catch (error: unknown) {
+      if (error instanceof HttpError) {
+        throw error;
+      }
       throw new HttpError(409, error instanceof Error ? error.message : String(error));
     }
   }
@@ -137,24 +146,5 @@ export function httpApp(parts: HttpParts): HttpApp {
     );
   }
 
-  return { ...parts, isBusy, isWatching, watchedInvoices, requireObligation, inTurn, emailThreads, alertsStatus };
-}
-
-// Whether the invoice's timeline still chains together, for the line under it on
-// the page. problem is the first break, or a running hash that is missing or does
-// not match.
-export interface AuditSummary {
-  lines: number;
-  problem: string | null;
-}
-
-// "If sent today" says when a payment that can still be approved and sent would
-// arrive, so a used, void or expired request, and a run already released, have none.
-export function adviceFor(arrival: ArrivalTerms, live: boolean): ArrivalAdvice {
-  const advice: ArrivalAdvice = arrivalAdvice(arrival);
-  return live ? advice : { ...advice, sentToday: null };
-}
-
-export function isLive(approval: Approval | RunApproval): boolean {
-  return (approval.state === "requested" || approval.state === "approved") && !isExpired(approval);
+  return { ...parts, live, isWatching, requireObligation, incident, inTurn, emailThreads, alertsStatus };
 }

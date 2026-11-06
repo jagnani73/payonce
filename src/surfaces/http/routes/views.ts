@@ -1,9 +1,7 @@
 import type { ServerResponse } from "node:http";
-import { NameError, personName } from "../../../domain/approvers.js";
 import { CHECK_EVERY_MS } from "../start.js";
 import { auditView, ledgerAuditExport } from "../../../views/audit.js";
 import { beneficiaryPicker, readBeneficiaries, type BeneficiaryRead } from "../../../views/beneficiaries.js";
-import { liveFrom, type Live } from "../../../views/context.js";
 import type { AuditCheckView, BeneficiaryPickerView, HomeView, ReportsView, SearchView, StatusView } from "../../../views/contract.js";
 import { airwallexHealth, type ServerFacts } from "../../../views/health.js";
 import { homeView } from "../../../views/home.js";
@@ -13,13 +11,13 @@ import { MAX_QUERY_LENGTH, searchView } from "../../../views/search.js";
 import { settingsView } from "../../../views/settings-view.js";
 import { statusView } from "../../../views/status.js";
 import type { HttpApp } from "../app.js";
-import { HttpError, sendJson } from "../http.js";
+import { HttpError, queryName, sendJson } from "../http.js";
 import type { Route } from "../router.js";
 
 // The read routes that answer views from src/views/: Home, the status chip,
-// Settings, Search, Reports, the ledger-wide audit and its export, and the New
-// payment form's beneficiary picker. They read the ledger and the server's own
-// state, and only the picker calls Airwallex, with GETs.
+// Settings, Search, Reports and the metrics, the ledger-wide audit and its
+// export, and the New payment form's beneficiary picker. They read the ledger
+// and the server's own state, and only the picker calls Airwallex, with GETs.
 
 // The ledger-wide audit hashes every line, so it is kept by the ledger's change
 // stamp and built again at most once a minute.
@@ -29,8 +27,7 @@ const BENEFICIARIES_EVERY_MS: number = 60_000;
 const METRICS_KEPT: number = 3;
 
 export function viewRoutes(app: HttpApp, sweepEveryMs: number): Route[] {
-  const { engine, settings, balances, reconRunner, alertsStatus, isBusy } = app;
-  const live: Live = liveFrom(isBusy);
+  const { engine, settings, balances, reconRunner, alertsStatus, live } = app;
   const metricsCache: Map<string, MetricsReport> = new Map();
   let audit: { stamp: string; at: number; view: AuditCheckView } | null = null;
   let beneficiaries: BeneficiaryRead | null = null;
@@ -47,7 +44,9 @@ export function viewRoutes(app: HttpApp, sweepEveryMs: number): Route[] {
     };
   }
 
-  // As the metrics route keeps them: by period, change stamp and minute.
+  // The last three metrics answers, by period, the ledger's change stamp and the
+  // minute, since durations still running and requests open now move with the
+  // clock. Home, Reports and the metrics route share them.
   function metrics(period: Period, now: number): MetricsReport {
     const key: string = `${period}|${engine.ledger.changeStamp()}|${Math.floor(now / 60_000)}`;
     const kept: MetricsReport | undefined = metricsCache.get(key);
@@ -70,26 +69,13 @@ export function viewRoutes(app: HttpApp, sweepEveryMs: number): Route[] {
     return audit.view;
   }
 
-  // The name a person chose, as personName records it, or none.
-  function me(params: URLSearchParams): string | null {
-    const raw: string = params.get("me") ?? "";
-    if (raw.trim() === "") {
-      return null;
-    }
-    try {
-      return personName(raw);
-    } catch (error: unknown) {
-      throw error instanceof NameError ? new HttpError(400, error.message) : error;
-    }
-  }
-
   function home(params: URLSearchParams): HomeView {
     const now: number = Date.now();
     return homeView(
       engine.ledger,
       settings,
       now,
-      me(params),
+      queryName(params, "me"),
       airwallexHealth(engine.ledger, engine.client.host, balances.latest()),
       live,
       metrics("7d", now),
@@ -112,11 +98,16 @@ export function viewRoutes(app: HttpApp, sweepEveryMs: number): Route[] {
     return searchView(engine.ledger, settings, Date.now(), q);
   }
 
-  function reports(params: URLSearchParams): ReportsView {
+  function periodOf(params: URLSearchParams): Period {
     const period: string = params.get("period") ?? "7d";
     if (!isPeriod(period)) {
       throw new HttpError(400, PERIOD_PROBLEM);
     }
+    return period;
+  }
+
+  function reports(params: URLSearchParams): ReportsView {
+    const period: Period = periodOf(params);
     const now: number = Date.now();
     return reportsView(engine.ledger, settings, now, period, metrics(period, now));
   }
@@ -152,6 +143,11 @@ export function viewRoutes(app: HttpApp, sweepEveryMs: number): Route[] {
     },
     { method: "GET", pattern: "/api/search", handler: ({ response, url }): void => sendJson(response, 200, search(url.searchParams)) },
     { method: "GET", pattern: "/api/reports", handler: ({ response, url }): void => sendJson(response, 200, reports(url.searchParams)) },
+    {
+      method: "GET",
+      pattern: "/api/metrics",
+      handler: ({ response, url }): void => sendJson(response, 200, metrics(periodOf(url.searchParams), Date.now())),
+    },
     { method: "GET", pattern: "/api/audit", handler: ({ response }): void => sendJson(response, 200, auditNow(Date.now())) },
     { method: "GET", pattern: "/api/audit/export", handler: ({ response }): void => sendExport(response) },
     {

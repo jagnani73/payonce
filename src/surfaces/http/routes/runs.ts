@@ -1,65 +1,34 @@
+import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { airwallexAdvice, AirwallexError, AirwallexUnreachableError, withAdvice } from "../../../airwallex/client.js";
-import type { RunRowTerms, RunTerms } from "../../../domain/approval.js";
-import { feeSeenText } from "../../../domain/arrival.js";
-import { outageView, type OutageView } from "../../../outages/outages.js";
 import { cleanFileName, MAX_RUN_FILE_CHARS, parseRunFile, type ParsedRunFile } from "../../../runs/run-file.js";
+import { approveRun, cancelRun, recheckRun, runKey, uploadRun } from "../../../runs/runs.js";
+import { auditCsv, runAuditExport, type RunAuditExport } from "../../../store/audit-trail.js";
 import {
-  approveRun,
-  cancelRun,
-  domainChecks,
-  domainText,
-  largestTotal,
-  recheckRun,
-  runBarred,
-  runCounts,
-  runKey,
-  runStatus,
-  uploadRun,
-  type DomainCheck,
-  type RunCash,
-} from "../../../runs/runs.js";
-import {
-  describeBreaks,
-  describeRunLedger,
-  auditCsv,
-  runAuditExport,
-  runChainReport,
-  runLedgerReport,
-  type RunAuditExport,
-  type RunAuditSnapshot,
-  type RunChainReport,
-  type RunLedgerReport,
-} from "../../../store/audit-trail.js";
-import {
-  isExpired,
   NothingToPayError,
-  readingSoft,
   SameFileError,
   WaitingRunError,
-  type Attempt,
-  type Obligation,
-  type Outage,
   type Run,
   type RunApproval,
-  type RunRow,
-  type Signoff,
 } from "../../../store/ledger.js";
-import { adviceFor, isLive, type AuditSummary, type HttpApp } from "../app.js";
+import type { Acted, Notice, RunsView, RunView } from "../../../views/contract.js";
+import { runsView, runView } from "../../../views/runs.js";
+import type { HttpApp } from "../app.js";
 import { HttpError, MAX_FINDING_LENGTH, name, readJson, RUN_ID_PATTERN, sendJson, text, UPLOAD_BODY_MS } from "../http.js";
 import type { Route } from "../router.js";
-import { capitalise } from "../../../text/printable.js";
 
 // A pay run file travels as a string inside JSON. Its largest, 40,000 characters,
 // takes at most 6 bytes a character once escaped, so this always fits it, and
 // parseRunFile refuses a longer file by its characters.
 const MAX_RUN_BODY_BYTES: number = 256 * 1024;
 const RUN_TOO_LARGE_TEXT: string = `The file is too large. A pay run file can be at most ${MAX_RUN_FILE_CHARS.toLocaleString("en-US")} characters`;
+const EXAMPLE_FILE: URL = new URL("../../../../fixtures/pay-run-example.csv", import.meta.url);
 
-// Pay runs: the list, a run's rows and approval, its audit, and a person
-// uploading, approving, checking or cancelling one.
+// Pay runs: the list, a run, its audit, the example file, and a person uploading,
+// approving, checking or cancelling one. Every action answers the run as it is
+// after it.
 export function runRoutes(app: HttpApp): Route[] {
-  const { engine, agent, isBusy, isWatching, startRelease } = app;
+  const { engine, settings, agent, live, startRelease } = app;
 
   function requireRun(raw: string): Run {
     const run: Run | undefined = RUN_ID_PATTERN.test(raw) ? engine.ledger.run(Number(raw)) : undefined;
@@ -69,163 +38,16 @@ export function runRoutes(app: HttpApp): Route[] {
     return run;
   }
 
-  function releasedInvoices(run: Run): string[] {
-    return engine.ledger
-      .runRows(run.id)
-      .filter((row: RunRow): boolean => row.state === "released" && row.invoiceId !== null)
-      .map((row: RunRow): string => row.invoiceId ?? "");
+  function list(): RunsView {
+    return runsView(engine.ledger, settings, Date.now(), live);
   }
 
-  // True while the run's own step or any of its invoices is being worked on.
-  function runBusy(run: Run): boolean {
-    return agent.isBusy(runKey(run.id)) || releasedInvoices(run).some(isBusy);
-  }
-
-  function runWatching(run: Run): boolean {
-    return releasedInvoices(run).some(isWatching);
-  }
-
-  // A list the page polls, so it reads stored JSON soft, as the incident list does.
-  function listRuns(): unknown {
-    return readingSoft(runList);
-  }
-
-  function runList(): unknown {
-    return {
-      runs: engine.ledger.runs().map((run: Run) => ({
-        id: run.id,
-        fileName: run.fileName,
-        uploadedBy: run.uploadedBy,
-        uploadedAt: run.uploadedAt,
-        state: run.state,
-        status: runStatus(engine.ledger, run),
-        counts: runCounts(engine.ledger.runRows(run.id)),
-        busy: runBusy(run),
-        watching: runWatching(run),
-      })),
-    };
-  }
-
-  // A released row's invoice as the rows card shows it.
-  function invoiceSummary(invoiceId: string): unknown {
-    const obligation: Obligation | undefined = engine.ledger.obligation(invoiceId);
-    if (obligation === undefined) {
-      return null;
+  function runNow(raw: string): RunView {
+    const view: RunView | null = RUN_ID_PATTERN.test(raw) ? runView(engine.ledger, settings, Date.now(), Number(raw), live) : null;
+    if (view === null) {
+      throw new HttpError(404, `Run ${raw.slice(0, 20)} is not in the ledger`);
     }
-    return {
-      invoiceId,
-      state: obligation.state,
-      attempts: engine.ledger.attempts(invoiceId).map((attempt: Attempt) => ({
-        kind: attempt.kind,
-        state: attempt.state,
-        reference: attempt.reference,
-      })),
-      busy: isBusy(invoiceId),
-      watching: isWatching(invoiceId),
-    };
-  }
-
-  function runOutage(terms: RunTerms): OutageView | null {
-    for (const row of terms.rows) {
-      const outage: Outage | undefined = engine.ledger.activeOutage(row.currency, row.transferMethod);
-      if (outage !== undefined) {
-        return outageView(engine.ledger, outage);
-      }
-    }
-    return null;
-  }
-
-  function runDetail(raw: string): unknown {
-    const run: Run = requireRun(raw);
-    const rows: RunRow[] = engine.ledger.runRows(run.id);
-    const approval: RunApproval | undefined = engine.ledger.latestRunApproval(run.id);
-    const terms: RunTerms | null =
-      approval === undefined ? null : (JSON.parse(approval.terms) as RunTerms);
-    return {
-      run: {
-        id: run.id,
-        fileName: run.fileName,
-        fileHash: run.fileHash,
-        columns: run.columns,
-        uploadedBy: run.uploadedBy,
-        uploadedAt: run.uploadedAt,
-        state: run.state,
-        checkedAt: run.checkedAt,
-        releasedAt: run.releasedAt,
-        cancelledBy: run.cancelledBy,
-        cancelNote: run.cancelNote,
-      },
-      status: runStatus(engine.ledger, run),
-      counts: runCounts(rows),
-      rows: rows.map((row: RunRow) => ({
-        ...row,
-        // The fee PayOnce last saw by the row's method in its currency, as an estimate.
-        feeSeen:
-          row.arrival === null || row.currency === null
-            ? null
-            : feeSeenText(engine.ledger, row.currency, row.arrival.method),
-        arrivalAdvice: row.arrival === null ? null : adviceFor(row.arrival, run.state === "waiting"),
-        invoice:
-          row.state === "released" && row.invoiceId !== null ? invoiceSummary(row.invoiceId) : null,
-      })),
-      cash: JSON.parse(run.cash) as RunCash[],
-      approval:
-        approval === undefined || terms === null
-          ? null
-          : {
-              id: approval.id,
-              state: approval.state,
-              approver: approval.approver,
-              terms,
-              // How the page words each estimate the terms carry, kept out of them.
-              arrivalAdvice: terms.rows.flatMap((row: RunRowTerms) =>
-                row.arrival === undefined
-                  ? []
-                  : [
-                      {
-                        line: row.line,
-                        invoiceId: row.invoiceId,
-                        advice: adviceFor(row.arrival, run.state === "waiting" && isLive(approval)),
-                      },
-                    ],
-              ),
-              needed: approval.needed,
-              neededWhy: approval.neededWhy,
-              signoffs: approval.signoffs.map((signoff: Signoff) => ({
-                approver: signoff.approver,
-                at: signoff.at,
-              })),
-              expiresAt: approval.expiresAt,
-              expired: isExpired(approval),
-              barred: runBarred(engine.ledger, terms),
-              largest: largestTotal(terms),
-              domains: domainChecks(engine.ledger, terms).map((check: DomainCheck) => ({
-                ...check,
-                changed: check.caution,
-                text: domainText(check),
-              })),
-            },
-      // A waiting run is released whole, so an active outage on any of its pay rows'
-      // rails holds all of it, as the board says. The first one found, or null.
-      outage: run.state === "waiting" && terms !== null ? runOutage(terms) : null,
-      events: engine.ledger.runEvents(run.id),
-      audit: runAuditSummary(run.id),
-      busy: runBusy(run),
-      watching: runWatching(run),
-    };
-  }
-
-  // The same for a pay run's timeline.
-  function runAuditSummary(runId: number): AuditSummary {
-    const snapshot: RunAuditSnapshot = engine.ledger.runAuditSnapshot(runId);
-    const report: RunChainReport = runChainReport(runId, snapshot.events);
-    const ledger: RunLedgerReport = runLedgerReport(snapshot);
-    const problem: string | null =
-      describeBreaks(report.breaks) ?? (ledger.intact ? null : describeRunLedger(ledger));
-    return {
-      lines: report.lines,
-      problem: problem === null ? null : capitalise(problem),
-    };
+    return view;
   }
 
   function sendRunAudit(response: ServerResponse, raw: string, format: string): void {
@@ -249,6 +71,16 @@ export function runRoutes(app: HttpApp): Route[] {
     response.end(auditCsv(audit));
   }
 
+  // The file the upload form offers as an example of the columns.
+  function sendExample(response: ServerResponse): void {
+    const content: Buffer = readFileSync(EXAMPLE_FILE);
+    response.writeHead(200, {
+      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Disposition": 'attachment; filename="pay-run-example.csv"',
+    });
+    response.end(content);
+  }
+
   // An Airwallex read that failed while checking a file is the bank's problem, not
   // the file's.
   function airwallexDown(error: unknown): HttpError | undefined {
@@ -261,10 +93,22 @@ export function runRoutes(app: HttpApp): Route[] {
     );
   }
 
+  // "Pay run 7 checked: 5 rows to pay, 1 held, 1 skipped. Waiting for approval."
+  function checkedNotice(view: RunView): Notice {
+    const parts: string[] = [`${view.counts.pay} ${view.counts.pay === 1 ? "row" : "rows"} to pay`];
+    if (view.counts.held > 0) {
+      parts.push(`${view.counts.held} held`);
+    }
+    if (view.counts.skip > 0) {
+      parts.push(`${view.counts.skip} skipped`);
+    }
+    return { tone: "success", text: `Pay run ${view.run.id} checked: ${parts.join(", ")}. Waiting for approval.` };
+  }
+
   // The page sends the file's text inside JSON, so the guard's Origin and content
   // type checks cover an upload too, and nothing parses multipart. The checks are a
   // handful of Airwallex GETs, so the answer waits for them.
-  async function uploadRunFile(request: IncomingMessage): Promise<unknown> {
+  async function uploadRunFile(request: IncomingMessage): Promise<Acted<RunView>> {
     const body: Record<string, unknown> = await readJson(request, MAX_RUN_BODY_BYTES, RUN_TOO_LARGE_TEXT, UPLOAD_BODY_MS);
     const uploadedBy: string = name(body, "uploadedBy", "Enter your name");
     const csv: unknown = body["csv"];
@@ -278,8 +122,9 @@ export function runRoutes(app: HttpApp): Route[] {
     if (!parsed.ok) {
       throw new HttpError(400, "PayOnce cannot read this file", { problems: parsed.problems });
     }
+    let runId: number;
     try {
-      return { runId: await uploadRun(engine, parsed.file, uploadedBy) };
+      runId = await uploadRun(engine, parsed.file, uploadedBy);
     } catch (error: unknown) {
       if (error instanceof WaitingRunError || error instanceof SameFileError) {
         throw new HttpError(409, error.message, { runId: error.runId });
@@ -289,6 +134,8 @@ export function runRoutes(app: HttpApp): Route[] {
       }
       throw airwallexDown(error) ?? error;
     }
+    const view: RunView = runNow(String(runId));
+    return { view, notice: checkedNotice(view) };
   }
 
   // A person's action on a run waits its turn behind any step already running on it.
@@ -300,7 +147,7 @@ export function runRoutes(app: HttpApp): Route[] {
     }
   }
 
-  async function approveRunByPerson(request: IncomingMessage, raw: string): Promise<unknown> {
+  async function approveRunByPerson(request: IncomingMessage, raw: string): Promise<Acted<RunView>> {
     const run: Run = requireRun(raw);
     const body: Record<string, unknown> = await readJson(request);
     const approver: string = name(body, "approver", "Enter the approver's name");
@@ -314,16 +161,26 @@ export function runRoutes(app: HttpApp): Route[] {
     if (after.state === "approved") {
       startRelease(run.id);
     }
-    return { ok: true, approved: after.state === "approved" };
+    const left: number = Math.max(0, after.needed - after.signoffs.length);
+    return {
+      view: runNow(raw),
+      notice: {
+        tone: "success",
+        text:
+          after.state === "approved"
+            ? `Pay run ${run.id} approved. PayOnce releases it now.`
+            : `Signed off. Request #${after.id} needs ${left} more ${left === 1 ? "approver" : "approvers"}.`,
+      },
+    };
   }
 
-  async function checkRunAgain(raw: string): Promise<unknown> {
+  async function checkRunAgain(raw: string): Promise<Acted<RunView>> {
     const run: Run = requireRun(raw);
     await inRunTurn(run.id, (): Promise<void> => recheckRun(engine, run.id));
-    return { ok: true };
+    return { view: runNow(raw), notice: { tone: "success", text: `Pay run ${run.id} checked again.` } };
   }
 
-  async function cancelRunByPerson(request: IncomingMessage, raw: string): Promise<unknown> {
+  async function cancelRunByPerson(request: IncomingMessage, raw: string): Promise<Acted<RunView>> {
     const run: Run = requireRun(raw);
     const body: Record<string, unknown> = await readJson(request);
     const cancelledBy: string = name(body, "cancelledBy", "Enter your name");
@@ -332,17 +189,19 @@ export function runRoutes(app: HttpApp): Route[] {
       throw new HttpError(400, "Say why the run is cancelled");
     }
     await inRunTurn(run.id, (): void => cancelRun(engine.ledger, run.id, cancelledBy, note));
-    return { ok: true };
+    return { view: runNow(raw), notice: { tone: "success", text: `Pay run ${run.id} cancelled. Nothing was sent.` } };
   }
 
   return [
-    { method: "GET", pattern: "/api/runs", handler: ({ response }): void => sendJson(response, 200, listRuns()) },
+    { method: "GET", pattern: "/api/runs", handler: ({ response }): void => sendJson(response, 200, list()) },
     {
       method: "POST",
       pattern: "/api/runs",
       handler: async ({ request, response }): Promise<void> => sendJson(response, 201, await uploadRunFile(request)),
     },
-    { method: "GET", pattern: "api/runs/:id", handler: ({ response }, id: string): void => sendJson(response, 200, runDetail(id)) },
+    // Before the run's own pattern, which would take it for a run id.
+    { method: "GET", pattern: "/api/runs/example.csv", handler: ({ response }): void => sendExample(response) },
+    { method: "GET", pattern: "api/runs/:id", handler: ({ response }, id: string): void => sendJson(response, 200, runNow(id)) },
     {
       method: "GET",
       pattern: "api/runs/:id/audit",
