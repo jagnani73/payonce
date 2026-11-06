@@ -97,7 +97,7 @@ function print(view: IncidentsView, home: HomeView, filters: BoardFilters): void
     heading(`Active rail outages (${view.outages.length}), whatever the filters`);
     view.outages.forEach(putOutage);
   }
-  heading(filters.group === null ? "Money by wallet" : "Money by wallet, all groups");
+  heading(filters.group === null ? "Money by wallet" : "Money by wallet in this group");
   if (view.totals.length === 0) {
     put("None", 1);
   }
