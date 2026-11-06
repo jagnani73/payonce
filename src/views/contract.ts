@@ -493,7 +493,8 @@ export type EventKind =
   | "callback"
   | "error"
   | "outbox"
-  | "outage";
+  | "outage"
+  | "contact";
 
 export interface TimelineLine {
   id: number;

@@ -2,6 +2,7 @@ import type { StatementSync } from "node:sqlite";
 import { ROUTE_SCHEME } from "../domain/assess.js";
 import { parseReason, reasonColumns, type ReasonColumns } from "../domain/reasons.js";
 import type { BankChangeStore } from "./bank-changes.js";
+import { seedContacts } from "./contacts.js";
 import type { ColumnRow, Db } from "./db.js";
 
 // The partial unique index is the duplicate lock: an invoice can hold one attempt
@@ -296,6 +297,35 @@ const SCHEMA: string = `
     ON outage_holds(outage_id, invoice_id) WHERE invoice_id IS NOT NULL;
   CREATE UNIQUE INDEX IF NOT EXISTS one_hold_per_run
     ON outage_holds(outage_id, run_id) WHERE run_id IS NOT NULL;
+  CREATE TABLE IF NOT EXISTS supplier_contacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    beneficiary_id TEXT NOT NULL,
+    field TEXT NOT NULL,
+    value TEXT NOT NULL,
+    digits TEXT NOT NULL DEFAULT '',
+    replaces_id INTEGER,
+    state TEXT NOT NULL,
+    origin TEXT NOT NULL,
+    proposed_by TEXT,
+    proposed_at TEXT NOT NULL,
+    proposed_source TEXT NOT NULL DEFAULT '',
+    proposed_note TEXT NOT NULL DEFAULT '',
+    seen_in_emails INTEGER NOT NULL DEFAULT 0,
+    seen_flagged INTEGER NOT NULL DEFAULT 0,
+    confirmed_by TEXT,
+    confirmed_at TEXT,
+    confirmed_source TEXT,
+    confirmed_note TEXT,
+    closed_by TEXT,
+    closed_at TEXT,
+    close_note TEXT,
+    withdrawn_requests INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS one_contact_on_file
+    ON supplier_contacts(beneficiary_id, field) WHERE state = 'on_file';
+  CREATE UNIQUE INDEX IF NOT EXISTS one_open_proposal
+    ON supplier_contacts(beneficiary_id, field) WHERE state = 'proposed';
+  CREATE INDEX IF NOT EXISTS contacts_by_beneficiary ON supplier_contacts(beneficiary_id, field, id);
 `;
 
 // Columns added after the first version of the ledger, by table. A database
@@ -461,6 +491,12 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     // from before it, and on a released row whose last check read another
     // account than the run approved.
     route_key: "TEXT",
+  },
+  bank_changes: {
+    // The supplier_contacts row of the phone number the callback was made on.
+    // Only while that row is on file does the callback verify bank details.
+    // Null on a callback made on a number that was never a record's on file.
+    contact_id: "INTEGER",
   },
   outside_payouts: {
     reference: "TEXT NOT NULL DEFAULT ''",
@@ -631,6 +667,7 @@ export class Schema {
         this.backfillReasonCodes();
       }
       this.rebuildRoutes();
+      seedContacts(this.db);
     });
   }
 

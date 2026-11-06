@@ -5,9 +5,10 @@ import {
 } from "../airwallex/beneficiaries.js";
 import { AirwallexError, AirwallexUnreachableError } from "../airwallex/client.js";
 import { getTransfer, type Transfer, type TransferBankDetails } from "../airwallex/transfers.js";
-import { personName } from "../domain/approvers.js";
+import { knownName, personName, sameName } from "../domain/approvers.js";
 import { bankDetailsKey, NOT_ROUTING_FIELDS, routeValue } from "../domain/assess.js";
 import { callbackBlocked } from "../domain/callback.js";
+import { isNumberOnFile, PHONE_CHANGED_WHILE_RECORDING, setterCalls, type Contact } from "../domain/contacts.js";
 import type { Engine } from "./engine.js";
 import { note } from "./lines.js";
 import type { Attempt, Ledger, Obligation } from "../store/ledger.js";
@@ -70,15 +71,19 @@ function sameValue(a: unknown, b: string): boolean {
   return typeof a === "string" && routeValue(a) === routeValue(b);
 }
 
-function digits(phone: string): string {
-  return phone.replace(/\D/g, "");
-}
-
-// The number dialled is the one on file, with or without its country code.
-function isNumberOnFile(dialled: string, onFile: string): boolean {
-  const typed: string = digits(dialled);
-  const file: string = digits(onFile);
-  return typed === file || (typed.length >= 10 && file.endsWith(typed));
+// Why this person may not record a callback on the number on file, or null:
+// they proposed or confirmed it. A number others put on file lifts it.
+function setterCalling(phone: Contact, calledBy: string): string | null {
+  for (const [stored, role] of [
+    [phone.proposedBy, "proposed"],
+    [phone.confirmedBy, "confirmed"],
+  ] as const) {
+    const name: string | null = knownName(stored);
+    if (name !== null && sameName(name, calledBy)) {
+      return setterCalls(name, role);
+    }
+  }
+  return null;
 }
 
 // True when the details hold the account the entered fields name. Airwallex
@@ -176,11 +181,13 @@ function requireText(value: string, what: string, max: number): string {
 // Records a person's callback to the supplier on the number on file, and the new
 // bank details the supplier confirmed on it, then updates the supplier's record
 // in Airwallex. The details come only from the person: never from an email or
-// the reader. The agent then offers a replacement to the new account under new
-// terms, or for an invoice held before paying the first payment to it, which two
-// approvers must approve, and the person who recorded the callback is not one of
-// them. Call it in the invoice's turn, and have the agent
-// look at the invoice afterwards whatever happens.
+// the reader. The call is on the record's phone on file, by someone who did not
+// propose or confirm it, and the callback keeps that number's row, so it counts
+// only while the number stays on file. The agent then offers a replacement to
+// the new account under new terms, or for an invoice held before paying the
+// first payment to it, which two approvers must approve, and the person who
+// recorded the callback is not one of them. Call it in the invoice's turn, and
+// have the agent look at the invoice afterwards whatever happens.
 export async function recordBankChange(
   engine: Engine,
   invoiceId: string,
@@ -191,15 +198,20 @@ export async function recordBankChange(
     throw new Error(`${invoiceId} is not in the ledger`);
   }
   const blocked: string | null = blockedReason(engine.ledger, obligation);
-  if (blocked !== null || obligation.supplierPhone === null) {
+  const phone: Contact | undefined = engine.ledger.contactOnFile(obligation.beneficiaryId, "phone");
+  if (blocked !== null || phone === undefined || phone.value === "") {
     throw new Error(blocked ?? "No phone number is on file for this supplier");
   }
   const calledBy: string = personName(input.calledBy);
+  const setter: string | null = setterCalling(phone, calledBy);
+  if (setter !== null) {
+    throw new Error(setter);
+  }
   const spokeTo: string = requireText(input.spokeTo, "who you spoke to", MAX_NAME_LENGTH);
   const confirmed: string = requireText(input.confirmed, "what they confirmed", MAX_CONFIRMED_LENGTH);
-  if (!isNumberOnFile(input.numberCalled, obligation.supplierPhone)) {
+  if (!isNumberOnFile(input.numberCalled, phone.value)) {
     throw new Error(
-      `That is not the number on file (${obligation.supplierPhone}). Call the supplier on the number on file, never on one from an email`,
+      `That is not the number on file (${phone.value}). Call the supplier on the number on file, never on one from an email`,
     );
   }
 
@@ -264,22 +276,26 @@ export async function recordBankChange(
     throw new Error("A callback for the bank details on file is recorded already");
   }
 
-  const id: number = engine.ledger.addBankChange({
+  const id: number | null = engine.ledger.addBankChange({
     invoiceId,
     beneficiaryId: obligation.beneficiaryId,
     calledBy,
-    numberCalled: obligation.supplierPhone,
+    numberCalled: phone.value,
     calledAt: new Date(calledAtMs).toISOString(),
     spokeTo,
     confirmed,
     oldDetails: JSON.stringify(current),
     newDetails: JSON.stringify(entered),
+    contactId: phone.id,
   });
+  if (id === null) {
+    throw new Error(PHONE_CHANGED_WHILE_RECORDING);
+  }
   note(
     engine.ledger,
     invoiceId,
     "callback",
-    `${calledBy} called the supplier on ${obligation.supplierPhone}, the number on file, and spoke to ${spokeTo}, who confirmed: ${confirmed}`,
+    `${calledBy} called the supplier on ${phone.value}, the number on file, and spoke to ${spokeTo}, who confirmed: ${confirmed}`,
   );
   // Whatever happens next, the request for the old details no longer stands.
   if (engine.ledger.voidOpenApprovals(invoiceId)) {

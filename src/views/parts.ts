@@ -180,6 +180,7 @@ const KIND_LABELS: Record<EventKind, string> = {
   error: "Error",
   outbox: "Message",
   outage: "Outage",
+  contact: "Supplier phone",
 };
 
 // The fixed prefixes the engine writes on decision lines, and their chips.

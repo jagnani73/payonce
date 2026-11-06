@@ -20,7 +20,22 @@ import {
   type LastPaid,
 } from "./attempts.js";
 import type { AuditSnapshot, ChainedEvent, LedgerReport, RunAuditSnapshot } from "./audit-trail.js";
-import { BankChangeStore, type BankChange, type BankChangeState, type NewBankChange } from "./bank-changes.js";
+import {
+  BankChangeStore,
+  type AppliedCallback,
+  type BankChange,
+  type BankChangeState,
+  type NewBankChange,
+  type PhoneSetter,
+} from "./bank-changes.js";
+import type { Contact, ContactField } from "../domain/contacts.js";
+import {
+  ContactReads,
+  ContactStore,
+  type ConfirmedContact,
+  type ContactChange,
+  type ProposedContact,
+} from "./contacts.js";
 import { CloseStore } from "./closes.js";
 import { Db } from "./db.js";
 import { DraftStore, type Draft, type DraftMove, type DraftState, type NewDraft } from "./drafts.js";
@@ -89,7 +104,8 @@ export type {
   LastPaid,
   LiveTested,
 } from "./attempts.js";
-export type { BankChange, BankChangeState, NewBankChange } from "./bank-changes.js";
+export type { AppliedCallback, BankChange, BankChangeState, NewBankChange, PhoneSetter } from "./bank-changes.js";
+export type { ConfirmedContact, ContactChange, ProposedContact } from "./contacts.js";
 export {
   checkedObject,
   LEDGER_PATH,
@@ -175,9 +191,11 @@ export type { EventKind, LedgerEvent } from "./timeline.js";
 
 interface Repositories {
   db: Db;
+  contactReads: ContactReads;
   bankChanges: BankChangeStore;
   schema: Schema;
   timelines: Timelines;
+  contacts: ContactStore;
   invoices: InvoiceStore;
   outages: OutageStore;
   locks: LockStore;
@@ -207,10 +225,12 @@ export class Ledger {
   constructor(path: string, readOnly: boolean = false) {
     const db: Db = new Db(path, readOnly);
     this.reconStore = new ReconStore(db);
-    const bankChanges: BankChangeStore = new BankChangeStore(db);
+    const contactReads: ContactReads = new ContactReads(db);
+    const bankChanges: BankChangeStore = new BankChangeStore(db, contactReads);
     const schema: Schema = new Schema(db, bankChanges);
     const timelines: Timelines = new Timelines(db, schema);
-    const invoices: InvoiceStore = new InvoiceStore(db, timelines);
+    const contacts: ContactStore = new ContactStore(db, contactReads, timelines);
+    const invoices: InvoiceStore = new InvoiceStore(db, timelines, contacts);
     const outages: OutageStore = new OutageStore(db, invoices, timelines);
     const locks: LockStore = new LockStore(db);
     const attempts: AttemptStore = new AttemptStore(db, invoices, outages, locks);
@@ -223,14 +243,16 @@ export class Ledger {
     const alerts: AlertStore = new AlertStore(db);
     const drafts: DraftStore = new DraftStore(db, timelines);
     const webhookEvents: WebhookEventStore = new WebhookEventStore(db);
-    const suppliers: SupplierReads = new SupplierReads(db, invoices, bankChanges);
+    const suppliers: SupplierReads = new SupplierReads(db, invoices, bankChanges, contactReads);
     const metrics: MetricsReads = new MetricsReads(db);
     const search: SearchReads = new SearchReads(db);
     this.repos = {
       db,
+      contactReads,
       bankChanges,
       schema,
       timelines,
+      contacts,
       invoices,
       outages,
       locks,
@@ -773,7 +795,7 @@ export class Ledger {
     this.repos.approvals.setApprovalState(id, state, approver);
   }
 
-  addBankChange(input: NewBankChange): number {
+  addBankChange(input: NewBankChange): number | null {
     return this.repos.bankChanges.addBankChange(input);
   }
 
@@ -793,8 +815,48 @@ export class Ledger {
     return this.repos.bankChanges.callbackRecorders(invoiceId);
   }
 
-  callbacksFor(beneficiaryId: string): { detailsKey: string; recorders: string[] }[] {
+  callbacksFor(beneficiaryId: string): AppliedCallback[] {
     return this.repos.bankChanges.callbacksFor(beneficiaryId);
+  }
+
+  callbackPhoneSetters(beneficiaryId: string, detailsKey: string): PhoneSetter[] {
+    return this.repos.bankChanges.callbackPhoneSetters(beneficiaryId, detailsKey);
+  }
+
+  // The record's phone on file: its row, '' for none on file once one was
+  // removed, or undefined when none was ever put on file.
+  contactOnFile(beneficiaryId: string, field: ContactField): Contact | undefined {
+    return this.repos.contactReads.onFile(beneficiaryId, field);
+  }
+
+  // The proposal waiting for a second person, lapsed or not.
+  contactProposal(beneficiaryId: string, field: ContactField): Contact | undefined {
+    return this.repos.contactReads.proposal(beneficiaryId, field);
+  }
+
+  contact(id: number): Contact | undefined {
+    return this.repos.contactReads.byId(id);
+  }
+
+  // Every version of the record's contacts, oldest first, or of every record's.
+  contactsOf(beneficiaryId: string | null): Contact[] {
+    return this.repos.contactReads.of(beneficiaryId);
+  }
+
+  storedPhones(): string[] {
+    return this.repos.contactReads.storedPhones();
+  }
+
+  proposeContact(input: ProposedContact, now: number): ContactChange {
+    return this.repos.contacts.proposeContact(input, now);
+  }
+
+  confirmContact(beneficiaryId: string, id: number, input: ConfirmedContact, now: number): ContactChange {
+    return this.repos.contacts.confirmContact(beneficiaryId, id, input, now);
+  }
+
+  withdrawContact(beneficiaryId: string, id: number, by: string, note: string, now: number): ContactChange {
+    return this.repos.contacts.withdrawContact(beneficiaryId, id, by, note, now);
   }
 
   paidOnce(invoiceId: string): boolean {

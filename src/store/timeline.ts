@@ -37,7 +37,8 @@ export type EventKind =
   | "callback"
   | "error"
   | "outbox"
-  | "outage";
+  | "outage"
+  | "contact";
 
 // One line of an incident's timeline.
 export interface LedgerEvent {

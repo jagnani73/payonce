@@ -1,4 +1,5 @@
 import type { CallbackFacts } from "../../domain/callback.js";
+import { waiting, type Contact } from "../../domain/contacts.js";
 import type { Attempt } from "../attempts.js";
 import type { Obligation, ScannedObligation } from "../invoices.js";
 import type { Ledger } from "../ledger.js";
@@ -8,7 +9,9 @@ import type { PayRunRow } from "../runs.js";
 // What callbackBlocked reads for an invoice, from the ledger as it is now. The
 // two facts that scan other invoices are read only when callbackBlocked asks.
 export function callbackFacts(ledger: Ledger, obligation: Obligation, now: number): CallbackFacts {
+  const proposal: Contact | undefined = ledger.contactProposal(obligation.beneficiaryId, "phone");
   return {
+    phoneProposed: proposal !== undefined && waiting(proposal, now),
     supplierPhone: obligation.supplierPhone,
     state: obligation.state,
     attempts: ledger.attempts(obligation.invoiceId),
