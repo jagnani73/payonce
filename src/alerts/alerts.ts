@@ -6,6 +6,7 @@ import {
   type AlertFormat,
   type AuditAlertFacts,
   type CashAlertFacts,
+  type ContactAlertFacts,
   type InboxAlertFacts,
   type InvoiceAlertFacts,
   type InvoiceNeed,
@@ -34,6 +35,8 @@ import {
 } from "../store/audit-trail.js";
 import type { CashReport, CurrencyCash } from "../engine/cash-position.js";
 import type { ApprovalPolicy } from "../domain/approvers.js";
+import { waiting, type Contact } from "../domain/contacts.js";
+import { BENEFICIARY_ID_PATTERN } from "../runs/run-file.js";
 import { approvedUnderway, heldBeforePaying } from "../domain/live.js";
 import { FLOOR_CLAUSES, reasonText, withoutClauses } from "../domain/reasons.js";
 import {
@@ -85,6 +88,8 @@ const POST_GAP_MS: number = 1_100;
 // How long an ended outage stays a condition, and how many payouts its alert
 // names.
 const ENDED_OUTAGE_SHOWN_MS: number = 24 * 60 * 60_000;
+// How long a phone number two people put on file stays a condition.
+const CONTACT_SHOWN_MS: number = 24 * 60 * 60_000;
 const OUTAGE_REFERENCES_SHOWN: number = 5;
 
 const SUMMARY_KEY: string = "summary";
@@ -428,6 +433,54 @@ function outageConditions(ledger: Ledger, now: number): FoundCondition[] {
     });
 }
 
+// A supplier record's phone: while a new number two people have not yet put on
+// file waits, and for a day after two people put one on file, with which it is
+// as the fingerprint, so each posts once. A number the demo scenario or an older
+// invoice put there is no news. Never the number or a name.
+function contactConditions(ledger: Ledger, now: number): FoundCondition[] {
+  const byRecord: Map<string, Contact[]> = new Map<string, Contact[]>();
+  for (const contact of ledger.contactsOf(null)) {
+    if (contact.field === "phone") {
+      byRecord.set(contact.beneficiaryId, [...(byRecord.get(contact.beneficiaryId) ?? []), contact]);
+    }
+  }
+  const found: FoundCondition[] = [];
+  for (const [beneficiaryId, contacts] of byRecord) {
+    const proposal: Contact | undefined = contacts.find((contact: Contact): boolean => waiting(contact, now));
+    const onFile: Contact | undefined = contacts.find(
+      (contact: Contact): boolean =>
+        contact.state === "on_file" &&
+        contact.origin === "person" &&
+        contact.confirmedAt !== null &&
+        now - Date.parse(contact.confirmedAt) < CONTACT_SHOWN_MS,
+    );
+    const row: Contact | undefined = proposal ?? onFile;
+    if (row === undefined) {
+      continue;
+    }
+    const replaced: Contact | undefined = contacts.find((contact: Contact): boolean => contact.id === row.replacesId);
+    const change: ContactAlertFacts["change"] =
+      row.value === "" ? "removal" : replaced === undefined || replaced.value === "" ? "first" : "change";
+    const state: ContactAlertFacts["state"] = proposal !== undefined ? "waiting" : change === "first" ? "set" : "changed";
+    const invoices: Obligation[] = ledger.obligationsFor(beneficiaryId);
+    const facts: ContactAlertFacts = {
+      kind: "contact",
+      supplierKey: BENEFICIARY_ID_PATTERN.test(beneficiaryId) ? beneficiaryId : null,
+      supplier: invoices[0]?.supplier ?? "",
+      field: "phone",
+      state,
+      change,
+      at: (proposal === undefined ? row.confirmedAt : row.proposedAt) ?? row.proposedAt,
+      openInvoices: invoices.filter(
+        (obligation: Obligation): boolean => obligation.state === "open" || obligation.state === "escalated",
+      ).length,
+      withdrawn: row.withdrawnRequests,
+    };
+    found.push(condition(`contact:${beneficiaryId}`, `${state}:${row.id}`, facts));
+  }
+  return found;
+}
+
 // Emails waiting in the inbox, by count only. The fingerprint is the newest
 // upload in any state, so a new upload alerts again and a delivery or a dismissal
 // does not.
@@ -691,6 +744,7 @@ export class Alerts {
       found.push(emails);
     }
     found.push(...outageConditions(this.ledger, now));
+    found.push(...contactConditions(this.ledger, now));
     const recon: ReconAlertState = this.ledger.recon().alertState();
     const wallet: FoundCondition | null = reconCondition(recon);
     if (wallet !== null) {
