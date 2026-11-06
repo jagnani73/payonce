@@ -779,7 +779,6 @@ export interface PaymentCheckView {
     | { kind: "hold"; reason: ReasonView; text: string }
     | { kind: "paused"; outageId: OutageId; text: string }
     | { kind: "unknown"; text: string };
-  approvers: { needed: number; why: Why | null } | null;
   headroom: HeadroomLine | null;
   warnings: string[];
   sandbox: { bankOutcome: string; text: string } | null;

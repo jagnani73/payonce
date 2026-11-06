@@ -33,7 +33,6 @@ function sandboxSentence(text: string): string {
   return `${rest.charAt(0).toUpperCase()}${rest.slice(1)}`;
 }
 
-const COUNT_WORDS: readonly string[] = ["no approvers", "one approver", "two approvers"];
 
 function HeadroomText(props: { headroom: HeadroomLine }): JSX.Element {
   const { wallet, now, after, floorSource } = props.headroom;
@@ -84,7 +83,7 @@ export function NextSteps(props: {
           : check.outcome.text;
   const look: { icon: IconName; tone: LineTone } =
     props.waitingFor !== null || check === null || fieldProblems ? OUTCOME_LOOK.unknown : OUTCOME_LOOK[check.outcome.kind];
-  const approvers: PaymentCheckView["approvers"] = props.waitingFor === null ? (check?.approvers ?? null) : null;
+
   const headroom: HeadroomLine | null = props.waitingFor === null ? (check?.headroom ?? null) : null;
   return (
     <aside class="card np-next" aria-labelledby="np-next-title" aria-busy={props.stale}>
@@ -98,11 +97,7 @@ export function NextSteps(props: {
         <Line icon={look.icon} tone={look.tone} live>
           {outcomeText}
         </Line>
-        {approvers === null ? null : (
-          <Line icon="user" tone="plain">
-            {`Approvals for this payment: ${COUNT_WORDS[approvers.needed] ?? `${approvers.needed} approvers`}${approvers.why === null ? "." : ` (${approvers.why.text}).`}`}
-          </Line>
-        )}
+
         {headroom !== null ? (
           <Line icon="bank" tone="plain">
             <HeadroomText headroom={headroom} />

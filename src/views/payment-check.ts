@@ -162,7 +162,6 @@ export function paymentCheckView(
       view: "payment-check",
       fields,
       outcome: outcomeOf(ledger, settings, input, fields, checked),
-      approvers: null,
       headroom,
       warnings: below
         ? [`This would leave ${payment.wallet} below its reserve floor. PayOnce doesn't check a single payment's first transfer against the floor.`]
