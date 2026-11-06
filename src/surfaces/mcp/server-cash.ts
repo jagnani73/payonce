@@ -1,7 +1,6 @@
 import type { Balance, BalanceState } from "../../airwallex/balances.js";
 import { CURRENCY_PATTERN } from "../../domain/patterns.js";
 import type { ReservePolicy } from "../../domain/reserve.js";
-import { SERVER_FLOORS_UNREADABLE } from "../../views/outside-fields.js";
 
 // The balances PayOnce's server holds, from GET /api/cash/cached on this machine,
 // which answers from its cache and never reads Airwallex. The MCP server works the
@@ -10,6 +9,9 @@ import { SERVER_FLOORS_UNREADABLE } from "../../views/outside-fields.js";
 const SERVER_TIMEOUT_MS: number = 1_500;
 const MAX_ANSWER_BYTES: number = 4 * 1024 * 1024;
 const BALANCE_MAX_AGE_MS: number = 30_000;
+// What this process says when the server could not read its reserve floors, in
+// place of the server's words, which it cannot vouch for.
+const SERVER_FLOORS_UNREADABLE: string = "PayOnce's server can't read the reserve floors";
 
 export const NO_BALANCES: BalanceState = {
   readAt: null,

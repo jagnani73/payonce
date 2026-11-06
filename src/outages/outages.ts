@@ -5,6 +5,7 @@ import { originalStateOf } from "../domain/assess.js";
 import { deadlineMinutes } from "../domain/deadlines.js";
 import { cleanLine } from "../intake/eml.js";
 import { formatMoney } from "../domain/money.js";
+import { railWords } from "../domain/patterns.js";
 import {
   readingSoft,
   type Approval,
@@ -51,8 +52,18 @@ export interface OutageRule extends OutageCount {
   problem: string | null;
 }
 
+function ruleWords(rule: OutageCount): string {
+  return `PayOnce opens no new payment on a currency and transfer method once payouts to ${rule.failures} different payees fail there with a rail-level code (${Object.keys(RAIL_FAILURE_CODES).join(", ")}) within ${rule.windowMinutes} minutes, until a person ends the outage`;
+}
+
+// The start-up line, with the problem a setting has.
 export function describeOutageRule(rule: OutageRule): string {
-  return `Outages: PayOnce opens no new payment on a currency and transfer method once payouts to ${rule.failures} different payees fail there with a rail-level code (${Object.keys(RAIL_FAILURE_CODES).join(", ")}) within ${rule.windowMinutes} minutes, until a person ends the outage${rule.problem === null ? "" : `. ${rule.problem}`}`;
+  return `Outages: ${ruleWords(rule)}${rule.problem === null ? "" : `. ${rule.problem}`}`;
+}
+
+// The rule as Treasury and Settings show it, which give the problem apart.
+export function outageRuleText(rule: OutageCount): string {
+  return `${ruleWords(rule)}.`;
 }
 
 export function railOf(outage: { currency: string; method: string }): string {
@@ -235,7 +246,7 @@ function runEndLine(outage: Outage, unlisted: boolean): string {
 // of the end form.
 export function endRefusal(policy: ApprovalPolicy): string | null {
   return policy.unreadable
-    ? `Nobody can end an outage while ${policy.problem ?? "the approval settings cannot be read"}. Fix the setting and restart PayOnce, then end the outage`
+    ? "Nobody can end an outage while PayOnce can't read the approval settings. Fix them and restart PayOnce, then end the outage."
     : null;
 }
 
@@ -351,7 +362,7 @@ export function endOutage(
   if (ender === undefined) {
     throw new EndRefusedError(
       "approver",
-      `Only a name in APPROVERS may end an outage, because ending it lets PayOnce pay on ${railOf(outage)} again: ${(enders ?? []).join(", ")}`,
+      `Only an approver may end an outage, because ending it lets PayOnce pay on ${railWords(outage.currency, outage.method)} again: ${(enders ?? []).join(", ")}`,
       outage,
     );
   }
@@ -495,10 +506,11 @@ function viewOf(ledger: Ledger, outage: Outage, holding: OutageHolding | null): 
         );
   // No time is in the sentence: the page shows declaredAt and endedAt in the
   // viewer's time zone, and the CLI prints them as they are stored.
+  const rail: string = railWords(outage.currency, outage.method);
   const text: string =
     outage.state === "active"
-      ? `Outage ${outage.id} on ${railOf(outage)}: payouts to ${outage.payees} payees failed with ${codesText(outage.codes)} within ${outage.windowMinutes} minutes. PayOnce opens no new payment on ${railOf(outage)} until a person ends it`
-      : `Outage ${outage.id} on ${railOf(outage)} was ended by ${outage.endedBy ?? ""}`;
+      ? `Outage ${outage.id} on ${rail}: payouts to ${outage.payees} payees failed with ${codesText(outage.codes)} within ${outage.windowMinutes} minutes. PayOnce opens no new payment on ${rail} until a person ends it.`
+      : `Outage ${outage.id} on ${rail} was ended by ${outage.endedBy ?? ""}.`;
   return {
     id: outage.id,
     rail: railOf(outage),

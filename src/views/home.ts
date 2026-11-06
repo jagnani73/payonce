@@ -38,14 +38,21 @@ function readiness(settings: Settings, airwallex: AirwallexHealth | null): Readi
       label: floors.length === 0 ? "Reserve floors set" : `Reserve floors set for ${floors.join(", ")}`,
       state: settings.reserve.problem !== null ? "missing" : floors.length === 0 ? "warning" : "ok",
       text:
-        settings.reserve.problem ?? "A currency with no floor sends every replacement to a person.",
+        settings.reserve.problem === null
+          ? "A currency with no floor sends every replacement to a person."
+          : "PayOnce can't read the reserve floors. Settings shows what to fix.",
       href: "#settings/cash",
     },
     {
       key: "alerts",
       label: "Alerts",
       state: settings.alerts.target !== null ? "ok" : settings.alerts.problem !== null ? "warning" : "optional",
-      text: settings.alerts.problem ?? (settings.alerts.target === null ? "No alert address is set." : "Alerts post when something needs a person."),
+      text:
+        settings.alerts.problem !== null
+          ? "PayOnce can't use the alert settings. Settings shows what to fix."
+          : settings.alerts.target === null
+            ? "No alert address is set."
+            : "Alerts post when something needs a person.",
       href: "#settings/alerts",
     },
     {

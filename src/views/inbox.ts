@@ -5,7 +5,7 @@ import type { Settings } from "../settings.js";
 import { readingSoft, storedObject, type Ledger, type Upload, type UploadState } from "../store/ledger.js";
 import { capitalise } from "../text/printable.js";
 import type { CandidateView, Can, InboxItemView, InboxListView, UploadRow } from "./contract.js";
-import { readerOf, snapshotOptions } from "./context.js";
+import { readerLabel, readerOf, snapshotOptions } from "./context.js";
 import { allowed, money, refused } from "./parts.js";
 import { readInvoiceSnapshots } from "./snapshot.js";
 
@@ -108,7 +108,7 @@ function readingOf(ledger: Ledger, target: InvoiceSnapshot): { state: "unread" }
   const findings: { summary?: string; readBy?: string } | null = stored === undefined ? null : storedObject<{ summary?: string; readBy?: string }>(stored);
   return findings === null
     ? { state: "unread" }
-    : { state: "read", summary: capitalise(findings.summary ?? ""), readBy: findings.readBy ?? null };
+    : { state: "read", summary: capitalise(findings.summary ?? ""), readBy: findings.readBy === undefined ? null : readerLabel(findings.readBy) };
 }
 
 export function inboxItemView(ledger: Ledger, settings: Settings, now: number, uploadId: number): InboxItemView | null {

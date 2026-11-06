@@ -2,6 +2,7 @@ import type { FxTerms } from "../domain/approval.js";
 import { today } from "../domain/arrival.js";
 import { failedStatus } from "../domain/assess.js";
 import { deadlineAt, inFlight, keptFailedLive, pastDeadline, watching } from "../domain/live.js";
+import { railWords } from "../domain/patterns.js";
 import { debitCurrency } from "../domain/reserve.js";
 import {
   incidentOf,
@@ -51,7 +52,7 @@ import type {
 } from "./contract.js";
 import { cautionsOf } from "./cautions.js";
 import { incidentPhone } from "./contacts.js";
-import { isBusy, snapshotOptions, supplierKeyOf, type Live } from "./context.js";
+import { isBusy, readerLabel, snapshotOptions, supplierKeyOf, type Live } from "./context.js";
 import { decisionPanel, headroomOf } from "./decision.js";
 import {
   accountView,
@@ -266,7 +267,7 @@ function emailsTab(ledger: Ledger, snapshot: InvoiceSnapshot): EmailsTab {
             claimsNonReceipt: stored.claimsNonReceipt === true,
             asksForNewBankDetails: stored.asksForNewBankDetails === true,
             asksNotToPay: stored.asksNotToPay === true,
-            readBy: stored.readBy ?? null,
+            readBy: stored.readBy === undefined ? null : readerLabel(stored.readBy),
           },
     unread:
       snapshot.emails.count > 0 && snapshot.emails.unread
@@ -451,7 +452,10 @@ export function incidentView(
       related: {
         secondBills: o.duplicateOf.map((id: string) => duplicateView(id, others.get(id) ?? null, null)),
         inbox: snapshot.inbox,
-        outage: snapshot.outage === null ? null : { id: snapshot.outage.outage.id, rail: `${snapshot.outage.outage.currency} ${snapshot.outage.outage.method}` },
+        outage:
+          snapshot.outage === null
+            ? null
+            : { id: snapshot.outage.outage.id, rail: railWords(snapshot.outage.outage.currency, snapshot.outage.outage.method) },
       },
       askWhy: situation.can.askWhy,
       activity: activityOf(isBusy(live, o.invoiceId), watching(snapshot.attempts, snapshot.payouts)),

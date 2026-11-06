@@ -1,3 +1,4 @@
+import { railWords } from "../domain/patterns.js";
 import { currencyFloor, debitCurrency, type CurrencyFloor } from "../domain/reserve.js";
 import { payoutNamesOnly, unrecognisedPaid, unrecognisedUncleared } from "../domain/live.js";
 import { aboutBankDetails, closeKindOf, type CloseKind, type InvoiceSnapshot, type Situation } from "../domain/situation.js";
@@ -18,7 +19,7 @@ import type {
   NamingPayoutView,
   RequestView,
 } from "./contract.js";
-import { allowed, listOf, money, refused } from "./parts.js";
+import { allowed, listOf, money, onceSignedOff, refused } from "./parts.js";
 
 // The Decision panel: the request, the cautions, and every option that fits the
 // payment now, each with what confirming it does and why it cannot be chosen
@@ -124,7 +125,7 @@ function options(input: DecisionInput): DecisionOption[] {
       kind: "approve",
       title: request.terms.title,
       consequence: [
-        `Sends ${request.terms.pay.text} to ${request.terms.account.label} at PayOnce's next check. Your signoff is ${signed + 1} of ${request.needed}.`,
+        `${onceSignedOff(signed, request.needed)}, PayOnce sends ${request.terms.pay.text} to ${request.terms.account.label} at its next check.`,
         ...(floorClause ? ["The terms say this takes cash below the reserve floor."] : []),
         ...(snapshot.outage === null ? [] : [`Outage ${snapshot.outage.outage.id} is active, so the payment waits until someone ends it.`]),
       ],
@@ -189,12 +190,12 @@ function options(input: DecisionInput): DecisionOption[] {
   if (snapshot.outage !== null && state === "paused-by-outage") {
     found.push({
       kind: "end-outage",
-      title: `End outage ${snapshot.outage.outage.id} on ${snapshot.outage.outage.currency} ${snapshot.outage.outage.method}`,
+      title: `End outage ${snapshot.outage.outage.id} on ${railWords(snapshot.outage.outage.currency, snapshot.outage.outage.method)}`,
       consequence: [`Ending it sends ${sendsText(input.sends)}.`],
       can: situation.can.endOutage,
       suggested: true,
       outageId: snapshot.outage.outage.id,
-      rail: `${snapshot.outage.outage.currency} ${snapshot.outage.outage.method}`,
+      rail: railWords(snapshot.outage.outage.currency, snapshot.outage.outage.method),
       enders: snapshot.outage.enders,
       sends: input.sends.map((send: OutageSend) => ({ payments: send.payments, total: money(send.minor, send.currency, send.estimated) })),
     });

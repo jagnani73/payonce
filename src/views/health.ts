@@ -61,7 +61,7 @@ export function airwallexHealth(ledger: Ledger, host: string, balances: BalanceS
       state: "unreachable",
       lastOkAt: null,
       failingSince: null,
-      text: `AWX_BASE_URL is the offline host, https://${OFFLINE_HOST}, so no call reaches Airwallex.`,
+      text: "PayOnce is offline: it makes no calls to Airwallex.",
       detail: null,
     };
   }

@@ -61,7 +61,15 @@ import { railOf } from "../outages/outages.js";
 import { debitCurrency } from "../domain/reserve.js";
 import { BENEFICIARY_ID_PATTERN } from "../runs/run-file.js";
 import { UNNAMED_PAYEE } from "../engine/sweep.js";
-import { CURRENCY_PATTERN, FAILURE_CODE_PATTERN, METHOD_PATTERN, RAIL_PATTERN, REFERENCE_PATTERN, STATUS_PATTERN } from "../domain/patterns.js";
+import {
+  CURRENCY_PATTERN,
+  FAILURE_CODE_PATTERN,
+  METHOD_PATTERN,
+  RAIL_PATTERN,
+  railWords,
+  REFERENCE_PATTERN,
+  STATUS_PATTERN,
+} from "../domain/patterns.js";
 import { ACCOUNT_FAILURE_CODES, FAILURE_WORDS, RAIL_FAILURE_CODES } from "../domain/failure-codes.js";
 
 // The supplier view: one Airwallex beneficiary record, the key every control
@@ -1184,8 +1192,7 @@ function earliest(times: number[]): string | null {
 }
 
 function railName(currency: string, method: string): string | null {
-  const rail: string = railOf({ currency, method });
-  return RAIL_PATTERN.test(rail) ? rail : null;
+  return RAIL_PATTERN.test(railOf({ currency, method })) ? railWords(currency, method) : null;
 }
 
 interface CautionDraft {

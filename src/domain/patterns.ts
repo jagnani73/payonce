@@ -22,6 +22,14 @@ export const STATUS_PATTERN: RegExp = whole(STATUS_SOURCE);
 export const METHOD_PATTERN: RegExp = whole(`(?:${METHOD_SOURCE})`);
 // A rail: a currency and a transfer method, such as "USD LOCAL".
 export const RAIL_PATTERN: RegExp = whole(`${CURRENCY_SOURCE} [A-Z_]{1,20}`);
+// A rail as a person reads it, such as "USD local" or "EUR SWIFT".
+export const RAIL_WORDS_PATTERN: RegExp = whole(`${CURRENCY_SOURCE} (?:local|[A-Z_]{1,20})`);
+
+// A rail in a person's words (glossary.md): the LOCAL method reads "local".
+// Stored lines keep the stored form, "USD LOCAL".
+export function railWords(currency: string, method: string): string {
+  return `${currency} ${method === "LOCAL" ? "local" : method}`;
+}
 
 function whole(source: string): RegExp {
   return new RegExp(`^${source}$`);

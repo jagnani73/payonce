@@ -12,8 +12,9 @@ import {
   type CurrencyCash,
   type InvoiceFloor,
 } from "../engine/cash-position.js";
+import { railWords } from "../domain/patterns.js";
 import {
-  describeOutageRule,
+  outageRuleText,
   outagesReport,
   sendsText,
   type CountedPayout,
@@ -61,6 +62,10 @@ const KIND_WORDS: Record<CashKind, { label: string; bucket: CashWorksheetGroup["
 
 const WITH_BANK: ReadonlySet<CashKind> = new Set<CashKind>(["with-bank", "outside"]);
 
+// In place of the setting's own problem, which Settings shows beside it.
+const FLOORS_UNREADABLE: string =
+  "PayOnce can't read the reserve floors, so it sends every replacement to a person. Settings shows what to fix.";
+
 function sumOf(cash: CurrencyCash, kinds: ReadonlySet<CashKind>): Money {
   const lines: CashLine[] = cash.lines.filter((line: CashLine): boolean => kinds.has(line.kind));
   return money(
@@ -74,7 +79,7 @@ function walletOf(cash: CurrencyCash): WalletCashView {
   const of = (minor: number | null): Money | null => (minor === null ? null : money(minor, cash.currency));
   const floorText: string =
     cash.floor.source === "unreadable"
-      ? "Can't read RESERVE_FLOORS"
+      ? "Can't read the reserve floors"
       : cash.floor.minor === null
         ? "Not set: every automatic replacement in this currency goes to a person"
         : formatMoney(cash.floor.minor, cash.currency);
@@ -150,10 +155,16 @@ export function cashView(
         problem:
           report.airwallex.error === null
             ? null
-            : { text: "Couldn't read balances from Airwallex. The last good read is shown.", since: report.airwallex.error.at },
+            : {
+                text:
+                  report.airwallex.readAt === null
+                    ? "Couldn't read balances from Airwallex, and there's no earlier read to show."
+                    : "Couldn't read balances from Airwallex. The last good read is shown.",
+                since: report.airwallex.error.at,
+              },
       },
       checksLastRanAt: report.ledger.statesCheckedAt,
-      floorsProblem: report.floors.problem,
+      floorsProblem: report.floors.problem === null ? null : FLOORS_UNREADABLE,
       wallets: report.currencies.map(walletOf),
     };
   });
@@ -176,7 +187,7 @@ function sendsOf(sends: OutageSend[]): { payments: number; total: Money }[] {
 function cardOf(view: OutageView, report: OutagesReport): OutageCardView {
   return {
     id: view.id,
-    rail: view.rail,
+    rail: railWords(view.currency, view.method),
     state: view.state,
     text: view.text,
     codes: view.codes,
@@ -216,7 +227,7 @@ export function outagesView(ledger: Ledger, settings: Settings, now: number): Ou
   const report: OutagesReport = outagesReport(ledger, settings.approvals, outageHolding(ledger, now));
   return {
     view: "outages",
-    rule: { text: describeOutageRule(settings.outageRule), problem: report.rule.problem },
+    rule: { text: outageRuleText(settings.outageRule), problem: report.rule.problem },
     active: report.active.map((view: OutageView): OutageCardView => cardOf(view, report)),
     ended: report.recent.map((view: OutageView): OutageCardView => cardOf(view, report)),
   };

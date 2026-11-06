@@ -11,6 +11,7 @@ import {
   type RunTotal,
 } from "../domain/approval.js";
 import type { Barred as DomainBarred } from "../domain/approvers.js";
+import { barredWords, STARTED_WHY } from "../domain/barred.js";
 import type { OriginalTransferState } from "../domain/incident.js";
 import { awaitingSignoffs, isExpired, requestOpen } from "../domain/live.js";
 import { neededWhyOf, parseReason, reasonView } from "../domain/reasons.js";
@@ -59,7 +60,7 @@ export function approverViews(choices: DomainChoice[], currency: string): Approv
 
 // The engine's and runs.ts's fixed words for why someone may not approve.
 function barredCode(text: string): string {
-  if (text === "started this incident") {
+  if (text === STARTED_WHY) {
     return "started";
   }
   if (text === "uploaded the pay run it came from" || text === "uploaded this run") {
@@ -72,7 +73,7 @@ function barredCode(text: string): string {
 }
 
 export function barredViews(barred: DomainBarred[]): Barred[] {
-  return barred.map((entry: DomainBarred): Barred => ({ name: entry.name, why: why(barredCode(entry.why), entry.why) }));
+  return barred.map((entry: DomainBarred): Barred => ({ name: entry.name, why: why(barredCode(entry.why), barredWords(entry.why)) }));
 }
 
 function signoffsOf(signoffs: Signoff[]): { name: string; at: string }[] {

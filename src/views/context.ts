@@ -1,6 +1,6 @@
 import { explainerFor } from "../explain/explainer.js";
 import { readerFor } from "../reader/reader.js";
-import { KeywordReader } from "../reader/keyword-reader.js";
+import { KEYWORD_READER_NAME, KeywordReader } from "../reader/keyword-reader.js";
 import type { EmailReader } from "../reader/emails.js";
 import { BENEFICIARY_ID_PATTERN } from "../runs/run-file.js";
 import { runKey } from "../runs/runs.js";
@@ -42,7 +42,13 @@ export function askWhyOn(settings: Settings): boolean {
 
 export function readerOf(settings: Settings): { name: string; isModel: boolean } {
   const reader: EmailReader = readerFor(settings.models.readerServices());
-  return { name: reader.name, isModel: !(reader instanceof KeywordReader) };
+  return { name: readerLabel(reader.name), isModel: !(reader instanceof KeywordReader) };
+}
+
+// Who read emails, as a person reads it. The keyword reader's stored name stays
+// in the findings it wrote.
+export function readerLabel(name: string): string {
+  return name === KEYWORD_READER_NAME ? "Keyword reader" : name;
 }
 
 export function snapshotOptions(settings: Settings, live: Live | null): SnapshotOptions {

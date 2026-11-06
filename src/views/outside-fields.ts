@@ -1,4 +1,4 @@
-import { RAIL_PATTERN, REFERENCE_PATTERN } from "../domain/patterns.js";
+import { RAIL_WORDS_PATTERN, REFERENCE_PATTERN } from "../domain/patterns.js";
 import type { ReasonView } from "../domain/reasons.js";
 import { UNSHOWN_REFERENCE } from "../text/printable.js";
 import type { AuditExport, RunAuditExport } from "../store/audit-trail.js";
@@ -114,13 +114,10 @@ const EMAIL_SUMMARY: RegExp = new RegExp(`^${SUMMARY}$`);
 const EMAIL_EVIDENCE: RegExp = new RegExp(
   `^${SUMMARY}(, (1 email|${COUNT} emails) on file(, ${COUNT} with text PayOnce could not read)?(, no supplier domain on file to check (1 sender|${COUNT} senders) against|, (1 sender does|${COUNT} senders do) not match the supplier on file)?)?$`,
 );
-// The keyword reader's name, or model ids as READER_MODEL lists them.
-const READER_NAME: RegExp = /^(keyword placeholder|[A-Za-z0-9._:/-]{1,60}(, then [A-Za-z0-9._:/-]{1,60}){0,4})$/;
+// The keyword reader's label, or model ids as READER_MODEL lists them.
+const READER_NAME: RegExp = /^(Keyword reader|[A-Za-z0-9._:/-]{1,60}(, then [A-Za-z0-9._:/-]{1,60}){0,4})$/;
 const FX_RATE: RegExp = /^1 [A-Z]{3} = [0-9.e+-]{1,30} [A-Z]{3}$/;
 const FX_MARKUP: RegExp = /^[0-9.]{1,20}% from mid-market [0-9.e+-]{1,30}$/;
-// What this process says when the server's RESERVE_FLOORS could not be read, in
-// place of the server's words, which it cannot vouch for.
-export const SERVER_FLOORS_UNREADABLE: string = "PayOnce's server could not read RESERVE_FLOORS";
 
 // Why codes whose text is one of PayOnce's fixed sentences. The others name a
 // person, an approver's limit or a setting as written, so they are wrapped.
@@ -136,6 +133,7 @@ const FIXED_WHY: readonly string[] = [
   "not-late",
   "closed",
   "approvers-unset",
+  "approvers-unreadable",
   "drafted",
   "not-built",
   "draft",
@@ -159,7 +157,7 @@ const FIXED_NEEDED_WHY: readonly string[] = [
 ];
 
 const WHY_TEXT: Checked = quotedUnless(codeIn(FIXED_WHY));
-const RAIL: Checked = { from: "unknown", plainWhen: fits(RAIL_PATTERN) };
+const RAIL: Checked = { from: "unknown", plainWhen: fits(RAIL_WORDS_PATTERN) };
 const REFERENCE: Checked = { from: "airwallex", plainWhen: fits(REFERENCE_PATTERN) };
 // A reference as shownReference gives it: in its own form, or PayOnce's words for one that is not.
 const SHOWN_REFERENCE: Checked = {
@@ -484,8 +482,7 @@ export const SUPPLIER_FIELDS = {
 
 export const CASH_FIELDS = {
   "balances.problem.text": "plain",
-  // This process's own RESERVE_FLOORS problem quotes the setting it could not read.
-  floorsProblem: quotedUnless((text: string): boolean => text === SERVER_FLOORS_UNREADABLE),
+  floorsProblem: "plain",
   "wallets[].floor.text": "plain",
   "wallets[].invoiceFloors[].text": "plain",
   "wallets[].worksheet[].label": "plain",
@@ -493,7 +490,7 @@ export const CASH_FIELDS = {
 
 const OUTAGE_CARD = {
   rail: RAIL,
-  // "Outage 1 on USD LOCAL was ended by Yash".
+  // "Outage 1 on USD local was ended by Yash."
   text: "quoted",
   "codes[].label": "plain",
   ...under("counted[].failure", FAILURE),

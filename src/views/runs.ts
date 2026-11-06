@@ -1,6 +1,6 @@
 import { feeSeenText, type ArrivalTerms } from "../domain/arrival.js";
 import { watching } from "../domain/live.js";
-import { CURRENCY_PATTERN } from "../domain/patterns.js";
+import { CURRENCY_PATTERN, railWords } from "../domain/patterns.js";
 import {
   runRowStateOf,
   runSituationOf,
@@ -29,7 +29,19 @@ import type {
   RunView,
 } from "./contract.js";
 import { isBusy, isRunBusy, snapshotOptions, type Live } from "./context.js";
-import { accountView, activityOf, allowed, arrivalView, money, refused, runAuditLine, timelineView, vouchedArrival } from "./parts.js";
+import {
+  accountView,
+  activityOf,
+  allowed,
+  arrivalView,
+  money,
+  onceSignedOff,
+  plural,
+  refused,
+  runAuditLine,
+  timelineView,
+  vouchedArrival,
+} from "./parts.js";
 import { runRequestView } from "./requests.js";
 import { readRunSnapshot, readRunSnapshots } from "./snapshot.js";
 import { sendsText, type OutageSend } from "../outages/outages.js";
@@ -168,7 +180,7 @@ function decisionOf(ledger: Ledger, snapshot: RunSnapshot, situation: RunSituati
   if (outage !== undefined) {
     cautions.push({
       code: "outage",
-      text: [`Outage ${outage.id} on ${outage.currency} ${outage.method} is active. The run is released whole, so it waits until someone ends it.`],
+      text: [`Outage ${outage.id} on ${railWords(outage.currency, outage.method)} is active. The run is released whole, so it waits until someone ends it.`],
     });
   }
   if (request !== null && request.state === "waiting") {
@@ -176,7 +188,7 @@ function decisionOf(ledger: Ledger, snapshot: RunSnapshot, situation: RunSituati
       kind: "approve",
       title: "Approve run",
       consequence: [
-        `Releases ${request.terms.payments} payments once every signoff is in. Your signoff is ${request.signoffs.length + 1} of ${request.needed}.`,
+        `${onceSignedOff(request.signoffs.length, request.needed)}, PayOnce releases ${plural(request.terms.payments, "payment", "payments")}.`,
         "PayOnce sends the rows one at a time, each checked again before it goes.",
       ],
       can: request.approvers.some((approver: ApproverChoice): boolean => approver.canApprove) ? allowed() : refused("no-approver", "Nobody left on the approver list can approve this run."),
@@ -206,12 +218,12 @@ function decisionOf(ledger: Ledger, snapshot: RunSnapshot, situation: RunSituati
     const sends: OutageSend[] = outageHolding(ledger, now)(outage).sends;
     options.push({
       kind: "end-outage",
-      title: `End outage ${outage.id} on ${outage.currency} ${outage.method}`,
+      title: `End outage ${outage.id} on ${railWords(outage.currency, outage.method)}`,
       consequence: [`Ending it releases the run and sends ${sendsText(sends)}.`],
       can: allowed(),
       suggested: true,
       outageId: outage.id,
-      rail: `${outage.currency} ${outage.method}`,
+      rail: railWords(outage.currency, outage.method),
       enders: snapshot.outage?.enders ?? null,
       sends: sends.map((send: OutageSend) => ({ payments: send.payments, total: money(send.minor, send.currency, send.estimated) })),
     });

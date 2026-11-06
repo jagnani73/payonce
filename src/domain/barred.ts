@@ -18,6 +18,20 @@ export interface BarFacts {
   }[];
 }
 
+// Why the starter of an invoice is barred, as approval refusals and the lines
+// that void an approval quote it.
+export const STARTED_WHY: string = "started this incident";
+
+// Why someone is barred, in the words a person reads on the page (glossary.md):
+// the payment, not the incident. Stored lines keep STARTED_WHY.
+export function barredWords(why: string): string {
+  return why === STARTED_WHY ? "started this payment" : why;
+}
+
+export function barredInWords(barred: Barred[]): Barred[] {
+  return barred.map((entry: Barred): Barred => ({ name: entry.name, why: barredWords(entry.why) }));
+}
+
 // The people who may not approve a payment of the invoice to the account with
 // this accountKey, and why: whoever started the incident, everyone who recorded
 // a callback verifying that account, and whoever proposed or confirmed the
@@ -35,7 +49,7 @@ export function barredFrom(facts: BarFacts, accountKey: string | undefined, rout
   const barred: Barred[] = [];
   const starter: string | null = knownName(facts.startedBy);
   if (starter !== null) {
-    barred.push({ name: starter, why: facts.fromRun ? "uploaded the pay run it came from" : "started this incident" });
+    barred.push({ name: starter, why: facts.fromRun ? "uploaded the pay run it came from" : STARTED_WHY });
   }
   for (const callback of facts.callbacks) {
     const applied: string | null = routeOfDetailsKey(callback.detailsKey);

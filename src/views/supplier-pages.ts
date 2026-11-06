@@ -25,6 +25,7 @@ import {
   type SupplierSummary,
 } from "./suppliers.js";
 import type { IncidentRow, SupplierAccountView, SupplierCaution, SupplierListRow, SupplierView, SuppliersView } from "./contract.js";
+import { railWords } from "../domain/patterns.js";
 import { contactView } from "./contacts.js";
 import { snapshotOptions, type Live } from "./context.js";
 import { walletTotals } from "./incidents.js";
@@ -214,7 +215,7 @@ export function supplierView(ledger: Ledger, settings: Settings, now: number, ke
             return [];
           }
           const sends: OutageSend[] = holding(outage).sends;
-          return [{ id: brief.id, rail: brief.rail ?? `${outage.currency} ${outage.method}`, pausing: brief.invoices.length, sendsText: `Ending it sends ${sendsText(sends)}.` }];
+          return [{ id: brief.id, rail: brief.rail ?? railWords(outage.currency, outage.method), pausing: brief.invoices.length, sendsText: `Ending it sends ${sendsText(sends)}.` }];
         }),
         failures: detail.outages.failures.map((failure: RecordFailure) => ({
           reference: failure.reference,

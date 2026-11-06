@@ -7,7 +7,7 @@ import { currencyFloor, type CurrencyFloor } from "../domain/reserve.js";
 import type { CashReport, CurrencyCash } from "../engine/cash-position.js";
 import { firstPaymentFacts, firstPaymentHold, firstPaymentOutage, type FirstPaymentHold } from "../engine/first-payment.js";
 import { asOpened, checkedPayee, newObligation, type NewPayment, type Payee, type PayeeCheck } from "../engine/new-payment.js";
-import { railOf } from "../outages/outages.js";
+import { railWords } from "../domain/patterns.js";
 import type { Settings } from "../settings.js";
 import { readingSoft, type Ledger, type Obligation, type Outage, type TransferMethod } from "../store/ledger.js";
 import { PAID_OUTCOME, STAYS_IN_FLIGHT } from "../text/words.js";
@@ -106,7 +106,7 @@ function outcomeOf(
   checked: PayeeCheck | null,
 ): PaymentCheckView["outcome"] {
   if (Object.keys(fields).length > 0) {
-    return { kind: "unknown", text: "PayOnce can't start it until you fix the problems marked above." };
+    return { kind: "unknown", text: "PayOnce can't start it until the problems in the form are fixed." };
   }
   if (input.record?.kind !== "read" || checked === null || !checked.ok) {
     return {
@@ -121,7 +121,7 @@ function outcomeOf(
     return {
       kind: "paused",
       outageId: outage.id,
-      text: `It will wait: outage ${outage.id} on ${railOf(outage)} is active. PayOnce sends it once a person ends the outage.`,
+      text: `It will wait: outage ${outage.id} on ${railWords(outage.currency, outage.method)} is active. PayOnce sends it once a person ends the outage.`,
     };
   }
   const held: FirstPaymentHold | null = firstPaymentHold(

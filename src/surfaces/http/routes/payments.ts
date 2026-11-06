@@ -12,7 +12,7 @@ import {
   type PaymentProblem,
 } from "../../../engine/new-payment.js";
 import { newInvoiceId } from "../../../engine/scenario.js";
-import { railOf } from "../../../outages/outages.js";
+import { railWords } from "../../../domain/patterns.js";
 import { amountMinorOf, amountProblem, BENEFICIARY_ID_PATTERN } from "../../../runs/run-file.js";
 import { readingSoft, type Obligation, type Outage, type TransferMethod } from "../../../store/ledger.js";
 import { SANDBOX_OUTCOMES } from "../../../text/words.js";
@@ -198,7 +198,7 @@ export function paymentRoutes(app: HttpApp): Route[] {
     return outage !== undefined
       ? {
           tone: "info",
-          text: `${invoiceId} is waiting: outage ${outage.id} on ${railOf(outage)} is active. PayOnce sends it once a person ends the outage.`,
+          text: `${invoiceId} is waiting: outage ${outage.id} on ${railWords(outage.currency, outage.method)} is active. PayOnce sends it once a person ends the outage.`,
         }
       : {
           tone: "warning",

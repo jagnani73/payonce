@@ -35,10 +35,16 @@ import type {
 // arrival estimates, timelines and the audit line. Pure, apart from the audit
 // line, which reads the chain.
 
+// formatMoney with a real minus sign, as a person reads it: "−7.05 EUR".
+// Stored lines and terms keep formatMoney's hyphen.
+export function moneyText(minor: number, currency: string): string {
+  return formatMoney(minor, currency).replace(/^-/, "−");
+}
+
 export function money(minor: number, currency: string, estimated: boolean = false): Money {
   return estimated
-    ? { minor, currency, text: formatMoney(minor, currency), estimated: true }
-    : { minor, currency, text: formatMoney(minor, currency) };
+    ? { minor, currency, text: moneyText(minor, currency), estimated: true }
+    : { minor, currency, text: moneyText(minor, currency) };
 }
 
 export function iso(at: number | null): string | null {
@@ -63,6 +69,18 @@ export function listOf(items: string[]): string {
 
 export function plural(count: number, one: string, many: string): string {
   return count === 1 ? `1 ${one}` : `${count} ${many}`;
+}
+
+const COUNT_WORDS: readonly string[] = ["no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
+
+// When a request's last signoff comes in, whoever reads it.
+export function onceSignedOff(signed: number, needed: number): string {
+  const left: number = Math.max(1, needed - signed);
+  const words = (n: number): string => COUNT_WORDS[n] ?? String(n);
+  if (signed === 0) {
+    return needed === 1 ? "Once an approver signs off" : `Once ${words(needed)} approvers sign off`;
+  }
+  return left === 1 ? "Once one more approver signs off" : `Once ${words(left)} more approvers sign off`;
 }
 
 // The last four digits of a phone number or an account, never more.

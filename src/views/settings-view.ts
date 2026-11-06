@@ -8,7 +8,7 @@ import { describeQuotes } from "../domain/fx.js";
 import { formatAmount, formatMoney } from "../domain/money.js";
 import { ASKS_PER_DAY, ASKS_PER_MINUTE, explainerFor, type Explainer } from "../explain/explainer.js";
 import { MAX_EMAIL_BYTES } from "../intake/eml.js";
-import { describeOutageRule } from "../outages/outages.js";
+import { outageRuleText } from "../outages/outages.js";
 import { ModelReader } from "../reader/model-reader.js";
 import { readerFor } from "../reader/reader.js";
 import type { EmailReader } from "../reader/emails.js";
@@ -17,6 +17,7 @@ import { MAX_RUN_FILE_CHARS, MAX_RUN_ROWS } from "../runs/run-file.js";
 import type { Settings } from "../settings.js";
 import type { Alert, Ledger } from "../store/ledger.js";
 import type { Money, SettingRow, SettingsView } from "./contract.js";
+import { readerLabel } from "./context.js";
 import { airwallexHealth, type ServerFacts } from "./health.js";
 import { money } from "./parts.js";
 
@@ -55,7 +56,7 @@ function readerSection(settings: Settings): SettingsView["reader"] {
   const explainer: Explainer | null = explainerFor(settings.models.askServices());
   const free: boolean = reader instanceof ModelReader && reader.views.some((view: ServiceView): boolean => view.googleFreeTier);
   return {
-    name: reader.name,
+    name: readerLabel(reader.name),
     isModel: reader instanceof ModelReader,
     notice: free ? "A model on Google's free tier reads uploaded emails. Don't upload anything you can't share with Google." : null,
     askWhy: {
@@ -111,7 +112,7 @@ export function settingsView(ledger: Ledger, settings: Settings, _now: number, s
       row("Local transfers", `${deadlineMinutes("LOCAL")} minutes, then PayOnce says the bank is late`, "BANK_DEADLINE_LOCAL_MINUTES"),
       row("SWIFT transfers", `${deadlineMinutes("SWIFT")} minutes, then PayOnce says the bank is late`, "BANK_DEADLINE_SWIFT_MINUTES"),
     ],
-    outages: [row("Rule", describeOutageRule(settings.outageRule), "OUTAGE_FAILURES", settings.outageRule.problem)],
+    outages: [row("Rule", outageRuleText(settings.outageRule), "OUTAGE_FAILURES", settings.outageRule.problem)],
     alerts: {
       on: target !== null,
       format: target?.format ?? null,

@@ -1,5 +1,6 @@
 import { paymentAmount, runAmount, type ApprovalTerms, type PaymentAmount, type RunTerms } from "./approval.js";
 import { checkSigner, eligibleApprovers, sameName, type ApprovalPolicy, type Approver, type Barred } from "./approvers.js";
+import { barredInWords } from "./barred.js";
 import { FAILURE_WORDS, RESENDABLE_FAILURE_CODES } from "./failure-codes.js";
 import {
   approvedUnspent,
@@ -28,7 +29,7 @@ import {
   unrecognisedPaid,
 } from "./live.js";
 import { formatAmount, formatMoney } from "./money.js";
-import { RAIL_PATTERN } from "./patterns.js";
+import { RAIL_PATTERN, railWords } from "./patterns.js";
 import {
   aboutBankDetailsReason,
   labelOf,
@@ -297,8 +298,7 @@ function plural(count: number, one: string, many: string): string {
 }
 
 function railName(outage: Outage): string {
-  const rail: string = `${outage.currency} ${outage.method}`;
-  return RAIL_PATTERN.test(rail) ? rail : "a rail PayOnce cannot name";
+  return RAIL_PATTERN.test(`${outage.currency} ${outage.method}`) ? railWords(outage.currency, outage.method) : "a rail PayOnce cannot name";
 }
 
 function refOf(reference: string | null | undefined, fallback: string): string {
@@ -469,14 +469,14 @@ export function signerChoices(
     let why: Why | null = null;
     if (code !== null) {
       try {
-        checkSigner(policy, approver.name, amount, barred, signedBy);
+        checkSigner(policy, approver.name, amount, barredInWords(barred), signedBy);
       } catch (error: unknown) {
-        why = { code, text: error instanceof Error ? error.message : String(error) };
+        why = { code, text: `${error instanceof Error ? error.message : String(error)}.` };
       }
     } else if (expired) {
-      why = { code: "expired", text: "The request has expired. PayOnce opens a new one at its next check" };
+      why = { code: "expired", text: "The request has expired. PayOnce opens a new one at its next check." };
     } else if (!waiting) {
-      why = { code: "not-waiting", text: "No request is waiting for signoffs" };
+      why = { code: "not-waiting", text: "No request is waiting for signoffs." };
     }
     return { name: approver.name, limitMinor: approver.limitMinor, canApprove: why === null, signed, why };
   });
@@ -488,7 +488,7 @@ export function whyNoRequest(snapshot: InvoiceSnapshot): Why | null {
   const policy: ApprovalPolicy = snapshot.signing.policy;
   if (policy.problem !== null) {
     return policy.unreadable
-      ? { code: "approvers-unreadable", text: `Approvals are off: APPROVERS cannot be read (${policy.problem}).` }
+      ? { code: "approvers-unreadable", text: "Approvals are off: PayOnce can't read the approval settings. Settings shows what to fix." }
       : { code: "approvers-unset", text: "No approver list is set, so nobody can approve payments." };
   }
   // Limits are compared with what a request's terms take from the wallet, so

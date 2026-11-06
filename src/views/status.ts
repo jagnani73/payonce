@@ -1,4 +1,5 @@
 import { isExpired } from "../domain/live.js";
+import { railWords } from "../domain/patterns.js";
 import type { AlertTarget } from "../alerts/alerts.js";
 import { sendsText, type HoldingOf, type OutageHolding } from "../outages/outages.js";
 import { reconReport, type BreakView, type ReconReport } from "../recon/reconcile.js";
@@ -26,7 +27,7 @@ function stripOf(outage: Outage, holding: HoldingOf): OutageStrip {
   const held: OutageHolding = holding(outage);
   return {
     id: outage.id,
-    rail: `${outage.currency} ${outage.method}`,
+    rail: railWords(outage.currency, outage.method),
     pausing: held.invoices.length + held.runs.length,
     sendsText: `Ending it sends ${sendsText(held.sends)}.`,
   };
@@ -38,7 +39,7 @@ function alertsLine(settings: Settings, server: ServerFacts | null): string {
     return `Alerts stopped: ${server.alerts.stopped}`;
   }
   if (target === null) {
-    return settings.alerts.problem === null ? "Off: no alert address is set" : `Off: ${settings.alerts.problem}`;
+    return settings.alerts.problem === null ? "Off: no alert address is set" : "Off: PayOnce can't use the alert settings. Settings shows why";
   }
   return `On · ${target.format === "slack" ? "Slack" : "Discord"} (${target.host})`;
 }

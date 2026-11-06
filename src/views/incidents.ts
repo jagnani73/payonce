@@ -1,4 +1,5 @@
 import { sameName } from "../domain/approvers.js";
+import { railWords } from "../domain/patterns.js";
 import { sendsText } from "../outages/outages.js";
 import type { Settings } from "../settings.js";
 import type { Attempt, Ledger, OutsidePayout } from "../store/ledger.js";
@@ -25,7 +26,7 @@ export function isScope(value: string): value is IncidentScope {
 export function outageStrip(outage: BoardOutage): OutageStrip {
   return {
     id: outage.id,
-    rail: outage.rail,
+    rail: railWords(outage.currency, outage.method),
     pausing: outage.originals.length + outage.approved.length + outage.runs.length,
     sendsText: `Ending it sends ${sendsText(outage.sends)}.`,
   };

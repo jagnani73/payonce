@@ -250,7 +250,7 @@ function Outages(props: { view: OutagesView; polled: Polled<OutagesView>; focus:
   useScrollTo(props.focus === null ? null : outageAnchor(props.focus), true);
   return (
     <>
-      <p class="outage-rule">{sentence(view.rule.text.replace(/^Outages: /, ""))}</p>
+      <p class="outage-rule">{view.rule.text}</p>
       {view.rule.problem === null ? null : <Callout tone="danger">{view.rule.problem}</Callout>}
       {view.active.length === 0 ? (
         <Empty title="No outages. PayOnce watches every rail for repeated failures." />
