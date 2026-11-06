@@ -60,6 +60,7 @@ import {
 import { formatAmount, formatMoney } from "../domain/money.js";
 import { runHoldLine, runWaitingLine } from "../outages/outages.js";
 import { committedAcross, committedByInvoice, type CommittedExcept } from "../store/read/cash.js";
+import { runRequestTerms } from "../store/stored.js";
 import { oneLine, printable, say, sayError } from "../text/printable.js";
 import { currencyFloor, type CurrencyFloor, type FloorSource } from "../domain/reserve.js";
 import { rowFromCells, type RunFile, type RunFileRow } from "./run-file.js";
@@ -626,7 +627,7 @@ function checkDay(ledger: Ledger, runId: number): string {
   return latest !== undefined &&
     (latest.state === "requested" || latest.state === "approved") &&
     !isExpired(latest)
-    ? (termsDay(JSON.parse(latest.terms) as RunTerms) ?? today())
+    ? (termsDay(runRequestTerms(latest)) ?? today())
     : today();
 }
 
@@ -1062,7 +1063,7 @@ export function pendingRunApproval(ledger: Ledger, runId: number): PendingRunApp
   if (approval?.state !== "requested" || ledger.run(runId)?.state !== "waiting") {
     return undefined;
   }
-  const terms: RunTerms = JSON.parse(approval.terms) as RunTerms;
+  const terms: RunTerms = runRequestTerms(approval);
   return {
     approval,
     terms,
@@ -1147,7 +1148,7 @@ export async function releaseRun(engine: Engine, agent: Dispatcher, runId: numbe
   if (run?.state !== "waiting" || approval?.state !== "approved") {
     return;
   }
-  const approved: RunTerms = JSON.parse(approval.terms) as RunTerms;
+  const approved: RunTerms = runRequestTerms(approval);
   // Read first, so a run held by an outage costs a ledger read and no Airwallex
   // call each time the watcher tries it.
   const outage: Outage | undefined = runOutage(ledger, approved);

@@ -1,5 +1,6 @@
-import type { EmailAttachment, SupplierEmail } from "../domain/emails.js";
-import type { Db } from "./db.js";
+import type { SupplierEmail } from "../domain/emails.js";
+import { storedShape, type Db } from "./db.js";
+import { emailsOnFile, isAttachmentList, isTextList } from "./stored.js";
 
 interface EmailRow {
   sender: string;
@@ -40,7 +41,8 @@ export class EmailStore {
 
   // A fixture thread's emails have the three fields they were written with. An
   // uploaded one has the rest of what PayOnce read from it, and the display name
-  // its upload keeps.
+  // its upload keeps. Its lists are read by shape: strict, so a look on one that
+  // is not in the shape PayOnce writes throws, and as none inside readingSoft.
   emails(invoiceId: string): SupplierEmail[] {
     const rows: EmailRow[] = this.db
       .prepare(
@@ -60,10 +62,10 @@ export class EmailStore {
               body: row.body,
               uploadId: row.inbox_id,
               fromName: row.sender_name ?? "",
-              replyTo: JSON.parse(row.reply_to) as string[],
+              replyTo: storedShape(row.reply_to, isTextList, emailsOnFile(invoiceId)) ?? [],
               styleText: row.style_text,
-              attachments: JSON.parse(row.attachments) as EmailAttachment[],
-              notes: JSON.parse(row.notes) as string[],
+              attachments: storedShape(row.attachments, isAttachmentList, emailsOnFile(invoiceId)) ?? [],
+              notes: storedShape(row.notes, isTextList, emailsOnFile(invoiceId)) ?? [],
               partial: row.partial === 1,
             },
     );
