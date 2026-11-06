@@ -9,6 +9,9 @@ A view is a typed, read-only answer built from the ledger for the page, the MCP 
 - `src/views/contract.ts` is the one view contract. The builders return its types, HTTP sends them as JSON, MCP projects them, the CLI prints them, and the page imports them as types only.
 - It re-exports the situation and reason types from `domain/situation.ts` and `domain/reasons.ts` unchanged, so no view defines them again. [reasons.md](reasons.md) has how a situation is worked out.
 - Every `...At` field is an ISO 8601 UTC string, and a day is `YYYY-MM-DD`. Every amount is a `Money`: minor units, a currency and PayOnce's own text.
+- No view writes a time into its text. A sentence that names one is a `Timed` (`domain/timed.ts`): its words in parts, with each time between them as `{ at }` (its ISO value) and `deadline` set on a deadline or an expiry. The page writes each time in the viewer's zone (`<Said>`), the CLI writes it in UTC (`said`), and MCP passes the ISO values.
+- A situation's detail, next step and blockers, a run's situation, the summary bullets and the cautions are `Timed`. A label holds no time: a transfer's `stateLabel` leaves its deadline to `deadlineAt`, and a supplier caution leaves its time to `since`.
+- A view's words follow [glossary.md](../glossary.md): a rail reads "USD local" (`railWords`), negative money has a real minus sign (`moneyText`), no sentence outside Settings names a `.env` variable, and a starter is barred because they "started this payment". Stored lines, terms and bindings keep their own words, "USD LOCAL" and "started this incident" included.
 - A field typed `Theirs` holds text PayOnce did not write. The page shows it through `<Theirs>`, MCP wraps it as outside text and alerts defang it. Every other string is PayOnce's own words or a value in a closed pattern.
 - What a person can do, and why not, is a `Can`: allowed, and a reason when it is not.
 - Every action answers `Acted<V>`: the fresh view of what it changed, and a `Notice`.
@@ -61,7 +64,7 @@ A view is a typed, read-only answer built from the ledger for the page, the MCP 
 - An HTTP action builds its view after the step's turn ends, from reads only ([web-server.md](web-server.md)).
 - MCP builds the same views with no `Live` and no cash panel. `marked` then projects them through `outside-fields.ts`: it drops `activity` and `askWhy` and wraps outside text ([mcp-server.md](mcp-server.md)).
 - The CLI prints views through `src/surfaces/cli/view-text.ts`. Every line goes through `printable` with its leading spaces kept, times read like "2 Nov 2026, 09:00 UTC" (`utc`), and table amounts are right-aligned.
-- A time already inside a view's text, such as "open until 10:00 UTC", is printed as the view gives it.
+- A `Timed` sentence prints with each time in UTC, such as "open until 2 Nov 2026, 10:00 UTC".
 
 | Command | Prints |
 |---|---|
@@ -72,7 +75,7 @@ A view is a typed, read-only answer built from the ledger for the page, the MCP 
 | `pnpm supplier [RECORD\|INVOICE]` | `suppliersView`, or `supplierView` of the record `resolveSupplier` finds, with a "Phone on file" section when the record has a contact row |
 | `pnpm outage` | `outagesView`, with the last five ended |
 | `pnpm cash` | `cashView`, over the balances the command reads itself |
-| `pnpm metrics` | `metricsReport`, the report `ReportsView` carries unchanged |
+| `pnpm metrics` | `metricsReport`, which `ReportsView` carries with each row's money as `Money` and its codes and rail in words (`shownMetrics`) |
 
 ### Nothing on a payment path reads a view
 
@@ -93,7 +96,11 @@ A view is a typed, read-only answer built from the ledger for the page, the MCP 
 - The check warns when the first transfer would leave the wallet below its floor, and says PayOnce does not check a single payment's first transfer against the floor.
 - `InboxItemView` says whether a delivered email has been read. Only the inbox routes serve the inbox views: MCP and the CLI do not.
 - An uploaded email's view carries its Date header as written, as `Theirs`, and the time it was uploaded. Both are null for an email the simulator played.
-- `SettingsView` names the `.env` variables the page labels, and never holds a secret: only whether a key is set shows, through what it turns on.
+- `SettingsView` names the `.env` variables behind each row (`SettingRow.variables`), and none for a limit fixed in PayOnce, such as Ask why's caps. It never holds a secret: for the Airwallex keys it says only whether each is set.
+- `IncidentsView.totals` follow every filter the rows do, scope, search and `me` included, and count the waiting pay run's rows while the run passes them. Each wallet names the runs in `runWaiting` (`runsWaiting`). `wallets` lists every wallet a payment in the ledger is paid from, closed payments included.
+- A supplier hint, in the list, on the record and in search, is its bank country (from the newest transfer PayOnce sent there), currencies, methods and account ending, such as "US · USD · Local · ···6789". It never shows the record's id.
+- `ReconView.lastCheck.at` is the latest check that ran, failed or not, and `lastOkAt` the latest one that read Airwallex in full.
+- The movements route answers `ReconMovementView`: amount and balance as `Money`, and how PayOnce explains the movement in words (`howText`).
 - `StatusView` reads little, because every screen polls it every 10 seconds.
 - `AuditCheckView` hashes every line, so the server keeps it by the ledger's `changeStamp` and builds it again at most once a minute.
 - The server keeps the last three metrics reports, keyed by period, change stamp and minute, and Home, Reports and `GET /api/metrics` share them.
@@ -116,11 +123,11 @@ A view is a typed, read-only answer built from the ledger for the page, the MCP 
 - Two parts of one view can be a moment apart. Each read model reads in its own transaction, so a payment's situation and its board money can come from slightly different moments.
 - A view shows a stored value that does not parse as none, and the payment path for that invoice stops on it.
 - The payment check skips `linkUnseenPayouts`, because it writes, so an outside payout with the new invoice number that the sweep has not tied yet is the one hold the check can miss.
-- For the approvers a new payment would need, the check gives none: a right count needs the request's terms, a cross-currency count needs a quote, and the second-bill rule reads the duplicates' transfers.
+- `PaymentCheckView` has no count of approvers. Paying a held first payment needs what the engine's held rule reads, the payee's history and the duplicates' transfers, and that rule also writes a timeline line, so no view can say it before a request opens.
 - Nothing is busy in the CLI's and MCP's views, and MCP's payment page has no headroom lines.
-- With a group filter, `pnpm board`'s wallet totals still cover every group, because the view's totals follow only currency and origin, and the heading says "all groups". Closed payments are not listed.
+- With a group filter, `pnpm board`'s wallet totals cover that group, because the list's totals follow its scope. Closed payments are not listed.
 - When `pnpm approve` meets terms PayOnce cannot read, `readableTerms` refuses them before the view is built. The engine's `pendingApproval` decides whether there is anything to approve, and so the exit code.
 - `pnpm close` picks the close option by `pendingClose`'s kind and checks `--covers` against `pendingClose().covered`.
-- For a pay run file with nothing to pay, nothing is stored, so there is no view. `pnpm payrun upload` prints the rows and their skip reasons from the file instead.
+- For a pay run file with nothing to pay, nothing is stored, so there is no run view. The upload's 422 gives every checked row as a `RunRowView` (`checkedRowViews`), and `pnpm payrun upload` prints the rows and their skip reasons.
 - With no active outage, `pnpm outage` does not say who may end one, because the view gives the enders on each active card.
 - `pnpm cash` sets its exit code from the view: no balance read, a floors problem, or a headroom below 0.

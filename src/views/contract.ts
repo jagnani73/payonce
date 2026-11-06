@@ -12,7 +12,7 @@
 //   The page writes the time in the viewer's zone, the CLI in UTC.
 // - A field typed Theirs holds text PayOnce did not write (supplier names, email
 //   text, typed names and notes, Airwallex messages, pay run cells). The page puts
-//   it in text nodes through whyText, MCP wraps it as outside text, alerts defang
+//   it in text nodes through <Theirs>, MCP wraps it as outside text, alerts defang
 //   it. Every other string is PayOnce's own words or a value in a closed pattern.
 // - "Can do and why not" is a Can: { allowed, why }. why is null when allowed.
 // - Every action answers with the fresh view of what it changed and a Notice.

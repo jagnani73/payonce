@@ -61,7 +61,7 @@ Twelve tools, in this order. Each builds its view on the read-only ledger with n
 - The one network call is `GET http://127.0.0.1:<PORT>/api/cash/cached` (`serverBalances`), with a 1.5 second timeout, no redirects and at most 4 MB of answer.
 - `cachedBalances` takes from the answer the balances and the floors, as numbers, and Airwallex's error message as text. Only floors that come from the setting are taken.
 - `cashView` then works the panel out again on this process's own ledger, so the headroom is the page's.
-- A floors problem the server reports becomes `SERVER_FLOORS_UNREADABLE`, PayOnce's own sentence.
+- A floors problem the server reports becomes `SERVER_FLOORS_UNREADABLE`, PayOnce's own sentence. The cash view then words any floors problem in one fixed sentence.
 - With no server, a server that answers 404, or an answer that is not a cash panel, the floors come from this process's `RESERVE_FLOORS` and there is no balance or headroom (`NO_BALANCES`). `balance.why` says which of the three it was, in PayOnce's words with the port.
 
 ### The projection
@@ -73,6 +73,7 @@ Twelve tools, in this order. Each builds its view on the read-only ledger with n
 - A string not listed is plain only as a token (`TOKENS`): an ISO time or day, a 64-character hash, a UUID, 1 to 40 letters, digits, `_`, `:` and `-`, or an amount as `formatMoney` writes it. Anything else is wrapped as `unknown`.
 - The lists are typed against the contract. `Fields<V>` is a partial record over `StringPaths<V>`, every path to a string in `V`, so a path that does not exist fails `pnpm typecheck`. `under` composes the shared lists: situation, request, terms, row.
 - Links are not tokens. A row's link, the audit export links, the callback form's path and the ledger audit's export path are plain only in the form PayOnce builds from an invoice or run number (`ROW_LINK`, `AUDIT_EXPORT_LINK`, `BANK_DETAILS_LINK`, `LEDGER_EXPORT_LINK`).
+- A `Timed` sentence is an array. Each run of words is plain or wrapped by its path (such as `situation.next[]`), and each time is an object `{ at }` whose ISO value passes as a token.
 - Wrapped text goes through `defanged`, `maskPhones` and `capped`. The caps are 4,000 characters for any `.body`, 2,000 for a timeline or audit line, 600 for other quoted text, 200 for `person`, `supplier` and `run-file`, and 300 otherwise.
 
 ### What is wrapped and what stays plain

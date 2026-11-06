@@ -168,7 +168,7 @@ pnpm ui
 
 - With `CLAUDE_API_KEY` set, Claude reads the emails: Claude Haiku 5.5 first and Claude Sonnet 5.5 second (`CLAUDE_MODEL`).
 - With `READER_API_KEY` set, Gemini 3.5 Flash and Gemini 3.1 Flash-Lite come next (`READER_MODEL`), through Google's OpenAI-compatible endpoint (`READER_BASE_URL`). Gemini's free tier needs no billing account, but Google may use its content, and the upload card says so.
-- Each model gets one try, in that order, and the first answer counts. With neither key, a keyword placeholder reads the emails.
+- Each model gets one try, in that order, and the first answer counts. With neither key, the keyword reader reads the emails.
 - The key is `CLAUDE_API_KEY`, not `ANTHROPIC_API_KEY`, because Claude Code reads `ANTHROPIC_API_KEY` from your shell and would switch to it.
 - Ask why (the summary card on a payment, and `pnpm ask`) uses the same keys, with Sonnet first (`CLAUDE_ASK_MODEL`). It gets PayOnce's own records only, never an email, an account or a typed note, and its answer is never stored.
 
@@ -195,7 +195,7 @@ pnpm ui
 
 | Tool | Arguments | What it returns |
 | --- | --- | --- |
-| `board` | `group`, `currency`, `origin` | The payments in one group (`person`, the default, `deadline`, `bank` or `open`), ranked as the page ranks them, each with its situation. Also the counts of every group, totals per wallet and the active outages |
+| `board` | `group`, `currency`, `origin` | The payments in one group (`person`, the default, `deadline`, `bank` or `open`), ranked as the page ranks them, each with its situation. Also the counts of every group, the group's totals per wallet and the active outages |
 | `incidents` | `state`, `limit` | Every payment, open and closed. `state` keeps one ledger state (`open`, `escalated`, `settled` or `rejected`), `limit` caps the rows (100), and `total` says how many matched |
 | `incident` | `invoiceId`, `lines` | One payment as its page shows it: its situation, summary, decision panel with the open request and who can sign, transfers, emails, drafts, the newest timeline lines (20) and the audit line |
 | `waiting_for` | `name` | The payments and pay runs whose request this person can approve now |

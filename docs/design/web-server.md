@@ -85,7 +85,7 @@ The table lists every route in `src/surfaces/http/routes/`. Views and their buil
 | POST | `/api/incidents/:id/outbox` | 201 `Acted<IncidentView>` and `draftId`, given `template` and `createdBy` | 400, 409 with `draftId` while a draft of that template is open, 422 when it does not fit now |
 | POST | `/api/incidents/:id/outbox/:draft/copied`, `/sent`, `/dismiss` | `Acted<IncidentView>`, given `copiedBy` (optional), `sentBy`, or `dismissedBy` and an optional `note` | 404 for another invoice's draft, 409 once sent or dismissed, 400 for a note over 200 characters |
 | GET | `/api/runs` | `RunsView` | |
-| POST | `/api/runs` | 201 `Acted<RunView>`, given `fileName`, `csv` and `uploadedBy` | 400 with `problems`, 409 with `runId`, 422 with `rows`, 408, 413, 502 |
+| POST | `/api/runs` | 201 `Acted<RunView>`, given `fileName`, `csv` and `uploadedBy` | 400 with `problems`, 409 `run-waiting` or `same-file` with `runId`, 422 `nothing-to-pay` with `rows`, 408, 413, 502 |
 | GET | /api/runs/example.csv | `fixtures/pay-run-example.csv` as an attachment | |
 | GET | `/api/runs/:id` | `RunView` | |
 | GET | `/api/runs/:id/audit?format=` | `runAuditExport` as JSON or CSV | 400 for another format |
@@ -118,11 +118,11 @@ The table lists every route in `src/surfaces/http/routes/`. Views and their buil
 | POST | `/api/payments` | 201 `PaymentCreated` | 400 `fields`, 409 `duplicate-invoice`, 502 `airwallex-unreachable` |
 
 - Every action answers `Acted<View>`: the view built after the step's turn ends, from reads only, and a `notice` with a `tone` and a `text`. A start answers `PaymentCreated` and an upload `UploadEmailResult`, each with a view and a notice. An outage end answers `EndOutageResult`.
-- A refusal carries `code` only for `close-kind-changed`, `fields`, `duplicate-invoice` and `airwallex-unreachable`. Every other refusal is told by its status and its words.
+- A refusal carries `code` only for `close-kind-changed`, `fields`, `duplicate-invoice`, `airwallex-unreachable` and the pay run upload's `run-waiting`, `same-file` and `nothing-to-pay`. Every other refusal is told by its status and its words.
 - `GET /api/board` maps `group` to the incident list's scope (person to needs-you, deadline to bank-late, bank to with-bank, open to payonce) and passes `currency` and `origin` on.
 - `GET /api/incidents/:id` builds the payment page with the server's `Live` and the headroom lines from the balance cache as it is, read soft (`HttpApp.incident`).
 - `GET /api/audit` hashes every line, so it is kept by the ledger's `changeStamp` and built again at most once a minute.
-- `GET /api/beneficiaries` reads Airwallex's beneficiary list with one GET at a time, and not again while the last read is under a minute old.
+- `GET /api/beneficiaries` reads Airwallex's beneficiary list with one GET at a time, and not again while the last good read is under a minute old. A failed read is answered once and not kept, so Try again reads again.
 - `GET /api/alerts` gives each alert's key, kind, title, state, tries and last error, and never the address it posts to.
 - `GET /api/sandbox` lists the email threads with `DEFAULT_EMAILS` first, so the form opens on the incident that is replaced without a person (`emailThreads`).
 
@@ -135,7 +135,7 @@ The table lists every route in `src/surfaces/http/routes/`. Views and their buil
 
 ### Uploads
 
-- A pay run upload waits for its checks, a few Airwallex GETs, and answers the run. A file PayOnce cannot read is 400 with `problems`, and a run already waiting or the same file again is 409 with `runId`.
+- A pay run upload waits for its checks, a few Airwallex GETs, and answers the run. A file PayOnce cannot read is 400 with `problems`, each `{ line, text }`. A run already waiting is 409 `run-waiting` and the same file again 409 `same-file`, each with `runId`. A file with nothing to pay is 422 `nothing-to-pay`, with every row as a `RunRowView`.
 - An email upload takes its place in the parse queue (`takeParsePlace`) before its body is read, so bodies still arriving count as waiting. A body that takes too long gives its place back.
 - An email over 2 MB, or a body over the route's 3 MB limit, is refused with the parser's words (`TOO_LARGE_TEXT`), not the generic ones.
 - Delivering an upload runs in the invoice's turn, then wakes the invoice when it is open or escalated, so the look reads the email.
@@ -182,6 +182,7 @@ The table lists every route in `src/surfaces/http/routes/`. Views and their buil
 - Nothing in the page uses `dangerouslySetInnerHTML`.
 - A refusal shows beside the button that caused it, in the server's words, cleaned. An action's notice shows as a toast.
 - A time shows in the viewer's time zone on a 24-hour clock, "14:20" today and "6 Nov, 14:20" on another day (`web/src/time.ts`). `parseIso` gives null for anything that is not a non-empty string.
+- A view's `Timed` sentence goes through `<Said>`, which writes each time with `<Time>`, and a deadline with how long is left. The page rewrites no time inside a view's text.
 
 ### Hash routes
 

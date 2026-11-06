@@ -42,22 +42,22 @@ The supplier view shows one Airwallex beneficiary record at a time: what PayOnce
 - A payment's check is `checked`, `misdirected`, `not-kept` (no `account_key`), `not-sent` (no transfer) or `outside`.
 - The account PayOnce last paid is `ledger.lastPaidTransfer`'s, never a copy of the rule.
 - What PayOnce last stored for the record is the newest key among decided for, asked to approve, pay run and verified by a callback. The record names the invoice it was stored on, or a pay run row as "row N of pay run M" (`runLine`), since the row's number may not be an invoice yet.
-- The latest applied callback is the newest applied one, whatever it kept. `verifiedBy` is that callback when its key is this account's.
+- The latest applied callback is the newest applied one, whatever it kept, and only while it was made on the phone number on file now (`onFilePhone`), as `verifiedBankChange` reads it. `verifiedBy` is that callback when its key is this account's.
 - Each account reads only its own payments, payouts, callbacks and failures, grouped once per record.
 - `barred` lists everyone who recorded an applied callback for the account (`bankChangeRecorders`) and whoever proposed or confirmed the number one was made on (`callbackPhoneSetters`), through `knownName`, as `barredFrom` reads them.
 
 ### Cautions
 - A caution is `{ code, level, text, invoices, accounts, keys, runs, since }`. Cautions come before infos, each in `CAUTIONS` order, and each code has a must or could tier.
 - `text` is fixed words. It may hold account labels, counts, a rail in its own form, and failure codes' words (`wordsFor`: only a code in `FAILURE_CODE_PATTERN`'s form that is `FAILURE_WORDS`'s own entry, so `constructor` gets none).
-- `callback-verified`'s text also holds the account's ending (1 to 4 letters and digits) and when the callback was recorded, to the minute in UTC.
+- `callback-verified`'s text also holds the account's ending (1 to 4 letters and digits). When the callback was recorded is its `since`, never in its text.
 - Invoice numbers (25 at most), account labels and other record ids (`keys`) go in the arrays. No caution carries a name, a domain or a reference, and none fills `runs`.
 - `phone-proposed` (first, a caution): a new phone number waits for a second person, and nobody can record a callback until it is confirmed or withdrawn. A lapsed proposal raises none.
-- `phone-changed`: people changed the number on file in the last 7 days. A first number, or one that replaced none, does not count.
+- `phone-changed`: people changed the number on file in the last 7 days. A first number, one that replaced none, or a removal does not count.
 - `account-changed` follows the engine's tests. It shows when `lastPaidTransfer` gives an account, the account PayOnce last stored is another, and the latest applied callback did not verify it. That part names the stored account's label.
 - `account-changed` also shows, with those invoices and whatever the callbacks, whenever an open invoice's reason code says the record's bank details changed (`accountChangedReason`).
 - `accountChangedReason` covers four codes: `bank-details-changed`, `last-paid-account-changed`, `account-changed-before-send` and `run-account-changed` (a pay run row whose record changed after the run was approved). The text has a part for each case.
 - The first part of `account-changed` speaks only of first payments and pay run rows: PayOnce sends no first payment to those details, and skips a pay run row to them, before a callback.
-- `callback-verified`: the latest applied callback verified the account PayOnce last stored, and it is not the account `lastPaidTransfer` gives. It says when the callback was recorded and which account (label and ending).
+- `callback-verified`: the latest applied callback verified the account PayOnce last stored, and it is not the account `lastPaidTransfer` gives. It says which account (label and ending).
 - `callback-verified` also says that paying a held invoice or a pay run row to the account needs two approvers (`payeeRule`, `runRule`), and that nobody who recorded a callback for it may approve. It says nothing about automatic payments, and reads with `new-payee`.
 - Then, in order:
   - `new-payee`: never paid, or paid only by itself and never on a person's approval;
@@ -79,7 +79,9 @@ The supplier view shows one Airwallex beneficiary record at a time: what PayOnce
 ### The list
 - The list puts a record first when it has an entry in the board's `person` group or a phone proposal waiting. Then come records with a must-tier caution, then the most money at risk, then the name and the key.
 - Each list row gives the account ending the record held the last time PayOnce stored it, and the phone on file's last four digits.
-- `suppliersView` shapes the list for the page. Each row gives the name, a hint (its currencies, methods and, when another record shares the name, the start of its id), how many records share its name, its payments open and in all, and each caution code with a short label (`CAUTION_LABELS`).
+- `suppliersView` shapes the list for the page (`supplierRows`). Each row gives the name, a hint (its bank country, currencies, methods and account ending), how many records share its name, its payments open and in all, and each caution code with a short label (`CAUTION_LABELS`).
+- A row's country is the bank country of the newest transfer PayOnce sent to the record, from its route advisory. The ledger keeps no bank name per account, so an account's label names it by its ending.
+- The list's search matches the name, the record's id, and three or more of the last characters of the account ending.
 - `suppliersView` takes `q` and keeps the records whose name or id holds it, ignoring case.
 
 ### The record
@@ -96,7 +98,8 @@ The supplier view shows one Airwallex beneficiary record at a time: what PayOnce
 - An account's `onFile` says it is the one PayOnce last stored for the record.
 - The contact block gives the phone on file by its ending, who proposed and confirmed it, a proposal waiting, the earlier versions, who may not record a callback on it, and what a person can do now (`propose`, `confirm`, `withdraw`). The full number is served only by the contact route ([supplier-contacts.md](supplier-contacts.md)).
 - A payment with no transfer says it was not sent, with no account or send time.
-- Starting a new payment from the record is refused as not built yet (`can.newPayment`).
+- Starting a new payment from the record is allowed, and `can.newPayment.href` opens New payment with the record picked.
+- The phone on file gives no `since` for a migrated number, because PayOnce knows only when it moved it. A removal two people confirmed gives `removed` and no `changed`, and the confirm notice says the number is no longer on file. Each earlier version gives the note it was withdrawn with (`closeNote`).
 
 ### Routes
 - `GET /api/suppliers` (with an optional `q`) and `GET /api/suppliers/:key` answer `SuppliersView` and `SupplierView`. They write nothing, so they skip the Dispatcher.
@@ -113,7 +116,7 @@ The supplier view shows one Airwallex beneficiary record at a time: what PayOnce
 ### `pnpm supplier`
 - `pnpm supplier` prints the list, or one record's sections ([cli.md](cli.md)). A word is a record id first, then an invoice number, which prints "INV pays supplier record X" first. Any other word prints the usage and exits 1.
 - The list gives each record's name and hint, its id or "A record id PayOnce cannot link", its payments not closed of the total, its caution labels, and how many records share its name.
-- A record prints its name, id and hint, other names on file, the phone ending and email domains, then its cautions, its "Phone on file" section and its money by wallet.
+- A record prints its name, id and hint, other names on file, the phone ending and email domains, then its cautions, each with its since, its "Phone on file" section and its money by wallet.
 - After those come the accounts, payments not closed, closed payments, callbacks, possible second bills, pay run rows, the inbox, messages, outages and related records. A section with nothing to show is left out.
 - An account's lines give its letter, its label, the reference that last paid it, where it was seen, when first and last, the callback that verified it, who cannot approve payments to it, and the other records it is on.
 - "Phone on file" gives the phone's ending, since when, and who proposed and confirmed it with their sources. It also gives a proposal waiting or lapsed, by its ending, and each earlier version.
