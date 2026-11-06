@@ -1,5 +1,5 @@
 import type { JSX } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useState } from "preact/hooks";
 import { postJson, type ApiError } from "../../api";
 import { ActionButton } from "../../components/Action";
 import { Field, NameField, type ControlProps } from "../../components/Form";
@@ -14,10 +14,17 @@ import type { Polled } from "../../poll";
 import { paymentHref, runHref } from "../../router";
 import type { EndOutageInput, EndOutageResult, OutageCardView, OutagesView } from "../../types";
 import { railWords, sentence } from "./format";
+import { useScrollTo } from "./scroll";
 
 // Treasury › Outages (ia.md section 8.3): the rule, each active outage with what
 // it counted and what it pauses, the form to end it, and the outages that ended.
 // The Treasury screen polls GET /api/outages, since its tab shows the count.
+
+// What a form still needs, shown under its field.
+interface Missing {
+  name: string | null;
+  note: string | null;
+}
 
 type Pausing = OutageCardView["pausing"][number];
 
@@ -67,12 +74,12 @@ function EndForm(props: { card: OutageCardView; polled: Polled<OutagesView> }): 
   const [typed, setTyped] = useNameDraft();
   const [chosen, setChosen] = useState<string | null>(null);
   const [note, setNote] = useState<string>("");
-  const [missing, setMissing] = useState<{ name: string | null; note: string | null }>({ name: null, note: null });
+  const [missing, setMissing] = useState<Missing>({ name: null, note: null });
   const listed: string = enders?.find((name: string): boolean => me !== null && sameMe(name, me)) ?? enders?.[0] ?? "";
   const endedBy: string = enders === null ? typed : (chosen ?? listed);
 
   async function end(): Promise<void> {
-    const problems: { name: string | null; note: string | null } = {
+    const problems: Missing = {
       name: endedBy.trim() === "" ? "Enter your name." : null,
       note: note.trim() === "" ? "Add a note saying why the rail is back." : null,
     };
@@ -95,7 +102,7 @@ function EndForm(props: { card: OutageCardView; polled: Polled<OutagesView> }): 
           error={missing.name}
           onInput={(value: string): void => {
             setTyped(value);
-            setMissing({ ...missing, name: null });
+            setMissing((now: Missing): Missing => ({ ...now, name: null }));
           }}
         />
       ) : (
@@ -131,7 +138,7 @@ function EndForm(props: { card: OutageCardView; polled: Polled<OutagesView> }): 
             value={note}
             onInput={(event: Event): void => {
               setNote((event.currentTarget as HTMLInputElement).value);
-              setMissing({ ...missing, note: null });
+              setMissing((now: Missing): Missing => ({ ...now, note: null }));
             }}
           />
         )}
@@ -140,8 +147,6 @@ function EndForm(props: { card: OutageCardView; polled: Polled<OutagesView> }): 
         label={`End outage ${card.id}`}
         busyLabel="Ending…"
         kind="primary"
-        disabled={!card.end.allowed}
-        reason={card.end.why?.text ?? null}
         onError={(error: ApiError): void => {
           if (error.status === 404 || error.status === 409) {
             props.polled.refresh();
@@ -206,7 +211,11 @@ function ActiveCard(props: { card: OutageCardView; polled: Polled<OutagesView> }
         </dd>
       </dl>
       {card.sendsText === null ? null : <p class="outage__sends">{card.sendsText}</p>}
-      <EndForm card={card} polled={props.polled} />
+      {card.end.allowed ? (
+        <EndForm card={card} polled={props.polled} />
+      ) : (
+        <p class="outage__form outage__refused">{card.end.why?.text ?? "Nobody can end this outage now."}</p>
+      )}
     </article>
   );
 }
@@ -237,14 +246,8 @@ function EndedLine(props: { card: OutageCardView }): JSX.Element {
 
 function Outages(props: { view: OutagesView; polled: Polled<OutagesView>; focus: number | null }): JSX.Element {
   const view: OutagesView = props.view;
-  // #outage/N scrolls to that outage once it is on screen.
-  useEffect((): void => {
-    if (props.focus !== null) {
-      const card: HTMLElement | null = document.getElementById(outageAnchor(props.focus));
-      card?.scrollIntoView({ block: "start" });
-      card?.focus({ preventScroll: true });
-    }
-  }, [props.focus]);
+  // #outage/N opens at that outage.
+  useScrollTo(props.focus === null ? null : outageAnchor(props.focus), true);
   return (
     <>
       <p class="outage-rule">{sentence(view.rule.text.replace(/^Outages: /, ""))}</p>

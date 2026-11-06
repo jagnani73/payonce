@@ -24,6 +24,12 @@ import { amountText } from "./format";
 type Group = ReconView["needsPerson"][number];
 type Wallet = ReconView["wallets"][number];
 
+// What a form still needs, shown under its field.
+interface Missing {
+  name: string | null;
+  note: string | null;
+}
+
 // The words for how a movement is explained. The movements route answers codes.
 const HOW_WORDS: Record<MovementView["how"], string> = {
   payonce: "PayOnce's payment",
@@ -45,17 +51,16 @@ function CheckBar(props: { view: ReconView; polled: Polled<ReconView> }): JSX.El
     <div class="stack-tight">
       <div class="cash-bar">
         <span class="cash-bar__read">
-          {view.running ? (
-            "Checking now…"
-          ) : last === null ? (
+          {view.running ? "Checking now… · " : null}
+          {last === null ? (
             "No check yet"
           ) : (
             <>
-              {"Last check "}
+              {view.running ? "last check " : "Last check "}
               <Time at={last.at} />
             </>
           )}
-          {view.nextCheckAt === null ? null : (
+          {view.running || view.nextCheckAt === null ? null : (
             <>
               {" · next "}
               <Time at={view.nextCheckAt} />
@@ -131,7 +136,7 @@ function BreakGroup(props: { group: Group; can: boolean; why: string | null; pol
   const [ticked, setTicked] = useState<ReadonlySet<number>>((): Set<number> => new Set(group.items.map((item: BreakItemView): number => item.id)));
   const [name, setName] = useNameDraft();
   const [note, setNote] = useState<string>("");
-  const [missing, setMissing] = useState<{ name: string | null; note: string | null }>({ name: null, note: null });
+  const [missing, setMissing] = useState<Missing>({ name: null, note: null });
   const picked: BreakItemView[] = group.items.filter((item: BreakItemView): boolean => ticked.has(item.id));
   const pick = (item: BreakItemView, on: boolean): void => {
     const next: Set<number> = new Set(ticked);
@@ -144,7 +149,7 @@ function BreakGroup(props: { group: Group; can: boolean; why: string | null; pol
   };
 
   async function explain(): Promise<void> {
-    const problems: { name: string | null; note: string | null } = {
+    const problems: Missing = {
       name: name.trim() === "" ? "Enter your name." : null,
       note: note.trim() === "" ? "Add a note saying what you found." : null,
     };
@@ -187,7 +192,7 @@ function BreakGroup(props: { group: Group; can: boolean; why: string | null; pol
               value={note}
               onInput={(event: Event): void => {
                 setNote((event.currentTarget as HTMLInputElement).value);
-                setMissing({ ...missing, note: null });
+                setMissing((now: Missing): Missing => ({ ...now, note: null }));
               }}
             />
           )}
@@ -198,7 +203,7 @@ function BreakGroup(props: { group: Group; can: boolean; why: string | null; pol
           error={missing.name}
           onInput={(value: string): void => {
             setName(value);
-            setMissing({ ...missing, name: null });
+            setMissing((now: Missing): Missing => ({ ...now, name: null }));
           }}
         />
         <ActionButton

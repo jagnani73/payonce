@@ -61,9 +61,22 @@
   min-width: 860px;
 }
 
+.cash-wallets {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* The wallet stays in view while the figures scroll sideways on a phone. */
+.cash-table th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
+
 .cash-table tbody th {
   border-top: 1px solid var(--line-faint);
-  background: transparent;
+  background: var(--surface);
   padding: 0;
 }
 
@@ -118,26 +131,22 @@
   font-weight: 600;
 }
 
-.cash-idle td {
-  padding: 0;
-}
-
-.cash-idle__toggle {
+.cash-idle {
   display: flex;
   align-items: center;
   gap: 6px;
-  width: 100%;
   min-height: var(--target);
   padding: 0 12px;
   border: 0;
+  border-radius: var(--radius);
   background: transparent;
   color: var(--text-2);
   text-align: left;
   cursor: pointer;
 }
 
-.cash-idle__toggle:hover {
-  background: var(--sunk);
+.cash-idle:hover {
+  background: var(--muted-fill);
 }
 
 /* ---------- the worksheet ---------- */
@@ -499,6 +508,11 @@
 .outage__form {
   padding-top: 12px;
   border-top: 1px solid var(--blocked-fill);
+}
+
+.outage__refused {
+  color: var(--warn-text);
+  font-weight: 500;
 }
 
 .ended-list {

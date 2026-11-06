@@ -27,9 +27,10 @@ const BUCKET_WORDS: Record<CashWorksheetGroup["bucket"], string> = {
   "fees-kept": "Fees kept on failed transfers",
 };
 
-// Nothing promised, waiting on people, with the bank or kept as a fee.
+// Nothing promised, waiting on people, with the bank or kept as a fee, and a
+// floor PayOnce can read.
 function idle(wallet: WalletCashView): boolean {
-  return wallet.worksheet.length === 0 && wallet.invoiceFloors.length === 0 && wallet.tone === "ok";
+  return wallet.worksheet.length === 0 && wallet.invoiceFloors.length === 0 && wallet.tone === "ok" && wallet.floor.source !== "unreadable";
 }
 
 function Floor(props: { wallet: WalletCashView }): JSX.Element {
@@ -141,47 +142,45 @@ function WalletTable(props: { wallets: WalletCashView[]; open: string | null; on
     <WalletRow key={wallet.wallet} wallet={wallet} open={props.open === wallet.wallet} onToggle={(): void => props.onToggle(wallet.wallet)} />
   );
   return (
-    <div class="table-scroll cash-table" role="region" aria-label="Wallets" tabIndex={0}>
-      <table class="table">
-        <caption class="visually-hidden">Wallets, down to their headroom. Open a wallet to see its worksheet.</caption>
-        <thead>
-          <tr>
-            <th scope="col">Wallet</th>
-            <th scope="col" class="is-end">
-              Available
-            </th>
-            <th scope="col" class="is-end">
-              Reserve floor
-            </th>
-            <th scope="col" class="is-end">
-              Promised
-            </th>
-            <th scope="col" class="is-end">
-              Waiting on people
-            </th>
-            <th scope="col" class="is-end">
-              Headroom
-            </th>
-            <th scope="col" class="is-end">
-              Headroom if approved
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {shown.map(row)}
-          {quiet.length === 0 ? null : (
-            <tr class="cash-idle">
-              <td colSpan={7}>
-                <button type="button" class="cash-idle__toggle" aria-expanded={showIdle} onClick={(): void => setShowIdle(!showIdle)}>
-                  <Icon name="chevron-right" size={14} class={showIdle ? "disclosure__chevron is-open" : "disclosure__chevron"} />
-                  {`${quiet.map((wallet: WalletCashView): string => wallet.wallet).join(", ")}: nothing promised, waiting on people or with the bank`}
-                </button>
-              </td>
+    <div class="cash-wallets">
+      <div class="table-scroll cash-table" role="region" aria-label="Wallets" tabIndex={0}>
+        <table class="table">
+          <caption class="visually-hidden">Wallets, down to their headroom. Open a wallet to see its worksheet.</caption>
+          <thead>
+            <tr>
+              <th scope="col">Wallet</th>
+              <th scope="col" class="is-end">
+                Available
+              </th>
+              <th scope="col" class="is-end">
+                Reserve floor
+              </th>
+              <th scope="col" class="is-end">
+                Promised
+              </th>
+              <th scope="col" class="is-end">
+                Waiting on people
+              </th>
+              <th scope="col" class="is-end">
+                Headroom
+              </th>
+              <th scope="col" class="is-end">
+                Headroom if approved
+              </th>
             </tr>
-          )}
-          {showIdle ? quiet.map(row) : null}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {shown.map(row)}
+            {showIdle ? quiet.map(row) : null}
+          </tbody>
+        </table>
+      </div>
+      {quiet.length === 0 ? null : (
+        <button type="button" class="cash-idle" aria-expanded={showIdle} onClick={(): void => setShowIdle(!showIdle)}>
+          <Icon name="chevron-right" size={14} class={showIdle ? "disclosure__chevron is-open" : "disclosure__chevron"} />
+          {`${quiet.map((wallet: WalletCashView): string => wallet.wallet).join(", ")}: nothing promised, waiting on people or with the bank`}
+        </button>
+      )}
     </div>
   );
 }
@@ -268,7 +267,7 @@ function InvoiceFloor(props: { floor: WalletCashView["invoiceFloors"][number] })
 function Worksheet(props: { wallet: WalletCashView | null }): JSX.Element {
   const w: WalletCashView | null = props.wallet;
   return (
-    <section class="card worksheet" id={WORKSHEET_ID} aria-live="polite">
+    <section class="card worksheet" id={WORKSHEET_ID}>
       <h2 class="card__title">{w === null ? "Pick a wallet to see its worksheet" : `${w.wallet} worksheet`}</h2>
       {w === null ? null : (
         <>
