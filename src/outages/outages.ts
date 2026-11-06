@@ -23,7 +23,6 @@ import {
   type OutageSubjectHeld,
   type RailFailure,
 } from "../store/ledger.js";
-import { currentSettings } from "../settings.js";
 import { say, sayWarning, shownFailureCode } from "../text/printable.js";
 import { RAIL_FAILURE_CODES } from "../domain/failure-codes.js";
 
@@ -551,13 +550,13 @@ export interface OutagesReport {
 export function outagesReport(
   ledger: Ledger,
   policy: ApprovalPolicy,
+  rule: OutageRule,
   holdingOf: HoldingOf | null = null,
 ): OutagesReport {
-  return readingSoft((): OutagesReport => reportOf(ledger, policy, holdingOf));
+  return readingSoft((): OutagesReport => reportOf(ledger, policy, rule, holdingOf));
 }
 
-function reportOf(ledger: Ledger, policy: ApprovalPolicy, holdingOf: HoldingOf | null): OutagesReport {
-  const rule: OutageRule = currentSettings().outageRule;
+function reportOf(ledger: Ledger, policy: ApprovalPolicy, rule: OutageRule, holdingOf: HoldingOf | null): OutagesReport {
   const all: Outage[] = ledger.outages();
   return {
     rule: {

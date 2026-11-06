@@ -54,11 +54,6 @@ const ALLOWED = [
     why: "The preview checks the payee and builds the invoice with the start's own code, for the same reason",
   },
   {
-    from: ["outages/outages.ts"],
-    to: "settings.ts",
-    why: "outagesReport reads the outage rule from the loaded settings, because views/treasury.ts asks for the report without it",
-  },
-  {
     from: ["domain/situation.ts"],
     to: "text/printable.ts",
     why: "capitalise. situation.ts belongs to the views work, and capitalise moves into domain/ with that work",
