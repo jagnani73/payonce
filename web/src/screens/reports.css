@@ -135,11 +135,12 @@
   gap: 8px 10px;
 }
 
+/* One table a row: the metrics tables have up to nine columns, which two
+   side by side would only show by scrolling. */
 .reports-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(520px, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
-  align-items: start;
 }
 
 .report {
@@ -204,8 +205,8 @@
     font-size: 22px;
   }
 
-  .reports-grid {
-    grid-template-columns: minmax(0, 1fr);
+  .audit-card__icon {
+    display: none;
   }
 
   .audit-card__actions {

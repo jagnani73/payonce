@@ -154,7 +154,7 @@ function Payments(props: { table: Metrics["payments"] }): JSX.Element {
 function Failures(props: { table: Metrics["failures"] }): JSX.Element {
   const t: Metrics["failures"] = props.table;
   return (
-    <Report title="Failures" caption="Transfers that failed in the period, by rail and code, by when they were created or tried.">
+    <Report title="Failures" caption="Transfers created or tried in the period that failed, by rail and code.">
       <Grid
         caption="Failures"
         head={["Rail", "Where", "Code", "What it means", "PayOnce", "Outside PayOnce", "Counts toward an outage", "A resend can fix it"]}
@@ -209,7 +209,7 @@ function Incidents(props: { table: Metrics["incidents"] }): JSX.Element {
 function Approvals(props: { table: Metrics["approvals"] }): JSX.Element {
   const t: Metrics["approvals"] = props.table;
   return (
-    <Report title="Approvals" caption="Requests that got the signoff that completed them in the period.">
+    <Report title="Approvals" caption="Requests fully signed off in the period.">
       <Grid
         caption="Approvals"
         head={["Requests", "Given", "Two approvers", "Used", "Withdrawn", "Waiting to be used", "Time to approve", "p90", "Longest"]}
@@ -248,7 +248,7 @@ function Fees(props: { table: Metrics["fees"] }): JSX.Element {
 function SecondBills(props: { table: Metrics["duplicates"] }): JSX.Element {
   const t: Metrics["duplicates"] = props.table;
   return (
-    <Report title="Possible second bills" caption="Payments PayOnce put on hold as a possible second bill, by the first line on their timeline.">
+    <Report title="Possible second bills" caption="Payments started in the period that went on hold as a possible second bill.">
       <Grid
         caption="Possible second bills"
         head={["Wallet", "On hold", "Closed without paying", "Not paid twice", "Paid on approval", "Approved, paying now", "Still on hold"]}

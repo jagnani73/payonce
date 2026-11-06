@@ -1,5 +1,4 @@
 import type { JSX } from "preact";
-import { useEffect } from "preact/hooks";
 import { getJson, query } from "../api";
 import { ActionButton } from "../components/Action";
 import { Icon } from "../components/Icon";
@@ -12,6 +11,7 @@ import { navigate, type ScreenProps } from "../router";
 import { count } from "../text";
 import type { AuditCheckView, ReportsView } from "../types";
 import { quiet, ReportTables } from "./reports/tables";
+import { useScrollTo } from "./treasury/scroll";
 import "./reports.css";
 
 // Reports (ia.md section 9): the headline tiles and the eight tables for a
@@ -181,15 +181,8 @@ export function Reports(props: ScreenProps): JSX.Element {
   const reports: Polled<ReportsView> = usePoll<ReportsView>(query("/api/reports", { period }), (): number => REPORTS_MS, true);
   const audit: Polled<AuditCheckView> = usePoll<AuditCheckView>("/api/audit", (): number => AUDIT_MS);
   const view: ReportsView | null = reports.data;
-  const toAudit: boolean = props.route.segments[0] === AUDIT_ID;
-
-  useEffect((): void => {
-    if (toAudit && audit.data !== null) {
-      const card: HTMLElement | null = document.getElementById(AUDIT_ID);
-      card?.scrollIntoView({ block: "start" });
-      card?.focus({ preventScroll: true });
-    }
-  }, [toAudit, audit.data === null]);
+  // #reports/audit opens at the audit card once it has its answer.
+  useScrollTo(props.route.segments[0] === AUDIT_ID ? AUDIT_ID : null, audit.data !== null);
 
   return (
     <div class="screen reports">
