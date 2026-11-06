@@ -393,11 +393,17 @@ function floorBreach(
 
 // Airwallex refused every original the invoice was sent with, so nothing was
 // paid. It goes to a person and pays only on an approval, like a held invoice.
+// The invoice is returned as the ledger holds it once escalated.
 export function holdRefused(engine: Engine, obligation: Obligation, refused: Attempt): Obligation {
+  const invoiceId: string = obligation.invoiceId;
   const reason: Reason = refusedOriginal(refused.failureCode);
-  engine.ledger.escalate(obligation.invoiceId, reason);
-  note(engine.ledger, obligation.invoiceId, "decision", `Escalate: ${reasonText(reason)}`, "decision");
-  return { ...obligation, state: "escalated", escalationReason: reasonText(reason) };
+  engine.ledger.escalate(invoiceId, reason);
+  const held: Obligation | undefined = engine.ledger.obligation(invoiceId);
+  if (held === undefined) {
+    throw new Error(`${invoiceId} is not in the ledger`);
+  }
+  note(engine.ledger, invoiceId, "decision", `Escalate: ${reasonText(reason)}`, "decision");
+  return held;
 }
 
 // The first payment of an open invoice with no attempt. A pay run's row sends its
