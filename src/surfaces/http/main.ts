@@ -30,6 +30,7 @@ import { inboxRoutes } from "./routes/inbox.js";
 import { incidentRoutes } from "./routes/incidents.js";
 import { outageRoutes } from "./routes/outages.js";
 import { outboxRoutes } from "./routes/outbox.js";
+import { paymentRoutes } from "./routes/payments.js";
 import { reconcileRoutes } from "./routes/reconcile.js";
 import { runRoutes } from "./routes/runs.js";
 import { sandboxRoutes } from "./routes/sandbox.js";
@@ -180,6 +181,7 @@ function main(): void {
     ...outboxRoutes(app),
     ...sandboxRoutes(app),
     ...viewRoutes(app, SWEEP_EVERY_MS),
+    ...paymentRoutes(app),
   ];
   const start: StartUp = startUp(app);
   const server: Server = createServer(requestListener(routes, port));

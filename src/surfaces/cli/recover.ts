@@ -5,6 +5,7 @@ import { createEngine, type EngineBuild } from "../../engine/create.js";
 import { Dispatcher } from "../../engine/dispatcher.js";
 import type { Engine } from "../../engine/engine.js";
 import { note, noteError } from "../../engine/lines.js";
+import { PaymentRefusedError } from "../../engine/new-payment.js";
 import { loadEnvIfPresent } from "../../env-file.js";
 import { describeQuotes } from "../../domain/fx.js";
 import type { Ledger, Obligation, RunRow } from "../../store/ledger.js";
@@ -120,6 +121,9 @@ async function main(): Promise<void> {
       stopped(ledger, invoiceId, bankOutcome, error);
     } else if (error instanceof SandboxBankError) {
       sandboxStopped(ledger, invoiceId, bankOutcome, error);
+    } else if (error instanceof PaymentRefusedError) {
+      // Refused with nothing stored, so no timeline has a line for it.
+      say(`${error.message}, so nothing was sent or stored`);
     } else {
       noteError(ledger, invoiceId, error);
     }

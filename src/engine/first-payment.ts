@@ -42,15 +42,47 @@ function waitingForFirst(ledger: Ledger, invoiceId: string): Obligation | undefi
   return now?.state === "open" && ledger.attempts(invoiceId).length === 0 ? now : undefined;
 }
 
+// A hold a first payment meets: its reason, the invoices it looks like a second
+// bill for (duplicateOf), those of them that only share its number, for another
+// amount or currency (sameNumber), and a cost line to note with it, or null.
+export interface FirstPaymentHold {
+  reason: Reason;
+  duplicateOf: string[];
+  sameNumber: string[];
+  detail: string | null;
+}
+
+// What a first payment's holds are decided on: the invoice, as the ledger has it
+// or as it would be opened, and what was read from Airwallex for it. record is the
+// beneficiary record's bank details, undefined when Airwallex has none and for a
+// pay run row, whose record accountProblem checks. account is what is wrong with
+// the account the payment would go to, or null. cash is a pay run row's wallet as
+// read under the lease, and null for any other first payment, which is not held
+// to the floor.
+export interface FirstPaymentFacts {
+  obligation: Obligation;
+  record: TransferBankDetails | undefined;
+  account: Reason | null;
+  cash: { availableMinor: number; committedBefore: Map<string, number> } | null;
+}
+
+// What the holds read besides the facts.
+type HoldReads = Pick<Engine, "ledger" | "reserve">;
+
+type HoldCheck = (engine: HoldReads, facts: FirstPaymentFacts) => FirstPaymentHold | null;
+
 // What startPayment found once every check had run: an attempt to send, or a
-// reason to hold the invoice, written already. sameNumber lists the invoices in
-// duplicateOf that only share its number, for another amount or currency.
+// reason to hold the invoice, written already.
 type FirstPayment =
   | { kind: "send"; obligation: Obligation; attempt: Attempt }
-  | { kind: "held"; duplicateOf: string[]; sameNumber: string[]; reason: Reason; detail: string | null };
+  | ({ kind: "held" } & FirstPaymentHold);
+
+function heldFor(reason: Reason, detail: string | null = null): FirstPaymentHold {
+  return { reason, duplicateOf: [], sameNumber: [], detail };
+}
 
 // Puts a hold startPayment wrote on the timelines, after its transaction.
-function noteHold(engine: Engine, invoiceId: string, held: Extract<FirstPayment, { kind: "held" }>): void {
+function noteHold(engine: Engine, invoiceId: string, held: FirstPaymentHold): void {
   note(engine.ledger, invoiceId, "decision", `Escalate: ${reasonText(held.reason)}`, "decision");
   if (held.detail !== null) {
     note(engine.ledger, invoiceId, "warning", held.detail, "cost");
@@ -103,15 +135,38 @@ function lastPaidHold(ledger: Ledger, obligation: Obligation, record: TransferBa
   return ledger.lastPaidUnchecked(obligation.beneficiaryId) === undefined ? null : reasonFor("account-unconfirmed");
 }
 
+// What is wrong with the account a first payment other than a pay run row's would
+// go to, as the record was read, and the route its details take.
+function recordAccount(record: TransferBankDetails | undefined): { problem: Reason | null; route: string | null } {
+  return record === undefined
+    ? { problem: reasonFor("beneficiary-missing"), route: null }
+    : { problem: null, route: routeKeyOf(record) };
+}
+
+// The facts of a first payment that is not a pay run row's, from a record read
+// with no lease held, for a preview of what startPayment would do with it.
+export function firstPaymentFacts(obligation: Obligation, record: TransferBankDetails | undefined): FirstPaymentFacts {
+  return { obligation, record, account: recordAccount(record).problem, cash: null };
+}
+
+// The active outage on the rail a first payment goes by, which holds it before
+// anything is read from Airwallex.
+export function firstPaymentOutage(ledger: Ledger, obligation: Obligation): Outage | undefined {
+  return ledger.activeOutage(obligation.currency, obligation.transferMethod);
+}
+
+// The beneficiary is no longer in Airwallex, or a pay run row's record no longer
+// holds the account the run was approved for.
+function heldForAccount(_engine: HoldReads, facts: FirstPaymentFacts): FirstPaymentHold | null {
+  return facts.account === null ? null : heldFor(facts.account);
+}
+
 // Why a new invoice is held before paying because of other invoices: it looks
 // like a second bill for one, it has the number of another invoice to the same
 // supplier, for any amount, or a payout for it sent outside PayOnce is live.
-// Undefined when none of these holds. Reads only the ledger, so it runs in the
-// transaction that would open the attempt.
-function heldForOthers(
-  ledger: Ledger,
-  obligation: Obligation,
-): Extract<FirstPayment, { kind: "held" }> | undefined {
+function heldForOthers(engine: HoldReads, facts: FirstPaymentFacts): FirstPaymentHold | null {
+  const { ledger }: HoldReads = engine;
+  const obligation: Obligation = facts.obligation;
   const duplicates: string[] = likelyDuplicates(ledger, obligation).map(
     (other: ScannedObligation): string => other.invoiceId,
   );
@@ -120,7 +175,7 @@ function heldForOthers(
     .filter((other: string): boolean => !duplicates.includes(other));
   const duplicateOf: string[] = [...duplicates, ...sameNumber];
   if (duplicateOf.length === 0 && !anyLive(ledger.outsidePayouts(obligation.invoiceId))) {
-    return undefined;
+    return null;
   }
   const reason: Reason =
     duplicates.length > 0
@@ -128,7 +183,63 @@ function heldForOthers(
       : sameNumber.length > 0
         ? heldForSameNumber(sameNumber)
         : reasonFor("outside-payout");
-  return { kind: "held", duplicateOf, sameNumber, reason, detail: null };
+  return { duplicateOf, sameNumber, reason, detail: null };
+}
+
+// An account PayOnce has not paid this supplier, when it has paid them another,
+// waits for a person, as a replacement does: a callback first, then two
+// approvers. So does any account of a supplier PayOnce paid only before it kept
+// which account each payment went to.
+function heldForLastPaid(engine: HoldReads, facts: FirstPaymentFacts): FirstPaymentHold | null {
+  const reason: Reason | null =
+    facts.record === undefined ? null : lastPaidHold(engine.ledger, facts.obligation, facts.record);
+  return reason === null ? null : heldFor(reason);
+}
+
+// A supplier who wrote before anything was paid may be asking not to pay it, or
+// to pay elsewhere, so a person reads the email first. That includes a pay run
+// row waiting its turn.
+function heldForEmails(engine: HoldReads, facts: FirstPaymentFacts): FirstPaymentHold | null {
+  return engine.ledger.emailCount(facts.obligation.invoiceId) > 0 ? heldFor(reasonFor("emails-before-payment")) : null;
+}
+
+// The agent never pays at a rate nobody has seen, so this is the least serious
+// reason to hold it and comes after the others.
+function heldForExchangeRate(_engine: HoldReads, facts: FirstPaymentFacts): FirstPaymentHold | null {
+  return crossCurrency(facts.obligation) ? heldFor(heldForRate(facts.obligation.sourceCurrency)) : null;
+}
+
+// A pay run's row that would take cash below the floor.
+function heldForFloor(engine: HoldReads, facts: FirstPaymentFacts): FirstPaymentHold | null {
+  if (facts.cash === null) {
+    return null;
+  }
+  const short: string | null = floorBreach(engine, facts.obligation, facts.cash.availableMinor, facts.cash.committedBefore);
+  return short === null ? null : heldFor(reasonFor("run-row-below-floor"), short);
+}
+
+// The holds a first payment meets, in the order they are checked. The first that
+// applies holds it.
+const FIRST_PAYMENT_HOLDS: readonly HoldCheck[] = [
+  heldForAccount,
+  heldForOthers,
+  heldForLastPaid,
+  heldForEmails,
+  heldForExchangeRate,
+  heldForFloor,
+];
+
+// The hold a first payment meets on these facts, or null when it goes out.
+// startPayment asks it in the transaction that would open the attempt, and the
+// New payment preview on facts read without a lease. It reads only the ledger.
+export function firstPaymentHold(engine: HoldReads, facts: FirstPaymentFacts): FirstPaymentHold | null {
+  for (const check of FIRST_PAYMENT_HOLDS) {
+    const held: FirstPaymentHold | null = check(engine, facts);
+    if (held !== null) {
+      return held;
+    }
+  }
+  return null;
 }
 
 // Sends a new invoice's original, unless it looks like a second bill for an
@@ -172,7 +283,7 @@ export async function startPayment(
   try {
     // A first payment on a rail with an outage waits, unsent and with no attempt,
     // and every check runs once the outage has ended. openAttempt refuses it too.
-    const outage: Outage | undefined = engine.ledger.activeOutage(obligation.currency, obligation.transferMethod);
+    const outage: Outage | undefined = firstPaymentOutage(engine.ledger, obligation);
     if (outage !== undefined) {
       throw new RailOutageError(outage, "original");
     }
@@ -191,12 +302,7 @@ export async function startPayment(
           ? (await findBeneficiary(engine.client, obligation.beneficiaryId))?.beneficiary?.bank_details
           : undefined;
       const checked: { problem: Reason | null; route: string | null } =
-        account !== null
-          ? await accountProblem(engine, obligation, account)
-          : record === undefined
-            ? { problem: reasonFor("beneficiary-missing"), route: null }
-            : { problem: null, route: routeKeyOf(record) };
-      const wrongAccount: Reason | null = checked.problem;
+        account !== null ? await accountProblem(engine, obligation, account) : recordAccount(record);
       const decidedKey: string | null = account?.accountKey ?? (record === undefined ? null : accountKeyOf(record));
 
       const first: FirstPayment = engine.ledger.transaction((): FirstPayment => {
@@ -205,46 +311,15 @@ export async function startPayment(
         if (now === undefined) {
           throw new Error(`${invoiceId} is not waiting for its first payment`);
         }
-        if (wrongAccount !== null) {
-          engine.ledger.holdBeforePaying(invoiceId, [], wrongAccount);
-          return { kind: "held", duplicateOf: [], sameNumber: [], reason: wrongAccount, detail: null };
-        }
-        const held: Extract<FirstPayment, { kind: "held" }> | undefined = heldForOthers(engine.ledger, now);
-        if (held !== undefined) {
+        const held: FirstPaymentHold | null = firstPaymentHold(engine, {
+          obligation: now,
+          record,
+          account: checked.problem,
+          cash: availableMinor === null ? null : { availableMinor, committedBefore: before },
+        });
+        if (held !== null) {
           engine.ledger.holdBeforePaying(invoiceId, held.duplicateOf, held.reason);
-          return held;
-        }
-        // An account PayOnce has not paid this supplier, when it has paid them
-        // another, waits for a person, as a replacement does: a callback first,
-        // then two approvers. So does any account of a supplier PayOnce paid only
-        // before it kept which account each payment went to.
-        const lastPaid: Reason | null = record === undefined ? null : lastPaidHold(engine.ledger, now, record);
-        if (lastPaid !== null) {
-          engine.ledger.holdBeforePaying(invoiceId, [], lastPaid);
-          return { kind: "held", duplicateOf: [], sameNumber: [], reason: lastPaid, detail: null };
-        }
-        // A supplier who wrote before anything was paid may be asking not to pay
-        // it, or to pay elsewhere, so a person reads the email first. That
-        // includes a pay run row waiting its turn.
-        if (engine.ledger.emailCount(invoiceId) > 0) {
-          const reason: Reason = reasonFor("emails-before-payment");
-          engine.ledger.holdBeforePaying(invoiceId, [], reason);
-          return { kind: "held", duplicateOf: [], sameNumber: [], reason, detail: null };
-        }
-        // The agent never pays at a rate nobody has seen, so this is the least
-        // serious reason to hold it and comes after the others.
-        if (crossCurrency(now)) {
-          const reason: Reason = heldForRate(now.sourceCurrency);
-          engine.ledger.holdBeforePaying(invoiceId, [], reason);
-          return { kind: "held", duplicateOf: [], sameNumber: [], reason, detail: null };
-        }
-        if (availableMinor !== null) {
-          const short: string | null = floorBreach(engine, now, availableMinor, before);
-          if (short !== null) {
-            const reason: Reason = reasonFor("run-row-below-floor");
-            engine.ledger.holdBeforePaying(invoiceId, [], reason);
-            return { kind: "held", duplicateOf: [], sameNumber: [], reason, detail: short };
-          }
+          return { kind: "held", ...held };
         }
         return {
           kind: "send",
@@ -289,7 +364,7 @@ export async function startPayment(
 // including the run's other rows not sent yet. A currency with no floor set does
 // not stop a row, because a person approved the run.
 function floorBreach(
-  engine: Engine,
+  engine: HoldReads,
   obligation: Obligation,
   availableMinor: number,
   committedBefore: Map<string, number>,
@@ -318,11 +393,17 @@ function floorBreach(
 
 // Airwallex refused every original the invoice was sent with, so nothing was
 // paid. It goes to a person and pays only on an approval, like a held invoice.
+// The invoice is returned as the ledger holds it once escalated.
 export function holdRefused(engine: Engine, obligation: Obligation, refused: Attempt): Obligation {
+  const invoiceId: string = obligation.invoiceId;
   const reason: Reason = refusedOriginal(refused.failureCode);
-  engine.ledger.escalate(obligation.invoiceId, reason);
-  note(engine.ledger, obligation.invoiceId, "decision", `Escalate: ${reasonText(reason)}`, "decision");
-  return { ...obligation, state: "escalated", escalationReason: reasonText(reason) };
+  engine.ledger.escalate(invoiceId, reason);
+  const held: Obligation | undefined = engine.ledger.obligation(invoiceId);
+  if (held === undefined) {
+    throw new Error(`${invoiceId} is not in the ledger`);
+  }
+  note(engine.ledger, invoiceId, "decision", `Escalate: ${reasonText(reason)}`, "decision");
+  return held;
 }
 
 // The first payment of an open invoice with no attempt. A pay run's row sends its
