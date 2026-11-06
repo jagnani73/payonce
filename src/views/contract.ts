@@ -986,7 +986,10 @@ export interface SupplierListRow {
   country: string | null;
   currencies: string[];
   methods: TransferMethod[];
+  // The account the record held the last time PayOnce stored it.
   accountEnding: string | null;
+  // Last four digits of the phone on file, never more.
+  phoneEnding: string | null;
   payments: { open: number; total: number };
   cautions: { code: string; text: string }[];
 }
@@ -1086,6 +1089,8 @@ export interface SupplierContactDetail {
 export interface SupplierAccountView extends AccountView {
   // A, B, C on this page, in the order first seen.
   letter: string;
+  // What the record held the last time PayOnce stored it.
+  onFile: boolean;
   seenAs: ("decided" | "sent" | "approval" | "pay-run" | "callback" | "before-callback" | "outside")[];
   firstSeen: Iso | null;
   lastSeen: Iso | null;

@@ -506,6 +506,10 @@ export interface SupplierSummary {
   name: string;
   otherNames: number;
   sameName: string[];
+  // The account the record held the last time PayOnce stored it, and the phone
+  // on file, by their last four characters only.
+  accountEnding: string | null;
+  phoneLast4: string | null;
   invoices: { total: number; open: number; escalated: number; settled: number; rejected: number };
   // Pay rows of the waiting run, not released.
   runRows: number;
@@ -2150,11 +2154,17 @@ function summaryOf(
     }
   }
   const caution: Caution[] = cautions.filter((entry: Caution): boolean => entry.level === "caution");
+  const phone: SupplierObligation | undefined = facts.obligations.find(
+    (obligation: SupplierObligation): boolean => (obligation.supplierPhone ?? "").trim() !== "",
+  );
+  const onFile: ContactBlock["phone"] = contactOf(facts, now).phone;
   return {
     key: SUPPLIER_KEY_PATTERN.test(facts.id) ? facts.id : null,
     name: nameOf(facts),
     otherNames: Math.max(0, names.length - 1),
     sameName: [...sameName].sort(),
+    accountEnding: accounts.views.find((account: AccountView): boolean => account.recordLastStored)?.ending ?? null,
+    phoneLast4: onFile === null ? lastFourDigits(phone?.supplierPhone ?? null) : onFile.ending,
     invoices: {
       total: facts.obligations.length,
       open: count("open"),
