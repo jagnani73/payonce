@@ -25,7 +25,6 @@
 import type { ReasonView } from "../domain/reasons.js";
 import type { Timed } from "../domain/timed.js";
 import type {
-  Blocker,
   Can,
   IncidentBrief,
   PaymentState,
@@ -36,7 +35,6 @@ import type {
   RunSituation,
   Situation,
   Tone,
-  WaitingOn,
   Why,
 } from "../domain/situation.js";
 import type { BreakKind, MovementHow } from "../recon/recon-match.js";
