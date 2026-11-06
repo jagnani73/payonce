@@ -1,18 +1,14 @@
 import { existsSync } from "node:fs";
-import { loadSettings } from "../../settings.js";
+import { loadSettings, type Settings } from "../../settings.js";
 import type { CoveredTransfer } from "../../engine/facts.js";
-import {
-  closeIncident,
-  coveredText,
-  namingText,
-  pendingClose,
-  type CloseReview,
-  type NamingPayout,
-} from "../../engine/person.js";
+import { closeIncident, pendingClose, type CloseReview } from "../../engine/person.js";
 import { personName } from "../../domain/approvers.js";
 import { Ledger, LEDGER_PATH } from "../../store/ledger.js";
-import { printable, say, shownReference } from "../../text/printable.js";
+import { say, shownReference } from "../../text/printable.js";
 import { notAnInvoiceText } from "../../runs/runs.js";
+import type { CoveredTransferView, DecisionOption, EmailsTab, IncidentView, NamingPayoutView } from "../../views/contract.js";
+import { incidentView } from "../../views/incident.js";
+import { count, heading, put, putAll, putCautions, putConsequence, putPayment } from "./view-text.js";
 
 const COVERS_FLAG: string = "--covers=";
 // Airwallex's transfer ids are UUIDs. Anything else is not printed.
@@ -30,13 +26,47 @@ function coverName(transfer: CoveredTransfer): string {
   return TRANSFER_ID.test(transfer.transferId) ? transfer.transferId : "<TRANSFER>";
 }
 
+function emailsLine(emails: EmailsTab): string | null {
+  if (emails.count === 0) {
+    return null;
+  }
+  return `Emails: ${count(emails.count, "email", "emails")} on file${emails.findings === null ? ", not read yet" : ` (${emails.findings.summary})`}`;
+}
+
+// The payment and the close that fits it, as the payment page's Decision panel
+// offers it.
+function show(view: IncidentView, unpaid: boolean): void {
+  putPayment(view);
+  const emails: string | null = emailsLine(view.emails);
+  if (emails !== null) {
+    put(emails);
+  }
+  putCautions(view.decision.open?.cautions ?? [], view.situation.also);
+  const option: DecisionOption | undefined = view.decision.open?.options.find(
+    (item: DecisionOption): boolean => item.kind === (unpaid ? "close-unpaid" : "close-paid"),
+  );
+  if (option === undefined || (option.kind !== "close-paid" && option.kind !== "close-unpaid")) {
+    return;
+  }
+  heading(option.title);
+  putConsequence(option);
+  if (option.kind === "close-paid" && option.namesOnly.length > 0) {
+    put("Payouts that name it but do not pay it:", 1);
+    putAll(option.namesOnly.map((payout: NamingPayoutView): string => payout.text), 2);
+  }
+  if (option.covers.length > 0) {
+    put("This close covers these unrecognised transfers, listed under its request ids:", 1);
+    putAll(option.covers.map((transfer: CoveredTransferView): string => transfer.text), 2);
+  }
+}
+
 // Without a name it only shows what is waiting. With a name and a note of what
-// the person confirmed, it closes the incident. A close that covers transfers
-// listed under the invoice's request ids that do not match it names each one
+// the person confirmed, it closes the payment. A close that covers transfers
+// listed under the payment's request ids that do not match it names each one
 // with --covers, by the bank's short reference or the transfer id, so the person
 // confirms the list they were shown.
 function main(): void {
-  loadSettings();
+  const settings: Settings = loadSettings();
   const invoiceId: string | undefined = process.argv[2];
   const closedBy: string | undefined = process.argv[3];
   const rest: string[] = process.argv.slice(4);
@@ -74,49 +104,16 @@ function main(): void {
     return;
   }
 
-  const duplicate: boolean = review.kind === "duplicate" || review.kind === "unpaid";
-  if (review.kind === "duplicate") {
-    // Invoice numbers, as one line.
-    say(`${invoiceId} is held before paying, as a likely second bill for ${printable(review.reference ?? "")}`);
-  } else if (review.kind === "unpaid") {
-    say(
-      review.namesOnly.length === 0
-        ? `${invoiceId} is waiting on a person and nothing for it is paid`
-        : review.namesOnly.every((payout: NamingPayout): boolean => payout.checked)
-          ? `${invoiceId} is waiting on a person. A payout that names it is paid, but it does not match its amount, currency or account, so PayOnce does not count it as paying the invoice`
-          : `${invoiceId} is waiting on a person. A payout that names it is paid, but PayOnce could not check it yet, so it does not count it as paying the invoice`,
-    );
-  } else {
-    say(`${invoiceId} is paid and waiting on a person`);
-    say(`  ${review.kind.padEnd(9)} ${review.reference === null ? "no reference" : shownReference(review.reference)} paid`);
-  }
-  say(`  because   ${review.reason}`);
-  if (review.emails !== null) {
-    say(`  emails    ${review.emails}`);
-  }
-  for (const payout of review.namesOnly) {
-    // The bank's short reference, printed only in its own form, and the currency
-    // Airwallex gave without control characters.
-    say(
-      `  names it  ${namingText({
-        ...payout,
-        reference: shownReference(payout.reference),
-        currency: payout.currency === null ? null : printable(payout.currency),
-      })}`,
-    );
-  }
-  if (review.covered.length > 0) {
-    say("  covers    transfers listed under its request ids that do not match it:");
-    for (const transfer of review.covered) {
-      say(`            ${coveredText(transfer)}`);
-    }
+  const unpaid: boolean = review.kind === "duplicate" || review.kind === "unpaid";
+  const view: IncidentView | null = incidentView(ledger, settings, Date.now(), invoiceId);
+  if (view !== null) {
+    show(view, unpaid);
+    say();
   }
   const covers: string =
     review.covered.length === 0 ? "" : ` ${COVERS_FLAG}${review.covered.map(coverName).join(",")}`;
   if (closedBy === undefined || closedBy.startsWith(COVERS_FLAG) || finding === "") {
-    say(
-      `To close it${duplicate ? " without paying" : ""}: pnpm close ${invoiceId} <NAME> <NOTE>${covers}`,
-    );
+    say(`To close it ${unpaid ? "without paying" : "as paid"}: pnpm close ${invoiceId} <NAME> <NOTE>${covers}`);
     return;
   }
   let by: string;
@@ -151,7 +148,7 @@ function main(): void {
     finding,
     review.covered.map((transfer: CoveredTransfer): string => transfer.transferId),
   );
-  say(duplicate ? "Closed without paying" : "Closed without a second payment");
+  say(unpaid ? "Closed without paying" : "Closed as paid. Nothing more is sent");
 }
 
 main();

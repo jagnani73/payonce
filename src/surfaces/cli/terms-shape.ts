@@ -3,10 +3,11 @@ import { validDomain } from "../../intake/eml.js";
 import { INVOICE_ID_PATTERN } from "../../store/ledger.js";
 import { CURRENCY_PATTERN } from "../../domain/patterns.js";
 
-// What pnpm approve and pnpm payrun print of stored approval terms, checked
-// field by field in the type and form each is printed in. Terms that do not
-// parse into their shape were changed outside PayOnce, so the commands show and
-// approve nothing for them. The engine reads terms as it always has.
+// The stored approval terms pnpm approve and pnpm payrun print through the views
+// and approve, checked field by field in the type and form each is read in.
+// Terms that do not parse into their shape were changed outside PayOnce, so the
+// commands show and approve nothing for them. The engine reads terms as it
+// always has.
 
 type Fields = Record<string, unknown>;
 
@@ -48,6 +49,8 @@ function readableFx(fx: unknown): boolean {
     isRate(fx["midRate"]) &&
     isText(fx["sellCurrency"]) &&
     isMinor(fx["sellAmountMinor"]) &&
+    isText(fx["buyCurrency"]) &&
+    isMinor(fx["buyAmountMinor"]) &&
     isText(fx["validTo"]) &&
     (fx["feeEstimateMinor"] === null || isMinor(fx["feeEstimateMinor"]))
   );
@@ -69,6 +72,20 @@ function readableArrival(arrival: unknown): boolean {
   );
 }
 
+// The callback that confirmed new bank details, as the terms carry it.
+function readableCallback(callback: unknown): boolean {
+  return (
+    callback === null ||
+    callback === undefined ||
+    (isFields(callback) &&
+      isText(callback["calledBy"]) &&
+      isText(callback["numberCalled"]) &&
+      isText(callback["calledAt"]) &&
+      isText(callback["spokeTo"]) &&
+      isText(callback["confirmed"]))
+  );
+}
+
 function readableDuplicate(duplicate: unknown): boolean {
   return isFields(duplicate) && isText(duplicate["invoiceId"]) && isText(duplicate["state"]) && isTextOrNull(duplicate["paidBy"]);
 }
@@ -87,7 +104,7 @@ export function readableTerms(terms: unknown): terms is ApprovalTerms {
     return false;
   }
   const evidence: unknown = terms["evidence"];
-  if (!isFields(evidence) || !isText(evidence["reason"])) {
+  if (!isFields(evidence) || !isText(evidence["reason"]) || !readableCallback(evidence["bankChange"])) {
     return false;
   }
   if (terms["action"] === "replace") {
