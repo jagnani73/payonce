@@ -98,10 +98,21 @@ interface DecisionInput {
   headroom: HeadroomLine | null;
 }
 
+// A person's close, as person.ts writes its line: closed as paid, or closed
+// without paying, as a second bill or not. The ledger keeps who closed an
+// invoice without paying first, but no note, so the line is read for both.
+const PERSON_CLOSE: RegExp[] = [
+  /^Incident closed by ([^:]+?): ([\s\S]*)$/,
+  /^Closed without paying by ([^,:]+?)(?:, as a second bill for [^:]+)?: ([\s\S]*)$/,
+];
+
 function closedPanel(input: DecisionInput): DecisionPanel["closed"] {
   const o: Obligation = input.snapshot.obligation;
-  const line: string | null = input.snapshot.times.closedLine;
-  const by: RegExpExecArray | null = /^Incident closed by (.+?): (.*)$/.exec(line ?? "");
+  const line: string = input.snapshot.times.closedLine ?? "";
+  const by: RegExpExecArray | null =
+    PERSON_CLOSE.map((pattern: RegExp): RegExpExecArray | null => pattern.exec(line)).find(
+      (found: RegExpExecArray | null): boolean => found !== null,
+    ) ?? null;
   return {
     kind: o.state === "settled" ? "paid" : "unpaid",
     by: by?.[1] ?? o.rejectedBy,
