@@ -1221,7 +1221,9 @@ export interface BreakItemView {
 
 export interface ReconView {
   view: "reconciliation";
-  lastCheck: { at: Iso; ok: boolean; problem: string | null } | null;
+  // at is the latest check that ran, ok or not. lastOkAt is the latest that read
+  // Airwallex in full and was kept, which is older when the latest failed.
+  lastCheck: { at: Iso; ok: boolean; problem: string | null; lastOkAt: Iso | null } | null;
   nextCheckAt: Iso | null;
   everyMinutes: number | null;
   running: boolean;

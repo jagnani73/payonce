@@ -319,7 +319,9 @@ export function reconView(ledger: Ledger, _settings: Settings, now: number, runn
     const report: ReconReport = reconReport(ledger, runner);
     const open: BreakItemView[] = report.open.map(breakItem);
     const actions: Map<BreakKind, string> = new Map(report.open.map((item: BreakView): [BreakKind, string] => [item.kind, item.action]));
-    const lastAt: string | null = report.lastRun?.finishedAt ?? report.lastRun?.startedAt ?? null;
+    const timeOf = (run: ReconReport["lastRun"]): string | null => run?.finishedAt ?? run?.startedAt ?? null;
+    const okAt: string | null = timeOf(report.lastRun);
+    const lastAt: string | null = report.lastProblem === null ? okAt : timeOf(report.lastProblem);
     const lastMs: number = lastAt === null ? Number.NaN : Date.parse(lastAt);
     const needsPerson: ReconView["needsPerson"] = grouped(
       open.filter((item: BreakItemView): boolean => !item.clearsByItself),
@@ -330,9 +332,9 @@ export function reconView(ledger: Ledger, _settings: Settings, now: number, runn
     return {
       view: "reconciliation",
       lastCheck:
-        report.lastRun === null || lastAt === null
+        lastAt === null
           ? null
-          : { at: lastAt, ok: report.lastProblem === null, problem: report.lastProblem?.error ?? null },
+          : { at: lastAt, ok: report.lastProblem === null, problem: report.lastProblem?.error ?? null, lastOkAt: okAt },
       nextCheckAt: report.everyMinutes === null || !Number.isFinite(lastMs) ? null : iso(lastMs + report.everyMinutes * 60_000),
       everyMinutes: report.everyMinutes,
       running: report.running,

@@ -70,8 +70,22 @@ function CheckBar(props: { view: ReconView; polled: Polled<ReconView> }): JSX.El
       {last === null || last.ok ? null : (
         <Callout tone="danger">
           {"The last check failed and changed no break"}
-          {last.problem === null ? "." : ": "}
-          {last.problem === null ? null : <Theirs text={last.problem} />}
+          {last.problem === null ? null : (
+            <>
+              {": "}
+              <Theirs text={last.problem} />
+            </>
+          )}
+          {". "}
+          {last.lastOkAt === null ? (
+            "No check has worked yet."
+          ) : (
+            <>
+              {"The last one that worked ran at "}
+              <Time at={last.lastOkAt} />
+              {"."}
+            </>
+          )}
         </Callout>
       )}
     </div>
