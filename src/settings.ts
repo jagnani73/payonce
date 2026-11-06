@@ -4,7 +4,7 @@ import { QUOTE_VALIDITIES, type QuoteValidity } from "./airwallex/fx.js";
 import type { AlertFormat } from "./alerts/alert-payloads.js";
 import type { AlertSetting } from "./alerts/alerts.js";
 import { policyFromEnv, type ApprovalPolicy } from "./domain/approvers.js";
-import { deadlineMinutes as minutesFor, type BankDeadlineMinutes } from "./domain/deadlines.js";
+import type { BankDeadlineMinutes } from "./domain/deadlines.js";
 import type { QuoteSetting } from "./domain/fx.js";
 import { reserveFromEnv, type ReservePolicy } from "./domain/reserve.js";
 import type { OutageRule } from "./outages/outages.js";
@@ -83,31 +83,9 @@ const SLACK_HOSTS: readonly string[] = ["hooks.slack.com"];
 const DISCORD_HOSTS: readonly string[] = ["discord.com", "discordapp.com"];
 const LOOPBACK_HOSTS: readonly string[] = ["127.0.0.1", "localhost", "[::1]"];
 
-let loaded: Settings | null = null;
-
-// Reads every setting from env and keeps them for currentSettings. A command
-// that loads .env only on some paths loads its settings again after it does.
+// Reads every setting from env. A command that loads .env only on some paths
+// loads its settings after it does.
 export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
-  loaded = readSettings(env);
-  return loaded;
-}
-
-// The settings the running command loaded, for the code whose callers do not
-// hand it them yet: the bank deadlines the views and the outbox read, and the
-// outage rule the outage report shows.
-export function currentSettings(): Settings {
-  if (loaded === null) {
-    throw new Error("PayOnce read a setting before it loaded its settings");
-  }
-  return loaded;
-}
-
-// The bank deadline for a method under the loaded settings, for those callers.
-export function deadlineMinutes(method: string): number {
-  return minutesFor(method, currentSettings().bankDeadlineMinutes);
-}
-
-function readSettings(env: NodeJS.ProcessEnv): Settings {
   const readerServices: ModelService[] = modelServicesFromEnv(env);
   const askServices: ModelService[] = modelServicesFromEnv(env, "ask");
   return {

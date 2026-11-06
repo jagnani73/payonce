@@ -276,7 +276,6 @@ function runOffline(): void {
 // after it, since that match read nothing.
 function show(raw: string | undefined): void {
   loadEnvIfPresent();
-  loadSettings();
   const currency: string | null = raw === undefined ? null : raw.trim().toUpperCase();
   if (currency !== null && shownCurrency(currency) === null) {
     fail(USAGE);
@@ -373,10 +372,7 @@ function explain(args: string[]): void {
   }
 }
 
-// Live, offline and show load .env and then their settings again. explain loads
-// no .env.
 async function main(): Promise<void> {
-  loadSettings();
   const [command, ...args] = process.argv.slice(2);
   if (command === undefined) {
     await runLive();

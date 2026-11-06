@@ -1,5 +1,4 @@
 import { existsSync } from "node:fs";
-import { loadSettings } from "../../settings.js";
 import { Ledger, LEDGER_PATH } from "../../store/ledger.js";
 import {
   isPeriod,
@@ -331,7 +330,6 @@ function recon(report: MetricsReport): void {
 }
 
 function main(): void {
-  loadSettings();
   let period: Period | null = null;
   let json: boolean = false;
   for (const word of process.argv.slice(2)) {

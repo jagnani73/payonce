@@ -1,5 +1,4 @@
 import { existsSync } from "node:fs";
-import { loadSettings } from "../../settings.js";
 import {
   auditCsv,
   auditExport,
@@ -213,7 +212,6 @@ function mainRun(ledger: Ledger, raw: string | undefined, format: string | undef
 // or CSV. "run" and a run's number do the same for a pay run. A run number is
 // digits, which are never a format, so "run 7" cannot be an invoice called run.
 function main(): void {
-  loadSettings();
   const first: string | undefined = process.argv[2];
   const runForm: boolean = first === "run" && /^[0-9]+$/.test(process.argv[3] ?? "");
   const invoiceId: string | undefined = first;
