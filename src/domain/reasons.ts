@@ -85,6 +85,7 @@ export type ReasonCode =
   | "unrecognised-transfer-failed"
   | "deadline-replacement"
   | "account-changed-before-send"
+  | "account-unknown-before-send"
   | "run-row-below-floor"
   | "run-account-changed"
   | "beneficiary-missing"
@@ -174,6 +175,13 @@ export const REPLACEMENT_DEADLINE_REASON: string =
 // alerts post it.
 export const ACCOUNT_CHANGED_REASON: string =
   "the supplier's bank details on file changed after this payment was decided or approved, so PayOnce does not send it again";
+
+// Why a pending payment with no transfer goes to a person when nothing on file
+// says which account it was decided or approved for: a replacement from before
+// PayOnce kept the account, whose original shows no bank details or whose terms
+// name none. A fixed string, as alerts post it.
+export const ACCOUNT_UNKNOWN_REASON: string =
+  "PayOnce does not know which bank details this payment was decided or approved for, so it does not send it again";
 
 // The reason a pay run row is held at send when paying it would take cash below
 // the floor. It stays the same whatever the numbers, so it does not void an
@@ -368,6 +376,7 @@ function leadParts(): Part<ReasonCode>[] {
     fixed("unrecognised-transfer-failed", MISMATCHED_FAILED_REASON),
     fixed("deadline-replacement", REPLACEMENT_DEADLINE_REASON),
     fixed("account-changed-before-send", ACCOUNT_CHANGED_REASON),
+    fixed("account-unknown-before-send", ACCOUNT_UNKNOWN_REASON),
     fixed("run-row-below-floor", CASH_HOLD_REASON),
     fixed("run-account-changed", RUN_ACCOUNT_CHANGED_REASON),
     fixed("beneficiary-missing", BENEFICIARY_MISSING_REASON),
@@ -833,6 +842,7 @@ const FAMILIES: Record<ReasonCode, ReasonFamily> = {
   "unrecognised-transfer-failed": "paid-twice",
   "deadline-replacement": "bank-deadline",
   "account-changed-before-send": "bank-details",
+  "account-unknown-before-send": "bank-details",
   "run-row-below-floor": "cash",
   "run-account-changed": "bank-details",
   "beneficiary-missing": "bank-details",
@@ -882,6 +892,7 @@ const LABELS: Record<ReasonCode | "unrecognised", string> = {
   "unrecognised-transfer-failed": "Unrecognised transfer",
   "deadline-replacement": "Bank late with the replacement",
   "account-changed-before-send": "Bank details changed before sending",
+  "account-unknown-before-send": "Bank details not known before sending",
   "run-row-below-floor": "Pay run row below the floor",
   "run-account-changed": "Bank details changed after the run was approved",
   "beneficiary-missing": "Supplier record gone from Airwallex",

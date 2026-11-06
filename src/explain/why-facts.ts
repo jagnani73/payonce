@@ -707,6 +707,11 @@ const FIXED_LINES: ReadonlyMap<string, readonly Source[]> = new Map<string, read
         (kind: string): string =>
           `Waiting on a person. The ${kind} was marked failed without being sent, so restoring those details no longer sends it: paying this invoice now takes a person's approval, or a person closes it without paying`,
       ),
+      "Waiting on a person. PayOnce does not know which bank details this payment was decided or approved for, so it does not send it again",
+      ...["original", "replacement"].map(
+        (kind: string): string =>
+          `Waiting on a person. The ${kind} was marked failed without being sent: paying this invoice now takes a person's approval, or a person closes it without paying`,
+      ),
     ],
   ),
   ...fixedFrom(["warning/bank-details"], ["The supplier's bank details on file are not the ones the original payment went to"]),
@@ -772,7 +777,7 @@ const ARRIVAL_MARKERS: readonly string[] = [
   ". A replacement sent on ",
   ". PayOnce has no arrival estimate for a replacement by ",
 ];
-const CAUSE: string = String.raw`payout ${REF} sent outside PayOnce has paid this invoice|payout ${REF} sent outside PayOnce names this invoice and is paid, but (?:does not match|PayOnce could not check) its amount, currency or account|(?:${KIND}) (?:${REF_OR_ID})?, found late, is live at the bank and may pay this invoice|transfer (?:${REF_OR_ID})? under the failed (?:${KIND})'s request id is paid but does not match this invoice|the bank details on file are not the ones it was decided or approved for`;
+const CAUSE: string = String.raw`payout ${REF} sent outside PayOnce has paid this invoice|payout ${REF} sent outside PayOnce names this invoice and is paid, but (?:does not match|PayOnce could not check) its amount, currency or account|(?:${KIND}) (?:${REF_OR_ID})?, found late, is live at the bank and may pay this invoice|transfer (?:${REF_OR_ID})? under the failed (?:${KIND})'s request id is paid but does not match this invoice|the bank details on file are not the ones it was decided or approved for|PayOnce does not know which bank details it was decided or approved for`;
 const THEN: string = `a person checks it, and can close the invoice without paying|a person can close the invoice|(?:${KIND}) (?:${REF_OR_ID})? counts as this invoice's payment|a person decides how to pay the invoice, or closes it without paying`;
 const OUTAGE_LEAD: string = `Outage ${N} on ${CUR} (?:${METHOD}), declared at ${CLOCK}`;
 // holdLine's endings in outages.ts.
