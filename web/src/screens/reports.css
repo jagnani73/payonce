@@ -1,0 +1,214 @@
+/* Reports: the period buttons, the tiles, the audit card and the grid of
+   tables. Cards and tables come from styles.css. */
+
+.reports__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.periods {
+  display: inline-flex;
+  margin-left: auto;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.periods__button {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--target);
+  padding: 0 14px;
+  border: 0;
+  background: var(--surface);
+  color: var(--text-2);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.periods__button + .periods__button {
+  border-left: 1px solid var(--line-strong);
+}
+
+.periods__button[aria-pressed="true"] {
+  background: var(--accent);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.reports__asof {
+  margin-top: -12px;
+  font-size: 13px;
+}
+
+.report-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px;
+}
+
+.report-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+
+.report-tile__label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+.report-tile__value {
+  font-size: 28px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.report-tile__sub {
+  min-height: 19px;
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.audit-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  border-color: var(--act-line);
+}
+
+.audit-card:focus {
+  outline: none;
+}
+
+.audit-card--broken {
+  border-color: var(--danger-line);
+}
+
+.audit-card__icon {
+  color: var(--act-text);
+}
+
+.audit-card--broken .audit-card__icon {
+  color: var(--danger);
+}
+
+.audit-card__body {
+  display: flex;
+  flex: 1 1 520px;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.audit-card__line {
+  font-weight: 600;
+  color: var(--act-text);
+}
+
+.audit-card__line--broken {
+  color: var(--danger);
+}
+
+.audit-card__problems {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--danger-text);
+}
+
+.audit-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px 10px;
+}
+
+.reports-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(520px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.report {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.report .card__head {
+  margin-bottom: 0;
+}
+
+.report__caption {
+  margin-top: -6px;
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.report__line {
+  font-size: 13px;
+  color: var(--text-body);
+}
+
+.report__line--danger {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.report__note {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+@media (max-width: 899px) {
+  .periods {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .periods__button {
+    flex: 1 1 0;
+    justify-content: center;
+    padding: 0 8px;
+    font-size: 13px;
+    text-align: center;
+  }
+
+  .reports__asof {
+    margin-top: -8px;
+  }
+
+  .report-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .report-tile {
+    padding: 12px;
+  }
+
+  .report-tile__value {
+    font-size: 22px;
+  }
+
+  .reports-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .audit-card__actions {
+    width: 100%;
+  }
+}
