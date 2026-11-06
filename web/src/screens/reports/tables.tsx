@@ -3,7 +3,7 @@ import { Card, Table, type Column } from "../../components/Layout";
 import { Time } from "../../components/Text";
 import { count } from "../../text";
 import type { ReportsView } from "../../types";
-import { amountText, railWords, secondsText } from "../treasury/format";
+import { secondsText } from "../treasury/format";
 
 // The eight tables of Reports (ia.md section 9), from the metrics as the server
 // keeps them. Each says in one line what puts a row in the period. Amounts are
@@ -25,35 +25,6 @@ interface Spread {
   notOnFile: number;
 }
 
-const PAYMENT_WORDS: Record<Metrics["payments"]["rows"][number]["what"], string> = {
-  first: "first transfer",
-  "first-approved": "first transfer, approved",
-  "replacement-auto": "replacement by PayOnce",
-  "replacement-approved": "replacement, approved",
-};
-
-const STAGE_WORDS: Record<Metrics["failures"]["rows"][number]["stage"], string> = {
-  bank: "Failed at the bank",
-  refused: "Refused by Airwallex",
-  "never-created": "Never created",
-};
-
-const HOW_WORDS: Record<Metrics["incidents"]["closed"][number]["how"], string> = {
-  "first-time": "paid the first time",
-  replaced: "replaced by PayOnce",
-  "person-paid": "paid after a person",
-  "not-paid": "closed without paying",
-};
-
-const GROUP_WORDS: Record<Metrics["incidents"]["timeToClose"][number]["group"], string> = {
-  "paid-first-time": "Paid the first time",
-  "recovered-by-itself": "Recovered by PayOnce",
-  "with-a-person": "With a person",
-};
-
-function railOf(currency: string, method: string): string {
-  return railWords(`${currency} ${method}`).replace(/ other$/, " (method not on file)");
-}
 
 function yes(value: boolean): string {
   return value ? "Yes" : "No";
@@ -108,7 +79,9 @@ function Payments(props: { table: Metrics["payments"] }): JSX.Element {
   const t: Metrics["payments"] = props.table;
   const twice: Metrics["payments"]["paidMoreThanOnce"] = t.paidMoreThanOnce;
   const kept: Metrics["payments"]["mismatchedPaid"] = t.mismatchedPaid;
-  const extra: string = twice.extra.map((money: { amountMinor: number; currency: string; payments: number }): string => `${amountText(money.amountMinor, money.currency)} in ${count(money.payments, "payment")}`).join(", ");
+  const extra: string = twice.extra
+    .map((money: Metrics["payments"]["paidMoreThanOnce"]["extra"][number]): string => `${money.amount.text} in ${count(money.payments, "payment")}`)
+    .join(", ");
   return (
     <Report title="Payments" caption="Transfers created in the period, by what they were and how the bank answered.">
       <Grid
@@ -116,7 +89,7 @@ function Payments(props: { table: Metrics["payments"] }): JSX.Element {
         head={["Transfer", "Sent", "Paid", "Failed", "With the bank", "Paid out", "From pay runs"]}
         rows={t.rows.map((row: Metrics["payments"]["rows"][number]): Row => ({
           key: `${row.currency}-${row.what}`,
-          cells: [`${row.currency} ${PAYMENT_WORDS[row.what]}`, row.sent, row.paid, row.failed, row.withBank, amountText(row.paidMinor, row.currency), row.fromPayRuns],
+          cells: [`${row.currency} ${row.whatText}`, row.sent, row.paid, row.failed, row.withBank, row.paidAmount.text, row.fromPayRuns],
         }))}
         empty="No transfers were created in this period."
         minWidth={620}
@@ -142,7 +115,7 @@ function Payments(props: { table: Metrics["payments"] }): JSX.Element {
         <Grid
           caption="Bank time to pay"
           head={["Bank time to pay", "Median", "p90", "Longest"]}
-          rows={t.bankTimeToPay.flatMap((row: Metrics["payments"]["bankTimeToPay"][number]): Row[] => spreadRow(`${row.currency}-${row.method}`, railOf(row.currency, row.method), row))}
+          rows={t.bankTimeToPay.flatMap((row: Metrics["payments"]["bankTimeToPay"][number]): Row[] => spreadRow(`${row.currency}-${row.method}`, row.railText, row))}
           empty=""
         />
       ) : null}
@@ -160,7 +133,7 @@ function Failures(props: { table: Metrics["failures"] }): JSX.Element {
         head={["Rail", "Where", "Code", "What it means", "PayOnce", "Outside PayOnce", "Counts toward an outage", "A resend can fix it"]}
         rows={t.rows.map((row: Metrics["failures"]["rows"][number]): Row => ({
           key: `${row.currency}-${row.method}-${row.stage}-${row.code}`,
-          cells: [railOf(row.currency, row.method), STAGE_WORDS[row.stage], <span class="mono">{row.code}</span>, row.label, row.payonce, row.outside, yes(row.rail), yes(row.resendable)],
+          cells: [row.railText, row.stageText, <span class="mono">{row.code}</span>, row.label, row.payonce, row.outside, yes(row.rail), yes(row.resendable)],
         }))}
         empty="No transfer failed in this period."
         numericFrom={4}
@@ -175,8 +148,8 @@ function Failures(props: { table: Metrics["failures"] }): JSX.Element {
 function Incidents(props: { table: Metrics["incidents"] }): JSX.Element {
   const t: Metrics["incidents"] = props.table;
   const times: Row[] = [
-    ...t.timeToClose.flatMap((spread: Metrics["incidents"]["timeToClose"][number]): Row[] => spreadRow(`close-${spread.group}`, `${GROUP_WORDS[spread.group]}, from the first line`, spread)),
-    ...t.afterFailure.flatMap((spread: Metrics["incidents"]["afterFailure"][number]): Row[] => spreadRow(`fail-${spread.group}`, `${GROUP_WORDS[spread.group]}, from the first failure`, spread)),
+    ...t.timeToClose.flatMap((spread: Metrics["incidents"]["timeToClose"][number]): Row[] => spreadRow(`close-${spread.group}`, `${spread.groupText}, from the first line`, spread)),
+    ...t.afterFailure.flatMap((spread: Metrics["incidents"]["afterFailure"][number]): Row[] => spreadRow(`fail-${spread.group}`, `${spread.groupText}, from the first failure`, spread)),
     ...spreadRow("person", "With a person, from when it first went to one", t.withPerson),
   ];
   return (
@@ -187,7 +160,7 @@ function Incidents(props: { table: Metrics["incidents"] }): JSX.Element {
         head={["How it closed", "Count", "Amount", "From pay runs", "Found in Airwallex"]}
         rows={t.closed.map((row: Metrics["incidents"]["closed"][number]): Row => ({
           key: `${row.currency}-${row.how}`,
-          cells: [`${row.currency} ${HOW_WORDS[row.how]}`, row.count, amountText(row.amountMinor, row.currency), row.fromPayRuns, row.found],
+          cells: [`${row.currency} ${row.howText}`, row.count, row.amount.text, row.fromPayRuns, row.found],
         }))}
         empty="No payment closed in this period."
         minWidth={560}
@@ -235,7 +208,7 @@ function Fees(props: { table: Metrics["fees"] }): JSX.Element {
         head={["Wallet", "Transfers", "Fees kept", "Not read yet", "PayOnce", "Outside PayOnce"]}
         rows={t.rows.map((row: Metrics["fees"]["rows"][number]): Row => ({
           key: row.currency,
-          cells: [row.currency, row.transfers, amountText(row.feeMinor, row.currency), row.notRead, row.payonce, row.outside],
+          cells: [row.currency, row.transfers, row.fee.text, row.notRead, row.payonce, row.outside],
         }))}
         empty="No fees were kept in this period."
         minWidth={560}
@@ -254,7 +227,7 @@ function SecondBills(props: { table: Metrics["duplicates"] }): JSX.Element {
         head={["Wallet", "On hold", "Closed without paying", "Not paid twice", "Paid on approval", "Approved, paying now", "Still on hold"]}
         rows={t.rows.map((row: Metrics["duplicates"]["rows"][number]): Row => ({
           key: row.currency,
-          cells: [row.currency, row.held, row.stopped, amountText(row.stoppedMinor, row.currency), row.paid, row.released, row.stillHeld],
+          cells: [row.currency, row.held, row.stopped, row.stoppedAmount.text, row.paid, row.released, row.stillHeld],
         }))}
         empty="No payment looked like a second bill in this period."
         minWidth={680}
@@ -284,7 +257,7 @@ function Outages(props: { table: Metrics["outages"] }): JSX.Element {
         rows={t.rows.map((row: Metrics["outages"]["rows"][number]): Row => ({
           key: String(row.id),
           cells: [
-            <a href={`#outage/${row.id}`}>{`Outage ${row.id} on ${railOf(row.currency, row.method)}`}</a>,
+            <a href={`#outage/${row.id}`}>{`Outage ${row.id} on ${row.railText}`}</a>,
             row.declaredAt === null ? "not on file" : <Time at={row.declaredAt} />,
             row.active ? "Still active" : row.endedAt === null ? "not on file" : <Time at={row.endedAt} />,
             secondsText(row.seconds),
@@ -303,7 +276,7 @@ function Outages(props: { table: Metrics["outages"] }): JSX.Element {
           head={["By rail", "Outages", "In all", "Longest"]}
           rows={t.byRail.map((row: Metrics["outages"]["byRail"][number]): Row => ({
             key: `${row.currency}-${row.method}`,
-            cells: [railOf(row.currency, row.method), row.outages, secondsText(row.totalSeconds), secondsText(row.longestSeconds)],
+            cells: [row.railText, row.outages, secondsText(row.totalSeconds), secondsText(row.longestSeconds)],
           }))}
           empty=""
         />

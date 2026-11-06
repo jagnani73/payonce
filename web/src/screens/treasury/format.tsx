@@ -2,18 +2,11 @@ import type { JSX } from "preact";
 import type { Money as MoneyView } from "../../types";
 
 // Small formatters Treasury and Reports share. They only shape what the views
-// already say: an amount as formatMoney writes it, a rail in the glossary's
-// words, a duration in a table.
+// already say: a rail in the glossary's words, a duration in a table.
 
 const MINUS: string = String.fromCharCode(0x2212);
 const NBSP: string = String.fromCharCode(0xa0);
 
-// "4,000.00 EUR" from minor units, as formatMoney writes it, for the few answers
-// that carry minor units only (the metrics and the movements).
-export function amountText(minor: number, currency: string): string {
-  const amount: string = (minor / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return `${minor < 0 ? MINUS : ""}${amount.replace(/^-/, "")} ${currency}`.trim();
-}
 
 // The rail as the glossary writes it: "USD local", "EUR SWIFT". It also mends a
 // rail inside one of PayOnce's own sentences.

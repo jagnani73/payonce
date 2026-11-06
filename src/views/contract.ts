@@ -39,11 +39,27 @@ import type {
   WaitingOn,
   Why,
 } from "../domain/situation.js";
-import type { BreakKind } from "../recon/recon-match.js";
-import type { MovementView } from "../recon/reconcile.js";
+import type { BreakKind, MovementHow } from "../recon/recon-match.js";
 import type { BreakState } from "../store/recon-store.js";
 import type { AuditExport, RunAuditExport } from "../store/audit-trail.js";
-import type { MetricsReport } from "./metrics.js";
+import type {
+  BankTimeRow,
+  ClosedRow,
+  DuplicateRow,
+  FailureRow,
+  FeeRow,
+  GroupSpread,
+  IncidentsTable,
+  MetricsReport,
+  MismatchedPaid,
+  OutageRow,
+  OutagesTable,
+  PaidTwice,
+  PaymentRow,
+  PaymentsTable,
+  RailRow,
+  WalletMoney,
+} from "./metrics.js";
 
 export type { ClauseCode, ReasonCode, ReasonFamily, ReasonView } from "../domain/reasons.js";
 export type { Timed, TimedPart, TimePart } from "../domain/timed.js";
@@ -1216,12 +1232,27 @@ export interface ReconView {
   can: { checkNow: Can; explain: Can };
 }
 
-// GET /api/reconcile/movements?currency=: one wallet's stored movements, newest
-// first, as the route has always answered them.
-export type { MovementView } from "../recon/reconcile.js";
+// One wallet movement in Airwallex's balance history, with what explains it.
+export interface ReconMovementView {
+  id: string;
+  postedAt: Iso;
+  // Airwallex's type for it, in PayOnce's words.
+  typeText: string;
+  // Null where Airwallex gave no amount PayOnce can read.
+  amount: Money | null;
+  balance: Money | null;
+  how: MovementHow;
+  // "PayOnce's payment", "Reserved by Airwallex", "Not explained"...
+  howText: string;
+  invoiceId: InvoiceId | null;
+  reference: Reference | null;
+  breakId: number | null;
+}
+
+// GET /api/reconcile/movements?currency=: one wallet's stored movements, newest first.
 export interface ReconMovementsView {
   currency: string;
-  movements: MovementView[];
+  movements: ReconMovementView[];
 }
 
 export interface OutageCardView {
@@ -1255,8 +1286,35 @@ export interface ReportsView {
   view: "reports";
   period: "7d" | "30d" | "all";
   tiles: { key: "first-time" | "recovered" | "needed-person" | "fees-kept" | "second-bills"; label: string; value: string; sub: string | null }[];
-  // Unchanged from metrics.ts.
-  metrics: MetricsReport;
+  // The metrics GET /api/metrics answers, each row with its money as Money and
+  // its codes and rail in words beside the raw fields.
+  metrics: ShownMetrics;
+}
+
+// "USD local", "EUR SWIFT", "USD (method not on file)".
+type Railed = { railText: string };
+type WalletAmount = WalletMoney & { amount: Money };
+
+export interface ShownMetrics extends Omit<MetricsReport, "payments" | "failures" | "incidents" | "fees" | "duplicates" | "outages"> {
+  payments: Omit<PaymentsTable, "rows" | "paidMoreThanOnce" | "mismatchedPaid" | "bankTimeToPay"> & {
+    // whatText: "first transfer", "replacement by PayOnce"...
+    rows: (PaymentRow & { whatText: string; paidAmount: Money })[];
+    paidMoreThanOnce: Omit<PaidTwice, "extra"> & { extra: WalletAmount[] };
+    mismatchedPaid: Omit<MismatchedPaid, "paid"> & { paid: WalletAmount[] };
+    bankTimeToPay: (BankTimeRow & Railed)[];
+  };
+  // stageText: "Failed at the bank", "Refused by Airwallex", "Never created".
+  failures: Omit<MetricsReport["failures"], "rows"> & { rows: (FailureRow & Railed & { stageText: string })[] };
+  incidents: Omit<IncidentsTable, "closed" | "timeToClose" | "afterFailure"> & {
+    // howText: "paid the first time", "closed without paying"...
+    closed: (ClosedRow & { howText: string; amount: Money })[];
+    // groupText: "Paid the first time", "Recovered by PayOnce", "With a person".
+    timeToClose: (GroupSpread & { groupText: string })[];
+    afterFailure: (GroupSpread & { groupText: string })[];
+  };
+  fees: Omit<MetricsReport["fees"], "rows"> & { rows: (FeeRow & { fee: Money })[] };
+  duplicates: Omit<MetricsReport["duplicates"], "rows"> & { rows: (DuplicateRow & { stoppedAmount: Money })[] };
+  outages: Omit<OutagesTable, "rows" | "byRail"> & { rows: (OutageRow & Railed)[]; byRail: (RailRow & Railed)[] };
 }
 
 export interface AuditCheckView {

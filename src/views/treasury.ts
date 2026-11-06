@@ -23,8 +23,17 @@ import {
   type OutagesReport,
   type OutageView,
 } from "../outages/outages.js";
-import { reconReport, type BreakView, type KindCount, type ReconReport, type ReconRunner, type WaitingView } from "../recon/reconcile.js";
-import { WALLET_STATUS_TEXT, type BreakKind, type WalletSummary } from "../recon/recon-match.js";
+import {
+  movementsView,
+  reconReport,
+  type BreakView,
+  type KindCount,
+  type MovementView,
+  type ReconReport,
+  type ReconRunner,
+  type WaitingView,
+} from "../recon/reconcile.js";
+import { WALLET_STATUS_TEXT, type BreakKind, type MovementHow, type WalletSummary } from "../recon/recon-match.js";
 import { capitalise } from "../text/printable.js";
 import type { Settings } from "../settings.js";
 import { readingSoft, type Ledger, type OutageHoldKind } from "../store/ledger.js";
@@ -36,6 +45,7 @@ import type {
   Money,
   OutageCardView,
   OutagesView,
+  ReconMovementsView,
   ReconView,
   WalletCashView,
 } from "./contract.js";
@@ -255,6 +265,42 @@ function breakItem(item: BreakView): BreakItemView {
   };
 }
 
+
+const HOW_WORDS: Record<MovementHow, string> = {
+  payonce: "PayOnce's payment",
+  mismatched: "Kept beside a payment because it doesn't match its invoice",
+  outside: "Sent outside PayOnce, tied to an invoice",
+  untied: "Sent outside PayOnce, tied to no invoice",
+  before: "From before the ledger",
+  hold: "Reserved by Airwallex",
+  waiting: "Waiting for its transfer to be read",
+  unexplained: "Not explained",
+  unreadable: "Can't be read",
+  "not-two-decimal": "Not reconciled",
+};
+
+// One wallet's stored movements, newest first, with their money and what
+// explains each in PayOnce's words.
+export function reconMovementsView(ledger: Ledger, currency: string, now: number): ReconMovementsView {
+  return readingSoft((): ReconMovementsView => {
+    const of = (minor: number | null): Money | null => (minor === null ? null : money(minor, currency));
+    return {
+      currency,
+      movements: movementsView(ledger, currency, now).map((movement: MovementView) => ({
+        id: movement.id,
+        postedAt: movement.postedAt,
+        typeText: movement.typeText,
+        amount: of(movement.amountMinor),
+        balance: of(movement.balanceMinor),
+        how: movement.how,
+        howText: HOW_WORDS[movement.how],
+        invoiceId: movement.invoiceId,
+        reference: movement.reference,
+        breakId: movement.breakId,
+      })),
+    };
+  });
+}
 
 // Movements that chain from one running balance to the next.
 const ADDS_UP: ReadonlySet<WalletSummary["status"]> = new Set<WalletSummary["status"]>(["adds-up", "differs", "moved", "unchecked"]);

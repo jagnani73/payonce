@@ -1,10 +1,10 @@
 import type { IncomingMessage } from "node:http";
 import { NameError } from "../../../domain/approvers.js";
 import { CURRENCY_PATTERN } from "../../../domain/patterns.js";
-import { explainBreaks, ExplainInputError, explainItems, movementsView, type BreakView } from "../../../recon/reconcile.js";
+import { explainBreaks, ExplainInputError, explainItems, type BreakView } from "../../../recon/reconcile.js";
 import { ReconChangedError, ReconKindsError, ReconUnknownError } from "../../../store/recon-store.js";
-import type { Acted, ReconView } from "../../../views/contract.js";
-import { reconView } from "../../../views/treasury.js";
+import type { Acted, ReconMovementsView, ReconView } from "../../../views/contract.js";
+import { reconMovementsView, reconView } from "../../../views/treasury.js";
 import type { HttpApp } from "../app.js";
 import { HttpError, readJson, sendJson, typed } from "../http.js";
 import type { Route } from "../router.js";
@@ -18,12 +18,12 @@ export function reconcileRoutes(app: HttpApp): Route[] {
     return reconView(engine.ledger, settings, Date.now(), reconRunner);
   }
 
-  function movements(url: URL): unknown {
+  function movements(url: URL): ReconMovementsView {
     const currency: string = url.searchParams.get("currency") ?? "";
     if (!CURRENCY_PATTERN.test(currency)) {
       throw new HttpError(400, "Name a wallet by its three capital letters, such as USD");
     }
-    return { currency, movements: movementsView(engine.ledger, currency) };
+    return reconMovementsView(engine.ledger, currency, Date.now());
   }
 
   function checkNow(): unknown {

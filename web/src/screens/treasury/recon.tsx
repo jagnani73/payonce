@@ -13,8 +13,8 @@ import { notify } from "../../notices";
 import { FAST_MS, SLOW_MS, usePoll, type Polled } from "../../poll";
 import { paymentHref } from "../../router";
 import { count } from "../../text";
-import type { Acted, BreakItemView, ExplainInput, MovementView, ReconMovementsView, ReconView } from "../../types";
-import { amountText } from "./format";
+import type { Acted, BreakItemView, ExplainInput, ReconMovementView, ReconMovementsView, ReconView } from "../../types";
+
 
 // Treasury › Reconciliation (ia.md section 8.2): the breaks that need a person
 // first, each kind with its explain form, then what clears by itself, what is
@@ -30,19 +30,6 @@ interface Missing {
   note: string | null;
 }
 
-// The words for how a movement is explained. The movements route answers codes.
-const HOW_WORDS: Record<MovementView["how"], string> = {
-  payonce: "PayOnce's payment",
-  mismatched: "Kept beside a payment because it doesn't match its invoice",
-  outside: "Sent outside PayOnce, tied to an invoice",
-  untied: "Sent outside PayOnce, tied to no invoice",
-  before: "From before the ledger",
-  hold: "Reserved by Airwallex",
-  waiting: "Waiting for its transfer to be read",
-  unexplained: "Not explained",
-  unreadable: "Can't be read",
-  "not-two-decimal": "Not reconciled",
-};
 
 function CheckBar(props: { view: ReconView; polled: Polled<ReconView> }): JSX.Element {
   const view: ReconView = props.view;
@@ -295,7 +282,7 @@ function Waiting(props: { view: ReconView }): JSX.Element | null {
 }
 
 interface Moves {
-  rows: MovementView[] | null;
+  rows: ReconMovementView[] | null;
   error: string | null;
 }
 
@@ -317,13 +304,13 @@ function MovementList(props: { currency: string; moves: Moves }): JSX.Element {
   return (
     <ol class="moves">
       {rows.map(
-        (row: MovementView): JSX.Element => (
+        (row: ReconMovementView): JSX.Element => (
           <li class="move" key={row.id}>
             <Time at={row.postedAt} class="move__when" />
             <span class="move__what">
               <span>{row.typeText}</span>
               <span class="move__how">
-                {HOW_WORDS[row.how] ?? "Not explained"}
+                {row.howText}
                 {row.reference === null ? null : (
                   <>
                     {" · "}
@@ -341,7 +328,7 @@ function MovementList(props: { currency: string; moves: Moves }): JSX.Element {
                 {row.breakId === null ? null : ` · break ${row.breakId}`}
               </span>
             </span>
-            <span class="move__amount">{row.amountMinor === null ? "Can't be read" : amountText(row.amountMinor, props.currency)}</span>
+            <span class="move__amount">{row.amount === null ? "Can't be read" : row.amount.text}</span>
           </li>
         ),
       )}
