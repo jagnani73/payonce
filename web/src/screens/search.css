@@ -1,0 +1,121 @@
+/* Search results: the search form, the exact match and one card per kind.
+   Each result is a link row. */
+
+.sresults {
+  gap: 18px;
+}
+
+.sresults__form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.sresults__field {
+  flex: 1 1 320px;
+  max-width: 520px;
+}
+
+.sresults__exact {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--accent-soft-line);
+  border-radius: var(--radius-card);
+  background: var(--accent-soft);
+}
+
+.sresults__exact > span {
+  flex: 1 1 260px;
+  font-weight: 500;
+}
+
+.hits {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+  min-height: 56px;
+  padding: 10px 20px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.hit:hover {
+  background: var(--sunk);
+  color: var(--text);
+}
+
+.hit__state {
+  flex: 0 0 200px;
+}
+
+.hit__main {
+  display: flex;
+  flex: 1 1 280px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  min-width: 0;
+}
+
+.hit__lead {
+  color: var(--accent);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.hit:hover .hit__lead {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
+
+.hit__rest {
+  color: var(--text-3);
+  overflow-wrap: anywhere;
+}
+
+.hit__money {
+  margin-left: auto;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.hit__aside {
+  margin-left: auto;
+}
+
+@media (max-width: 899px) {
+  .sresults {
+    gap: 14px;
+  }
+
+  .sresults__field {
+    flex-basis: 100%;
+    max-width: none;
+  }
+
+  .hit {
+    padding: 10px 14px;
+  }
+
+  .hit__state {
+    flex-basis: 100%;
+  }
+
+  .hit__main {
+    flex-direction: column;
+    flex-basis: 0;
+    gap: 2px;
+  }
+}
