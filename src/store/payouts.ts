@@ -190,63 +190,62 @@ export class PayoutStore {
     found: FoundPayout,
     line: string,
   ): void {
-    this.db.exec("BEGIN IMMEDIATE");
     try {
-      // A plain INSERT, so an invoice written by another process since the sweep
-      // checked fails here instead of gaining a second original.
-      this.db
-        .prepare(
-          `INSERT INTO obligations
-             (invoice_id, supplier, supplier_domain, beneficiary_id, currency,
-              amount_minor, transfer_method, invoice_floor_minor, origin,
-              payout_reference, started_by, supplier_phone, source_currency, look_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'outside', ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          input.invoiceId,
-          input.supplier,
-          input.supplierDomain,
-          input.beneficiaryId,
-          input.currency,
-          input.amountMinor,
-          input.transferMethod,
-          input.invoiceFloorMinor,
-          payoutReference,
-          input.startedBy,
-          input.supplierPhone,
-          sourceColumn(input),
-          // Due at once, so a watcher looks at it even if the step that found it
-          // stops before it wakes the invoice.
-          new Date().toISOString(),
-        );
-      this.db
-        .prepare(
-          `INSERT INTO attempts
-             (request_id, invoice_id, kind, transfer_id, reference, state, failure_code,
-              fee_minor, fee_currency, amount_minor, currency, sent_key, sent_ending, sent_route,
-              bank_created_at)
-           VALUES (?, ?, 'original', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          found.requestId,
-          input.invoiceId,
-          found.transferId,
-          found.reference,
-          found.state,
-          found.failureCode,
-          found.feeMinor,
-          found.feeCurrency,
-          found.amountMinor,
-          found.currency,
-          found.sentKey,
-          found.sentEnding,
-          found.sentRoute,
-          found.bankCreatedAt,
-        );
-      this.timelines.appendEvent(input.invoiceId, "bank", line, null);
-      this.db.exec("COMMIT");
+      this.db.transaction((): void => {
+        // A plain INSERT, so an invoice written by another process since the sweep
+        // checked fails here instead of gaining a second original.
+        this.db
+          .prepare(
+            `INSERT INTO obligations
+               (invoice_id, supplier, supplier_domain, beneficiary_id, currency,
+                amount_minor, transfer_method, invoice_floor_minor, origin,
+                payout_reference, started_by, supplier_phone, source_currency, look_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'outside', ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            input.invoiceId,
+            input.supplier,
+            input.supplierDomain,
+            input.beneficiaryId,
+            input.currency,
+            input.amountMinor,
+            input.transferMethod,
+            input.invoiceFloorMinor,
+            payoutReference,
+            input.startedBy,
+            input.supplierPhone,
+            sourceColumn(input),
+            // Due at once, so a watcher looks at it even if the step that found it
+            // stops before it wakes the invoice.
+            new Date().toISOString(),
+          );
+        this.db
+          .prepare(
+            `INSERT INTO attempts
+               (request_id, invoice_id, kind, transfer_id, reference, state, failure_code,
+                fee_minor, fee_currency, amount_minor, currency, sent_key, sent_ending, sent_route,
+                bank_created_at)
+             VALUES (?, ?, 'original', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            found.requestId,
+            input.invoiceId,
+            found.transferId,
+            found.reference,
+            found.state,
+            found.failureCode,
+            found.feeMinor,
+            found.feeCurrency,
+            found.amountMinor,
+            found.currency,
+            found.sentKey,
+            found.sentEnding,
+            found.sentRoute,
+            found.bankCreatedAt,
+          );
+        this.timelines.appendEvent(input.invoiceId, "bank", line, null);
+      });
     } catch (error: unknown) {
-      this.db.exec("ROLLBACK");
       if (isUniqueViolation(error)) {
         throw new DuplicatePaymentError(input.invoiceId);
       }

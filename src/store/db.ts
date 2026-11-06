@@ -150,16 +150,18 @@ export class Db {
   }
 
   // Runs fn in one write transaction and commits it, or rolls it all back if fn
-  // throws. Steps that open a transaction of their own cannot run inside one, so
-  // a nested call throws instead of failing part way.
-  transaction<T>(fn: () => T): T {
+  // throws. With commit, what fn returned is kept only when commit says so of it,
+  // and otherwise rolled back and still returned. Steps that open a transaction
+  // of their own cannot run inside one, so a nested call throws instead of
+  // failing part way.
+  transaction<T>(fn: () => T, commit: (result: T) => boolean = (): boolean => true): T {
     if (this.db.isTransaction) {
       throw new Error("A ledger transaction is already open");
     }
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const result: T = fn();
-      this.db.exec("COMMIT");
+      this.db.exec(commit(result) ? "COMMIT" : "ROLLBACK");
       return result;
     } catch (error: unknown) {
       this.db.exec("ROLLBACK");

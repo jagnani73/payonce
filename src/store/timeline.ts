@@ -186,8 +186,7 @@ export class Timelines {
   // started is never hashed again, even if part of its record has gone missing,
   // because hashing again would vouch for whatever the lines now say.
   startChain(): void {
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
+    this.db.transaction((): void => {
       if (!this.chainStarted()) {
         const rows: EventRow[] = this.db
           .prepare("SELECT * FROM events ORDER BY id")
@@ -212,11 +211,7 @@ export class Timelines {
         insert.run(CHAIN_STARTED_KEY, new Date().toISOString());
         insert.run(BACKFILLED_THROUGH_KEY, String(rows.at(-1)?.id ?? 0));
       }
-      this.db.exec("COMMIT");
-    } catch (error: unknown) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+    });
   }
 
   // True once pay run timelines are a hash chain, read the way chainStarted reads
@@ -247,8 +242,7 @@ export class Timelines {
   // Starts the chain of pay run timelines the way startChain starts the invoices':
   // the lines already there are hashed once, in id order, and never again.
   startRunChain(): void {
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
+    this.db.transaction((): void => {
       if (!this.runChainStarted()) {
         const rows: RunEventRow[] = this.db
           .prepare("SELECT * FROM run_events ORDER BY id")
@@ -273,11 +267,7 @@ export class Timelines {
         insert.run(RUN_CHAIN_STARTED_KEY, new Date().toISOString());
         insert.run(RUN_BACKFILLED_THROUGH_KEY, String(rows.at(-1)?.id ?? 0));
       }
-      this.db.exec("COMMIT");
-    } catch (error: unknown) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+    });
   }
 
   // Chains the line to the invoice's last line and adds it to the running hash in
@@ -355,8 +345,7 @@ export class Timelines {
   // meanwhile cannot make the running hash look wrong. invoiceId null reads every
   // invoice's lines.
   auditSnapshot(invoiceId: string | null): AuditSnapshot {
-    this.db.exec("BEGIN");
-    try {
+    return this.db.readSnapshot((): AuditSnapshot => {
       const rows: EventRow[] = (
         invoiceId === null
           ? this.db.prepare("SELECT * FROM events ORDER BY id").all()
@@ -375,12 +364,8 @@ export class Timelines {
         restarted: restartOf(this.db.metaValue(LEDGER_RESTARTED_KEY)),
         unlined: this.unlinedInvoices(),
       };
-      this.db.exec("COMMIT");
       return snapshot;
-    } catch (error: unknown) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+    });
   }
 
   events(invoiceId: string): LedgerEvent[] {
@@ -470,8 +455,7 @@ export class Timelines {
   // hashed is read again each time, so lines removed from the end are caught at
   // once: ids are never reused, so its hash then reads as missing.
   runningHashCheck(now: number = Date.now()): LedgerReport {
-    this.db.exec("BEGIN");
-    try {
+    return this.db.readSnapshot((): LedgerReport => {
       let progress: HeadProgress | undefined = this.headProgress;
       if (progress !== undefined && now - progress.fullAt >= FULL_HEAD_CHECK_MS) {
         progress = undefined;
@@ -514,7 +498,6 @@ export class Timelines {
       const stored: string | null = this.db.metaValue(LEDGER_HEAD_KEY);
       const restarted: HeadRestart | null = restartOf(this.db.metaValue(LEDGER_RESTARTED_KEY));
       const unlined: string[] = this.unlinedInvoices();
-      this.db.exec("COMMIT");
       return {
         lines: this.headProgress.lines,
         invoices: from.invoices.size,
@@ -524,10 +507,7 @@ export class Timelines {
         unlined,
         intact: stored === computed && restarted === null && unlined.length === 0,
       };
-    } catch (error: unknown) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+    });
   }
 
   // Chains one line to the run's timeline and adds it to the running hash of run
@@ -571,8 +551,7 @@ export class Timelines {
   // What an audit of run timelines checks, read in one transaction. runId null
   // reads every run's lines.
   runAuditSnapshot(runId: number | null): RunAuditSnapshot {
-    this.db.exec("BEGIN");
-    try {
+    return this.db.readSnapshot((): RunAuditSnapshot => {
       const rows: RunEventRow[] = (
         runId === null
           ? this.db.prepare("SELECT * FROM run_events ORDER BY id").all()
@@ -591,12 +570,8 @@ export class Timelines {
         restarted: restartOf(this.db.metaValue(RUN_RESTARTED_KEY)),
         unlined: this.unlinedRuns(),
       };
-      this.db.exec("COMMIT");
       return snapshot;
-    } catch (error: unknown) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+    });
   }
 
   runEvents(runId: number): LedgerEvent[] {

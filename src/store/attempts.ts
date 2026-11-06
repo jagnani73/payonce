@@ -504,12 +504,10 @@ export class AttemptStore {
   // so nothing is left for a later look to send. Throws DuplicatePaymentError when
   // the lock refuses it.
   tryLock(invoiceId: string): void {
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      this.insertAttempt(randomUUID(), invoiceId, "replacement", null, null, null);
-    } finally {
-      this.db.exec("ROLLBACK");
-    }
+    this.db.transaction(
+      (): void => this.insertAttempt(randomUUID(), invoiceId, "replacement", null, null, null),
+      (): boolean => false,
+    );
   }
 
   attempts(invoiceId: string): Attempt[] {

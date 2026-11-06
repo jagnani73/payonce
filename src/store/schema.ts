@@ -574,8 +574,7 @@ export class Schema {
   // Under the write lock, so two processes opening an older file at once do not
   // both add a column.
   private addColumns(): void {
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
+    this.db.transaction((): void => {
       let accountKeyAdded: boolean = false;
       for (const [table, columns] of Object.entries(ADDED_COLUMNS)) {
         const existing: string[] = (
@@ -616,11 +615,7 @@ export class Schema {
         this.backfillAccountKeys();
       }
       this.rebuildRoutes();
-      this.db.exec("COMMIT");
-    } catch (error: unknown) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+    });
   }
 
   // An attempt from before account_key keeps the account something checked when

@@ -476,7 +476,7 @@ export class ReconStore {
   // that never had a line. Once it has, a running hash removed later stays
   // missing, and the audit says so, as it does for the invoice chain.
   ensure(): void {
-    this.within("BEGIN IMMEDIATE", (): void => {
+    this.db.transaction((): void => {
       this.db.exec(RECON_SCHEMA);
       const columns: string[] = (
         this.db.prepare("PRAGMA table_info(recon_transfers)").all() as unknown as ColumnRow[]
@@ -528,29 +528,10 @@ export class ReconStore {
       .run(key, value);
   }
 
-  private begin(mode: "BEGIN" | "BEGIN IMMEDIATE"): void {
-    if (this.db.isTransaction) {
-      throw new Error("A ledger transaction is already open");
-    }
-    this.db.exec(mode);
-  }
-
-  private within<T>(mode: "BEGIN" | "BEGIN IMMEDIATE", fn: () => T): T {
-    this.begin(mode);
-    try {
-      const result: T = fn();
-      this.db.exec("COMMIT");
-      return result;
-    } catch (error: unknown) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
-  }
-
   // A run gets its number when it starts, under the write lock, so a later
   // number always means a later start, whichever process runs it.
   beginRun(ranFrom: RanFrom, mode: ReconMode, now: number): ReconRun {
-    const row: RunRow = this.within("BEGIN IMMEDIATE", (): RunRow => {
+    const row: RunRow = this.db.transaction((): RunRow => {
       this.db
         .prepare("INSERT INTO recon_runs (started_at, ran_from, mode) VALUES (?, ?, ?)")
         .run(new Date(now).toISOString(), ranFrom, mode);
@@ -687,7 +668,7 @@ export class ReconStore {
 
   // What the matcher works on now, from the ledger alone, in one read.
   snapshot(): ReconSnapshot {
-    return this.within("BEGIN", (): ReconSnapshot => this.snapshotRows());
+    return this.db.readSnapshot((): ReconSnapshot => this.snapshotRows());
   }
 
   private storeRead(write: ReconWrite, now: number): void {
@@ -986,7 +967,7 @@ export class ReconStore {
   // never undoes a newer one. Nothing awaits inside, so no other step on this
   // connection can find the transaction open.
   commit(runId: number, write: ReconWrite | null, now: number, rules: CommitRules): CommitResult {
-    return this.within("BEGIN IMMEDIATE", (): CommitResult => {
+    return this.db.transaction((): CommitResult => {
       const finishedAt: string = new Date(now).toISOString();
       const committed: number = Number(this.meta(COMMITTED_RUN_KEY) ?? 0);
       if (committed > runId) {
@@ -1018,7 +999,7 @@ export class ReconStore {
   // A person says what a set of open breaks of one kind is. Every break must be
   // open with the facts the person was shown, or nothing changes.
   explain(items: ExplainItem[], name: string, note: string, now: number): ReconBreak[] {
-    return this.within("BEGIN IMMEDIATE", (): ReconBreak[] => {
+    return this.db.transaction((): ReconBreak[] => {
       const at: string = new Date(now).toISOString();
       const rows: (BreakRow | undefined)[] = items.map(
         (item: ExplainItem): BreakRow | undefined =>
@@ -1164,7 +1145,7 @@ export class ReconStore {
 
   // What an audit of the chain checks, read in one transaction.
   auditSnapshot(): ReconAuditSnapshot {
-    return this.within("BEGIN", (): ReconAuditSnapshot => ({
+    return this.db.readSnapshot((): ReconAuditSnapshot => ({
       events: (this.db.prepare("SELECT * FROM recon_events ORDER BY id").all() as unknown as EventRow[]).map(
         (row: EventRow): ChainedReconEvent => ({
           id: row.id,

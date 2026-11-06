@@ -120,6 +120,12 @@ export interface RunApprovalRow {
   needed_why: string;
 }
 
+// Spending an approval is kept only when it opened the payment's attempt, and
+// rolled back otherwise.
+function opened(attempt: Attempt | undefined): boolean {
+  return attempt !== undefined;
+}
+
 // Approval requests and signoffs for invoices (approvals, signoffs) and pay runs
 // (run_approvals, run_signoffs), and spending an approval.
 export class ApprovalStore {
@@ -146,10 +152,8 @@ export class ApprovalStore {
     unchanged: () => boolean,
     route: string | null = null,
   ): Attempt | undefined {
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
+    return this.db.transaction((): Attempt | undefined => {
       if (!unchanged()) {
-        this.db.exec("ROLLBACK");
         return undefined;
       }
       const used: { changes: number | bigint } = this.db
@@ -167,16 +171,10 @@ export class ApprovalStore {
         )
         .run(invoiceId, invoiceId, invoiceId, invoiceId);
       if (Number(used.changes) !== 1 || Number(released.changes) !== 1) {
-        this.db.exec("ROLLBACK");
         return undefined;
       }
-      const attempt: Attempt = this.attempts.openAttempt(invoiceId, "original", lease, approvalId, null, route);
-      this.db.exec("COMMIT");
-      return attempt;
-    } catch (error: unknown) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+      return this.attempts.openAttempt(invoiceId, "original", lease, approvalId, null, route);
+    }, opened);
   }
 
   // Voids a request or approval for the invoice that is still open. False when
@@ -195,8 +193,7 @@ export class ApprovalStore {
   // an invoice with a person gets one, so a request cannot land on an invoice
   // another process has just closed. False when none was opened.
   requestApproval(invoiceId: string, request: ApprovalRequest): boolean {
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
+    return this.db.transaction((): boolean => {
       this.voidOpenApprovals(invoiceId);
       const result: { changes: number | bigint } = this.db
         .prepare(
@@ -216,12 +213,8 @@ export class ApprovalStore {
           request.routeKey ?? null,
           invoiceId,
         );
-      this.db.exec("COMMIT");
       return Number(result.changes) === 1;
-    } catch (error: unknown) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+    });
   }
 
   latestApproval(invoiceId: string): Approval | undefined {
@@ -277,8 +270,7 @@ export class ApprovalStore {
     binding: string,
     useWithinMs: number,
   ): Approval {
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
+    this.db.transaction((): void => {
       const row: ApprovalRow | undefined = this.db
         .prepare("SELECT * FROM approvals WHERE id = ?")
         .get(approvalId) as unknown as ApprovalRow | undefined;
@@ -318,11 +310,7 @@ export class ApprovalStore {
           .prepare("UPDATE obligations SET look_at = ? WHERE invoice_id = ?")
           .run(new Date().toISOString(), row.invoice_id);
       }
-      this.db.exec("COMMIT");
-    } catch (error: unknown) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+    });
     const row: ApprovalRow = this.db
       .prepare("SELECT * FROM approvals WHERE id = ?")
       .get(approvalId) as unknown as ApprovalRow;
@@ -347,10 +335,8 @@ export class ApprovalStore {
     unchanged: () => boolean,
     route: string | null = null,
   ): Attempt | undefined {
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
+    return this.db.transaction((): Attempt | undefined => {
       if (!unchanged()) {
-        this.db.exec("ROLLBACK");
         return undefined;
       }
       const result: { changes: number | bigint } = this.db
@@ -363,16 +349,10 @@ export class ApprovalStore {
         )
         .run(approvalId, invoiceId, new Date().toISOString(), invoiceId, invoiceId, invoiceId);
       if (Number(result.changes) !== 1) {
-        this.db.exec("ROLLBACK");
         return undefined;
       }
-      const attempt: Attempt = this.attempts.openAttempt(invoiceId, "replacement", lease, approvalId, null, route);
-      this.db.exec("COMMIT");
-      return attempt;
-    } catch (error: unknown) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+      return this.attempts.openAttempt(invoiceId, "replacement", lease, approvalId, null, route);
+    }, opened);
   }
 
   setApprovalState(
