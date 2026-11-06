@@ -128,7 +128,10 @@ function ScriptedIncident(props: { view: SandboxView }): JSX.Element {
               maxLength={40}
               placeholder="PayOnce makes one"
               value={invoice}
-              onInput={(event: Event): void => setInvoice((event.currentTarget as HTMLInputElement).value)}
+              onInput={(event: Event): void => {
+                setInvoice((event.currentTarget as HTMLInputElement).value);
+                setInvoiceError(null);
+              }}
             />
           )}
         </Field>
@@ -199,7 +202,7 @@ function DuplicateLock(props: { under: Route }): JSX.Element {
     const tested: string = invoiceId;
     const answer: DuplicateLockResult = await postJson<DuplicateLockResult>(`/api/sandbox/duplicate-lock/${encodeURIComponent(tested)}`, {});
     setResult({ invoiceId: tested, refused: answer.refused, text: answer.text });
-    logAction(tested, answer.refused ? "Duplicate lock refused a second live transfer" : "Duplicate lock test: not refused, nothing was sent");
+    logAction(tested, answer.refused ? "Duplicate lock refused a second live transfer" : "Duplicate lock test: not refused. Nothing was sent.");
   }
 
   return (
@@ -237,11 +240,11 @@ function DuplicateLock(props: { under: Route }): JSX.Element {
         <Callout tone={result.refused ? "info" : "warning"}>
           <p class="sim__result">
             {result.refused
-              ? `Refused by the duplicate lock: ${result.invoiceId} already has a live transfer.`
+              ? `Refused by the duplicate lock: ${result.invoiceId} already has a transfer that is live or paid.`
               : "Not refused: nothing is live, so PayOnce would decide normally. Nothing was sent."}
           </p>
           <p class="sim__line">
-            {"Timeline line: "}
+            {"On the timeline: "}
             <Theirs text={result.text} />
           </p>
         </Callout>
@@ -255,7 +258,7 @@ function SessionLog(): JSX.Element {
   return (
     <Section title="This session">
       {entries.length === 0 ? (
-        <p class="muted">Nothing yet. What you do here in this tab is listed, newest first.</p>
+        <p class="muted">Nothing yet. This list shows what you do here in this tab, newest first.</p>
       ) : (
         <ol class="sim__log">
           {entries.map(
