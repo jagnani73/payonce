@@ -456,6 +456,7 @@ export const SUPPLIER_FIELDS = {
   "contact.history[].proposedBy": "person",
   "contact.history[].confirmedBy": "person",
   "contact.history[].closedBy": "person",
+  "contact.history[].closeNote": "person",
   "contact.callbackBarred[]": "person",
   "contact.notice": "plain",
   ...under("contact.actions.propose", CONTACT_CAN),

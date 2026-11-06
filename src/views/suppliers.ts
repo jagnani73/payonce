@@ -469,6 +469,8 @@ export interface PhoneVersion {
   confirmedAt: string | null;
   closedBy: string | null;
   closedAt: string | null;
+  // Why it was withdrawn, as the person who withdrew it typed it.
+  closeNote: string | null;
 }
 
 export interface ContactBlock {
@@ -1790,6 +1792,7 @@ function contactOf(facts: RecordFacts, now: number): ContactBlock {
             confirmedSource: sourceLabel(onFile.confirmedSource),
             replacedEnding: replaced === undefined ? null : phoneEnding(replaced.value),
             changedRecently:
+              onFile.value !== "" &&
               replaced !== undefined &&
               replaced.value !== "" &&
               onFile.origin === "person" &&
@@ -1829,6 +1832,7 @@ function contactOf(facts: RecordFacts, now: number): ContactBlock {
           confirmedAt: iso(contact.confirmedAt),
           closedBy: contact.closedBy,
           closedAt: iso(contact.closedAt),
+          closeNote: contact.closeNote,
         }),
       ),
     callbackBarred,

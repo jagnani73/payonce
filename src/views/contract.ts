@@ -1031,8 +1031,9 @@ export interface SuppliersView {
 // The record's phone on file, by its last four digits only. GET
 // /api/suppliers/:key/contact gives the full number. removed: two people took it
 // off file, so none is on file. originText is PayOnce's words for a number no
-// person put on file, "" for one two people did. changed: it replaced another
-// number in the last 7 days, with PayOnce's warning.
+// person put on file, "" for one two people did. since is null for a migrated
+// number, whose own time PayOnce does not know. changed: a new number replaced
+// another in the last 7 days, with PayOnce's warning; never set on a removal.
 export interface PhoneOnFileView {
   contactId: number;
   ending: string | null;
@@ -1079,6 +1080,8 @@ export interface PhoneVersionView {
   confirmedAt: Iso | null;
   closedBy: PersonName | null;
   closedAt: Iso | null;
+  // Why it was withdrawn, as typed.
+  closeNote: Theirs | null;
 }
 
 // The supplier's contact on file: the phone, which two people put there or

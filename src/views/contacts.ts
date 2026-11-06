@@ -50,7 +50,8 @@ export function phoneOnFileView(phone: PhoneOnFile | null, now: number): PhoneOn
     removed: phone.removed,
     origin: phone.origin,
     originText: ORIGIN_TEXT[phone.origin],
-    since: phone.since,
+    // A migrated number's own time is when PayOnce moved it, not when it went on file.
+    since: phone.origin === "migrated" ? null : phone.since,
     proposedBy: phone.proposedBy,
     proposedSource: phone.proposedSource,
     confirmedBy: phone.confirmedBy,
@@ -95,20 +96,26 @@ function versionView(version: PhoneVersion): PhoneVersionView {
     confirmedAt: version.confirmedAt,
     closedBy: version.closedBy,
     closedAt: version.closedAt,
+    closeNote: version.closeNote,
   };
+}
+
+// A refusal PayOnce words as a thrown message, as a sentence for the page.
+function sentence(text: string): string {
+  return /[.!?]$/.test(text) ? text : `${text}.`;
 }
 
 // What a person can do with the record's phone now: propose a number unless one
 // waits, and confirm or withdraw the one that waits.
 function actionsOf(proposal: PhoneProposal | null): Record<string, Can> {
-  const none: Can = refused("no-phone-proposal", "No new phone number for this supplier waits for a second person");
+  const none: Can = refused("no-phone-proposal", "No new phone number for this supplier waits for a second person.");
   if (proposal === null) {
     return { propose: allowed(), confirm: none, withdraw: none };
   }
   const value: string = proposal.removal ? "" : (proposal.ending ?? "");
   return {
-    propose: proposal.lapsed ? allowed() : refused("phone-proposal-waits", proposalWaits(proposal)),
-    confirm: proposal.lapsed ? refused("phone-proposal-lapsed", `${lapseLine({ value })}. Propose it again`) : allowed(),
+    propose: proposal.lapsed ? allowed() : refused("phone-proposal-waits", sentence(proposalWaits(proposal))),
+    confirm: proposal.lapsed ? refused("phone-proposal-lapsed", `${lapseLine({ value })}. Propose it again.`) : allowed(),
     withdraw: allowed(),
   };
 }
