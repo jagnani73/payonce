@@ -10,7 +10,7 @@ The SQLite ledger: its tables, columns, indexes and triggers, its transactions, 
 - `Ledger` builds every store on one `Db`, the connection, and each `Ledger` method hands over to the store that owns its tables. The rest of PayOnce goes through `Ledger`.
 - A write waits up to 5 seconds (`BUSY_TIMEOUT_MS`) for another process's lock before it fails.
 - `pnpm reset` renames the file to `payonce.<time>.db`, which `.gitignore` also ignores, so the next run starts an empty ledger. Nothing is deleted, and transfers already sent stay in the sandbox.
-- `new Ledger(path, true)` opens a file read-only and skips the schema, the upgrade, the chain start and `ReconStore.ensure`. `pnpm run audit`, `pnpm ask`, `pnpm metrics` and the MCP server open the ledger this way.
+- `new Ledger(path, true)` opens a file read-only and skips the schema, the upgrade, the chain start and `ReconStore.ensure`. `pnpm run audit`, `pnpm ask`, `pnpm metrics`, `pnpm reconcile show` and the MCP server open the ledger this way.
 - `schemaGaps` lists the tables in `SCHEMA` and the columns in `ADDED_COLUMNS` that a file lacks, and only reads. Reconciliation's tables are not in `SCHEMA`, so neither `schemaGaps` nor the MCP server asks for them.
 
 ### Stores and read models
@@ -35,10 +35,10 @@ The SQLite ledger: its tables, columns, indexes and triggers, its transactions, 
 | `Schema` | `store/schema.ts` | creates and upgrades every table, and `meta` |
 | `ReconStore` | `store/recon-store.ts` | reconciliation's tables |
 
-- `store/read/` holds models that only read: `SupplierReads` for the supplier view, `MetricsReads` for the metrics, `SearchReads` (`search`, `knownNames`), and `callbackFacts` in `store/read/callback.ts`, which the engine and `views/snapshot.ts` both use.
+- `store/read/` holds models that only read: `SupplierReads` for the supplier view, `MetricsReads` for the metrics, `SearchReads` (`search`, `knownNames`), the cash lines and `committedMinor` (`cash.ts`), an invoice's facts such as `paidTwice` and `coveredByClose` (`facts.ts`), what a person reads before a close or an approval (`reviews.ts`: `pendingClose`, `pendingApproval`, `barredOnFile`), and `callbackFacts` in `store/read/callback.ts`, which the engine and `views/snapshot.ts` both use.
 - `ReconStore` shares the `Db`, runs through `Db.transaction`, `Db.readSnapshot` and `RECON_CHAIN`, and creates its tables in `ReconStore.ensure` on every writable open. `Ledger.recon()` hands it out. Its rules are in [reconciliation.md](reconciliation.md).
 - Smaller reads for the views: `nextCheckAt` gives `obligations.look_at` as stored, `approvalsFor` and `runApprovalsFor` give every request for an invoice or a run, oldest first, and `callbackRecorders` gives only the names of who recorded each callback on an invoice.
-- `store/attempts.ts` exports the live tests: `liveAtBank` (and `LIVE_ATTEMPT`, the same test in SQL), `ownLive`, `withBank`, `mismatchedLive` and `lateBesideLive`, the test `paidTwice` and `settle` make. `store/approvals.ts` exports `expiryOf` and `isExpired`.
+- The live tests are defined once, in `domain/live.ts`: `liveAtBank`, `ownLive`, `withBank`, `mismatchedLive`, `lateBesideLive` (the test `paidTwice` and `settle` make), `payoutPays`, and a request's `expiryOf` and `isExpired`. The store keeps only their SQL forms: `LIVE_ATTEMPT` and `UNCLEARED_MISMATCH` in `store/attempts.ts`, and `LIVE_OUTSIDE_PAYOUT` in `store/payouts.ts`.
 - `metricsRead` and `changeStamp` serve the metrics. `changeStamp` changes whenever this connection writes or another commits, and writes nothing.
 
 ### Transactions
@@ -46,7 +46,7 @@ The SQLite ledger: its tables, columns, indexes and triggers, its transactions, 
 - `Db.transaction(fn, commit?)` is the one write transaction: `BEGIN IMMEDIATE`, then commit, or roll back if `fn` throws. `Ledger.transaction(fn)` is the same without `commit`.
 - With `commit`, a result it refuses is rolled back and still returned: `releaseFor` and `useApproval` roll back when they open no attempt, and `tryLock` always rolls back.
 - Transactions cannot nest. `Db.transaction` and `Db.readSnapshot` throw "A ledger transaction is already open" before anything is written ([invariant 59](../invariants.md#records-and-boundaries)).
-- Nothing that opens its own transaction runs inside one, and neither does `note`. These include `addEvent`, `addRunEvent`, `requestApproval`, `requestRunApproval`, `signOff`, `releaseFor`, `useApproval`, `tryLock`, `adoptPayout`, `linkOutsidePayout`, `settle`, `reject`, `rejectAgain` and `takeCurrencyLock`.
+- Nothing that opens its own transaction runs inside one, and neither does `note`. These include `addEvent`, `addRunEvent`, `requestApproval`, `signOff`, `releaseFor`, `useApproval`, `tryLock`, `adoptPayout`, `linkOutsidePayout`, `settle`, `reject`, `rejectAgain` and `takeCurrencyLock`.
 - `openAttempt` and `addRunApproval` run only inside a transaction the caller holds, and throw outside one.
 - `Db.readSnapshot(fn)` is the one read snapshot: a deferred `BEGIN`, so every read in `fn` sees the ledger at one moment. It works on a read-only open, and `fn` only reads.
 - A view reads in several read transactions, one per read model (the invoice and run snapshots in `views/snapshot.ts`, the supplier reads, the metrics), so two parts of one view can come from different moments. `boardReport` opens no snapshot of its own.
@@ -55,11 +55,11 @@ The SQLite ledger: its tables, columns, indexes and triggers, its transactions, 
 
 - Stored JSON is read strict. Outside `readingSoft`, `storedStrings`, `storedList` and `storedObject` in `store/db.ts` are plain `JSON.parse` ([invariant 60](../invariants.md#records-and-boundaries)).
 - The row mappers read through them: `duplicate_of`, attempt and run row `arrival`, run `columns`, run row `cells`, `reasons` and `held_for`, outage `codes` and `counted`, and an upload's `reply_to`, `attachments` and `notes`.
-- `checkedObject(json, shape, what)` reads strict everywhere, inside `readingSoft` too. `storedShape(json, shape, what)` reads strict outside `readingSoft` and as none inside it. The shapes are `isApprovalTerms`, `isLastQuote` and `isStoredFindings` in `engine/stored.ts`.
+- `checkedObject(json, shape, what)` reads strict everywhere, inside `readingSoft` too. `storedShape(json, shape, what)` reads strict outside `readingSoft` and as none inside it. The shapes are `isApprovalTerms`, `isRunTerms`, `isLastQuote`, `isStoredFindings`, `isTextList` and `isAttachmentList` in `store/stored.ts`.
 - A value that does not parse, or that the shape refuses, throws `StoredShapeError`, a `SyntaxError`. Its message is fixed words naming the row ("PayOnce cannot read the terms of approval request 3 for INV-102502 in the ledger, so it stops here and sends nothing"), never the stored text.
-- Approval terms are read with `requestTerms` (`checkedObject`) in `approvalProblem`, `voidIfStale`, `awaitApproval`, `noteEvidenceUpgrade`, `retry`, `pendingApproval`, `rateFor`, `rateProblem` and `arrivalFrom`.
+- Approval terms are read with `requestTerms` (`checkedObject`) in `approvalProblem`, `voidIfStale`, `awaitApproval`, `noteEvidenceUpgrade`, `retry`, `pendingApproval`, `rateFor`, `rateProblem` and `arrivalFrom`. Run terms are read with `runRequestTerms` (`checkedObject`, `isRunTerms`) in the run check, `pendingRunApproval` and `releaseRun`.
 - `rateFor` reads the kept quote and `readNewEmails` the findings with `checkedObject`. `storedFindings` and the cash line amount's terms and kept quote use `storedShape`, so the board's `pendingClose` and the panel read them soft.
-- `Ledger.emails` reads an email's `reply_to`, `attachments` and `notes` with plain `JSON.parse`, so it reads strict inside `readingSoft` too.
+- `Ledger.emails` reads an email's `reply_to` and `notes` with `storedShape` and `isTextList`, and its `attachments` with `isAttachmentList`. A look throws on a list that is not in the shape PayOnce writes, and a view reads it as an empty list.
 - Reads that span every invoice parse only the columns they use: `committedMinor` reads `committedRead` (open and escalated invoices and their attempts, without `duplicate_of` or `arrival`), and the duplicate scans, the run checks and the callback's check read `scannedObligations`.
 - Only views read soft, inside `readingSoft(fn)`: the builders in `src/views/`, `outageView`, `outagesReport` and `GET /api/cash`. The watcher and the server's start-up pick-up (`pickUpInterrupted`) also read soft when they list which invoices to wake.
 - `readingSoft` takes synchronous reads only and throws on a promise, so no look runs inside it. The watcher and `pickUpInterrupted` read inside it and wake the invoices afterwards.
@@ -113,14 +113,14 @@ The SQLite ledger: its tables, columns, indexes and triggers, its transactions, 
 
 - `sent_key`, `sent_route` and `sent_ending`, on attempts and `outside_payouts`, are where a transfer went as last read: `accountKeyOf` and `routeKeyOf` of its bank details, and the last four of `account_number`, else `iban`, as 1 to 4 letters and digits (`sentToOf`).
 - All three are null when the transfer shows no bank details, or details that are not an object, such as `null`.
-- They are display only, for the supplier view, except that `outside_payouts.sent_route` decides whether a paid payout pays its invoice (`payoutVerdict`). No decision, term, binding, alert, draft or explainer reads them.
+- They are display only, for the supplier view, the payment page and the New payment picker's last paid (`paidTransfer`), except that `outside_payouts.sent_route` decides whether a paid payout pays its invoice (`payoutVerdict`). No decision, term, binding, alert, draft or explainer reads them.
 - `record` in `engine/payments.ts` writes them with `recordSentTo`, a `COALESCE` update after its transaction, inside a try, so a failure prints a warning and the payment step goes on.
 - `payoutMoney` writes them when a payout is tied and on every look that reads it, and the sweep's `adopt` on a found payout's original.
 - `sentToOf` never throws: it checks the value is an object first and catches anything else.
 
 ### Time triggers
 
-- `obligations.escalated_at`, `attempts.failed_at` and `attempts.paid_at` are when PayOnce first recorded that state. For a found payout's original taken on failed or paid, that is when PayOnce took it on. Only the metrics read them.
+- `obligations.escalated_at`, `attempts.failed_at` and `attempts.paid_at` are when PayOnce first recorded that state. For a found payout's original taken on failed or paid, that is when PayOnce took it on. Only the metrics read them, and the New payment picker, which shows when the last paid transfer was paid (`paidTransfer`).
 - Only the five triggers in `TIME_TRIGGERS` write them. `obligation_escalated_at`, `attempt_failed_at` and `attempt_paid_at` run after an `UPDATE OF state` into that state from another one while the column is null.
 - `attempt_failed_at_insert` and `attempt_paid_at_insert` run after an insert in that state, as `adoptPayout` makes.
 - Each trigger sets only its own column, with `COALESCE` and `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`, on the same row by rowid. A trigger has no constraint, no RAISE and no SELECT.
@@ -134,7 +134,7 @@ The SQLite ledger: its tables, columns, indexes and triggers, its transactions, 
 - `RequestBook.signOff` checks the request is waiting, the binding matches and it has not expired, adds the signoff, and marks it approved once it has `needed`, in one transaction ([invariant 36](../invariants.md#approvals)).
 - A request that gets its last signoff has at least `useWithinMs` to be used, `approvals.approver` joins the signers' names (`signersOf`), and an invoice's next look is due at once.
 - `RequestBook.add` voids any earlier open request for the same invoice or run, and inserts only while the shape's `open` test passes: an escalated invoice, or a waiting run.
-- `requestApproval` and `requestRunApproval` run `add` in a transaction of their own. `addRunApproval` runs it in the caller's, so a run check's rows and its request are written together.
+- `requestApproval` runs `add` in a transaction of its own. A run's request opens only through `addRunApproval`, which runs it in the caller's transaction, so a run check's rows and its request are written together.
 - Invoice and run requests share `RequestBook`, with a shape each (`INVOICE_REQUESTS`, `RUN_REQUESTS`): the tables, the owner column, the open test, the columns kept beside the terms (`route_key`, invoices only), the expiry message, and the look due once approved.
 - An approval is marked `used` in the transaction that opens its attempt, before the payment is tried (`useApproval`, `releaseFor`, or `RunStore.releaseRun` for a run), so it covers one attempt.
 - PayOnce opens a request only when the original has failed, or for a held invoice. `pendingApproval` shows none on an invoice that is not escalated. The duplicate lock still applies to an approved payment.
@@ -237,7 +237,6 @@ The SQLite ledger: its tables, columns, indexes and triggers, its transactions, 
 - The store methods that write a line with their change call them: `openObligation`, `adoptPayout`, `releaseRun`, `createDraft`, `markDraft`, `recordRailFailure`, `holdForOutage`, `endOutage`, `proposeContact`, `confirmContact` and `withdrawContact`.
 - Every other line is written after the commit. Apart from hashing the lines already there when a chain starts, no code updates or deletes a line.
 - Every invoice gets its first line in the transaction that writes it: "Incident opened by NAME" from `openObligation`, the found payout's line from `adoptPayout`, each released row's line from `releaseRun`. A run's upload line follows `createRun` with nothing awaited between them.
-- `headlines` gives each invoice's latest decision, close or standing line for the incident list, never an error, an email or a draft, walking back on `events_by_invoice`.
 
 ### Hash chains
 
@@ -312,7 +311,7 @@ The SQLite ledger: its tables, columns, indexes and triggers, its transactions, 
 - A held invoice whose `duplicate_of` does not parse stays held, and `pendingApproval` throws on it too, so nobody can approve paying it.
 - In a view, unreadable terms or a kept quote give the panel's line amount no quote, the board tells a held request from a replacement by the invoice, and findings that do not parse or fit their shape (such as `{}`) stand as not read.
 - An outage with no readable codes says "a rail-level code", as its alert does, and its card on Treasury's Outages tab (`web/src/screens/treasury/`) shows "none on file".
-- The stored shapes accept every version on file. A replacement's terms may lack `accountKey` (rows before 2026-10-28) and `evidence.emails` (the first terms), and `evidence.bankChange` may be missing or null. Held terms always have `accountKey`.
+- The stored shapes accept every version on file. A replacement's terms may lack `accountKey` (rows before 2026-10-28) and `evidence.emails` (the first terms), and `evidence.bankChange` may be missing or null. Held terms always have `accountKey`. A pay run's rows may lack `supplierDomain` and `arrival`.
 - Stored findings may lack `asksNotToPay`, `emailsRead`, `unread`, `unverifiedSenders` and `readBy`.
 - A line with no hash, written by older code, is reported as written outside the chain, and the next line chains from the last line with a hash.
 - A ledger whose run chain or invoice chain has not started is reported by `pnpm run audit`, never hashed by it. On a file from before pay runs, which has no `runs` table (`hasRunTable`), `pnpm run audit run <RUN>` says the ledger has no pay runs.
