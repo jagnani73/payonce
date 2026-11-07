@@ -393,8 +393,10 @@ export interface HeadroomLine {
   now: Money | null;
   after: Money | null;
   floor: Money | null;
-  // "not-set" | "unreadable" | "setting"
-  floorSource: "setting" | "not-set" | "unreadable";
+  // invoice: the payment is held to the invoice's own floor, which is stricter
+  // than its wallet's or stands where the wallet has none. Only the payment page
+  // gives it.
+  floorSource: "setting" | "not-set" | "unreadable" | "invoice";
 }
 
 export interface DecisionPanel {

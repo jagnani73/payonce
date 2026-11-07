@@ -1,12 +1,12 @@
 import { railWords, STATUS_PATTERN } from "../domain/patterns.js";
-import { currencyFloor, debitCurrency, type CurrencyFloor } from "../domain/reserve.js";
+import { currencyFloor, debitCurrency, heldFloor, type HeldFloor } from "../domain/reserve.js";
 import { payoutNamesOnly, unrecognisedPaid, unrecognisedUncleared } from "../domain/live.js";
 import { aboutBankDetails, closeKindOf, type CloseKind, type InvoiceSnapshot, type Situation } from "../domain/situation.js";
 import { sendsText, type OutageSend } from "../outages/outages.js";
 import type { Outbox } from "../outbox/drafts.js";
 import type { Settings } from "../settings.js";
 import { payoutVerdict, type Attempt, type Obligation, type OutsidePayout } from "../store/ledger.js";
-import { WAITING_KINDS, type CashLine, type CashReport, type CurrencyCash } from "../store/read/cash.js";
+import { headroomAbove, WAITING_KINDS, type CashLine, type CashReport, type CurrencyCash } from "../store/read/cash.js";
 import { namingText, type NamingPayout } from "../store/read/reviews.js";
 import { shownReference } from "../text/printable.js";
 import type {
@@ -65,18 +65,23 @@ function paidReference(snapshot: InvoiceSnapshot, kind: CloseKind | undefined): 
 }
 
 // The wallet's headroom now and after the request is approved, from the cash
-// panel as the server last read it.
+// panel as the server last read it. While the invoice is open it is worked above
+// the floor the policy holds its payments to (floorFor), which can be the
+// invoice's own. A closed invoice pays nothing more, so as on the cash panel only
+// its wallet's floor counts.
 export function headroomOf(snapshot: InvoiceSnapshot, settings: Settings, cash: CashReport | null): HeadroomLine | null {
-  const wallet: string = debitCurrency(snapshot.obligation);
-  const floor: CurrencyFloor = currencyFloor(settings.reserve, wallet);
+  const o: Obligation = snapshot.obligation;
+  const wallet: string = debitCurrency(o);
+  const floor: HeldFloor =
+    o.state === "settled" || o.state === "rejected" ? currencyFloor(settings.reserve, wallet) : heldFloor(settings.reserve, o);
   const found: CurrencyCash | undefined = cash?.currencies.find((entry: CurrencyCash): boolean => entry.currency === wallet);
   if (cash === null) {
     return null;
   }
   const waiting: number = (found?.lines ?? [])
-    .filter((line: CashLine): boolean => line.invoiceId === snapshot.obligation.invoiceId && WAITING_KINDS.has(line.kind))
+    .filter((line: CashLine): boolean => line.invoiceId === o.invoiceId && WAITING_KINDS.has(line.kind))
     .reduce((sum: number, line: CashLine): number => sum + line.amountMinor + line.feeMinor, 0);
-  const now: number | null = found?.headroomMinor ?? null;
+  const now: number | null = found === undefined ? null : headroomAbove(found.airwallex?.availableMinor ?? null, floor, found.totals);
   return {
     wallet,
     now: now === null ? null : money(now, wallet),

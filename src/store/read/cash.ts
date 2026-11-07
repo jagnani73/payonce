@@ -6,6 +6,7 @@ import {
   debitCurrency,
   type CurrencyFloor,
   type FloorSource,
+  type HeldFloor,
   type ReservePolicy,
 } from "../../domain/reserve.js";
 import type { Approval, RunApproval } from "../approvals.js";
@@ -595,6 +596,20 @@ function sumOf(totals: Record<CashKind, KindTotal>, kinds: ReadonlySet<CashKind>
   return [...kinds].reduce((sum: number, kind: CashKind): number => sum + totals[kind].minor, 0);
 }
 
+// What is left above a floor: the available balance less the floor and every
+// promised line (FIRM_KINDS). A floor not set counts as 0. Null when the balance
+// or the floor cannot be read. The panel gives each wallet's against its own
+// floor, and the payment page one invoice's against the floor floorFor holds it to.
+export function headroomAbove(
+  availableMinor: number | null,
+  floor: HeldFloor,
+  totals: Record<CashKind, KindTotal>,
+): number | null {
+  return availableMinor === null || floor.source === "unreadable"
+    ? null
+    : availableMinor - (floor.minor ?? 0) - sumOf(totals, FIRM_KINDS);
+}
+
 // Per currency: what Airwallex holds, the floor, and what the ledger has promised,
 // sent or lost, worked out to the headroom left above the floor. A currency is
 // listed when it has a floor set, a line in the ledger, an invoice floor, or a
@@ -632,11 +647,7 @@ export function cashReport(input: CashInput): CashReport {
         (entry: Balance): boolean => entry.currency === currency,
       );
       const floor: CurrencyFloor = currencyFloor(input.reserve, currency);
-      const available: number | null = balance?.availableMinor ?? null;
-      const headroom: number | null =
-        available === null || floor.source === "unreadable"
-          ? null
-          : available - (floor.minor ?? 0) - sumOf(totals, FIRM_KINDS);
+      const headroom: number | null = headroomAbove(balance?.availableMinor ?? null, floor, totals);
       return {
         currency,
         airwallex:

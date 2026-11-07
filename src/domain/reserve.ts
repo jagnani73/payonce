@@ -83,6 +83,21 @@ export function floorFor(policy: ReservePolicy, obligation: Obligation): number 
   return Math.max(floor.minor ?? 0, obligation.invoiceFloorMinor);
 }
 
+export interface HeldFloor {
+  minor: number | null;
+  // invoice: the invoice's own floor is stricter than its wallet's, or the wallet
+  // has none, so floorFor holds the payment to it.
+  source: FloorSource | "invoice";
+}
+
+// floorFor's floor, with where it comes from: the wallet's floor as currencyFloor
+// gives it, or the invoice's own where floorFor took that instead.
+export function heldFloor(policy: ReservePolicy, obligation: Obligation): HeldFloor {
+  const wallet: CurrencyFloor = currencyFloor(policy, debitCurrency(obligation));
+  const minor: number | null = floorFor(policy, obligation);
+  return wallet.source === "unreadable" || minor === wallet.minor ? wallet : { minor, source: "invoice" };
+}
+
 export function describeFloors(policy: ReservePolicy): string {
   if (policy.problem !== null) {
     return `Every reserve floor is unreadable, so every automatic replacement goes to a person: ${policy.problem}`;
