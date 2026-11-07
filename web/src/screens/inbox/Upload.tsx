@@ -1,6 +1,7 @@
 import type { JSX } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { asApiError, postJson, type ApiError } from "../../api";
+import { Modal } from "../../components/Dialog";
 import { Field, NameField, type ControlProps } from "../../components/Form";
 import { Icon } from "../../components/Icon";
 import { Tabs } from "../../components/Layout";
@@ -53,7 +54,6 @@ export function UploadDialog(props: {
   onClose: () => void;
   onUploaded: (id: number) => void;
 }): JSX.Element {
-  const dialog = useRef<HTMLDialogElement>(null);
   const mounted = useRef<boolean>(true);
   const [source, setSource] = useState<Source>("file");
   const [file, setFile] = useState<File | null>(null);
@@ -66,15 +66,8 @@ export function UploadDialog(props: {
 
   useEffect((): (() => void) => {
     mounted.current = true;
-    const shown: HTMLDialogElement | null = dialog.current;
-    if (shown !== null && !shown.open) {
-      shown.showModal();
-    }
     return (): void => {
       mounted.current = false;
-      if (shown?.open === true) {
-        shown.close();
-      }
     };
   }, []);
 
@@ -117,25 +110,7 @@ export function UploadDialog(props: {
   }
 
   return (
-    <dialog
-      ref={dialog}
-      class="upload-dialog"
-      aria-labelledby="upload-email-title"
-      onClose={(): void => props.onClose()}
-      onCancel={(event: Event): void => {
-        if (busy) {
-          event.preventDefault();
-        }
-      }}
-    >
-      <div class="upload-dialog__head">
-        <h2 id="upload-email-title" class="upload-dialog__title">
-          Upload email
-        </h2>
-        <button type="button" class="icon-button icon-button--framed" aria-label="Close" disabled={busy} onClick={(): void => props.onClose()}>
-          <Icon name="close" />
-        </button>
-      </div>
+    <Modal title="Upload email" busy={busy} onClose={props.onClose}>
       <Tabs
         label="Upload as"
         tabs={[
@@ -225,6 +200,6 @@ export function UploadDialog(props: {
           Cancel
         </button>
       </div>
-    </dialog>
+    </Modal>
   );
 }

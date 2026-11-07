@@ -346,48 +346,6 @@
 
 /* ---------- the upload dialog ---------- */
 
-.upload-dialog {
-  width: calc(100% - 32px);
-  max-width: 560px;
-  margin: 80px auto auto;
-  padding: 22px;
-  border: 0;
-  border-radius: 12px;
-  background: var(--surface);
-  color: var(--text);
-  box-shadow: var(--shadow-pop);
-}
-
-.upload-dialog[open] {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.upload-dialog::backdrop {
-  background: rgba(22, 26, 35, 0.45);
-}
-
-.upload-dialog__head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.upload-dialog__title {
-  flex: 1 1 auto;
-  font-size: 18px;
-  font-weight: 650;
-}
-
-.upload-dialog .tabs__row {
-  padding: 0;
-}
-
-.upload-dialog .tabs__select {
-  padding: 0;
-}
-
 .upload-dialog__source {
   font-size: 12px;
 }
@@ -466,11 +424,6 @@
   .mail__facts dd,
   .mail__reading dd {
     margin-bottom: 6px;
-  }
-
-  .upload-dialog {
-    margin-top: 24px;
-    padding: 16px;
   }
 
   .inbox__upload {
