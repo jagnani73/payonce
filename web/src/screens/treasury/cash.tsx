@@ -3,6 +3,7 @@ import { useState } from "preact/hooks";
 import { getJson } from "../../api";
 import { ActionButton } from "../../components/Action";
 import { Icon } from "../../components/Icon";
+import { ClickRow } from "../../components/Layout";
 import { Callout } from "../../components/Notice";
 import { Empty, LoadError, Loading } from "../../components/States";
 import { Figure, Money, Ref, Time } from "../../components/Text";
@@ -102,9 +103,9 @@ function Problems(props: { view: CashView }): JSX.Element | null {
 function WalletRow(props: { wallet: WalletCashView; open: boolean; onToggle: () => void }): JSX.Element {
   const w: WalletCashView = props.wallet;
   return (
-    <tr class={props.open ? "cash-row is-open" : "cash-row"} onClick={props.onToggle}>
+    <ClickRow class={props.open ? "cash-row is-open" : "cash-row"} onOpen={props.onToggle}>
       <th scope="row">
-        <button type="button" class="cash-row__wallet" aria-expanded={props.open} aria-controls={WORKSHEET_ID}>
+        <button type="button" class="cash-row__wallet" aria-expanded={props.open} aria-controls={WORKSHEET_ID} onClick={props.onToggle}>
           <Icon name="chevron-right" size={14} class={props.open ? "disclosure__chevron is-open" : "disclosure__chevron"} />
           {w.wallet}
         </button>
@@ -127,7 +128,7 @@ function WalletRow(props: { wallet: WalletCashView; open: boolean; onToggle: () 
       <td class={w.tone === "low" ? "is-end is-numeric is-low" : "is-end is-numeric"}>
         <Figure money={w.headroomIfApproved} />
       </td>
-    </tr>
+    </ClickRow>
   );
 }
 

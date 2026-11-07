@@ -1343,6 +1343,15 @@ textarea {
   font-variant-numeric: tabular-nums;
 }
 
+.click-row {
+  cursor: pointer;
+}
+
+.click-row:hover > td,
+.click-row:hover > th {
+  background: var(--sunk);
+}
+
 /* ---------- forms ---------- */
 
 .field {

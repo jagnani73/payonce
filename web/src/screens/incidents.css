@@ -252,14 +252,6 @@
   border-top: 1px solid var(--line-soft);
 }
 
-.itable__row {
-  cursor: pointer;
-}
-
-.itable__row:hover td {
-  background: var(--sunk);
-}
-
 .itable__state {
   display: flex;
   flex-direction: column;

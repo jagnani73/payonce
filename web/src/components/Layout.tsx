@@ -105,6 +105,25 @@ export function Tabs(props: {
   );
 }
 
+// A table row that opens something wherever it is clicked: Incidents' payments,
+// the pay runs, Treasury's wallets. Its own link or button is what a keyboard
+// and a screen reader use; a click elsewhere on the row does the same, unless it
+// lands on another link or control or ends a text selection.
+export function ClickRow(props: { onOpen: () => void; class?: string; children: ComponentChildren }): JSX.Element {
+  const click = (event: MouseEvent): void => {
+    const target: Element | null = event.target instanceof Element ? event.target : null;
+    if (target === null || target.closest("a, button, input, select, textarea, label") !== null || (window.getSelection()?.toString() ?? "") !== "") {
+      return;
+    }
+    props.onOpen();
+  };
+  return (
+    <tr class={props.class === undefined ? "click-row" : `click-row ${props.class}`} onClick={click}>
+      {props.children}
+    </tr>
+  );
+}
+
 export interface Column<T> {
   key: string;
   label: string;

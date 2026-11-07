@@ -1,5 +1,6 @@
 import type { JSX } from "preact";
 import { Icon } from "../../components/Icon";
+import { ClickRow } from "../../components/Layout";
 import { HandlingRows, QueueRows } from "../../components/Rows";
 import { Day, Money, Said, saidKey, Theirs, Time } from "../../components/Text";
 import { Tag, ToneBadge } from "../../components/Tone";
@@ -83,24 +84,13 @@ function waitingOn(row: IncidentRow): string {
   return who === null ? "Nobody" : `${who.charAt(0).toUpperCase()}${who.slice(1)}`;
 }
 
-// The whole row opens the payment. The invoice number is the link a keyboard
-// or a screen reader uses; a click elsewhere on the row follows it too, unless
-// it lands on another link or ends a text selection.
-function open(event: MouseEvent, invoiceId: string): void {
-  const target: Element | null = event.target instanceof Element ? event.target : null;
-  if (target === null || target.closest("a, button") !== null || (window.getSelection()?.toString() ?? "") !== "") {
-    return;
-  }
-  navigate(paymentHref(invoiceId));
-}
-
 function TableRow(props: { row: IncidentRow }): JSX.Element {
   const row: IncidentRow = props.row;
   const s: IncidentRow["situation"] = row.situation;
   const blocker: Blocker | undefined = s.blockers[0];
   const tags: RowTag[] = row.tags.filter((tag: RowTag): boolean => !SAID_IN_ROW.has(tag.code));
   return (
-    <tr class="itable__row" onClick={(event: MouseEvent): void => open(event, row.invoiceId)}>
+    <ClickRow class="itable__row" onOpen={(): void => navigate(paymentHref(row.invoiceId))}>
       <td>
         <div class="itable__state">
           <ToneBadge tone={s.tone} label={s.label} />
@@ -161,7 +151,7 @@ function TableRow(props: { row: IncidentRow }): JSX.Element {
         <Time at={row.waitingSince} />
       </td>
       <td class="itable__soft">{row.dueDate === null ? "None" : <Day day={row.dueDate} />}</td>
-    </tr>
+    </ClickRow>
   );
 }
 

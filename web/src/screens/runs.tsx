@@ -1,12 +1,13 @@
 import type { JSX } from "preact";
 import { useState } from "preact/hooks";
 import { Icon } from "../components/Icon";
+import { ClickRow } from "../components/Layout";
 import { Empty, LoadError, Loading } from "../components/States";
 import { Money, Theirs, Time } from "../components/Text";
 import { ToneBadge } from "../components/Tone";
 import { useTitle } from "../hooks";
 import { FAST_MS, SLOW_MS, usePoll, type Polled } from "../poll";
-import { runHref, type ScreenProps } from "../router";
+import { navigate, runHref, type ScreenProps } from "../router";
 import type { Money as MoneyView, RunListRow, RunsView } from "../types";
 import { RunPage } from "./runs/Run";
 import { RunUpload } from "./runs/Upload";
@@ -59,7 +60,7 @@ function RunList(props: { view: RunsView; current: number | null }): JSX.Element
             {props.view.rows.map((row: RunListRow): JSX.Element => {
               const on: boolean = row.id === props.current;
               return (
-                <tr key={row.id} class={on ? "is-current" : undefined}>
+                <ClickRow key={row.id} class={on ? "is-current" : undefined} onOpen={(): void => navigate(runHref(row.id))}>
                   <td>
                     <a class="run-list__link" href={runHref(row.id)} aria-current={on ? "page" : undefined}>
                       {`Pay run ${row.id}`}
@@ -96,7 +97,7 @@ function RunList(props: { view: RunsView; current: number | null }): JSX.Element
                       )}
                     </span>
                   </td>
-                </tr>
+                </ClickRow>
               );
             })}
           </tbody>

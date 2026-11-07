@@ -64,15 +64,6 @@
   padding: 0;
 }
 
-.cash-row {
-  cursor: pointer;
-}
-
-.cash-row:hover td,
-.cash-row:hover th {
-  background: var(--sunk);
-}
-
 .cash-row.is-open td,
 .cash-row.is-open th {
   background: var(--accent-soft);
