@@ -74,10 +74,11 @@ export function NameField(props: {
 }
 
 // The name to start an approver select on: You are when that name is on the
-// list, else the first who can approve, else the first.
+// list and has not signed yet, so a barred name still shows its reason; else
+// the first who can approve, else the first.
 export function firstApprover(choices: readonly ApproverChoice[], me: string | null): string {
   return (
-    choices.find((choice: ApproverChoice): boolean => me !== null && sameMe(choice.name, me))?.name ??
+    choices.find((choice: ApproverChoice): boolean => me !== null && !choice.signed && sameMe(choice.name, me))?.name ??
     choices.find((choice: ApproverChoice): boolean => choice.canApprove)?.name ??
     choices[0]?.name ??
     ""
