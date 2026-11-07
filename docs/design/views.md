@@ -107,6 +107,8 @@ A view is a typed, read-only answer built from the ledger for the page, the MCP 
 - `ReconView.lastCheck.at` is the latest check that ran, failed or not, and `lastOkAt` the latest one that read Airwallex in full.
 - The movements route answers `ReconMovementView`: amount and balance as `Money`, and how PayOnce explains the movement in words (`howText`).
 - `StatusView` reads little, because every screen polls it every 10 seconds.
+- The status's Airwallex answer, and the settings view's, comes from `airwallexHealth` (`health.ts`). The newest of the balance cache's last good read, its last failure and the latest reconciliation check against Airwallex decides it.
+- On `sandbox.invalid` the answer is "PayOnce is offline" until this server's balance cache has read once (`balances.readAt`). From then on the reads decide, as on the sandbox hosts.
 - `AuditCheckView` hashes every line, so the server keeps it by the ledger's `changeStamp` and builds it again at most once a minute.
 - The server keeps the last three metrics reports, keyed by period, change stamp and minute, and Home, Reports and `GET /api/metrics` share them.
 
@@ -124,6 +126,7 @@ A view is a typed, read-only answer built from the ledger for the page, the MCP 
 - The panel and the page share `headroomAbove`, so they cannot work headroom out two ways.
 - A field problem shows under its field as a sentence, so it ends with a stop. The refusal's `error` has none, because `pnpm recover` adds ", so nothing was sent or stored" to the same text.
 - The status view stays small because it is read every 10 seconds by every open page.
+- On the offline host only this server's balance read ends the offline answer. A reconciliation check on file can come from a run against the real sandbox, and offline PayOnce must never say that Airwallex answered.
 - The audit view is cached because building it hashes every line in the ledger again.
 
 ## Edge cases
@@ -135,6 +138,8 @@ A view is a typed, read-only answer built from the ledger for the page, the MCP 
 - Nothing is busy in the CLI's and MCP's views, and MCP's payment page has no headroom lines.
 - The headroom lines use the server's cached balance. They agree with the request's floor reason once the cache has read the balance after the bank kept the original's fee. Until then they are off by that fee, so a replacement can show as leaving cash above the invoice's floor while the reason says it goes below. While a page is open, its status poll starts a new read whenever the cache is 30 seconds old.
 - On a run's request, an over-limit approver's line says "... and this payment is ...", in `checkSigner`'s words.
+- A dry run's ledger opened offline, as in the offline replay in [demo.md](../demo.md), keeps its reconciliation checks. They do not end the offline answer, so the page shows the red "PayOnce is offline" banner.
+- Against a stand-in bank on `sandbox.invalid`, the chip reads "All good" once a balance read works.
 - With a group filter, `pnpm board`'s wallet totals cover that group, because the list's totals follow its scope. Closed payments are not listed.
 - When `pnpm approve` meets terms PayOnce cannot read, `readableTerms` refuses them before the view is built. `pendingApproval` (`store/read/reviews.ts`) decides whether there is anything to approve, and so the exit code.
 - `pnpm close` picks the close option by `pendingClose`'s kind and checks `--covers` against `pendingClose().covered`.
