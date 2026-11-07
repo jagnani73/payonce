@@ -26,16 +26,24 @@ interface Draft {
 
 const two = (n: number): string => String(n).padStart(2, "0");
 
-// A datetime-local value in the browser's time zone.
+const SECOND_MS: number = 1_000;
+
+// A datetime-local value in the browser's time zone, to the second, so a time
+// just after the transfer's own is not cut back to before it.
 function localValue(date: Date): string {
-  return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}T${two(date.getHours())}:${two(date.getMinutes())}`;
+  return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}T${two(date.getHours())}:${two(date.getMinutes())}:${two(date.getSeconds())}`;
+}
+
+// A time rounded up to its next whole second, which datetime-local can hold.
+function wholeSecond(ms: number): Date {
+  return new Date(Math.ceil(ms / SECOND_MS) * SECOND_MS);
 }
 
 // The call cannot be before the payment it is compared with, so the time starts
 // at the later of now and when Airwallex created that payment.
 function startDraft(form: BankDetailsForm | null): Draft {
   const sent: number = form?.comparedSentAt === null || form?.comparedSentAt === undefined ? Number.NaN : Date.parse(form.comparedSentAt);
-  const at: Date = new Date(Number.isFinite(sent) ? Math.max(Date.now(), sent) : Date.now());
+  const at: Date = wholeSecond(Number.isFinite(sent) ? Math.max(Date.now(), sent) : Date.now());
   return { numberCalled: "", calledAt: localValue(at), spokeTo: "", confirmed: "", details: {} };
 }
 
@@ -81,7 +89,7 @@ function Form(props: { form: BankDetailsForm; acts: Acts }): JSX.Element {
     setDraft((now: Draft): Draft => ({ ...now, details: { ...now.details, [field]: value } }));
     setProblem(null);
   };
-  const sent: Date | null = form.comparedSentAt === null ? null : new Date(form.comparedSentAt);
+  const sent: Date | null = form.comparedSentAt === null ? null : wholeSecond(Date.parse(form.comparedSentAt));
   return (
     <div class="option-form">
       <p class="pay-form__intro">Call the number on file, never one from an email. A callback is the only way new bank details enter PayOnce.</p>
@@ -120,6 +128,7 @@ function Form(props: { form: BankDetailsForm; acts: Acts }): JSX.Element {
               {...control}
               class="input"
               type="datetime-local"
+              step={1}
               min={sent === null ? undefined : localValue(sent)}
               value={draft.calledAt}
               onInput={(event: Event): void => set("calledAt")((event.currentTarget as HTMLInputElement).value)}
