@@ -6,8 +6,9 @@ import { Theirs, Time } from "./Text";
 
 // A payment's or a pay run's timeline as the view shapes it: newest first, runs
 // of system lines folded into one "Show N system lines" row, repeated errors
-// already grouped by the server. New lines get a brief highlight; the page never
-// scrolls by itself.
+// already grouped by the server. A warning or a decision is never folded away,
+// even when the system wrote it. New lines get a brief highlight; the page
+// never scrolls by itself.
 
 type Filter = "all" | "decisions" | "bank" | "emails" | "approvals" | "messages";
 
@@ -49,6 +50,12 @@ const ICONS: Record<EventKind, IconName> = {
 };
 
 type Item = { line: TimelineLine } | { folded: number; key: string };
+
+const NEVER_FOLDED: ReadonlySet<EventKind> = new Set<EventKind>(["warning", "decision"]);
+
+function foldable(line: TimelineLine): boolean {
+  return line.system && !NEVER_FOLDED.has(line.kind);
+}
 
 function Line(props: { line: TimelineLine; fresh: boolean }): JSX.Element {
   const line: TimelineLine = props.line;
@@ -101,11 +108,11 @@ export function Timeline(props: { timeline: TimelineView; empty?: string }): JSX
   const shown: TimelineLine[] =
     filter === "all"
       ? props.timeline.lines
-      : props.timeline.lines.filter((line: TimelineLine): boolean => !line.system && FILTER_OF[line.kind] === filter);
+      : props.timeline.lines.filter((line: TimelineLine): boolean => !foldable(line) && FILTER_OF[line.kind] === filter);
   const items: Item[] = [];
   let folded: number = 0;
   for (const line of shown) {
-    if (line.system && !showSystem) {
+    if (foldable(line) && !showSystem) {
       folded += 1;
       continue;
     }
