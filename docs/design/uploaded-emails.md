@@ -1,6 +1,6 @@
 # Uploaded emails
 
-A person uploads a raw supplier email on the page. PayOnce parses it, matches it to invoices, and a person delivers it to one, where the reader reads it ([email-reader.md](email-reader.md)). The parser and the inbox are `src/intake/` (`eml.ts`, `html-text.ts`, `css-text.ts`, `intake.ts`, `parse-worker.ts`), the email's shape, the sender check and the evidence are `src/reader/emails.ts`, and the routes are `src/surfaces/http/routes/inbox.ts`.
+A person uploads a raw supplier email on the page. PayOnce parses it, matches it to invoices, and a person delivers it to one, where the reader reads it ([email-reader.md](email-reader.md)). The parser and the inbox are `src/intake/` (`eml.ts`, `html-text.ts`, `css-text.ts`, `intake.ts`, `parse-worker.ts`), the email's shape, the sender check and the evidence are `src/domain/emails.ts`, and the routes are `src/surfaces/http/routes/inbox.ts`.
 
 ## Rules
 
@@ -12,7 +12,7 @@ A person uploads a raw supplier email on the page. PayOnce parses it, matches it
 - `scanCss` (`css-text.ts`) is the CSS tokenizer. It takes out every string and any text that is not CSS, and applies the fail-closed rule below.
 - `intake.ts` gives `takeParsePlace`, `parseUpload`, `storeUpload`, `candidatesFor`, `invoiceIndex`, `deliverUpload` and the timeline lines for a delivery.
 - `parse-worker.ts` is the worker thread `parseUpload` starts. It says it is ready, parses the one email it is sent, posts what `parseEmail` made of it, and is terminated.
-- `src/reader/emails.ts` gives `SupplierEmail`, the `EmailReader` interface (a `name` shown beside the findings, and `read`), `EmailFindings` (the three findings), `summarise`, `unverifiedSenders`, `emailEvidence` and the fixture loader `loadEmails`.
+- `src/domain/emails.ts` gives `SupplierEmail`, `EmailAttachment`, `EmailFindings` (the three findings), `summarise`, `unverifiedSenders` and `emailEvidence`. `src/reader/emails.ts` keeps the `EmailReader` interface (a `name` shown beside the findings, and `read`) and the fixture loader `loadEmails`. `StoredFindings` and `storedFindings` are in `src/store/stored.ts`.
 
 ### Uploading
 

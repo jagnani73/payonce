@@ -12,7 +12,7 @@ A person asks a model why PayOnce did what it did on one invoice. The facts are 
 
 ### The facts
 
-- `whyFacts(ledger, invoiceId, settings)` reads the ledger and `WhySettings` only (the approval policy, the reserve floors and the reader names), in one `Ledger.readSnapshot`. It writes nothing and calls nothing outside the ledger, so the page and the CLI give the same facts.
+- `whyFacts(ledger, invoiceId, settings)` reads the ledger and `WhySettings` only (the approval policy, the reserve floors, the reader names, the bank deadlines and the quote validity), in one `Ledger.readSnapshot`. It writes nothing and calls nothing outside the ledger, so the page and the CLI give the same facts.
 - It returns the facts, the `legend` (alias to real value, never sent), `asOf` (the timeline's length and last line id) and how many reasons it did not pass on.
 - Every value is PayOnce's own words, a closed pattern, a failure code in PayOnce's words (`FAILURE_WORDS`), or an alias.
 - The closed patterns: a bank reference `^[A-Z0-9-]{1,30}$`, a transfer id as a UUID, a status `^[A-Z_]{1,30}$`, a currency, an amount `formatMoney` wrote, a date, an ISO time, a rate such as `1 EUR = 1.1191 USD`, and a count.
@@ -54,7 +54,7 @@ A person asks a model why PayOnce did what it did on one invoice. The facts are 
 - Each service gets the reader's request shape ([email-reader.md](email-reader.md)) with a `json_schema` of two strings, `explanation` and `notInFacts`, the 8-second timeout and `MAX_TOKENS` 4,000.
 - The user message is `<facts>`, the facts as JSON, `</facts>`, with `<` and `>` written as `<` and `>` (`promptOf`).
 - Each model gets one request: Claude's in `CLAUDE_ASK_MODEL`'s order (default `claude-sonnet-5-5,claude-haiku-5-5`), then Gemini's in `READER_MODEL`'s (`explainerFor(settings.models.askServices())`). `CLAUDE_MODEL` is the reader's list only.
-- `explainerFor` gives null when neither key is set. An `Explainer` also carries `views` (where the facts go, service by service), `googleFreeTier` and `maxSeconds` (how long an ask can take when every model times out), which no view reads.
+- `explainerFor` gives null when neither key is set. An `Explainer` also carries `views` (where the facts go, service by service) and `googleFreeTier`, which no view reads, and `maxSeconds` (how long an ask can take when every model times out), which the settings view gives as "Waits for an answer".
 - A failure moves on to the next model: an error status, a timeout, a body that is not JSON, a `stop_reason` other than `end_turn` or a `finish_reason` other than `stop`, fields other than the two, or an empty explanation.
 - Each failure prints `  why      MODEL gave no answer after N ms: ...`. A 401 or 403 skips the rest of that service's models.
 - `redactKeys` cuts both keys out of every error and out of both strings of an answer. [airwallex-client.md](airwallex-client.md) has the full rule for `redactKey`.
@@ -74,7 +74,7 @@ A person asks a model why PayOnce did what it did on one invoice. The facts are 
 - 503 without `CLAUDE_API_KEY` or `READER_API_KEY`, before any facts are built. 404 for an invoice not in the ledger. 500 when the facts cannot be built, and nothing is sent.
 - 409 while another ask runs. 429 with `retryAfterSeconds` and a `Retry-After` header. 502 when every model failed, saying what each one did in PayOnce's words.
 - The server logs `  why      INV answered by MODEL in N s (N characters)`.
-- The payment view (`IncidentView`) says whether Ask why is allowed, from the situation's `can`. The settings view (`SettingsView`) says whether it is on, which models it asks and the page's limits.
+- The payment view (`IncidentView`) says whether Ask why is allowed, from the situation's `can`. The settings view (`SettingsView.reader.askWhy`) says whether it is on, which models it asks and the hosts the facts go to (`hosts`), and gives the page's limits as rows (`limits`): asks a minute, asks a day and how long it waits for an answer.
 
 ### The page's limits
 

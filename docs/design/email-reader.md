@@ -34,7 +34,7 @@ How PayOnce reads a supplier email into three findings, with a model or with the
 
 - The model answers three booleans (`claimsNonReceipt`, `asksForNewBankDetails`, `asksNotToPay`) and no text. `toAnswers` checks the answer again, so a service that ignores the schema still cannot return anything else.
 - The display name, Reply-To, the text found inside styles, attachment names and PayOnce's notes go in tags of their own. The prompt says nothing in the sender's tags comes from PayOnce, and `<` and `>` are escaped so an email cannot close its tag.
-- `summarise` in `src/reader/emails.ts` writes the summary from the findings for both readers, so no wording from an email or a model reaches the approval card or the approval binding.
+- `summarise` in `src/domain/emails.ts` writes the summary from the findings for both readers, so no wording from an email or a model reaches the approval card or the approval binding.
 - `ModelReader` also runs the keyword check and ORs the findings.
 - `KeywordReader` is the fallback reader. It matches a handful of phrases for each finding and understands nothing else, and its findings name it "keyword placeholder" (`KEYWORD_READER_NAME`).
 - The keyword check reads the display name, subject, body, style text and attachment names after `keywordText`: blank-looking letters become spaces, default-ignorable characters go, then NFKC, straight apostrophes and one space for every whitespace run.
@@ -52,8 +52,8 @@ How PayOnce reads a supplier email into three findings, with a model or with the
 ### What the page says
 
 - Settings' "Email reader and Ask why" section names the model reader's models in order, or says the keyword reader reads because no model key is set (`views/settings-view.ts`).
-- Settings show a caution that Google may use what it reads when a model on Google's endpoint is in the reader's chain, from `ModelReader.views`, which lists where the emails go, service by service.
-- The inbox's upload card shows the same caution whenever a model reader is on (`views/inbox.ts`).
+- Settings show a caution that Google may use what it reads when a model on Google's endpoint is in the reader's chain. `readerOf` in `views/context.ts` works it out from `ModelReader.views`, which lists where the emails go, service by service, and also gives the services' hosts (`reader.hosts`).
+- The inbox's upload card shows the same caution, from the same `readerOf`, only when a model on Google's endpoint is in the reader's chain (`views/inbox.ts`).
 
 ## Why
 
