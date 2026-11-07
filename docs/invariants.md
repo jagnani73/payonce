@@ -95,7 +95,7 @@ A guarantee enforced "in SQL" is a condition inside the statement that writes, r
     Where: `replaceUnderLock` in `src/engine/replacement.ts` (`committedAcross`, `decide`, `openAttempt`). Details: [engine-rules.md](design/engine-rules.md).
 
 29. Money promised but still in the available balance (attempts being sent, approvals not yet spent, approved or released run rows not sent) is taken off in every floor check.\
-    Where: `committedMinor` and `committedByInvoice` in `src/engine/cash-position.ts`, which count the `FIRM_KINDS` lines. Details: [engine-rules.md](design/engine-rules.md), [incident-board.md](design/incident-board.md).
+    Where: `committedMinor` and `committedByInvoice` in `src/store/read/cash.ts`, which count the `FIRM_KINDS` lines. Details: [engine-rules.md](design/engine-rules.md), [incident-board.md](design/incident-board.md).
 
 30. Pay run rows are checked against the floor when the run is checked, again under the lease at release, and again when each row is sent, while a single incident's original is not.\
     Where: `cashCheck` and `releaseRun` in `src/runs/runs.ts`; `floorBreach` in `src/engine/first-payment.ts`, which runs for run rows only. Details: [pay-runs.md](design/pay-runs.md).
@@ -147,8 +147,8 @@ A guarantee enforced "in SQL" is a condition inside the statement that writes, r
 45. Two different approvers are needed above `TWO_APPROVERS_ABOVE`, for an account the original did not go to, and when PayOnce does not know who started the payment, with further cases for a held invoice's first payment and for a pay run.\
     Where: `signoffsNeeded` in `src/domain/approvers.ts`; `payeeRule` in `src/engine/held.ts`; `runRule` in `src/runs/runs.ts`. Details: [engine-rules.md](design/engine-rules.md), [pay-runs.md](design/pay-runs.md).
 
-46. Whoever started the incident, a pay run's uploader, and anyone who recorded a callback for the account cannot approve the payment.\
-    Where: `barredFrom` in `src/domain/barred.ts` (through `barredOnFile` in `src/engine/requests.ts`); `runBarred` in `src/runs/runs.ts`; `checkSigner` refuses a barred name. Details: [engine-rules.md](design/engine-rules.md).
+46. Whoever started the incident, a pay run's uploader, anyone who recorded a callback for the account, and anyone who proposed or confirmed the phone number that callback was made on cannot approve the payment.\
+    Where: `barredFrom` in `src/domain/barred.ts` (through `barredOnFile` in `src/store/read/reviews.ts`); `runBarred` in `src/runs/runs.ts`; `checkSigner` refuses a barred name. Details: [engine-rules.md](design/engine-rules.md).
 
 47. No request opens while fewer people could approve it than it needs, and an open one is withdrawn.\
     Where: `awaitApproval` in `src/engine/requests.ts` (`eligibleApprovers`, `waitForApproverList`). Details: [engine-rules.md](design/engine-rules.md).
@@ -171,7 +171,7 @@ A guarantee enforced "in SQL" is a condition inside the statement that writes, r
     Where: the conditions on `state = 'escalated'` and `LIVE_ATTEMPT` in the SQL of `releaseFor`, `useApproval` and `reject`, each under the write lock. Details: [engine-rules.md](design/engine-rules.md).
 
 53. A payment that may have paid the supplier twice holds the invoice for a person before the policy runs and before any close.\
-    Where: `paidTwice` in `src/engine/facts.ts`, the `holdIfPaidTwice` step and `holdPaidTwice`; `settle` refuses while `lateBesideLive` finds one. Details: [engine-rules.md](design/engine-rules.md).
+    Where: `paidTwice` in `src/store/read/facts.ts`, the `holdIfPaidTwice` step and `holdPaidTwice`; `settle` refuses while `lateBesideLive` finds one. Details: [engine-rules.md](design/engine-rules.md).
 
 54. While an unrecognised transfer (one under PayOnce's request id that does not match the invoice) is live, the invoice waits for a person and nothing is sent.\
     Where: `holdMismatched` in `src/engine/late-mismatched.ts`, run by `look` before any retry or decision; `holdPending` for a pending attempt. Details: [engine-rules.md](design/engine-rules.md).

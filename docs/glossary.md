@@ -102,7 +102,7 @@ The first part defines the words PayOnce shows people. The second defines the wo
 
 **Duplicate lock.** The rule that an invoice has at most one live attempt: `insertAttempt`'s `LIVE_ATTEMPT` check and the unique index `one_live_attempt_per_invoice`.
 
-**Kept failed.** An attempt the ledger keeps `failed` although the bank shows its transfer live, because another payment held the duplicate lock when it was recorded (`keptFailed`). It takes its own state once the lock is free.
+**Kept failed.** An attempt the ledger keeps `failed` although the bank shows its transfer live, because another payment held the duplicate lock when it was recorded (`keptFailedLive` in `src/domain/live.ts`). It takes its own state once the lock is free.
 
 **Mismatched transfer.** The code's name for an unrecognised transfer, kept in the `mismatched_*` columns of the attempt whose request id it came under. `mismatched_cleared_at` is set when a person's close covers it.
 
