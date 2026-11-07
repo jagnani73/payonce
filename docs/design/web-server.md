@@ -128,7 +128,7 @@ The table lists every route in `src/surfaces/http/routes/`. Views and their buil
 
 ### Closing and approving
 
-- A close names in `covered` the transfer ids the close card showed, at most 50 of up to 64 characters each. A close that names none is refused while any unrecognised transfer is on file.
+- A close names in `covered` the transfer ids the close option showed, at most 50 of up to 64 characters each. A close that names none is refused while any unrecognised transfer is on file.
 - A close may send `as`, `paid` or `unpaid`. It must still be how PayOnce would close the payment (`pendingClose`'s kind), else 409 `close-kind-changed`. Without `as` the close is not checked this way.
 - A recorded callback wakes the invoice even when the change failed part way.
 - An approval's notice says whether the request is approved or how many approvers it still needs. The route wakes the invoice after an approval, and the release starts after a run's.
@@ -231,7 +231,7 @@ The table lists every route in `src/surfaces/http/routes/`. Views and their buil
 - The page imports only types from `src/`, so it cannot carry a copy of a rule or a wording, and the server's views stay the one source.
 - The bare-hash rule is there because alerts already posted links of the form `#<invoice>`.
 - Home polls for busy only because `/api/home` reads every snapshot, and a transfer can stay with the bank for days.
-- The default thread comes first so that the start form opens on the incident PayOnce replaces without a person.
+- The default thread comes first so that the simulator's scripted incident form opens on the incident PayOnce replaces without a person.
 
 ## Edge cases
 

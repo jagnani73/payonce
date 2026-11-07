@@ -96,13 +96,13 @@ A person uploads a raw supplier email on the page. PayOnce parses it, matches it
 - `assess` adds the clause to the decision line as well. The floor and second-bill clauses stay off that line.
 - For a held invoice, `continueHeld` rewords the stored reason with `Ledger.rewordEscalation`, which changes only an invoice still escalated with the reason the look read, and writes a decision line.
 - When `rewordEscalation` changes nothing, another process changed the invoice since the look read it, so the look opens no request on the old reason and comes again at once.
-- The approval request, the alert and the approval card then name the ask, and a person can still approve paying. Without the finding nothing is added.
+- The approval request, the alert and the approve option then name the ask, and a person can still approve paying. Without the finding nothing is added.
 - An invoice with no supplier domain on file (a pay run row without `supplier_domain`, a found payout) flags every sender (`unverifiedSenders`).
 - An invoice with any email on file before its first payment is held for a person (`EMAILS_BEFORE_PAYMENT_REASON`), pay run rows waiting their turn included.
 - A held invoice reads its emails in `continueHeld` and opens no request until they are read. It looks again a minute later after a reader failure, or at once when another process delivered an email while the others were being read.
 - A held invoice's `HeldPaymentTerms.evidence.emails` carries the evidence, added only when it has emails.
 - `emailEvidence` in approval terms is the findings' summary, the number of emails on file, how many have text PayOnce could not read and how many senders the check flags. It names no address. Every new email changes it, so it voids an open approval.
-- The approval card and `pnpm approve` show the evidence for a held invoice as for a replacement. `pendingClose` gives it as `CloseReview.emails`, which the close card and `pnpm close` show.
+- The approve option and `pnpm approve` show the evidence for a held invoice as for a replacement. `pendingClose` gives it as `CloseReview.emails`, which the close option and `pnpm close` show.
 - `useApproval`, `releaseFor` and the automatic replacement's transaction spend nothing when the invoice's email count differs from the one the look assessed.
 
 ## Why

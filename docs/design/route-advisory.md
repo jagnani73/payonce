@@ -28,7 +28,7 @@ The route advisory tells people when a payment usually arrives and whether it ma
 - `awaitApproval` then compares the recounted binding with the latest request again, so a request another process opened today on the same terms is kept, with its signoffs.
 - `escalate` compares the open request with both the terms and their `countedFromToday` version, so on the look that opens a request the `floor` and `second-bill` warnings already say it names them.
 - An approval can be spent on an estimate from an earlier day. The day holds while the request is open, which is up to `APPROVAL_TTL_MINUTES` (no cap) plus `APPROVED_USE_WITHIN_MS`.
-- When the estimate's day is before today, the approval cards, `pnpm approve` and `pnpm payrun approve` add when the payment usually arrives if it is sent today. That line is not in the terms.
+- When the estimate's day is before today, the approve options, `pnpm approve` and `pnpm payrun approve` add when the payment usually arrives if it is sent today. That line is not in the terms.
 - For a route with no figures, that "if sent today" line appears only when the due date has passed since the estimate's day.
 - A pay run counts its rows' estimates by the same day rule. See [pay-runs.md](pay-runs.md).
 

@@ -45,7 +45,7 @@ The run sends six sandbox transfers. Airwallex emails the account owner for each
 - The rules are a pure function in `src/domain/decide.ts`. The reader answers three yes-or-no questions, and PayOnce writes the summary from the answers. It returns no amounts and no bank details, so it cannot change what is paid or to whom.
 - The duplicate lock is a unique index in SQLite. The database refuses a second live payment for an invoice, whatever the code above it does.
 - An approval covers the exact terms on the card and one payment. If the account on file, the amount or the evidence changes, the approval is void.
-- Gemini 3.5 Flash on the free tier reads the emails. It answers three yes-or-no questions and PayOnce writes the summary, so no wording from an email reaches the approval card. Before recording, check the findings say "Reader: gemini-3.5-flash" or "Reader: gemini-3.1-flash-lite" and not the keyword placeholder.
+- Gemini 3.5 Flash on the free tier reads the emails. It answers three yes-or-no questions and PayOnce writes the summary, so no wording from an email reaches the approve option. Before recording, check the findings say "Reader: gemini-3.5-flash" or "Reader: gemini-3.1-flash-lite" and not the keyword placeholder.
 - Everything runs against the Airwallex sandbox. The simulator stands in for the bank.
 
 ## If something goes wrong

@@ -61,7 +61,7 @@ A pay run is a CSV of payments that people check and approve together, and that 
 - Approving (`approveRun`) follows `approvePayment`: the request the approver was shown, `checkSigner`, `signOffRun`, the binding.
 - A run's requests are `run_approvals` rows kept by the same `RequestBook` as an invoice's, with the `RUN_REQUESTS` shape (`src/store/approvals.ts`). One opens only on a waiting run, and a new one voids the open one.
 - A run request expires after `APPROVAL_TTL_MINUTES` and is not renewed by itself.
-- `recheckRun` ("Check again", `pnpm payrun check`) runs every check. Then one transaction (`setRunRows` running `settleRunRequest`) rewrites the rows and keeps any requested or approved request with the same binding that has not expired.
+- `recheckRun` ("Re-check run", `pnpm payrun check`) runs every check. Then one transaction (`setRunRows` running `settleRunRequest`) rewrites the rows and keeps any requested or approved request with the same binding that has not expired.
 - Otherwise `recheckRun` opens a new request and says when signoffs no longer count. With nothing left to pay, or too few eligible approvers, it opens none and says why.
 - `recheckRun` is refused while the run's latest request is approved and has not expired.
 - A confirmed change of the supplier's phone on file voids the waiting run's requested or approved request when a pay row of it to that record relies on a callback (`bank_change_id`), with a line on the run naming the rows. See [supplier-contacts.md](supplier-contacts.md).
