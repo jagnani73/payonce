@@ -83,7 +83,7 @@ function Form(props: { form: BankDetailsForm; acts: Acts }): JSX.Element {
   };
   const sent: Date | null = form.comparedSentAt === null ? null : new Date(form.comparedSentAt);
   return (
-    <div class="pay-form">
+    <div class="option-form">
       <p class="pay-form__intro">Call the number on file, never one from an email. A callback is the only way new bank details enter PayOnce.</p>
       <div class="pay-form__grid">
         <TextField
@@ -243,7 +243,7 @@ export function CallbackForm(props: { option: CallbackOption; acts: Acts }): JSX
 
   if (load.state === "loading") {
     return (
-      <div class="pay-form">
+      <div class="option-form">
         <p class="muted" role="status">
           Reading the supplier's bank details in Airwallex…
         </p>
@@ -252,7 +252,7 @@ export function CallbackForm(props: { option: CallbackOption; acts: Acts }): JSX
   }
   if (load.state === "failed") {
     return (
-      <div class="pay-form">
+      <div class="option-form">
         <p class="inline-error" role="alert">{`Couldn't read the bank details on file. ${load.error}`}</p>
         <div>
           <button type="button" class="btn btn--secondary" onClick={(): void => setAttempt(attempt + 1)}>
@@ -264,14 +264,14 @@ export function CallbackForm(props: { option: CallbackOption; acts: Acts }): JSX
   }
   if (load.form.blocked !== null) {
     return (
-      <div class="pay-form">
+      <div class="option-form">
         <Callout tone="warning">{load.form.blocked}</Callout>
       </div>
     );
   }
   if (load.form.fields.length === 0) {
     return (
-      <div class="pay-form">
+      <div class="option-form">
         <Callout tone="warning">The supplier's record in Airwallex has no bank details PayOnce can change.</Callout>
       </div>
     );

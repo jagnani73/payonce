@@ -2,15 +2,13 @@ import type { JSX } from "preact";
 import { useState } from "preact/hooks";
 import { postJson } from "../../api";
 import { ActionButton, Details } from "../../components/Action";
-import { Field, firstApprover, NameField, NamePicker, type ControlProps } from "../../components/Form";
+import { Field, NameField, type ControlProps } from "../../components/Form";
 import { Ref } from "../../components/Text";
 import { sameMe, useMe, useNameDraft } from "../../me";
 import { notify } from "../../notices";
 import { joinNames } from "../../text";
 import type {
   Acted,
-  ApproveOption,
-  ApproverChoice,
   ClosePaidOption,
   CloseUnpaidOption,
   CoveredTransferView,
@@ -49,38 +47,6 @@ function NoteField(props: {
         />
       )}
     </Field>
-  );
-}
-
-export function ApproveForm(props: { option: ApproveOption; acts: Acts }): JSX.Element {
-  const me: string | null = useMe();
-  const [picked, setPicked] = useState<string | null>(null);
-  const choices: ApproverChoice[] = props.option.approvers;
-  const name: string =
-    picked !== null && choices.some((choice: ApproverChoice): boolean => choice.name === picked) ? picked : firstApprover(choices, me);
-  const choice: ApproverChoice | undefined = choices.find((item: ApproverChoice): boolean => item.name === name);
-  const can: boolean = props.option.can.allowed && choice?.canApprove === true;
-  return (
-    <div class="pay-form">
-      {choices.length === 0 ? (
-        <p class="muted">No approver list is set, so nobody can approve this.</p>
-      ) : (
-        <NamePicker label="Approving as" choices={choices} value={name} onChange={setPicked} me={me} />
-      )}
-      <ActionButton
-        kind="primary"
-        label={name === "" ? "Approve" : `Approve as ${name}`}
-        busyLabel="Approving…"
-        disabled={!can}
-        reason={props.option.can.allowed ? null : (props.option.can.why?.text ?? null)}
-        onAction={async (): Promise<void> => {
-          props.acts.done(
-            await postJson<Acted<IncidentView>>(`${props.acts.path}/approve`, { approver: name, approvalId: props.option.requestId }),
-          );
-        }}
-        onError={props.acts.refresh}
-      />
-    </div>
   );
 }
 
@@ -131,7 +97,7 @@ export function CloseForm(props: { option: ClosePaidOption | CloseUnpaidOption; 
   const [name, setName] = useNameDraft();
   const [nameError, setNameError] = useState<string | null>(null);
   return (
-    <div class="pay-form">
+    <div class="option-form">
       <NoteField
         label={paid ? "What did you confirm?" : "Why are you closing it?"}
         placeholder={paid ? "Supplier confirmed by phone the payment arrived on 29 Oct" : "The supplier withdrew this invoice"}
@@ -220,7 +186,7 @@ export function OutageForm(props: { option: EndOutageOption; acts: Acts }): JSX.
   const fromMe: string = me === null ? "" : (o.enders === null ? me : (o.enders.find((ender: string): boolean => sameMe(ender, me)) ?? ""));
   const name: string = picked ?? fromMe;
   return (
-    <div class="pay-form">
+    <div class="option-form">
       <EnderField
         enders={o.enders}
         value={name}
@@ -276,7 +242,7 @@ export function TraceForm(props: { acts: Acts; allowed: boolean; why: string | n
   const [name, setName] = useNameDraft();
   const [nameError, setNameError] = useState<string | null>(null);
   return (
-    <div class="pay-form">
+    <div class="option-form">
       <NameField
         label="Drafting as"
         value={name}

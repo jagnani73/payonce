@@ -1,14 +1,15 @@
 import type { JSX } from "preact";
 import { useEffect, useId, useState } from "preact/hooks";
+import { postJson } from "../../api";
+import { ApproveForm, DecisionCard, OptionCard, Options, RequestLine, Signers } from "../../components/Decision";
 import { Callout } from "../../components/Notice";
-import { Money, Said, Theirs, Time } from "../../components/Text";
-import { useMe } from "../../me";
-import type { Caution, DecisionOption, DecisionPanel, HeadroomLine, IncidentPhoneView, IncidentView, RequestView } from "../../types";
+import { Money, Said, Theirs, Time, When } from "../../components/Text";
+import type { Acted, Caution, DecisionOption, DecisionPanel, HeadroomLine, IncidentPhoneView, IncidentView, RequestView } from "../../types";
 import { CallbackForm } from "./callback";
-import { ApproveForm, CloseForm, OutageForm, TraceForm } from "./forms";
+import { CloseForm, OutageForm, TraceForm } from "./forms";
 import type { Acts } from "./parts";
-import { PhoneOnFile } from "./phone";
-import { Signers, Terms } from "./terms";
+import { CallbackPhone } from "./phone";
+import { Terms } from "./terms";
 
 // The Decision panel (ia.md 3.3): the one place to act on a payment. The request
 // and what an approval covers, the cautions, who has signed, then every option
@@ -25,17 +26,18 @@ export function isKind(value: string | null): value is Kind {
 
 function Closed(props: { closed: NonNullable<DecisionPanel["closed"]> }): JSX.Element {
   const c: NonNullable<DecisionPanel["closed"]> = props.closed;
+  const at: JSX.Element | null =
+    c.at === null ? null : (
+      <>
+        {" "}
+        <When at={c.at} />
+      </>
+    );
   if (c.by === null) {
     return (
       <p class="pay-closed">
         {c.kind === "paid" ? "Paid. Closed by PayOnce" : "Closed without paying"}
-        {c.at === null ? null : (
-          <>
-            {" at "}
-            <Time at={c.at} />
-          </>
-        )}
-        .
+        {at}.
       </p>
     );
   }
@@ -43,33 +45,16 @@ function Closed(props: { closed: NonNullable<DecisionPanel["closed"]> }): JSX.El
     <p class="pay-closed">
       {c.kind === "paid" ? "Closed as paid by " : "Closed without paying by "}
       <Theirs text={c.by} />
-      {c.at === null ? null : (
-        <>
-          {" at "}
-          <Time at={c.at} />
-        </>
-      )}
-      {c.note === null ? "." : (
+      {at}
+      {c.note === null ? (
+        "."
+      ) : (
         <>
           {": "}
           <Theirs text={c.note} />
         </>
       )}
     </p>
-  );
-}
-
-// "Request #11 · open until 15:25 (in 52 min)" in the panel's heading row.
-function RequestLine(props: { request: RequestView }): JSX.Element | null {
-  const r: RequestView = props.request;
-  if ((r.state !== "waiting" && r.state !== "approved") || r.expiresAt === null) {
-    return null;
-  }
-  return (
-    <span class="pay-decision__request">
-      {`Request #${r.id} · ${r.state === "approved" ? "approved, usable until" : "open until"} `}
-      <Time at={r.expiresAt} mode="until" />
-    </span>
   );
 }
 
@@ -82,8 +67,8 @@ function RequestState(props: { request: RequestView; nextCheckAt: string | null 
         {`Request #${r.id} expired`}
         {r.expiresAt === null ? null : (
           <>
-            {" at "}
-            <Time at={r.expiresAt} />
+            {" "}
+            <When at={r.expiresAt} />
           </>
         )}
         {". PayOnce opens a new request at its next check"}
@@ -121,57 +106,31 @@ function Headroom(props: { line: HeadroomLine }): JSX.Element | null {
   );
 }
 
-// One option as a radio card: its title, what confirming it does and, when it
-// is off, why. The callback card also shows the phone it would be made on.
-function OptionCard(props: {
-  option: DecisionOption;
-  chosen: boolean;
-  name: string;
-  onPick: () => void;
-  phone: IncidentPhoneView;
-  supplierKey: string | null;
-}): JSX.Element {
-  const o: DecisionOption = props.option;
-  const off: boolean = !o.can.allowed;
-  const classes: string = ["pay-option", props.chosen ? "is-on" : "", off ? "is-off" : ""].filter((name: string): boolean => name !== "").join(" ");
-  return (
-    <div class={classes}>
-      <label class="pay-option__pick">
-        <input type="radio" class="pay-option__radio" name={props.name} value={o.kind} checked={props.chosen} disabled={off} onChange={props.onPick} />
-        <span class="pay-option__body">
-          <span class="pay-option__title">
-            {o.title}
-            {o.suggested && !off ? <span class="pay-pill">Suggested</span> : null}
-          </span>
-          {o.consequence.map(
-            (line: string): JSX.Element => (
-              <span class="pay-option__line" key={line}>
-                {line}
-              </span>
-            ),
-          )}
-          {off && o.can.why !== null ? <span class="pay-option__why">{o.can.why.text}</span> : null}
-        </span>
-      </label>
-      {o.kind === "callback" ? <PhoneOnFile phone={props.phone} supplierKey={props.supplierKey} blocked={off} /> : null}
-    </div>
-  );
-}
-
 function OptionForm(props: { option: DecisionOption; acts: Acts }): JSX.Element {
   const o: DecisionOption = props.option;
+  const acts: Acts = props.acts;
   switch (o.kind) {
     case "approve":
-      return <ApproveForm option={o} acts={props.acts} />;
+      return (
+        <ApproveForm
+          approvers={o.approvers}
+          can={o.can}
+          empty="Approve"
+          onApprove={async (approver: string): Promise<void> => {
+            acts.done(await postJson<Acted<IncidentView>>(`${acts.path}/approve`, { approver, approvalId: o.requestId }));
+          }}
+          onRefused={acts.refresh}
+        />
+      );
     case "callback":
-      return <CallbackForm option={o} acts={props.acts} />;
+      return <CallbackForm option={o} acts={acts} />;
     case "close-paid":
     case "close-unpaid":
-      return <CloseForm option={o} acts={props.acts} />;
+      return <CloseForm option={o} acts={acts} />;
     case "end-outage":
-      return <OutageForm option={o} acts={props.acts} />;
+      return <OutageForm option={o} acts={acts} />;
     case "trace":
-      return <TraceForm acts={props.acts} allowed={o.can.allowed} why={o.can.why?.text ?? null} />;
+      return <TraceForm acts={acts} allowed={o.can.allowed} why={o.can.why?.text ?? null} />;
   }
 }
 
@@ -182,7 +141,7 @@ function firstChoice(options: DecisionOption[], want: Kind | null): Kind | null 
   return (wanted ?? options.find((option: DecisionOption): boolean => option.suggested && option.can.allowed))?.kind ?? null;
 }
 
-function Options(props: {
+function Choices(props: {
   options: DecisionOption[];
   acts: Acts;
   want: Kind | null;
@@ -212,27 +171,20 @@ function Options(props: {
   }
   return (
     <>
-      <fieldset class="pay-options">
-        <legend class="pay-options__legend">Choose what to do</legend>
+      <Options>
         {options.map(
           (option: DecisionOption): JSX.Element => (
-            <OptionCard
-              key={option.kind}
-              option={option}
-              chosen={option.kind === chosen}
-              name={name}
-              onPick={(): void => setPicked(option.kind)}
-              phone={props.phone}
-              supplierKey={props.supplierKey}
-            />
+            <OptionCard key={option.kind} option={option} name={name} chosen={option.kind === chosen} onPick={(): void => setPicked(option.kind)}>
+              {option.kind === "callback" ? <CallbackPhone phone={props.phone} supplierKey={props.supplierKey} blocked={!option.can.allowed} /> : null}
+            </OptionCard>
           ),
         )}
-      </fieldset>
+      </Options>
       {options
         .filter((option: DecisionOption): boolean => option.can.allowed && (opened.has(option.kind) || option.kind === chosen))
         .map(
           (option: DecisionOption): JSX.Element => (
-            <div key={option.kind} class="pay-chosen" hidden={option.kind !== chosen}>
+            <div key={option.kind} hidden={option.kind !== chosen}>
               <OptionForm option={option} acts={props.acts} />
             </div>
           ),
@@ -242,21 +194,13 @@ function Options(props: {
 }
 
 export function Decision(props: { view: IncidentView; acts: Acts; want: Kind | null }): JSX.Element {
-  const id: string = useId();
-  const me: string | null = useMe();
   const v: IncidentView = props.view;
   const panel: DecisionPanel = v.decision;
   const open: NonNullable<DecisionPanel["open"]> | null = panel.open;
   const request: RequestView | null = open?.request ?? null;
   const live: boolean = request !== null && (request.state === "waiting" || request.state === "approved");
   return (
-    <section class="card card--accent pay-decision" id="decision" aria-labelledby={id} tabIndex={-1}>
-      <div class="pay-decision__head">
-        <h2 class="pay-decision__title" id={id}>
-          Decision
-        </h2>
-        {request === null ? null : <RequestLine request={request} />}
-      </div>
+    <DecisionCard id="decision" aside={live ? <RequestLine request={request} noun="Request" /> : null}>
       {panel.closed !== null ? <Closed closed={panel.closed} /> : null}
       {open === null ? null : (
         <>
@@ -266,7 +210,7 @@ export function Decision(props: { view: IncidentView; acts: Acts; want: Kind | n
             <RequestState request={request} nextCheckAt={v.situation.nextCheckAt} />
           )}
           {open.cautions.length === 0 ? null : (
-            <div class="pay-cautions">
+            <div class="decision__cautions">
               {open.cautions.map(
                 (caution: Caution): JSX.Element => (
                   <Callout tone="warning" key={caution.code}>
@@ -276,11 +220,11 @@ export function Decision(props: { view: IncidentView; acts: Acts; want: Kind | n
               )}
             </div>
           )}
-          {request !== null && live ? <Signers request={request} me={me} /> : null}
-          <Options options={open.options} acts={props.acts} want={props.want} phone={v.supplier.phone} supplierKey={v.payment.supplierKey} />
+          {request !== null && live ? <Signers request={request} explain /> : null}
+          <Choices options={open.options} acts={props.acts} want={props.want} phone={v.supplier.phone} supplierKey={v.payment.supplierKey} />
           {open.headroom === null ? null : <Headroom line={open.headroom} />}
         </>
       )}
-    </section>
+    </DecisionCard>
   );
 }

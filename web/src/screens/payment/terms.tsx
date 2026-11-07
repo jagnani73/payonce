@@ -1,13 +1,11 @@
 import type { JSX } from "preact";
-import { Dotted, Money, Ref, Theirs, Time } from "../../components/Text";
-import { sameMe } from "../../me";
+import { Money, Ref, Theirs, Time, When } from "../../components/Text";
 import { paymentHref } from "../../router";
 import { capitalised } from "../../text";
-import type { ApproverChoice, Barred, DuplicateView, RequestView, TermsView } from "../../types";
+import type { DuplicateView, TermsView } from "../../types";
 import { PayTo } from "./parts";
 
-// What an approval covers (ia.md 3.3, item 1): the request's terms line by line,
-// then who has signed, who can and who can't.
+// What an approval covers (ia.md 3.3, item 1): the request's terms line by line.
 
 function Original(props: { original: NonNullable<TermsView["original"]> }): JSX.Element {
   const o: NonNullable<TermsView["original"]> = props.original;
@@ -55,8 +53,8 @@ function Callback(props: { callback: NonNullable<TermsView["callback"]>; still: 
       {props.still === true ? ", still on file" : null}
       {c.calledAt === null ? null : (
         <>
-          {", on "}
-          <Time at={c.calledAt} />
+          {", "}
+          <When at={c.calledAt} />
         </>
       )}
       {". They spoke to "}
@@ -75,10 +73,10 @@ export function Terms(props: { terms: TermsView; wallet: string; callbackOnFile:
   const arrival: { text: string; atRisk: boolean } | null =
     t.arrival === null ? null : (t.arrival.sentToday ?? { text: t.arrival.text, atRisk: t.arrival.atRisk });
   return (
-    <div class="pay-terms">
-      <h3 class="pay-terms__title">What an approval covers</h3>
-      <ul class="pay-terms__list">
-        <li class="pay-terms__lead">
+    <div class="terms">
+      <h3 class="terms__title">What an approval covers</h3>
+      <ul class="terms__list">
+        <li class="terms__lead">
           {"Pay "}
           <Money money={t.pay} />
           {" to "}
@@ -114,115 +112,7 @@ export function Terms(props: { terms: TermsView; wallet: string; callbackOnFile:
         {t.callback === null ? null : <Callback callback={t.callback} still={props.callbackOnFile} />}
         {arrival === null ? null : <li class={arrival.atRisk ? "pay-warn" : undefined}>{`Arrival: ${arrival.text}`}</li>}
       </ul>
-      <p class="pay-terms__foot">Approving covers these exact terms and one transfer. If anything changes, PayOnce opens a new request.</p>
-    </div>
-  );
-}
-
-function cannot(choice: ApproverChoice): string {
-  return choice.why?.code === "over-limit" ? `limit ${choice.limit.text}` : (choice.why?.text ?? "can't approve");
-}
-
-function Name(props: { name: string; me: string | null }): JSX.Element {
-  return props.me !== null && sameMe(props.name, props.me) ? (
-    <strong>
-      <Theirs text={props.name} />
-    </strong>
-  ) : (
-    <Theirs text={props.name} />
-  );
-}
-
-function Signoffs(props: { request: RequestView }): JSX.Element {
-  const r: RequestView = props.request;
-  if (r.signoffs.length === 0) {
-    return <>{`0 of ${r.needed} signoffs`}</>;
-  }
-  return (
-    <>
-      {`${r.signoffs.length} of ${r.needed}: approved by `}
-      {r.signoffs.map(
-        (signoff: { name: string; at: string }, index: number): JSX.Element => (
-          <span key={signoff.name}>
-            {index === 0 ? null : " and "}
-            <Theirs text={signoff.name} />
-            {" at "}
-            <Time at={signoff.at} />
-          </span>
-        ),
-      )}
-    </>
-  );
-}
-
-// "0 of 1 signoffs" or "1 of 2: approved by Alex at 14:02", then, while the
-// request waits, who can approve it and who can't, the You are name in bold.
-export function Signers(props: { request: RequestView; me: string | null }): JSX.Element {
-  const r: RequestView = props.request;
-  const me: string | null = props.me;
-  const waiting: boolean = r.state === "waiting";
-  const can: ApproverChoice[] = r.approvers.filter((choice: ApproverChoice): boolean => choice.canApprove);
-  const isBarred = (name: string): boolean => r.barred.some((entry: Barred): boolean => sameMe(entry.name, name));
-  const cant: ApproverChoice[] = r.approvers.filter(
-    (choice: ApproverChoice): boolean => !choice.canApprove && !choice.signed && !isBarred(choice.name),
-  );
-  return (
-    <div class="pay-signers">
-      <div class="pay-signers__group">
-        <span class="pay-signers__label">Signoffs</span>
-        <span class="pay-signers__value">
-          <Signoffs request={r} />
-        </span>
-        {r.needed > 1 && r.neededWhy !== null ? <span class="pay-signers__why">{`Needs two signoffs because ${r.neededWhy.text}.`}</span> : null}
-      </div>
-      {waiting ? (
-        <div class="pay-signers__group">
-          <span class="pay-signers__label">Can approve</span>
-          <span class="pay-signers__value">
-            {can.length === 0 ? (
-              "Nobody left who can approve"
-            ) : (
-              <Dotted
-                parts={can.map(
-                  (choice: ApproverChoice): JSX.Element => (
-                    <>
-                      <Name name={choice.name} me={me} />
-                      {` (up to ${choice.limit.text})`}
-                    </>
-                  ),
-                )}
-              />
-            )}
-          </span>
-        </div>
-      ) : null}
-      {!waiting || (r.barred.length === 0 && cant.length === 0) ? null : (
-        <div class="pay-signers__group">
-          <span class="pay-signers__label">Can't approve</span>
-          <span class="pay-signers__value pay-signers__value--off">
-            <Dotted
-              parts={[
-                ...r.barred.map(
-                  (entry: Barred): JSX.Element => (
-                    <>
-                      <Name name={entry.name} me={me} />
-                      {`: ${entry.why.text}`}
-                    </>
-                  ),
-                ),
-                ...cant.map(
-                  (choice: ApproverChoice): JSX.Element => (
-                    <>
-                      <Name name={choice.name} me={me} />
-                      {`: ${cannot(choice)}`}
-                    </>
-                  ),
-                ),
-              ]}
-            />
-          </span>
-        </div>
-      )}
+      <p class="terms__foot">Approving covers these exact terms and one transfer. If anything changes, PayOnce opens a new request.</p>
     </div>
   );
 }

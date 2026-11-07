@@ -42,18 +42,6 @@
   font-weight: 600;
 }
 
-.pay-pill {
-  display: inline-flex;
-  align-items: center;
-  min-height: 20px;
-  padding: 0 7px;
-  border-radius: var(--radius-pill);
-  background: var(--accent);
-  color: #ffffff;
-  font-size: 11px;
-  font-weight: 600;
-}
-
 .pay-nowrap {
   white-space: nowrap;
 }
@@ -230,33 +218,6 @@
 
 /* ---------- the Decision panel ---------- */
 
-.pay-decision {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.pay-decision:focus {
-  outline: none;
-}
-
-.pay-decision__head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 6px 14px;
-}
-
-.pay-decision__title {
-  font-size: 18px;
-  font-weight: 650;
-}
-
-.pay-decision__request {
-  font-size: 13px;
-  color: var(--text-2);
-}
-
 .pay-decision__state {
   color: var(--text-2);
 }
@@ -268,184 +229,16 @@
   color: var(--text-body);
 }
 
-.pay-terms {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 14px 16px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--sunk);
-}
-
-.pay-terms__title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-2);
-}
-
-.pay-terms__list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.pay-terms__lead {
-  font-size: 15px;
-  font-weight: 600;
-}
-
 .pay-terms__changed {
   display: block;
   margin-top: 2px;
   font-weight: 600;
 }
 
-.pay-terms__foot {
-  margin-top: 4px;
-  padding-top: 8px;
-  border-top: 1px solid #e1e4ea;
-  font-size: 13px;
-  color: var(--text-2);
-}
-
-.pay-cautions {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.pay-signers {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px 32px;
-  padding: 12px 0;
-  border-top: 1px solid var(--line-soft);
-  border-bottom: 1px solid var(--line-soft);
-}
-
-.pay-signers__group {
-  display: flex;
-  flex: 1 1 220px;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.pay-signers__label {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-3);
-}
-
-.pay-signers__value {
-  font-weight: 500;
-}
-
-.pay-signers__value--off {
-  font-weight: 400;
-  color: var(--text-2);
-}
-
-.pay-signers__why {
-  font-size: 13px;
-  color: var(--text-2);
-}
-
-.pay-options {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.pay-options__legend {
-  margin-bottom: 10px;
-  padding: 0;
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.pay-option {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 14px 16px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius);
-  background: var(--surface);
-}
-
-.pay-option.is-on {
-  border-color: var(--accent);
-  box-shadow: inset 0 0 0 1px var(--accent);
-  background: var(--accent-soft);
-}
-
-.pay-option.is-off {
-  border-color: var(--line);
-  background: var(--sunk);
-}
-
-.pay-option__pick {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  cursor: pointer;
-}
-
-.pay-option.is-off .pay-option__pick {
-  cursor: not-allowed;
-}
-
-.pay-option__radio {
-  flex: 0 0 auto;
-  width: 18px;
-  height: 18px;
-  margin: 2px 0 0;
-  accent-color: var(--accent);
-}
-
-.pay-option__body {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-
-.pay-option__title {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  font-weight: 600;
-}
-
-.pay-option.is-off .pay-option__title {
-  color: var(--text-2);
-}
-
-.pay-option__line {
-  font-size: 13px;
-  color: var(--text-2);
-}
-
-.pay-option__why {
-  font-size: 13px;
-  color: var(--text-3);
-}
-
 .pay-phone {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin-left: 30px;
   font-size: 13px;
   color: var(--text-2);
 }
@@ -456,15 +249,6 @@
   align-items: center;
   min-height: 32px;
   font-weight: 500;
-}
-
-.pay-form {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  padding: 16px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
 }
 
 .pay-form__intro,
@@ -827,23 +611,11 @@
   .pay-ask {
     flex-basis: 100%;
   }
-
-  .pay-phone {
-    margin-left: 0;
-  }
 }
 
 @media (max-width: 599px) {
   .pay-head__check {
     margin-left: 0;
-  }
-
-  .pay-option {
-    padding: 12px;
-  }
-
-  .pay-form {
-    padding: 12px;
   }
 
   .pay-bank__head {

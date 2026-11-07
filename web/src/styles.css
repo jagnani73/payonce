@@ -460,6 +460,15 @@ textarea {
   color: var(--blocked-text);
 }
 
+/* "Suggested" on an option card. */
+.pill--accent {
+  min-height: 20px;
+  padding: 0 7px;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 11px;
+}
+
 .count-pill {
   display: inline-flex;
   align-items: center;
@@ -1432,6 +1441,238 @@ textarea {
   color: var(--text-body);
 }
 
+/* ---------- the Decision panel (payment page and pay runs) ---------- */
+
+.decision {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.decision:focus {
+  outline: none;
+}
+
+.decision__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 14px;
+}
+
+.decision__title {
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.decision__request {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.decision__request--warn {
+  color: var(--warn-text);
+  font-weight: 500;
+}
+
+.decision__cautions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* What an approval covers. */
+.terms {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--sunk);
+}
+
+.terms__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.terms__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.terms__lead {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.terms__foot {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+/* Who has signed, who can and who can't. */
+.signers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 32px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.signers__group {
+  display: flex;
+  flex: 1 1 220px;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.signers__group--first {
+  flex: 0 1 auto;
+  min-width: 200px;
+}
+
+.signers__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-3);
+}
+
+.signers__value {
+  font-weight: 600;
+}
+
+.signers__me {
+  font-weight: 700;
+}
+
+.signers__off {
+  color: var(--text-2);
+}
+
+.signers__why {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+/* The options as radio cards, and the chosen one's form. */
+.options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.options__legend {
+  margin-bottom: 10px;
+  padding: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.option {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.option.is-on {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  background: var(--accent-soft);
+}
+
+.option.is-off {
+  border-color: var(--line);
+  background: var(--sunk);
+}
+
+.option__pick {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.option.is-off .option__pick {
+  cursor: not-allowed;
+}
+
+.option__radio {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.option__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.option__title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.option.is-off .option__title {
+  color: var(--text-2);
+}
+
+.option__line {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.option__why {
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+/* What a card shows under its title, in line with the title. */
+.option__more {
+  margin-left: 30px;
+}
+
+.option-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.option-form--row {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
 /* ---------- queue rows ---------- */
 
 .qrows {
@@ -1834,11 +2075,20 @@ textarea {
     grid-template-columns: minmax(0, 1fr);
     gap: 2px;
   }
+
+  .option__more {
+    margin-left: 0;
+  }
 }
 
 @media (max-width: 599px) {
   .tabs__row {
     display: none;
+  }
+
+  .option,
+  .option-form {
+    padding: 12px;
   }
 
   .tabs__select {

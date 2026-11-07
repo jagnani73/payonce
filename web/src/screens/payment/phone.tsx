@@ -46,7 +46,7 @@ function OnFile(props: { phone: PhoneOnFileView }): JSX.Element {
 
 // blocked: the card already says why the callback can't be recorded (no phone,
 // or a new number waiting), so only the facts it does not say are added.
-export function PhoneOnFile(props: { phone: IncidentPhoneView; supplierKey: string | null; blocked: boolean }): JSX.Element {
+export function CallbackPhone(props: { phone: IncidentPhoneView; supplierKey: string | null; blocked: boolean }): JSX.Element {
   const onFile: PhoneOnFileView | null = props.phone.onFile;
   const pending: IncidentPhoneView["pending"] = props.phone.pending;
   const none: boolean = onFile === null || onFile.removed || onFile.ending === null;
