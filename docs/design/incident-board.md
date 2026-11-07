@@ -1,6 +1,6 @@
 # Incident board
 
-The incident board ranks everything still open, from the ledger alone, and works out the money each item has at risk from the cash panel's own lines. The code is `src/views/incident-board.ts`, with the cash line kinds it totals in `src/engine/cash-position.ts`. The Incidents and Home views (`src/views/incidents.ts`, `src/views/home.ts`), `pnpm board`, the supplier view and the outage holdings read it. The groups people see on those lists come from the situation layer ([reasons.md](reasons.md)), and outages are in [rail-outages.md](rail-outages.md).
+The incident board ranks everything still open, from the ledger alone, and works out the money each item has at risk from the cash panel's own lines. The code is `src/views/incident-board.ts`, with the cash line kinds it totals in `src/store/read/cash.ts`. The Incidents and Home views (`src/views/incidents.ts`, `src/views/home.ts`), `pnpm board`, the supplier view and the outage holdings read it. The groups people see on those lists come from the situation layer ([reasons.md](reasons.md)), and outages are in [rail-outages.md](rail-outages.md).
 
 ## Rules
 
@@ -10,7 +10,7 @@ The incident board ranks everything still open, from the ledger alone, and works
 - Each `BoardEntry` is an invoice or a run row, and names its `beneficiaryId`: the invoice's, or the run row's. `BoardOutage`, `BoardOutageMark` and `OutageTouch` are how the board shows rail outages.
 - Money at risk is the cash panel's lines and nothing else: `cashLines` with `openOnly`, without `fee-lost`, plus `payRunLines` and `waitingRunLines`. Each line counts its amount plus its fee, per invoice and per currency of the wallet the money leaves (`moneyOf`).
 - The waiting run has released nothing, so a line with its `runId` goes to its row. Any other run's line goes to the released invoice.
-- `FIRM_KINDS` (`sending`, `approved`, `pay-run`: what headroom takes off) and `WAITING_KINDS` (`awaiting-approval`, `awaiting-person`, `waiting-outage`) are exported from `cash-position.ts` for the board's totals and the cash panel.
+- `FIRM_KINDS` (`sending`, `approved`, `pay-run`: what headroom takes off) and `WAITING_KINDS` (`awaiting-approval`, `awaiting-person`, `waiting-outage`) are exported from `store/read/cash.ts` for the board's totals and the cash panel.
 - `waitingRunLines` gives the waiting run's pay rows that `payRunLines` leaves out because the request is not approved or has expired. They are `awaiting-approval` while the request is open and `awaiting-person` otherwise, worked out as `payRunLines` does.
 - `cashReport` never takes `waitingRunLines`, so no headroom counts a run before its approval. Only the board does, as `runWaitingMinor`.
 - `cashLines(ledger, now, { openOnly: true })` skips settled and rejected invoices, whose only lines are fees kept. Given `obligations`, it reads only those invoices' lines.
@@ -20,7 +20,7 @@ The incident board ranks everything still open, from the ledger alone, and works
 - `person`: an invoice with a line of kind `awaiting-approval` or `awaiting-person`, or a pay row of the waiting run while its request is not approved.
 - `person` also takes an escalated invoice the bank reports paid that waits for a person to close it (`pendingClose` of a paid kind). It is tested ahead of the deadline and bank groups.
 - `person` also takes an invoice with any line at risk that a waiting upload offers first (`candidatesFor`'s `suggested`): the one invoice the upload names, not only among other digits, open or escalated.
-- `deadline`: a payment with a transfer, pending or in flight, at or past `bank_created_at` plus `deadlineMinutes(obligation.transferMethod)`.
+- `deadline`: a payment with a transfer, pending or in flight, at or past `bank_created_at` plus `deadlineMinutes(obligation.transferMethod, deadlines)`, with the bank deadlines the caller passes from its settings.
 - With no creation time on file, a payment counts as past its deadline only when the escalation reason starts with a deadline reason (`DEADLINE_REASONS`).
 - `bank`: any other payment with the bank, or a tied outside payout in flight or in an unknown status.
 - `open`: the rest. That includes an invoice with an `approved` line (the next look spends it), a pay row of an approved run (the server's watcher releases it), a released row waiting for its turn, and a payment with no transfer yet.
@@ -30,7 +30,7 @@ The incident board ranks everything still open, from the ledger alone, and works
 
 ### Words
 - `why` and `also` are fixed strings in `incident-board.ts`, filled only with PayOnce's own figures: the open request's signoffs, the run id, how many uploads name the invoice, and an outage's id and rail. `reason` is the code behind `why` (`BoardReason`).
-- `why` and `also` never hold the escalation reason, an email, a model's answer or an Airwallex message. The escalation reason is only read with `startsWith` to pick a group or a touch.
+- `why` and `also` never hold the escalation reason, an email, a model's answer or an Airwallex message. The escalation reason is only read with `startsWith`, to pick a group, a `reason` or a touch.
 - `railName` names a rail only when it matches `RAIL_PATTERN` (a currency code and a method), and writes "a rail PayOnce cannot name" otherwise.
 - A `person` entry whose payment is past its deadline says so in `also`. So does an entry that an upload offers first but that is in its group for another reason.
 - An upload that names an invoice beside others, only nearly or among other digits, never moves it. It adds "may be about this invoice" to `also`.
@@ -38,7 +38,7 @@ The incident board ranks everything still open, from the ledger alone, and works
 - `deadlineAt` is the deadline of the live payment the entry is about, null when no creation time is on file.
 
 ### Totals and filters
-- `totals` per currency, over the entries shown: `promisedMinor` (`FIRM_KINDS`), `waitingMinor` (`awaiting-approval` and `awaiting-person` with no run), `outageMinor` (`waiting-outage`), `runWaitingMinor` (`waitingRunLines`) and `withBankMinor` (`with-bank` and `outside`).
+- `totals` per currency, over the entries shown that the caller's `keep` passes (by default, every one): `promisedMinor` (`FIRM_KINDS`), `waitingMinor` (`awaiting-approval` and `awaiting-person` with no run), `outageMinor` (`waiting-outage`), `runWaitingMinor` (`waitingRunLines`) and `withBankMinor` (`with-bank` and `outside`).
 - With no filter, `promisedMinor`, `waitingMinor`, `outageMinor` and `withBankMinor` equal the cash panel's lines of the same kinds read at the same moment.
 - With a currency filter only that currency is totalled. An entry passes the filter when its wallet or any currency it has at risk is that one.
 - The origin filter is `payonce`, `outside` or `pay-run`. `pay-run` is any invoice with `run_row_id` and every waiting run row.
@@ -46,13 +46,13 @@ The incident board ranks everything still open, from the ledger alone, and works
 - One report reads the whole invoice table three times (`obligations`, `cashLines` with `openOnly`, and one `invoiceIndex` shared by every waiting upload) and does the rest per open invoice.
 
 ### Who reads it
-- `incidentsView` calls `boardReport` with no group filter. It takes the board's totals (as `WalletTotals`), `currencies`, outages (as `OutageStrip`) and invoice count, and each row's money in play and wallet amount from the board's entry.
+- `incidentsView` calls `boardReport` with the list's currency and origin and no group filter. Its `keep` passes the invoices the list's scope, search and `me` filters keep, and the waiting run's rows while the run passes them, so the totals (as `WalletTotals`, with `runsWaiting`) follow the list. It also takes `currencies`, outages (as `OutageStrip`) and the invoice count, and each row's money in play and wallet amount from the board's entry.
 - The rows of `incidentsView`, their groups and their ranking are the situation's (`situationOf`, ranked in `src/views/rows.ts`), not the board's. A row takes the entry's `waitingSince` only when its situation gives no time.
 - `homeView` reads the board's entries for its rows' money, ranked the same way.
 - `boardEntriesFor` builds the entries and totals for some invoices, and for the waiting run's pay rows to one beneficiary (every pay row when it is null), each as the whole board with no filter has it. The supplier view and the payment page's money read it.
 - In `boardEntriesFor`, the run's outage and status are worked out over all its rows before the rows are picked. `indexOf` gives the invoice index for the waiting uploads, read only when one waits.
 - `inboxNames` and `runOutage` are exported for `src/views/snapshot.ts`, so the situation layer counts uploads and run outages exactly as the board does.
-- The board's own groups, `why`, `also` and `reason` are read only by the supplier view: its list puts a record with a `person` entry first, and its read model keeps each invoice's group and words. `boardGroups` has no caller.
+- The board's own groups, `why`, `also` and `reason` are read only by the supplier view: its list puts a record with a `person` entry first, and its read model keeps each invoice's group and words.
 
 ### Group words outside the board
 - `pnpm board`, `GET /api/board` and the MCP `board` tool take the board's group words and map them to the Incidents scopes: `person` to `needs-you`, `deadline` to `bank-late`, `bank` to `with-bank`, `open` to `payonce`. Each keeps its own copy of the map.
@@ -64,7 +64,7 @@ The incident board ranks everything still open, from the ledger alone, and works
 - A currency can be in any case, and must be a code `Intl.supportedValuesOf("currency")` lists or a wallet on the board (Node does not list CNH). Any other word, such as `pay`, prints the usage and exits 1.
 - It prints the active rail outages (whatever the filters), the money by wallet, then the four open groups as Needs you, Bank is late, With the bank and PayOnce is handling. Closed payments are not listed.
 - Needs you also lists the pay runs that need someone, from Home, under the same filters.
-- With a group filter, the money by wallet still covers every group, and its heading says "all groups".
+- With a group filter, the money by wallet covers that group, because the list's totals follow its scope, and its heading says "in this group".
 - With no invoices in the ledger it says how to start one. When every payment is closed and no run waits, it says that.
 
 ### Outages on the board
@@ -78,7 +78,7 @@ The incident board ranks everything still open, from the ledger alone, and works
 - `outages` in the report: each active outage, oldest first, with `outageView`'s `codes`, `payees`, `windowMinutes`, `declaredAt` and `text`, and what it holds now from the entries before any filter.
 - What an outage holds: `originals`, `replacements` and `approved` (invoice ids), `runs` (run ids), `atRisk` (the sum of those entries' cash lines) and `sends` (`sendsOf`).
 - `sends` is what ending the outage sends per currency: one payment per `original`, `approved` and `run` entry, and the sum of their cash lines.
-- `outageHolding(ledger, now)` gives the same lists, as `OutageHolding`, to Treasury's Outages tab, `pnpm outage`, the status view's outage strips, the end-outage option on the payment and pay run pages, and the end of an outage. It reads the board once, on its first call.
+- `outageHolding(ledger, deadlines, now)` gives the same lists, as `OutageHolding`, to Treasury's Outages tab, `pnpm outage`, the status view's outage strips, the end-outage option on the payment and pay run pages, and the end of an outage. It reads the board once, on its first call.
 - Ending an outage, in one transaction, records a hold (the touch as `what`) for every invoice and run the holding listed and marks the outage ended. It then writes the end line on every invoice and run with a hold, `counted` ones included ([rail-outages.md](rail-outages.md)).
 - `incidentsView` turns each board outage into an `OutageStrip`: its id, rail, how many payments it is pausing (originals, approved and runs) and what ending it sends. The Incidents screen shows each as a link to Treasury's Outages tab, where the end form is.
 
