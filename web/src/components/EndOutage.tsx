@@ -20,14 +20,23 @@ interface Missing {
 const MAX_NOTE: number = 200;
 
 // The enders as a select when there is an approver list, a free name otherwise.
-function EnderField(props: { enders: string[] | null; value: string; onInput: (value: string) => void; error: string | null }): JSX.Element {
+// hinted: say who can end it under the field, where the form has room.
+function EnderField(props: { enders: string[] | null; value: string; onInput: (value: string) => void; error: string | null; hinted: boolean }): JSX.Element {
   const me: string | null = useMe();
   const enders: string[] | null = props.enders;
   if (enders === null) {
-    return <NameField label="Ended by" value={props.value} onInput={props.onInput} error={props.error} hint="Anyone can end it while no approver list is set." />;
+    return (
+      <NameField
+        label="Ended by"
+        value={props.value}
+        onInput={props.onInput}
+        error={props.error}
+        hint={props.hinted ? "Anyone can end it while no approver list is set." : undefined}
+      />
+    );
   }
   return (
-    <Field label="Ended by" class="field--name" error={props.error} hint={enders.length === 0 ? undefined : `${joinNames(enders, "or")} can end it.`}>
+    <Field label="Ended by" class="field--name" error={props.error} hint={!props.hinted || enders.length === 0 ? undefined : `${joinNames(enders, "or")} can end it.`}>
       {(control: ControlProps): JSX.Element => (
         <select
           {...control}
@@ -92,6 +101,7 @@ export function EndOutageForm(props: {
         enders={enders}
         value={endedBy}
         error={missing.name}
+        hinted={props.row !== true}
         onInput={(value: string): void => {
           if (enders === null) {
             setTyped(value);
