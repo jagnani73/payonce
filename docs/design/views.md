@@ -97,6 +97,7 @@ A view is a typed, read-only answer built from the ledger for the page, the MCP 
 - The check gives back the invoice number it checked. For an empty field that is the number `newInvoiceId` made, and the page sends it on later checks and on start, so the payment starts under the number the person saw.
 - The check shows the record's phone on file by its last four digits only (`phoneEnding`), read from the ledger, so it shows while Airwallex is unreachable.
 - The check warns when the first transfer would leave the wallet below its floor, and says PayOnce does not check a single payment's first transfer against the floor.
+- Every New payment field problem ends with a full stop (`fieldTexts`), in the check view's `fields` and in the `fields` of the start's 400 or 409. The refusal's `error` gives the same text with no stop.
 - `InboxItemView` says whether a delivered email has been read. Only the inbox routes serve the inbox views: MCP and the CLI do not.
 - An uploaded email's view carries its Date header as written, as `Theirs`, and the time it was uploaded. Both are null for an email the simulator played.
 - `SettingsView` names the `.env` variables behind each row (`SettingRow.variables`), and none for a limit fixed in PayOnce, such as Ask why's caps. It never holds a secret: for the Airwallex keys it says only whether each is set.
@@ -120,6 +121,7 @@ A view is a typed, read-only answer built from the ledger for the page, the MCP 
 - The check asks the start's own holds, so the preview cannot drift from what starting the payment does.
 - An open invoice's headroom is worked above the floor its payments are held to, so the line agrees with the request's floor reason. A settled or rejected invoice pays nothing more, so only its wallet's floor counts, as on the cash panel, which lists invoice floors for open invoices only.
 - The panel and the page share `headroomAbove`, so they cannot work headroom out two ways.
+- A field problem shows under its field as a sentence, so it ends with a stop. The refusal's `error` has none, because `pnpm recover` adds ", so nothing was sent or stored" to the same text.
 - The status view stays small because it is read every 10 seconds by every open page.
 - The audit view is cached because building it hashes every line in the ledger again.
 
