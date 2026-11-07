@@ -1,6 +1,6 @@
 import { Fragment, type ComponentChildren, type JSX } from "preact";
 import { paymentHref } from "../router";
-import { cleanBlock, cleanLine, moneyText } from "../text";
+import { cleanBlock, cleanLine, cleanRun, moneyText } from "../text";
 import {
   agoText,
   clockOf,
@@ -214,9 +214,10 @@ function escaped(text: string): string {
 
 // A sentence from the view with its invoice numbers as links and its bank
 // references in mono. The sentence is the server's; only the refs are marked.
-// self: the payment on show, whose number is not linked.
+// It may be one run of a sentence with times (<Said>), so the spaces at its
+// ends stay. self: the payment on show, whose number is not linked.
 export function WithRefs(props: { text: string; refs: readonly Mark[]; self?: string }): JSX.Element {
-  const text: string = cleanLine(props.text);
+  const text: string = cleanRun(props.text);
   const marks: string[] = props.refs
     .map((ref: Mark): string => ref.invoiceId ?? ref.reference ?? "")
     .filter((mark: string): boolean => mark !== "" && text.includes(mark));

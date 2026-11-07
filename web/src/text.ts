@@ -12,7 +12,13 @@ const BLOCK_CONTROL: RegExp = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u0
 
 // One line: what a name, a note or a cell shows.
 export function cleanLine(text: string | null | undefined): string {
-  return typeof text === "string" ? text.replace(HIDDEN, "").replace(CONTROL, " ").trim() : "";
+  return cleanRun(text).trim();
+}
+
+// A run of words inside a sentence, such as the words before a time: cleaned
+// like a line, with the spaces at its ends kept.
+export function cleanRun(text: string | null | undefined): string {
+  return typeof text === "string" ? text.replace(HIDDEN, "").replace(CONTROL, " ") : "";
 }
 
 // Several lines, as written.
