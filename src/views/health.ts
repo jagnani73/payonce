@@ -54,9 +54,14 @@ function outcomesOf(balances: BalanceState, recon: RunView | null): Outcome[] {
 // Whether PayOnce can reach Airwallex, from its latest reads: the balance cache's
 // last good read and last failure, and the latest reconciliation check against
 // Airwallex. The newest of them decides. PayOnce's words go in text, the
-// client's message only in detail.
+// client's message only in detail. Nothing answers on the offline host, so
+// PayOnce says it is offline there until a read works, as one does against a
+// stand-in bank, and from then on the reads decide.
 export function airwallexHealth(ledger: Ledger, host: string, balances: BalanceState): AirwallexHealth {
-  if (host === OFFLINE_HOST) {
+  const outcomes: Outcome[] = outcomesOf(balances, latestLiveRun(ledger));
+  const lastOk: Outcome | undefined = [...outcomes].reverse().find((outcome: Outcome): boolean => outcome.ok);
+  const latest: Outcome | undefined = outcomes.at(-1);
+  if (host === OFFLINE_HOST && lastOk === undefined) {
     return {
       state: "unreachable",
       lastOkAt: null,
@@ -65,9 +70,6 @@ export function airwallexHealth(ledger: Ledger, host: string, balances: BalanceS
       detail: null,
     };
   }
-  const outcomes: Outcome[] = outcomesOf(balances, latestLiveRun(ledger));
-  const lastOk: Outcome | undefined = [...outcomes].reverse().find((outcome: Outcome): boolean => outcome.ok);
-  const latest: Outcome | undefined = outcomes.at(-1);
   if (latest === undefined) {
     return { state: "unknown", lastOkAt: null, failingSince: null, text: "PayOnce has not read Airwallex yet.", detail: null };
   }
