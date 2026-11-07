@@ -1,39 +1,40 @@
 # Engine rules
 
-How the agent works an invoice, look by look: sending and retrying payments, holding a first payment, replacing a failed one against the reserve floor, approval requests, exchange rates, payouts sent outside PayOnce, late and unrecognised transfers, callbacks and closing. The code is `src/engine/` and the policy's half of `src/domain/`. [architecture.md](../architecture.md) draws the look, the payment gate, the leases and the Dispatcher, watcher and sweep, and [invariants.md](../invariants.md) numbers the guarantees whose details are here.
+How the agent works an invoice, look by look: sending and retrying payments, holding a first payment, replacing a failed one against the reserve floor, approval requests, exchange rates, payouts sent outside PayOnce, late and unrecognised transfers, callbacks and closing. The code is `src/engine/`, the policy's half of `src/domain/`, and the ledger reads it acts on in `store/read/` and `store/stored.ts`. [architecture.md](../architecture.md) draws the look, the payment gate, the leases and the Dispatcher, watcher and sweep, and [invariants.md](../invariants.md) numbers the guarantees whose details are here.
 
 ## Where the code is
 
 | File | Holds |
 |---|---|
-| `engine/engine.ts` | shared types: `Engine`, `Bank`, `NextLook`, `LookOptions`, `StepResult`, `RETRY_FAILED_LOOK_MS`, `StoredFindings`, `Rate`, `Decided`, `Assessment` |
+| `engine/engine.ts` | shared types: `Engine`, `Bank`, `NextLook`, `LookOptions`, `StepResult`, `RETRY_FAILED_LOOK_MS`, `Rate`, `Decided`, `Assessment` |
 | `engine/look.ts` | `resumeIncident`, `look()`, `SENT_STEPS` and its steps, `act`, `waitOnOutage` |
 | `engine/first-payment.ts` | `startPayment`, `FIRST_PAYMENT_HOLDS`, `firstPaymentHold`, `firstPaymentFacts`, `firstPaymentOutage`, `holdRefused`, `startFirst` |
 | `engine/new-payment.ts` | `openPayment`, `paymentProblems`, `checkedPayee`, `recordPayee`, `newObligation`, `asOpened`, `PaymentRefusedError` |
 | `engine/held.ts` | `continueHeld` and its sub-steps, `payeeRule`, `duplicateEvidence`, `duplicatesOnFile`, `releaseHeld`, `closeAgain` |
 | `engine/escalated.ts` | `escalate` (`EscalateAs`), `continueEscalated`, `noteFloor`, `noteSecondBill` |
-| `engine/requests.ts` | `barredOnFile`, `ruleFor`, `approvalProblem`, `voidIfStale`, `awaitApproval` and its sub-steps |
+| `engine/requests.ts` | `ruleFor`, `approvalProblem`, `voidIfStale`, `awaitApproval` and its sub-steps |
 | `engine/replacement.ts` | `replaceUnderLock`, `escalateForOutage` |
 | `engine/retry.ts` | `holdPending`, `NeverSentCause`, `failNeverSent`, `neverSentAt`, `Retried`, `retryUnderLock`, `retry` |
 | `engine/outside.ts` | `linkOutsidePayout`, `linkUnseenPayouts`, `syncOutsidePayouts`, `judgePayouts`, `payingRoute`, `holdForOutsidePayout` |
 | `engine/late-mismatched.ts` | `recordLateTransfer`, `noteMismatchedTransfer`, `syncMismatched`, `unrecordedAttemptOf`, `holdMismatched`, `holdPaidTwice` |
-| `engine/emails.ts` | `deliver`, `noteSenders`, `readNewEmails`, `storedFindings`, `noteEvidenceUpgrade` |
+| `engine/emails.ts` | `deliver`, `noteSenders`, `readNewEmails`, `emailsNotRead`, `noteEvidenceUpgrade` |
 | `engine/rates.ts`, `engine/terms.ts` | `rateFor`, `requestExpiry`, `quoteLine`; `termsOf` and the arrival estimate in terms (`arrivalOf`, `arrivalClause`, `countedFromToday`) |
 | `engine/assessment.ts` | `assess` |
 | `engine/send.ts` | `requireAccount`, `AccountChangedError`, `transferChecks`, `send`, `waitForBank`, `deadlineLook`, `replacementOverdue` |
 | `engine/payments.ts` | `sendAttempt`, `syncTransfer`, `wasRejected`, `recordMissingFees` |
 | `engine/close.ts` | the agent's own close: `close`, `closeRefused`, `closeWaitingLine` |
-| `engine/person.ts` | `payAgain`, `pendingClose`, `closeIncident`, `pendingApproval`, `approvePayment` |
-| `engine/facts.ts` | ledger predicates: `anyLive`, `paidDuplicate`, `paidTwice`, `keptFailed`, `heldBeforePaying`, `coveredByClose` |
-| `engine/lines.ts` | `note`, `noteError`, `lineWanted`, `describe`, `payoutSummary`, `listOf` |
+| `engine/person.ts` | `payAgain`, `closeIncident`, `approvePayment` |
+| `store/read/reviews.ts` | what a person reads before a close or an approval: `pendingClose` (`CloseReview`, `NamingPayout`), `pendingApproval`, `barredOnFile` |
+| `store/read/facts.ts` | ledger predicates: `anyLive`, `paidDuplicate`, `paidTwice`, `heldBeforePaying`, `coveredByClose` (`CoveredTransfer`) |
+| `engine/lines.ts` | `note`, `noteError`, `lineWanted`, `describe`, `payoutSummary` |
 | `engine/reason-text.ts` | the clause builders: `decided`, `secondBill`, `namingNotToPay`, `withFloorReason`, `asRequested`, `PAID_ONLY_BY_ITSELF` |
-| `engine/stored.ts` | the shapes of stored terms, a kept quote and findings (`isApprovalTerms`, `isLastQuote`, `isStoredFindings`), `requestTerms`, and what a failed read names (`termsOnFile`, `quoteOnFile`, `findingsOnFile`) |
+| `store/stored.ts` | the shapes of stored terms, run terms, a kept quote, findings and an uploaded email's lists (`isApprovalTerms`, `isRunTerms`, `isLastQuote`, `isStoredFindings`, `isTextList`, `isAttachmentList`), `StoredFindings` and `storedFindings`, `requestTerms` and `runRequestTerms`, and what a failed read names (`termsOnFile`, `runTermsOnFile`, `quoteOnFile`, `findingsOnFile`, `emailsOnFile`) |
 | `engine/bank-change.ts` | `bankChangeForm`, `recordBankChange`, `blockedReason` |
-| `engine/cash-position.ts` | the cash lines, `committedMinor`, `committedByInvoice`, `committedAcross`, `payRunLines`, `cashReport` |
+| `store/read/cash.ts` | the cash lines, `committedMinor`, `committedByInvoice`, `committedAcross`, `payRunLines`, `cashReport` |
 | `engine/currency-lock.ts` | `withCurrencyLock`, `withCurrencyLocks`, `CurrencyBusyError` |
 | `engine/dispatcher.ts`, `watcher.ts`, `sweep.ts`, `create.ts` | `Dispatcher`, `Watcher`, `sweep`, `createEngine` |
 | `domain/decide.ts`, `domain/incident.ts` | `decide`, `floorReason` and the policy's reason constants; `Incident` and `Decision`, amounts in minor units |
-| `domain/live.ts` | every test of live ([reasons.md](reasons.md#what-live-means)), and the engine's own close: `paidByReplacement`, `closeRefusedBy`, `closesItself` |
+| `domain/live.ts` | every test of live ([reasons.md](reasons.md#what-live-means)), `keptFailedLive` among them, and the engine's own close: `paidByReplacement`, `closeRefusedBy`, `closesItself` |
 | `domain/approval.ts`, `approvers.ts`, `barred.ts` | terms and bindings; the approval policy; who is barred |
 | `domain/duplicates.ts` | invoice numbers, second bills and the payout-to-invoice match |
 | `domain/reserve.ts`, `deadlines.ts`, `fx.ts` | reserve floors and `debitCurrency`; bank deadlines; quote validity |
@@ -56,7 +57,7 @@ How the agent works an invoice, look by look: sending and retrying payments, hol
 - The engine reads its own reasons by code: `sayMismatchedFailed`, the reason `escalate` keeps (`Ledger.reasonOf`), and a held invoice's reason (`namingNotToPayHeld`).
 - A look that throws leaves its next look as it was while that time is ahead, and otherwise moves it a minute on (`postponeDueLook`, `RETRY_FAILED_LOOK_MS`).
 - `noteError` never throws. It writes an `AirwallexError` or `AirwallexUnreachableError` as an `error` line and one console line, a `LineError` as a line of its own kind with its `detail` on the console, and any other error as an `error` line with its stack trace on the console.
-- Waiting on the bank has a deadline: the transfer's `created_at` plus `BANK_DEADLINE_LOCAL_MINUTES` (default 3) or `BANK_DEADLINE_SWIFT_MINUTES` (default 5), from `Settings.bankDeadlineMinutes` (`deadlineMinutes`). The look saves it in `obligations.look_at`.
+- Waiting on the bank has a deadline: the transfer's `created_at` plus `BANK_DEADLINE_LOCAL_MINUTES` (default 3) or `BANK_DEADLINE_SWIFT_MINUTES` (default 5), from `Settings.bankDeadlineMinutes`, which `createEngine` puts on the engine as `Engine.bankDeadlineMinutes` and every deadline check hands to `deadlineMinutes`. The look saves it in `obligations.look_at`.
 - A transfer method PayOnce does not know gets its longest deadline, and `isOverdue` counts a deadline it cannot read as passed.
 - `startPayment` saves the deadline look (`deadlineLook`) as soon as the original is with the bank. When the send's outcome is unknown, it moves the next look a minute on, as a failed look does.
 - An original still in flight at its deadline escalates (`ORIGINAL_DEADLINE_REASON`). A replacement still in flight escalates with `REPLACEMENT_DEADLINE_REASON`, nothing more is sent (`replacementOverdue`), and the incident still closes by itself if the bank pays it.
@@ -81,7 +82,7 @@ How the agent works an invoice, look by look: sending and retrying payments, hol
 - `retry` sends only to the account the attempt keeps: `requireAccount` on `attempts.account_key` throws `AccountChangedError` when the record differs in any field. The look hands that to `failNeverSent` as cause `account-changed` (`ACCOUNT_CHANGED_REASON`).
 - A pending attempt is marked failed without a refusal only by `failNeverSent` ([invariant 7](../invariants.md#opening-and-sending-a-payment)).
 - `failNeverSent` holds the attempt for its `NeverSentCause` (`paid-outside`, `names-only`, `late`, `mismatched`, `account-changed`, `account-unknown`) until `neverSentAt`, the method's bank deadline after `tried_at`, or after `opened_at` with no try. It plans the look for then, with a standing `retry` warning.
-- On each such look it escalates the invoice with the cause's reason through `Ledger.escalateIfChanged`, which writes the row only when the reason differs in one of its columns.
+- On each such look it escalates the invoice with the cause's reason through `Ledger.escalateIfChanged`, which writes the row only when the invoice is not already escalated with that reason in every column.
 - Past the deadline, `failNeverSent` takes the lease of the wallet the attempt pays from, reads the attempt again and lists its request id. If Airwallex lists nothing, `failAttempt` marks it failed with a `payment` line on the `retry` topic, which frees the duplicate lock and drops its `sending` cash line.
 - `failAttempt` changes only an attempt still `pending` with no `transfer_id`. A transfer listed by then is not failed, and the next look, due at once, records it.
 - After the fail, a paid outside payout or a paid unrecognised transfer leaves the invoice for the close card, a late transfer is recorded by the next look in its own state, and for `account-changed` or `account-unknown` paying takes a person's approval.
@@ -108,7 +109,7 @@ How the agent works an invoice, look by look: sending and retrying payments, hol
 - `heldForExchangeRate` holds every cross-currency first payment (`heldForRate`): "it is paid from USD, so a person approves the exchange rate before PayOnce pays it".
 - A held invoice is `escalated` with no attempt and `obligations.duplicate_of` listing the matches (`holdBeforePaying`). The invoices it matched get a line on their timelines. Nothing is sent.
 - The outage gate comes before the lease (`firstPaymentOutage`), so a first payment on a rail with an active outage waits unsent with no attempt ([rail-outages.md](rail-outages.md)).
-- For any first payment but a pay run row's, `startPayment` ties unseen payouts, then reads the record and keeps its account on the attempt (`account_key`, `route_key`). A pay run row keeps the account the run approved, checked against the record (`accountProblem`).
+- `startPayment` ties unseen payouts for every first payment. For any but a pay run row's, it then reads the record and keeps its account on the attempt (`account_key`, `route_key`). A pay run row keeps the account the run approved, checked against the record (`accountProblem`).
 - `startPayment` holds the invoice when an outside payout it ties is live, and sends anyway when that payout has already failed.
 - A pay run row is sent only on a look with the run's turn (`startFirst`). Any other look leaves it with a standing waiting line, due at once. `startPayment` refuses a pay run row whose invoice would convert.
 - Airwallex refusing every original (a 4xx on create) escalates the invoice through `holdRefused` (`refusedOriginal`), at once on the first send and otherwise on the next look. It is then held like any other.
@@ -209,7 +210,7 @@ How the agent works an invoice, look by look: sending and retrying payments, hol
 - A rate line (kind `payment`, `quoteLine`) is written only when a request opens on a quote, with the last request's rate when it differs. `awaitApproval` reads the last request's terms for it only then, before anything is written.
 - The waiting line for a payment nobody can approve names no rate, only roughly what the payment takes from the wallet.
 - A cross-currency request expires at `min(opened + APPROVAL_TTL_MINUTES, quote end - APPROVED_USE_WITHIN_MS - QUOTE_MARGIN_MS)`, a 2 minute margin. The quote end is the earlier of `valid_to_at` and arrival plus the quote's validity.
-- `FX_QUOTE_VALIDITY` (`Settings.fxQuotes`, read by `quoteValidity` when a quote is taken) takes `MIN_30` or longer, and `rateFor` refuses a quote that holds 12 minutes or less. `describeQuotes` is the start-up line.
+- `FX_QUOTE_VALIDITY` (`Settings.fxQuotes`, on the engine as `Engine.fxQuotes`, read by `quoteValidity` when a quote is taken) takes `MIN_30` or longer, and `rateFor` refuses a quote that holds 12 minutes or less. `describeQuotes` is the start-up line.
 - Approval limits, `TWO_APPROVERS_ABOVE`, `eligibleApprovers`, `signoffsNeeded` (in `continueHeld` too) and `signoffProblem` use `paymentAmount(terms)`: the quote's sell amount in the sell currency, else the invoice amount. The fee stays out of the limit.
 - The attempt keeps `quote_id`, `quote_valid_to` and `approval_id`, written by `openAttempt` from the approval's own terms. A retry sends the same request id and quote, never a new one, under the source wallet's lease.
 - Until `quote_valid_to` plus the method's bank deadline, a 4xx on a retry (`sendAttempt(..., "retry")`) never fails a cross-currency attempt: it stays pending and holds the lock, and the look runs again a minute later. A first send's 4xx still fails it.
@@ -244,7 +245,7 @@ How the agent works an invoice, look by look: sending and retrying payments, hol
 - `setPayoutVerdict` always runs, as one conditional statement, so the stored verdict ends as the one the look just worked out. Every test that lets a payout count as paying reads the row when it decides, never a copy from earlier in the look.
 - A paid payout that does not pay the invoice still holds PayOnce's payments. It does not stop a person's close without paying (`reject`, and `rejectAgain` with `byPerson`, which test `BLOCKING_OUTSIDE_PAYOUT`).
 - The close card lists such a payout in `namesOnly` (`NamingPayout`): its reference, what it delivered, the last four characters of the account, never the payee, and `checked`, false while PayOnce could not judge it. The card and `pnpm close` then say it could not be checked yet.
-- A pending attempt is not sent again while a payout is live (`holdRetryForOutsidePayout`): it stays pending under its request id, the invoice is escalated with `OUTSIDE_PAYOUT_REASON`, and a standing `retry` warning says so. The watcher wakes the invoice when that payout fails.
+- A pending attempt is not sent again while a payout is live (`holdRetryForOutsidePayout`): it stays pending under its request id, the invoice is escalated with `OUTSIDE_PAYOUT_REASON` through `Ledger.escalateIfChanged`, as in `failNeverSent`, and a standing `retry` warning says so. The watcher wakes the invoice when that payout fails.
 - A payout tied in this look that has already failed holds nothing: the invoice is not escalated, and the next look, due at once, retries the attempt.
 
 ### Late and unrecognised transfers
@@ -264,7 +265,7 @@ How the agent works an invoice, look by look: sending and retrying payments, hol
 - An attempt still pending with no transfer beside a late transfer goes to `failNeverSent` (cause `late`), so it is marked failed once a bank deadline has passed with nothing listed. With no other live payment, a late transfer is followed like any payment.
 - A transfer the bank has live counts as live everywhere, whatever state its attempt has in the ledger ([invariant 3](../invariants.md#opening-and-sending-a-payment)). `insertAttempt` refuses an attempt beside one (`DuplicatePaymentError`), so neither `openAttempt` nor `tryLock` opens a payment beside a transfer the ledger keeps failed.
 - `useApproval`, `releaseFor` and `reject` change nothing while one is live. `Ledger.releaseRun` opens no attempt, so its rows meet the test when `startPayment` opens theirs.
-- The look records a kept-failed transfer again after reading the others (`keptFailed`), so it takes its own state, and the duplicate lock, in the look that finds the other payment failed, with a `bank` line. If one is still kept, the look decides nothing and looks again at once (`waitOnKeptFailed`).
+- The look records a kept-failed transfer again after reading the others (`keptFailedLive`), so it takes its own state, and the duplicate lock, in the look that finds the other payment failed, with a `bank` line. If one is still kept, the look decides nothing and looks again at once (`waitOnKeptFailed`).
 - While an unrecognised transfer is live, the look reads its status first, and `holdMismatched` escalates with `MISMATCHED_TRANSFER_REASON`, withdraws any open request and sends nothing, before a retry and before anything else is decided.
 - Just before that hold the look reads the invoice's outside payouts, so one the bank has paid or failed is recorded and the watcher stops waking the invoice for it.
 - Once it is paid, `paidMismatched` lets a person close the invoice from the close card (kind `mismatched`), and `settle(invoiceId, true)` accepts it.
@@ -345,7 +346,7 @@ How the agent works an invoice, look by look: sending and retrying payments, hol
 - `sweep` lists the transfers created since the ledger started (`meta.started_at`) and handles the ones the ledger has not recorded: late transfers, unrecognised ones, payouts to tie and payouts to take on. Every listed transfer then goes to `railFailureSeen`.
 - A payout the sweep cannot handle is reported once on the console and skipped. A found payout with no beneficiary, or with an unknown transfer method, is not taken on.
 - A found payout's invoice number is its reference when that fits `INVOICE_ID_PATTERN`, else the bank's short reference, with the reference kept (`payout_reference`) so a later payout with it is tied to this invoice.
-- A found payout's invoice has no floor of its own, no `started_by`, no email domain and no phone. Its supplier is the account name, else `UNNAMED_PAYEE`, and a replacement is paid from the wallet the payout came from.
+- A found payout's invoice has no floor of its own, no `started_by` and no email domain, and adds no phone: its phone is the record's phone on file, if any. Its supplier is the account name, else `UNNAMED_PAYEE`, and a replacement is paid from the wallet the payout came from.
 
 ## Why
 
@@ -458,7 +459,7 @@ How the agent works an invoice, look by look: sending and retrying payments, hol
 ### Looks and steps
 
 - A held invoice's reader failure line says PayOnce reads the email again "in about a minute", because its next look comes a minute later. Any other invoice's says "on its next look at this invoice". The console's `reader` lines keep what the service wrote, with the key cut out.
-- When stored terms, a kept quote or findings a look acts on are not in a shape PayOnce wrote, the look throws `StoredShapeError`, whose fixed words name the row (`engine/stored.ts`), and pays nothing. The shapes accept every version on file ([ledger.md](ledger.md)).
+- When stored terms, a kept quote, findings or an uploaded email's lists a look acts on are not in a shape PayOnce wrote, the look throws `StoredShapeError` (`store/db.ts`), whose fixed words name the row (`store/stored.ts`), and pays nothing. The shapes accept every version on file ([ledger.md](ledger.md)).
 
 ### Sending and retries
 
