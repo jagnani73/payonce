@@ -213,9 +213,9 @@ export function OptionCard(props: { option: Choosable; name: string; chosen: boo
   );
 }
 
-// "Approving as", from the request's approvers, and Approve. After a signoff
-// the picker moves on to the next who can approve. empty: the button's label
-// before a name is chosen.
+// "Approving as", from the request's approvers, and Approve. A name that has
+// signed, here or anywhere else, gives way to the next who can approve. empty:
+// the button's label before a name is chosen.
 export function ApproveForm(props: {
   approvers: ApproverChoice[];
   can: Can;
@@ -226,7 +226,8 @@ export function ApproveForm(props: {
   const me: string | null = useMe();
   const [picked, setPicked] = useState<string | null>(null);
   const choices: ApproverChoice[] = props.approvers;
-  const name: string = picked !== null && choices.some((choice: ApproverChoice): boolean => choice.name === picked) ? picked : firstApprover(choices, me);
+  const name: string =
+    picked !== null && choices.some((choice: ApproverChoice): boolean => choice.name === picked && !choice.signed) ? picked : firstApprover(choices, me);
   const choice: ApproverChoice | undefined = choices.find((item: ApproverChoice): boolean => item.name === name);
   return (
     <div class="option-form">
