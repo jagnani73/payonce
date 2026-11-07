@@ -55,13 +55,12 @@ function outcomesOf(balances: BalanceState, recon: RunView | null): Outcome[] {
 // last good read and last failure, and the latest reconciliation check against
 // Airwallex. The newest of them decides. PayOnce's words go in text, the
 // client's message only in detail. Nothing answers on the offline host, so
-// PayOnce says it is offline there until a read works, as one does against a
-// stand-in bank, and from then on the reads decide.
+// PayOnce says it is offline there until this server's balance read works, as
+// one does against a stand-in bank, and from then on the reads decide. A
+// reconciliation check on file does not count for that, since it may come from
+// a run against the sandbox.
 export function airwallexHealth(ledger: Ledger, host: string, balances: BalanceState): AirwallexHealth {
-  const outcomes: Outcome[] = outcomesOf(balances, latestLiveRun(ledger));
-  const lastOk: Outcome | undefined = [...outcomes].reverse().find((outcome: Outcome): boolean => outcome.ok);
-  const latest: Outcome | undefined = outcomes.at(-1);
-  if (host === OFFLINE_HOST && lastOk === undefined) {
+  if (host === OFFLINE_HOST && balances.readAt === null) {
     return {
       state: "unreachable",
       lastOkAt: null,
@@ -70,6 +69,9 @@ export function airwallexHealth(ledger: Ledger, host: string, balances: BalanceS
       detail: null,
     };
   }
+  const outcomes: Outcome[] = outcomesOf(balances, latestLiveRun(ledger));
+  const lastOk: Outcome | undefined = [...outcomes].reverse().find((outcome: Outcome): boolean => outcome.ok);
+  const latest: Outcome | undefined = outcomes.at(-1);
   if (latest === undefined) {
     return { state: "unknown", lastOkAt: null, failingSince: null, text: "PayOnce has not read Airwallex yet.", detail: null };
   }
