@@ -134,7 +134,7 @@ Then start the server:
 pnpm ui
 ```
 
-`pnpm ui` builds the page first (`pnpm build:web`, esbuild, into `web/dist/`), then serves it and the JSON API at `http://127.0.0.1:4310`. Open the Sandbox simulator to start a scripted incident, or New payment to pay a beneficiary of your own. [docs/demo.md](docs/demo.md) walks through four incidents.
+`pnpm ui` builds the page first (`pnpm build:web`, esbuild, into `web/dist/`), then serves it and the JSON API at `http://127.0.0.1:4310`. Open the Sandbox simulator to start a scripted incident, or New payment to pay a beneficiary of your own. [docs/demo.md](docs/demo.md) walks through one morning: `node scripts/demo-morning.mjs` sets up a pay run and two incidents, and the recording follows them in seven beats.
 
 `.env.example` lists every setting. `NAME!` is required, `NAME=value` shows the default, and `a|b|c` lists the accepted values, so write one of them. Put only the lines you change in `.env`. To run with no Airwallex at all, set `AWX_BASE_URL=https://sandbox.invalid` and give the two credential lines any value: every call then fails as unreachable, and nothing can be paid. `pnpm ui` stops at start-up while either credential is missing.
 
