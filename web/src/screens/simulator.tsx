@@ -155,10 +155,12 @@ function ScriptedIncident(props: { view: SandboxView }): JSX.Element {
           disabled={name.trim() === ""}
           reason="Enter who is starting it."
           onAction={start}
-          onError={(error: ApiError): void => {
-            if (error.status === 409) {
-              setInvoiceError(error.message);
+          onError={(error: ApiError): boolean => {
+            if (error.status !== 409) {
+              return false;
             }
+            setInvoiceError(error.message);
+            return true;
           }}
         />
       </div>

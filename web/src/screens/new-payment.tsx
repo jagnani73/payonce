@@ -194,15 +194,18 @@ export function NewPayment(props: ScreenProps): JSX.Element {
     navigate(paymentHref(created.invoiceId));
   }
 
-  function startRefused(error: ApiError): void {
+  // A refusal that names fields shows under them, not beside the button.
+  function startRefused(error: ApiError): boolean {
     const fields: unknown = error.body?.fields;
-    if ((error.status === 400 || error.status === 409) && typeof fields === "object" && fields !== null) {
+    if ((error.status === 400 || error.status === 409) && typeof fields === "object" && fields !== null && Object.keys(fields).length > 0) {
       setRefused({ body, fields: fields as Record<string, string> });
       // Someone took the number PayOnce made before this start: make another.
       if (invoice.trim() === "" && (fields as Record<string, unknown>)["invoiceId"] !== undefined) {
         setMade(null);
       }
+      return true;
     }
+    return false;
   }
 
   const amountError: string | null = errorOf("amount") ?? errorOf("currency");

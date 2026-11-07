@@ -1,13 +1,13 @@
 import type { ComponentChildren, JSX } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { asApiError, type ApiError } from "../api";
-import { cleanLine } from "../text";
+import { cleanLine, sentenceEnd } from "../text";
 import { Icon } from "./Icon";
 import { InlineError } from "./Notice";
 
 // Buttons that do something. Every action button shows a busy label while it
-// runs, and a refusal shows beside it in the server's words (role="alert"),
-// never at the top of the page. The action itself puts the fresh view on screen
+// runs, and a refusal shows beside it in the server's words, ended with a full
+// stop (role="alert"), never at the top of the page. The action itself puts the fresh view on screen
 // and calls notify() with the answer's notice.
 
 export type ButtonKind = "primary" | "secondary" | "danger" | "quiet";
@@ -21,9 +21,9 @@ export function ActionButton(props: {
   disabled?: boolean;
   // Why it is off, shown beside it in grey.
   reason?: string | null;
-  // A refusal the form shows itself (field errors, say). Its message still
-  // shows beside the button.
-  onError?: (error: ApiError) => void;
+  // Told of every refusal. It returns true when the form shows the refusal
+  // itself (field errors, say), so it is not said again beside the button.
+  onError?: (error: ApiError) => boolean | void;
   icon?: ComponentChildren;
 }): JSX.Element {
   const [busy, setBusy] = useState<boolean>(false);
@@ -46,10 +46,10 @@ export function ActionButton(props: {
       await props.onAction();
     } catch (caught: unknown) {
       const refusal: ApiError = asApiError(caught);
-      if (mounted.current) {
-        setError(refusal.message);
+      const shown: boolean = props.onError?.(refusal) === true;
+      if (mounted.current && !shown) {
+        setError(sentenceEnd(refusal.message));
       }
-      props.onError?.(refusal);
     } finally {
       if (mounted.current) {
         setBusy(false);
