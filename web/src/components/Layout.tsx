@@ -38,6 +38,19 @@ export function Card(props: {
   );
 }
 
+// "Incidents › INV-671104": the screen a page sits under, and the page.
+export function Crumbs(props: { up: { href: string; label: string }; children: ComponentChildren }): JSX.Element {
+  return (
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href={props.up.href}>{props.up.label}</a>
+      <span class="sep" aria-hidden="true">
+        {" › "}
+      </span>
+      <span aria-current="page">{props.children}</span>
+    </nav>
+  );
+}
+
 export interface TabItem {
   key: string;
   label: string;

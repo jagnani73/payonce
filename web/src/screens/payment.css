@@ -6,17 +6,6 @@
   gap: 16px;
 }
 
-.pay-crumbs {
-  font-size: 13px;
-  color: var(--text-3);
-}
-
-.pay-crumbs a {
-  display: inline-flex;
-  align-items: center;
-  min-height: 32px;
-}
-
 /* Main column and the rail beside it; one column below 1180 px, rail last. */
 .pay-grid {
   display: grid;
@@ -72,26 +61,6 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 8px 12px;
-}
-
-.pay-eyebrow {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-3);
-}
-
-.pay-badge {
-  display: inline-flex;
-  align-items: center;
-  min-height: 20px;
-  padding: 0 8px;
-  border: 1px solid var(--line-strong);
-  border-radius: 6px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-2);
 }
 
 .pay-head__check {
@@ -257,12 +226,6 @@
   color: var(--text-2);
 }
 
-.pay-form__grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 14px;
-}
-
 .pay-form__notes {
   margin: 0;
   padding-left: 18px;
@@ -407,24 +370,6 @@
 .pay-read__line {
   font-size: 13px;
   color: var(--text-2);
-}
-
-.pay-email__head {
-  display: grid;
-  grid-template-columns: 130px minmax(0, 1fr);
-  gap: 4px 12px;
-  margin: 0;
-  font-size: 13px;
-}
-
-.pay-email__head dt {
-  color: var(--text-3);
-}
-
-.pay-email__head dd {
-  margin: 0;
-  min-width: 0;
-  overflow-wrap: anywhere;
 }
 
 .pay-email__subject {
@@ -629,15 +574,6 @@
 
   .pay-bank__now-label {
     display: inline;
-  }
-
-  .pay-email__head {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0;
-  }
-
-  .pay-email__head dd {
-    margin-bottom: 6px;
   }
 
   .pay-transfer,

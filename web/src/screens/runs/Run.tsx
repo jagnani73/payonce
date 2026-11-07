@@ -44,7 +44,7 @@ function Header(props: { view: RunView }): JSX.Element {
   const outage: Caution | undefined = view.decision?.cautions.find((caution: Caution): boolean => caution.code === "outage");
   return (
     <header class="card run-head">
-      <span class="run-head__eyebrow">Pay run</span>
+      <span class="eyebrow">Pay run</span>
       <div class="run-head__title">
         <h2 class="run-head__name">{`Pay run ${run.id}`}</h2>
         <Theirs text={run.fileName} class="run-head__file" />
@@ -130,11 +130,11 @@ function StatusCell(props: { row: RunRowView; domain: boolean; open: boolean; on
         <ToneBadge tone={row.state === "released" ? "done" : ROW_TONES[row.state]} label={row.state === "second-bill-check" ? "Pays" : row.label} />
       )}
       {row.state === "second-bill-check" ? (
-        <span class="run-tag run-tag--warn">{`Possible second bill of ${row.secondBillOf.join(", ")}`}</span>
+        <span class="tag tag--warn">{`Possible second bill of ${row.secondBillOf.join(", ")}`}</span>
       ) : null}
       {row.newPayee ? <Tag>New payee</Tag> : null}
       {row.callbackVerified ? <Tag>Verified by callback</Tag> : null}
-      {props.domain ? <span class="run-tag run-tag--warn">Domain caution</span> : null}
+      {props.domain ? <span class="tag tag--warn">Domain caution</span> : null}
       {payment?.activity.busy === true ? (
         <span class="working">
           <span class="working__dot" aria-hidden="true" />

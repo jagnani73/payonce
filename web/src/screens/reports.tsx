@@ -40,7 +40,7 @@ function wordsOf(period: Period): string {
 
 function PeriodButtons(props: { period: Period }): JSX.Element {
   return (
-    <div class="periods" role="group" aria-label="Period">
+    <div class="periods screen__end" role="group" aria-label="Period">
       {PERIODS.map(
         (item: { key: Period; label: string }): JSX.Element => (
           <button
@@ -185,7 +185,7 @@ export function Reports(props: ScreenProps): JSX.Element {
 
   return (
     <div class="screen reports">
-      <header class="reports__head">
+      <header class="screen__bar">
         <h1 class="screen__title">Reports</h1>
         <PeriodButtons period={period} />
       </header>

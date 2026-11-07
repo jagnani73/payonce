@@ -78,8 +78,8 @@ export function Header(props: { view: IncidentView; acts: Acts }): JSX.Element {
   return (
     <header class="card pay-head">
       <div class="pay-head__top">
-        <span class="pay-eyebrow">Payment</span>
-        {v.incident === null ? null : <span class="pay-badge">Incident</span>}
+        <span class="eyebrow">Payment</span>
+        {v.incident === null ? null : <span class="tag tag--outline">Incident</span>}
         {v.activity.busy ? (
           <span class="working" role="status">
             <span class="working__dot" aria-hidden="true" />

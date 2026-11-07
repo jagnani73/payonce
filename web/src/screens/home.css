@@ -155,7 +155,7 @@ a.tile:hover {
 }
 
 .readiness__item--warning .readiness__icon {
-  color: #a35200;
+  color: var(--sandbox-line);
 }
 
 .readiness__item--optional .readiness__icon {

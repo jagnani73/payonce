@@ -43,13 +43,13 @@ function Header(props: { item: Item }): JSX.Element {
   return (
     <header class="mail__head">
       <div class="mail__eyebrow">
-        <span class="mail__number">{`Email ${item.id}`}</span>
-        {item.partial ? <span class="mail-tag mail-tag--partial">Partly unreadable</span> : <span class="mail-tag">Fully readable</span>}
+        <span class="eyebrow">{`Email ${item.id}`}</span>
+        {item.partial ? <span class="tag tag--partial">Partly unreadable</span> : <span class="tag">Fully readable</span>}
       </div>
       <h2 id="mail-subject" class="mail__subject">
         <Theirs text={item.subject === "" ? "(no subject)" : item.subject} />
       </h2>
-      <dl class="mail__facts">
+      <dl class="facts">
         <dt>From</dt>
         <dd>
           {item.fromName === null ? null : (
@@ -280,7 +280,7 @@ function Delivered(props: { view: InboxItemView }): JSX.Element {
         .
       </p>
       {reading?.state === "read" ? (
-        <dl class="mail__reading">
+        <dl class="facts">
           <dt>What PayOnce read</dt>
           <dd>{reading.summary}</dd>
           {reading.readBy === null ? null : (

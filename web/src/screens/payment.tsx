@@ -1,6 +1,6 @@
 import type { JSX } from "preact";
 import { useState } from "preact/hooks";
-import { Card, Tabs, type TabItem } from "../components/Layout";
+import { Card, Crumbs, Tabs, type TabItem } from "../components/Layout";
 import { Empty, LoadError, Loading } from "../components/States";
 import { Timeline } from "../components/Timeline";
 import { useScrollTo, useTitle } from "../hooks";
@@ -103,11 +103,9 @@ export function Payment(props: ScreenProps): JSX.Element {
   const missing: boolean = invoiceId === "" || v.error?.status === 404;
   return (
     <div class="screen pay">
-      <nav class="pay-crumbs" aria-label="Breadcrumb">
-        <a href="#incidents">Incidents</a>
-        <span aria-hidden="true">{" › "}</span>
+      <Crumbs up={{ href: "#incidents", label: "Incidents" }}>
         <span class="mono">{invoiceId}</span>
-      </nav>
+      </Crumbs>
       {missing ? null : <LoadError what="this payment" error={v.error} />}
       {missing ? (
         <NotFound invoiceId={invoiceId} />

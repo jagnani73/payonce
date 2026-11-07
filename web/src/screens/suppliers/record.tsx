@@ -1,7 +1,7 @@
 import type { JSX } from "preact";
 import { Details, LinkButton } from "../../components/Action";
 import { Icon } from "../../components/Icon";
-import { Card } from "../../components/Layout";
+import { Card, Crumbs } from "../../components/Layout";
 import { Empty, LoadError, Loading } from "../../components/States";
 import { Dotted, Theirs, Time } from "../../components/Text";
 import { useTitle } from "../../hooks";
@@ -54,7 +54,7 @@ function Header(props: { view: SupplierView; others: Others }): JSX.Element {
   return (
     <header class="card sup-header">
       <div class="sup-header__main">
-        <span class="sup-eyebrow">Supplier record</span>
+        <span class="eyebrow">Supplier record</span>
         <h1 class="sup-header__name">
           <Theirs text={view.name === "" ? "No name on file" : view.name} />
         </h1>
@@ -199,13 +199,9 @@ export function SupplierRecord(props: { route: Route }): JSX.Element {
   const missing: boolean = view === null && record.error !== null && record.error.status === 404;
   return (
     <div class="screen sup">
-      <p class="sup-crumb">
-        <a href="#suppliers">Suppliers</a>
-        <span class="sep" aria-hidden="true">
-          {" › "}
-        </span>
+      <Crumbs up={{ href: "#suppliers", label: "Suppliers" }}>
         {view === null ? "Supplier record" : <Theirs text={view.name === "" ? "No name on file" : view.name} />}
-      </p>
+      </Crumbs>
       {missing ? null : <LoadError what="this supplier record" error={record.error} />}
       {view === null ? (
         missing ? (

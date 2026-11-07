@@ -1,6 +1,5 @@
-/* Treasury: cash, reconciliation and outages. Cards, tables, fields and chips
-   come from styles.css; these rules lay out what only Treasury has. Reports and
-   Settings use .form-row, .two-up, .facts and .figure from here too. */
+/* Treasury: cash, reconciliation and outages. Cards, tables, fields, chips and
+   figures come from styles.css; these rules lay out what only Treasury has. */
 
 .tab-panel {
   display: flex;
@@ -436,24 +435,6 @@
   font-weight: 650;
 }
 
-.facts {
-  display: grid;
-  grid-template-columns: 120px minmax(0, 1fr);
-  gap: 6px 12px;
-  margin: 0;
-  font-size: 13px;
-}
-
-.facts dt {
-  color: var(--text-3);
-}
-
-.facts dd {
-  margin: 0;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
 .outage__sends {
   font-weight: 600;
 }
@@ -491,15 +472,6 @@
 @media (max-width: 899px) {
   .cash-bar__checks {
     margin-left: 0;
-  }
-
-  .facts {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 2px;
-  }
-
-  .facts dd {
-    margin-bottom: 6px;
   }
 
   .recon-wallets,

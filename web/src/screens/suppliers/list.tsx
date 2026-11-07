@@ -28,7 +28,7 @@ function SearchBox(props: { value: string; onInput: (value: string) => void; onS
   const id: string = useId();
   return (
     <form
-      class="sup-search"
+      class="search-field sup-search screen__end"
       role="search"
       onSubmit={(event: Event): void => {
         event.preventDefault();
@@ -38,10 +38,10 @@ function SearchBox(props: { value: string; onInput: (value: string) => void; onS
       <label class="visually-hidden" for={id}>
         Search suppliers
       </label>
-      <Icon name="search" class="sup-search__icon" />
+      <Icon name="search" />
       <input
         id={id}
-        class="input sup-search__input"
+        class="input"
         type="search"
         autocomplete="off"
         spellcheck={false}
@@ -71,7 +71,7 @@ function Row(props: { row: SupplierListRow }): JSX.Element {
       <span class="sup-row__cautions">
         {row.cautions.map(
           (caution: SupplierListRow["cautions"][number]): JSX.Element => (
-            <span class="tag sup-tag--caution" key={caution.code}>
+            <span class="tag tag--warn" key={caution.code}>
               {caution.text}
             </span>
           ),
@@ -152,7 +152,7 @@ export function SupplierList(props: { route: Route }): JSX.Element {
   const list: Polled<SuppliersView> = usePoll<SuppliersView>(query("/api/suppliers", { q: applied }), (): number => SLOW_MS, { keep: true });
   return (
     <div class="screen sup">
-      <header class="sup-head">
+      <header class="screen__bar">
         <h1 class="screen__title">Suppliers</h1>
         <SearchBox
           value={draft}

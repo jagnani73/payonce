@@ -222,7 +222,7 @@ function ConfirmForm(props: { supplierKey: string; proposal: PhoneProposalView; 
               </>
             )}
           </p>
-          <div class="sup-form-grid">
+          <div class="form-grid">
             {removal ? null : (
               <Field label="The number from your source" error={errors["value"] ?? null}>
                 {(control: ControlProps): JSX.Element => <TextInput control={control} value={value} onInput={setValue} tel placeholder="+1 212 555 …" />}
@@ -285,7 +285,7 @@ function WithdrawForm(props: { supplierKey: string; proposal: PhoneProposalView;
       <h4 class="sup-proposal__form-title">Withdraw the proposal</h4>
       {props.can.allowed ? (
         <>
-          <div class="sup-form-grid">
+          <div class="form-grid">
             <Field label="Why" error={error}>
               {(control: ControlProps): JSX.Element => (
                 <TextInput control={control} value={note} onInput={setNote} placeholder="The number came from a look-alike email" />
@@ -360,7 +360,7 @@ function Proposal(props: { supplierKey: string; view: SupplierView; proposal: Ph
         <ToneBadge tone={proposal.lapsed ? "done" : "act"} label={proposal.lapsed ? "Lapsed" : "Waits for a second person"} />
         <h3 class="sup-proposal__title">{proposal.removal ? "Take the phone number off file" : `New phone ending ${proposal.ending ?? ""}`}</h3>
       </div>
-      <dl class="sup-facts">
+      <dl class="facts">
         <dt>Proposed by</dt>
         <dd>
           {proposal.proposedBy === null ? "A person PayOnce did not record" : <Theirs text={proposal.proposedBy} />} <When at={proposal.proposedAt} />
@@ -453,7 +453,7 @@ function ProposeForm(props: { supplierKey: string; first: boolean; onActed: Acti
       <p class="sup-proposal__lede">
         Type the number from a source you trust. It goes on file only when someone else finds the same number in their own source and confirms it.
       </p>
-      <div class="sup-form-grid">
+      <div class="form-grid">
         <Field label="Phone number" hint="With a + and the country code, such as +1 212 555 0147." error={errors["value"] ?? null}>
           {(control: ControlProps): JSX.Element => <TextInput control={control} value={value} onInput={setValue} tel />}
         </Field>

@@ -106,9 +106,9 @@ export function Search(props: { onGo?: () => void }): JSX.Element {
   return (
     <div class="search" ref={box}>
       <form role="search" onSubmit={submit}>
-        <label class="search__field">
+        <label class="search-field">
           <span class="visually-hidden">Search</span>
-          <Icon name="search" class="search__icon" />
+          <Icon name="search" />
           <input
             ref={input}
             class="input search__input"

@@ -190,7 +190,7 @@ export function RunUpload(props: { runs: RunsView | null; id: string }): JSX.Ele
       <h2 id={`${props.id}-title`} class="card__title">
         Upload pay run
       </h2>
-      <div class="run-upload__fields">
+      <div class="form-grid">
         <Field
           label="CSV file"
           hint={`Up to ${maxChars.toLocaleString("en-US")} characters and ${upload?.maxRows ?? 50} rows.`}

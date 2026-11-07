@@ -115,7 +115,7 @@ function ScriptedIncident(props: { view: SandboxView }): JSX.Element {
       <Select label="Scenario" choices={view.scenarios} value={scenario} onChange={setScenario} />
       <Select label="Bank outcome" choices={view.bankOutcomes} value={outcome} onChange={setOutcome} />
       <Select label="Supplier emails to play" choices={view.emailThreads} value={emails} onChange={setEmails} />
-      <div class="sim__pair">
+      <div class="form-grid">
         <Field label="Invoice number (optional)" error={invoiceError}>
           {(control: ControlProps): JSX.Element => (
             <input
@@ -328,7 +328,7 @@ export function Simulator(props: { under: Route }): JSX.Element {
         <div class="sim__body">
           <div class="drawer__head">
             <div class="sim__titles">
-              <span class="sim__tag">Sandbox tool</span>
+              <span class="sandbox-tag">Sandbox tool</span>
               <h1 id="sim-title" class="drawer__title" tabIndex={-1} ref={heading}>
                 <Icon name="flask" size={22} />
                 Sandbox simulator

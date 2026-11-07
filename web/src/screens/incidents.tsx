@@ -317,9 +317,9 @@ export function Incidents(props: ScreenProps): JSX.Element {
 
   return (
     <div class="screen incidents">
-      <header class="incidents__head">
+      <header class="screen__bar">
         <h1 class="screen__title">Incidents</h1>
-        <LinkButton href="#new-payment" kind="primary" class="incidents__new">
+        <LinkButton href="#new-payment" kind="primary" class="screen__end">
           <Icon name="plus" />
           New payment
         </LinkButton>

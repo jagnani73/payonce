@@ -1,17 +1,6 @@
 /* Pay runs: the list, the upload panel, and one run with its Decision panel and
    tabs. Cards, tables, tabs, chips and fields come from styles.css. */
 
-.runs__title-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-}
-
-.runs__upload {
-  margin-left: auto;
-}
-
 /* ---------- the list ---------- */
 
 .run-list {
@@ -71,12 +60,6 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
-}
-
-.run-upload__fields {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 16px;
 }
 
 .run-upload__file {
@@ -144,14 +127,6 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-}
-
-.run-head__eyebrow {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-3);
 }
 
 .run-head__title {
@@ -249,25 +224,6 @@
   gap: 6px;
 }
 
-.run-tag {
-  display: inline-flex;
-  align-items: center;
-  min-height: 20px;
-  padding: 0 7px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--muted-fill);
-  color: var(--text-2);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.run-tag--warn {
-  border-color: var(--warn-line);
-  background: var(--warn-fill);
-  color: var(--warn-text);
-}
-
 .run-rows__toggle {
   display: inline-flex;
   align-items: center;
@@ -354,10 +310,6 @@
 /* ---------- phone ---------- */
 
 @media (max-width: 899px) {
-  .runs__upload {
-    margin-left: 0;
-  }
-
   .run-record__body {
     padding: 14px;
   }

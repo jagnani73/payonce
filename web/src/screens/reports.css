@@ -1,16 +1,8 @@
 /* Reports: the period buttons, the tiles, the audit card and the grid of
    tables. Cards and tables come from styles.css. */
 
-.reports__head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-}
-
 .periods {
   display: inline-flex;
-  margin-left: auto;
   overflow: hidden;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
@@ -177,7 +169,6 @@
 @media (max-width: 899px) {
   .periods {
     width: 100%;
-    margin-left: 0;
   }
 
   .periods__button {

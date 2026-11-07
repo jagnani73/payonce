@@ -93,7 +93,7 @@ function Form(props: { form: BankDetailsForm; acts: Acts }): JSX.Element {
   return (
     <div class="option-form">
       <p class="pay-form__intro">Call the number on file, never one from an email. A callback is the only way new bank details enter PayOnce.</p>
-      <div class="pay-form__grid">
+      <div class="form-grid">
         <TextField
           label="Number you called"
           type="tel"

@@ -123,7 +123,7 @@ export function NextSteps(props: {
         </p>
       )}
       <div class="np-sandbox">
-        <span class="np-sandbox__tag">Sandbox tool</span>
+        <span class="sandbox-tag">Sandbox tool</span>
         <p class="np-sandbox__text">
           {check?.sandbox === null || check?.sandbox === undefined
             ? "The simulator plays the bank for this payment's first transfer."

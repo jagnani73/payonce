@@ -1,17 +1,6 @@
 /* Inbox: the list beside the open email, the email itself and the upload
    dialog. Cards, tabs, fields and buttons come from styles.css. */
 
-.inbox__title-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-}
-
-.inbox__upload {
-  margin-left: auto;
-}
-
 .inbox__layout {
   display: grid;
   grid-template-columns: minmax(340px, 440px) minmax(0, 1fr);
@@ -103,31 +92,6 @@
   color: var(--text-3);
 }
 
-.mail-tag {
-  display: inline-flex;
-  align-items: center;
-  min-height: 20px;
-  padding: 0 7px;
-  border: 1px solid var(--done-line);
-  border-radius: 6px;
-  background: var(--done-fill);
-  color: var(--done-text);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.mail-tag--match {
-  border-color: var(--act-line);
-  background: var(--act-fill);
-  color: var(--act-text);
-}
-
-.mail-tag--partial {
-  border: 1px dashed var(--blocked-line);
-  background: var(--warn-fill);
-  color: var(--blocked-text);
-}
-
 /* ---------- the open email ---------- */
 
 .mail {
@@ -149,35 +113,9 @@
   gap: 6px 10px;
 }
 
-.mail__number {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-3);
-}
-
 .mail__subject {
   font-size: 20px;
   font-weight: 650;
-}
-
-.mail__facts {
-  display: grid;
-  grid-template-columns: 150px minmax(0, 1fr);
-  gap: 4px 12px;
-  margin: 0;
-  font-size: 13px;
-}
-
-.mail__facts dt {
-  color: var(--text-3);
-}
-
-.mail__facts dd {
-  margin: 0;
-  min-width: 0;
-  overflow-wrap: anywhere;
 }
 
 .mail__address {
@@ -310,21 +248,6 @@
   font-weight: 600;
 }
 
-.mail__reading {
-  display: grid;
-  grid-template-columns: 150px minmax(0, 1fr);
-  gap: 4px 12px;
-  margin: 0;
-}
-
-.mail__reading dt {
-  color: var(--text-3);
-}
-
-.mail__reading dd {
-  margin: 0;
-}
-
 .mail__body {
   display: flex;
   flex-direction: column;
@@ -413,20 +336,3 @@
 }
 
 /* ---------- phone ---------- */
-
-@media (max-width: 899px) {
-  .mail__facts,
-  .mail__reading {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0;
-  }
-
-  .mail__facts dd,
-  .mail__reading dd {
-    margin-bottom: 6px;
-  }
-
-  .inbox__upload {
-    margin-left: 0;
-  }
-}

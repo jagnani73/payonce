@@ -118,11 +118,11 @@ export function Runs(props: ScreenProps): JSX.Element {
   return (
     <div class="screen runs">
       <header class="screen__head">
-        <div class="runs__title-row">
+        <div class="screen__bar">
           <h1 class="screen__title">Pay runs</h1>
           <button
             type="button"
-            class="btn btn--primary runs__upload"
+            class="btn btn--primary screen__end"
             aria-expanded={uploading}
             aria-controls={UPLOAD_ID}
             onClick={(): void => setUploading(!uploading)}

@@ -5,17 +5,6 @@
   gap: 18px;
 }
 
-.incidents__head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-}
-
-.incidents__new {
-  margin-left: auto;
-}
-
 /* ---------- filters ---------- */
 
 .ifilters {

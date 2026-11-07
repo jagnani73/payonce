@@ -68,7 +68,7 @@ function Line(props: { line: TimelineLine; fresh: boolean }): JSX.Element {
         {line.kindLabel}
       </span>
       <span class="tl__text">
-        {line.lead === null ? null : <span class="tl__lead">{line.lead}</span>}
+        {line.lead === null ? null : <span class="pill pill--accent tl__lead">{line.lead}</span>}
         <Theirs text={line.text} />
         {line.repeat === null ? null : (
           <span class="tl__repeat">

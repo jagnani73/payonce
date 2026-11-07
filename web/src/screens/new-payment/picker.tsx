@@ -120,11 +120,11 @@ export function BeneficiaryPicker(props: {
 
   return (
     <div class="np-picker">
-      <div class="np-search">
-        <Icon name="search" class="np-search__icon" />
+      <div class="search-field">
+        <Icon name="search" />
         <input
           id={props.inputId}
-          class="input np-search__input"
+          class="input"
           type="search"
           autocomplete="off"
           spellcheck={false}

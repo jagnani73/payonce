@@ -238,7 +238,7 @@ export function NewPayment(props: ScreenProps): JSX.Element {
             )}
           </fieldset>
 
-          <div class="np-pair">
+          <div class="form-grid">
             <Field label="Invoice number" error={errorOf("invoiceId")}>
               {(control: ControlProps): JSX.Element => (
                 <input
@@ -364,7 +364,7 @@ export function NewPayment(props: ScreenProps): JSX.Element {
             )}
           </fieldset>
 
-          <div class="np-pair">
+          <div class="form-grid">
             <Field
               label="Due date (optional)"
               hint="When the supplier expects the money. This is advice only and never stops a payment."

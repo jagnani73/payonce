@@ -51,7 +51,7 @@ function Email(props: { email: EmailView }): JSX.Element {
   const e: EmailView = props.email;
   return (
     <article class="pay-email">
-      <dl class="pay-email__head">
+      <dl class="facts">
         <dt>From</dt>
         <dd>
           {e.fromName === null ? (

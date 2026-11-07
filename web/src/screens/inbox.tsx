@@ -63,8 +63,8 @@ function Row(props: { row: UploadRow; tab: UploadState; current: boolean; prefer
             {" · "}
             <Time at={row.uploadedAt} />
           </span>
-          <span class={matched ? "mail-tag mail-tag--match" : "mail-tag"}>{row.label}</span>
-          {row.partial ? <span class="mail-tag mail-tag--partial">Partly unreadable</span> : null}
+          <span class={matched ? "tag tag--act" : "tag"}>{row.label}</span>
+          {row.partial ? <span class="tag tag--partial">Partly unreadable</span> : null}
         </span>
       </a>
     </li>
@@ -139,9 +139,9 @@ export function Inbox(props: ScreenProps): JSX.Element {
   return (
     <div class="screen inbox">
       <header class="screen__head inbox__head">
-        <div class="inbox__title-row">
+        <div class="screen__bar">
           <h1 class="screen__title">Inbox</h1>
-          <button type="button" class="btn btn--primary inbox__upload" onClick={(): void => setUploading(true)}>
+          <button type="button" class="btn btn--primary screen__end" onClick={(): void => setUploading(true)}>
             <Icon name="plus" />
             Upload email
           </button>
