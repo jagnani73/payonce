@@ -4,7 +4,7 @@ import { getJson, postJson, query, type ApiError } from "../api";
 import { ActionButton, LinkButton } from "../components/Action";
 import { Field, NameField, type ControlProps } from "../components/Form";
 import { Theirs } from "../components/Text";
-import { useTitle } from "../hooks";
+import { useDebouncedCheck, useTitle, type Checked } from "../hooks";
 import { useNameDraft } from "../me";
 import { notify } from "../notices";
 import { usePoll, type Polled } from "../poll";
@@ -53,11 +53,6 @@ function amountToSend(typed: string): string {
 // which the server answers as a problem with the method field.
 type FormInput = Omit<NewPaymentInput, "method"> & { method: TransferMethod | "" };
 
-interface Checked {
-  body: string;
-  view: PaymentCheckView;
-}
-
 export function NewPayment(props: ScreenProps): JSX.Element {
   useTitle("New payment");
   const supplierParam: string | null = props.route.params.get("supplier");
@@ -72,8 +67,6 @@ export function NewPayment(props: ScreenProps): JSX.Element {
   const [method, setMethod] = useState<TransferMethod | null>(null);
   const [due, setDue] = useState<string>("");
   const [touched, setTouched] = useState<ReadonlySet<FieldKey>>(new Set());
-  const [checked, setChecked] = useState<Checked | null>(null);
-  const [checkError, setCheckError] = useState<string | null>(null);
   const [refused, setRefused] = useState<{ body: string; fields: Record<string, string> } | null>(null);
   const searchId: string = useId();
 
@@ -137,34 +130,23 @@ export function NewPayment(props: ScreenProps): JSX.Element {
   const body: string = JSON.stringify(input);
 
   // One check per pause in typing. An answer to an older form is dropped.
-  const latest = useRef<number>(0);
-  useEffect((): (() => void) => {
-    const mine: number = latest.current + 1;
-    latest.current = mine;
-    const timer: number = window.setTimeout((): void => {
-      postJson<PaymentCheckView>("/api/payments/check", JSON.parse(body))
-        .then((view: PaymentCheckView): void => {
-          if (latest.current !== mine) {
-            return;
-          }
-          setChecked({ body, view });
-          setCheckError(null);
-          const sentEmpty: boolean = (JSON.parse(body) as FormInput).invoiceId === "";
-          if (sentEmpty) {
-            setMade(view.invoiceId);
-          } else if (invoice.trim() === "" && view.fields["invoiceId"] !== undefined) {
-            // The number PayOnce made was taken meanwhile: ask for another.
-            setMade(null);
-          }
-        })
-        .catch((error: ApiError): void => {
-          if (latest.current === mine) {
-            setCheckError(error.message);
-          }
-        });
-    }, CHECK_MS);
-    return (): void => window.clearTimeout(timer);
-  }, [body]);
+  const check: { checked: Checked<PaymentCheckView> | null; error: ApiError | null } = useDebouncedCheck<PaymentCheckView>(
+    body,
+    CHECK_MS,
+    (sent: string): Promise<PaymentCheckView> => postJson<PaymentCheckView>("/api/payments/check", JSON.parse(sent)),
+  );
+  const checked: Checked<PaymentCheckView> | null = check.checked;
+  useEffect((): void => {
+    if (checked === null) {
+      return;
+    }
+    if ((JSON.parse(checked.input) as FormInput).invoiceId === "") {
+      setMade(checked.answer.invoiceId);
+    } else if (invoice.trim() === "" && checked.answer.fields["invoiceId"] !== undefined) {
+      // The number PayOnce made was taken meanwhile: ask for another.
+      setMade(null);
+    }
+  }, [checked]);
 
   useEffect((): void => {
     if (refused !== null && refused.body !== body) {
@@ -172,7 +154,7 @@ export function NewPayment(props: ScreenProps): JSX.Element {
     }
   }, [body]);
 
-  const view: PaymentCheckView | null = checked?.view ?? null;
+  const view: PaymentCheckView | null = checked?.answer ?? null;
   const filled: Record<FieldKey, boolean> = {
     supplierKey: picked !== null,
     invoiceId: invoice.trim() !== "",
@@ -201,7 +183,7 @@ export function NewPayment(props: ScreenProps): JSX.Element {
     method === null ? "pick a transfer method" : null,
     name.trim() === "" ? "enter who is starting it" : null,
   ].filter((part: string | null): part is string => part !== null);
-  const current: boolean = checked !== null && checked.body === body;
+  const current: boolean = checked !== null && checked.input === body;
   const blocked: boolean = missing.length > 0 || (current && Object.keys(view?.fields ?? {}).length > 0);
   const reason: string = missing.length > 0 ? `To start it, ${joinNames(missing, "and")}.` : "Fix the fields above to start it.";
 
@@ -437,7 +419,7 @@ export function NewPayment(props: ScreenProps): JSX.Element {
           waitingFor={picked === null ? "Pick a beneficiary and enter an amount to see what PayOnce will do." : null}
           stale={checked !== null && !current}
           marked={marked}
-          error={checkError}
+          error={check.error?.message ?? null}
           wantsHeadroom={amount.trim() !== ""}
           sandboxError={errorOf("sandbox")}
         />

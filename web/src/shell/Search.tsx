@@ -1,9 +1,9 @@
 import type { JSX } from "preact";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useRef, useState } from "preact/hooks";
 import { getJson, query } from "../api";
 import { Icon } from "../components/Icon";
 import { Theirs } from "../components/Text";
-import { useDismiss } from "../hooks";
+import { useDebouncedCheck, useDismiss, type Checked } from "../hooks";
 import { navigate, paymentHref, runHref, supplierHref } from "../router";
 import type { SearchView } from "../types";
 
@@ -63,7 +63,6 @@ function groupsOf(view: SearchView): Group[] {
 
 export function Search(props: { onGo?: () => void }): JSX.Element {
   const [q, setQ] = useState<string>("");
-  const [found, setFound] = useState<SearchView | null>(null);
   const [open, setOpen] = useState<boolean>(false);
   const box = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -71,26 +70,12 @@ export function Search(props: { onGo?: () => void }): JSX.Element {
   useDismiss(open, (): void => setOpen(false), box, input);
 
   const wanted: string = q.trim();
-  useEffect((): (() => void) | undefined => {
-    if (wanted === "" || wanted.length > MAX_QUERY) {
-      setFound(null);
-      return undefined;
-    }
-    let gone: boolean = false;
-    const timer: number = window.setTimeout((): void => {
-      getJson<SearchView>(query("/api/search", { q: wanted }))
-        .then((view: SearchView): void => {
-          if (!gone) {
-            setFound(view);
-          }
-        })
-        .catch((): void => undefined);
-    }, WAIT_MS);
-    return (): void => {
-      gone = true;
-      window.clearTimeout(timer);
-    };
-  }, [wanted]);
+  const suggested: Checked<SearchView> | null = useDebouncedCheck<SearchView>(
+    wanted === "" || wanted.length > MAX_QUERY ? null : wanted,
+    WAIT_MS,
+    (asked: string): Promise<SearchView> => getJson<SearchView>(query("/api/search", { q: asked })),
+  ).checked;
+  const found: SearchView | null = suggested !== null && suggested.input === wanted ? suggested.answer : null;
 
   function go(href: string): void {
     setOpen(false);
@@ -103,7 +88,7 @@ export function Search(props: { onGo?: () => void }): JSX.Element {
     if (wanted === "") {
       return;
     }
-    const exact: string | null = found !== null && found.q === wanted ? (found.exact?.href ?? null) : null;
+    const exact: string | null = found?.exact?.href ?? null;
     go(exact ?? query("#search", { q: wanted.slice(0, MAX_QUERY) }));
   }
 
@@ -117,7 +102,7 @@ export function Search(props: { onGo?: () => void }): JSX.Element {
     }
   }
 
-  const groups: Group[] = found !== null && found.q === wanted ? groupsOf(found) : [];
+  const groups: Group[] = found === null ? [] : groupsOf(found);
   return (
     <div class="search" ref={box}>
       <form role="search" onSubmit={submit}>

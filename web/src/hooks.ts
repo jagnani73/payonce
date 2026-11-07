@@ -1,5 +1,6 @@
 import type { RefObject } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
+import { asApiError, type ApiError } from "./api";
 
 // Small hooks the shell and the screens share.
 
@@ -57,6 +58,52 @@ export function useDismiss(
       document.removeEventListener("pointerdown", onPointer);
     };
   }, [open]);
+}
+
+// The answer to the newest input a debounced check asked about.
+export interface Checked<T> {
+  input: string;
+  answer: T;
+}
+
+// Asks check(input) once the input has stayed the same for ms: a form's preview
+// (New payment) or a search box's suggestions. Only the answer to the newest
+// input is kept; one that lands after the input changed again is dropped. A
+// failure keeps the last answer and says why. A null input asks nothing and
+// clears both.
+export function useDebouncedCheck<T>(
+  input: string | null,
+  ms: number,
+  check: (input: string) => Promise<T>,
+): { checked: Checked<T> | null; error: ApiError | null } {
+  const [state, setState] = useState<{ checked: Checked<T> | null; error: ApiError | null }>({ checked: null, error: null });
+  const latest = useRef<number>(0);
+  const checkRef = useRef<(input: string) => Promise<T>>(check);
+  checkRef.current = check;
+  useEffect((): (() => void) | undefined => {
+    const mine: number = latest.current + 1;
+    latest.current = mine;
+    if (input === null) {
+      setState({ checked: null, error: null });
+      return undefined;
+    }
+    const timer: number = window.setTimeout((): void => {
+      checkRef
+        .current(input)
+        .then((answer: T): void => {
+          if (latest.current === mine) {
+            setState({ checked: { input, answer }, error: null });
+          }
+        })
+        .catch((caught: unknown): void => {
+          if (latest.current === mine) {
+            setState((now: { checked: Checked<T> | null }) => ({ checked: now.checked, error: asApiError(caught) }));
+          }
+        });
+    }, ms);
+    return (): void => window.clearTimeout(timer);
+  }, [input]);
+  return state;
 }
 
 // Brings the element a route names into view once it is on screen (#outage/3,
