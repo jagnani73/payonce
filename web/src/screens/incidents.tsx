@@ -342,6 +342,7 @@ export function Incidents(props: ScreenProps): JSX.Element {
               }),
             )}
             current={scope}
+            flush
           />
           <FiltersRow
             view={view}

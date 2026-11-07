@@ -46,7 +46,7 @@ export function Treasury(props: ScreenProps): JSX.Element {
     key: item.key,
     label: item.label,
     href: `#treasury/${item.key}`,
-    count: item.key === "outages" && active > 0 ? active : null,
+    count: item.key === "outages" ? active : null,
   }));
   return (
     <div class="screen treasury">
@@ -54,7 +54,7 @@ export function Treasury(props: ScreenProps): JSX.Element {
         <h1 class="screen__title">Treasury</h1>
       </header>
       <div class={active > 0 ? "treasury__tabs has-outage" : "treasury__tabs"}>
-        <Tabs label="Treasury" tabs={tabs} current={tab} />
+        <Tabs label="Treasury" tabs={tabs} current={tab} flush />
       </div>
       {tab === "cash" ? <CashTab /> : tab === "reconciliation" ? <ReconTab /> : <OutagesTab polled={outages} focus={focusOf(props.route)} />}
     </div>

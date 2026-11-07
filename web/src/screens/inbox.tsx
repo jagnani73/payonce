@@ -88,7 +88,7 @@ function List(props: {
         tabs={TABS.map((tab: UploadState) => ({
           key: tab,
           label: view?.tabs.find((item: InboxListView["tabs"][number]): boolean => item.state === tab)?.label ?? TAB_LABELS[tab],
-          count: tab === "waiting" && waiting > 0 ? waiting : null,
+          count: tab === "waiting" ? waiting : null,
           href: query("#inbox", { tab: tab === "waiting" ? null : tab, for: props.preferred }),
         }))}
         current={props.tab}

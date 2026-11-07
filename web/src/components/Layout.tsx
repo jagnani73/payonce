@@ -41,19 +41,21 @@ export function Card(props: {
 export interface TabItem {
   key: string;
   label: string;
+  // Shown beside the label when above 0.
   count?: number | null;
   // A routed tab links to its hash; the others call onSelect.
   href?: string;
 }
 
-// Tabs above a card or a screen. A tab that is a route is a link with
-// aria-current; on a phone the tabs become a select. Without hrefs they are
-// toggle buttons and onSelect picks.
+// Tabs atop a card, or flush: a screen's own tabs, in line with what is under
+// them. A tab that is a route is a link with aria-current; on a phone the tabs
+// become a select. Without hrefs they are toggle buttons and onSelect picks.
 export function Tabs(props: {
   label: string;
   tabs: TabItem[];
   current: string;
   onSelect?: (key: string) => void;
+  flush?: boolean;
 }): JSX.Element {
   const id: string = useId();
   const pick = (key: string): void => {
@@ -64,16 +66,17 @@ export function Tabs(props: {
       props.onSelect?.(key);
     }
   };
-  const text = (tab: TabItem): string => (tab.count === null || tab.count === undefined ? tab.label : `${tab.label} ${tab.count}`);
+  const counted = (tab: TabItem): boolean => tab.count !== null && tab.count !== undefined && tab.count > 0;
+  const text = (tab: TabItem): string => (counted(tab) ? `${tab.label} ${tab.count}` : tab.label);
   return (
-    <div class="tabs">
+    <div class={props.flush === true ? "tabs tabs--flush" : "tabs"}>
       <nav class="tabs__row" aria-label={props.label}>
         {props.tabs.map((tab: TabItem): JSX.Element => {
           const on: boolean = tab.key === props.current;
           const body: JSX.Element = (
             <>
               {tab.label}
-              {tab.count === null || tab.count === undefined ? null : <span class="tabs__count">{tab.count}</span>}
+              {counted(tab) ? <span class="tabs__count">{tab.count}</span> : null}
             </>
           );
           return tab.href !== undefined ? (

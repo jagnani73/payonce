@@ -118,6 +118,7 @@ export function UploadDialog(props: {
           { key: "paste", label: "Paste source" },
         ]}
         current={source}
+        flush
         onSelect={(key: string): void => {
           setSource(key === "paste" ? "paste" : "file");
           setFailure(null);

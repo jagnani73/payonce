@@ -16,15 +16,6 @@
   margin-left: auto;
 }
 
-/* The scope tabs line up with the filters under them, as in the mockup. */
-.incidents .tabs__row {
-  padding: 0;
-}
-
-.incidents .tabs__select {
-  padding: 0;
-}
-
 /* ---------- filters ---------- */
 
 .ifilters {

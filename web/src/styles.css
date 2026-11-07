@@ -1274,6 +1274,11 @@ textarea {
   padding: 12px;
 }
 
+.tabs--flush .tabs__row,
+.tabs--flush .tabs__select {
+  padding: 0;
+}
+
 .filter-chip {
   display: inline-flex;
   align-items: center;
@@ -2027,10 +2032,6 @@ textarea {
   font-weight: 650;
 }
 
-.modal .tabs__row,
-.modal .tabs__select {
-  padding: 0;
-}
 
 /* ---------- the drawer (the simulator fills it) ---------- */
 
