@@ -58,3 +58,16 @@ export function useDismiss(
     };
   }, [open]);
 }
+
+// Brings the element a route names into view once it is on screen (#outage/3,
+// #reports/audit, #settings/alerts) and gives it focus.
+export function useScrollTo(id: string | null, ready: boolean): void {
+  useEffect((): void => {
+    if (id === null || !ready) {
+      return;
+    }
+    const target: HTMLElement | null = document.getElementById(id);
+    target?.scrollIntoView({ block: "start" });
+    target?.focus({ preventScroll: true });
+  }, [id, ready]);
+}

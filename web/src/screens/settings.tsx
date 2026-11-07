@@ -4,12 +4,11 @@ import { Table, type Column } from "../components/Layout";
 import { Callout } from "../components/Notice";
 import { LoadError, Loading } from "../components/States";
 import { Theirs, Time } from "../components/Text";
-import { useTitle } from "../hooks";
+import { useScrollTo, useTitle } from "../hooks";
 import { usePoll, type Polled } from "../poll";
 import type { ScreenProps } from "../router";
 import { timeZone } from "../time";
 import type { SettingRow, SettingsView } from "../types";
-import { useScrollTo } from "./treasury/scroll";
 import "./settings.css";
 
 // Settings (ia.md section 10): what PayOnce read from its .env file, read-only.

@@ -8,13 +8,13 @@ import { Callout } from "../../components/Notice";
 import { Empty, LoadError, Loading } from "../../components/States";
 import { Ref, Theirs, Time } from "../../components/Text";
 import { ToneBadge } from "../../components/Tone";
+import { useScrollTo } from "../../hooks";
 import { sameMe, useMe, useNameDraft } from "../../me";
 import { notify } from "../../notices";
 import type { Polled } from "../../poll";
 import { paymentHref, runHref } from "../../router";
 import type { EndOutageInput, EndOutageResult, OutageCardView, OutagesView } from "../../types";
 import { railWords, sentence } from "./format";
-import { useScrollTo } from "./scroll";
 
 // Treasury › Outages (ia.md section 8.3): the rule, each active outage with what
 // it counted and what it pauses, the form to end it, and the outages that ended.

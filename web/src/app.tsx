@@ -1,5 +1,5 @@
 import type { JSX } from "preact";
-import { useEffect, useRef } from "preact/hooks";
+import { useLayoutEffect, useRef } from "preact/hooks";
 import { Toasts } from "./components/Notice";
 import { usePoll, type Polled } from "./poll";
 import { useRoute, type Route, type Screen, type ScreenProps } from "./router";
@@ -56,10 +56,12 @@ export function App(): JSX.Element {
   const page: Route = under.current;
   const Screen: (props: ScreenProps) => JSX.Element = SCREENS[page.screen === "sandbox" ? "home" : page.screen];
 
-  // Another screen starts at the top, with focus on it for a screen reader.
+  // Another screen starts at the top, with focus on it for a screen reader. A
+  // layout effect runs before any screen's effects, so a screen that scrolls to
+  // what its route names (#outage/3, #settings/alerts) has the last word.
   const shown = useRef<string | null>(null);
   const key: string = screenKey(page);
-  useEffect((): void => {
+  useLayoutEffect((): void => {
     if (shown.current !== null && shown.current !== key) {
       window.scrollTo(0, 0);
       document.getElementById("content")?.focus({ preventScroll: true });

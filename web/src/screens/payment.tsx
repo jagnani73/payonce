@@ -1,9 +1,9 @@
 import type { JSX } from "preact";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useState } from "preact/hooks";
 import { Card, Tabs, type TabItem } from "../components/Layout";
 import { Empty, LoadError, Loading } from "../components/States";
 import { Timeline } from "../components/Timeline";
-import { useTitle } from "../hooks";
+import { useScrollTo, useTitle } from "../hooks";
 import { notify } from "../notices";
 import { FAST_MS, SLOW_MS, usePoll, type Polled } from "../poll";
 import { navigate, paymentHref, type ScreenProps } from "../router";
@@ -84,13 +84,7 @@ export function Payment(props: ScreenProps): JSX.Element {
   const [openDraft, setOpenDraft] = useState<number | null>(null);
 
   // A link that names an option ("Review and approve") brings the panel into view.
-  const shownDecision = useRef<boolean>(false);
-  useEffect((): void => {
-    if (v.data !== null && want !== null && !shownDecision.current) {
-      shownDecision.current = true;
-      document.getElementById("decision")?.scrollIntoView({ block: "start" });
-    }
-  }, [v.data !== null, want]);
+  useScrollTo(want === null ? null : "decision", v.data !== null);
 
   const acts: Acts = {
     invoiceId,

@@ -4,14 +4,13 @@ import { ActionButton } from "../components/Action";
 import { Icon } from "../components/Icon";
 import { Delayed, Empty, LoadError, Loading } from "../components/States";
 import { Time } from "../components/Text";
-import { useTitle } from "../hooks";
+import { useScrollTo, useTitle } from "../hooks";
 import { notify } from "../notices";
 import { usePoll, type Polled } from "../poll";
 import { navigate, type ScreenProps } from "../router";
 import { count } from "../text";
 import type { AuditCheckView, ReportsView } from "../types";
 import { quiet, ReportTables } from "./reports/tables";
-import { useScrollTo } from "./treasury/scroll";
 import "./reports.css";
 
 // Reports (ia.md section 9): the headline tiles and the eight tables for a
