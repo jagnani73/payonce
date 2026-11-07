@@ -117,6 +117,22 @@ export function navigate(hash: string): void {
   window.location.hash = hash;
 }
 
+// What follows the route besides the hashchange event, which replaceRoute does
+// not raise.
+const followers: Set<() => void> = new Set();
+
+// Puts a hash in place of the one on show, with no history entry: a search field
+// settling into the route, so Back does not step through every letter.
+export function replaceRoute(hash: string): void {
+  if (hash === window.location.hash) {
+    return;
+  }
+  window.history.replaceState(null, "", hash);
+  for (const follow of followers) {
+    follow();
+  }
+}
+
 function current(): Route {
   for (let hops: number = 0; hops < 3; hops += 1) {
     const found: Route | { redirect: string } = parse(window.location.hash);
@@ -134,7 +150,11 @@ export function useRoute(): Route {
   useEffect((): (() => void) => {
     const follow = (): void => setRoute(current());
     window.addEventListener("hashchange", follow);
-    return (): void => window.removeEventListener("hashchange", follow);
+    followers.add(follow);
+    return (): void => {
+      window.removeEventListener("hashchange", follow);
+      followers.delete(follow);
+    };
   }, []);
   return route;
 }

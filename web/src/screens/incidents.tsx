@@ -9,7 +9,7 @@ import { Theirs } from "../components/Text";
 import { useMedia, useTitle, WIDE } from "../hooks";
 import { useMe } from "../me";
 import { usePoll, type Polled } from "../poll";
-import { navigate, type ScreenProps } from "../router";
+import { navigate, replaceRoute, type ScreenProps } from "../router";
 import { count } from "../text";
 import type { IncidentRow, IncidentScope, IncidentsView, Origin, QueueGroup } from "../types";
 import { countOf, filtersHref, filtersOf, MAX_QUERY, narrowed, SCOPES, shownScope, viewPath, type Filters } from "./incidents/filters";
@@ -298,8 +298,7 @@ export function Incidents(props: ScreenProps): JSX.Element {
       setDraft(next.q);
     }
     if (replace) {
-      window.history.replaceState(null, "", href);
-      window.dispatchEvent(new HashChangeEvent("hashchange"));
+      replaceRoute(href);
     } else {
       navigate(href);
     }

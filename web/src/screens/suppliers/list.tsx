@@ -7,7 +7,7 @@ import { Empty, LoadError, Loading } from "../../components/States";
 import { Theirs } from "../../components/Text";
 import { useTitle } from "../../hooks";
 import { SLOW_MS, usePoll, type Polled } from "../../poll";
-import { supplierHref, type Route } from "../../router";
+import { replaceRoute, supplierHref, type Route } from "../../router";
 import type { SupplierListRow, SuppliersView } from "../../types";
 import { endingText, paymentsText, phoneText } from "./words";
 
@@ -142,7 +142,7 @@ export function SupplierList(props: { route: Route }): JSX.Element {
     if (draft.trim() === applied) {
       return undefined;
     }
-    const timer: number = window.setTimeout((): void => window.location.replace(searchHash(draft)), TYPING_MS);
+    const timer: number = window.setTimeout((): void => replaceRoute(searchHash(draft)), TYPING_MS);
     return (): void => window.clearTimeout(timer);
   }, [draft]);
   useEffect((): void => {
@@ -159,7 +159,7 @@ export function SupplierList(props: { route: Route }): JSX.Element {
           onInput={setDraft}
           onSubmit={(): void => {
             if (draft.trim() !== applied) {
-              window.location.replace(searchHash(draft));
+              replaceRoute(searchHash(draft));
             }
           }}
         />
@@ -177,7 +177,7 @@ export function SupplierList(props: { route: Route }): JSX.Element {
           q={applied}
           onClear={(): void => {
             setDraft("");
-            window.location.replace("#suppliers");
+            replaceRoute("#suppliers");
           }}
         />
       )}
