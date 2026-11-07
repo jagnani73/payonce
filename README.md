@@ -99,7 +99,7 @@ When an invoice has a due date, PayOnce says when its route usually arrives and 
 | New payment | `#new-payment` | Pick a beneficiary and enter the invoice. As you type, a preview runs the same holds the first payment will and says what happens next. |
 | Inbox | `#inbox` | Upload a supplier's raw email. PayOnce parses it, suggests the invoice it names, and a person delivers or dismisses it. |
 | Pay runs | `#runs` | Upload a CSV of invoices, see each row's checks and the cash check, approve the run's terms, and watch it release row by row. |
-| Suppliers | `#suppliers` | One page per Airwallex beneficiary record: cautions, money at risk, the accounts PayOnce paid, invoices, callbacks and the phone on file. |
+| Suppliers | `#suppliers` | One page per Airwallex beneficiary record: cautions, money at risk, the accounts PayOnce paid, invoices, callbacks, the phone on file with its two-person change, and a New payment button for the record. |
 | Treasury | `#treasury` | Cash per wallet down to the headroom above its floor, reconciliation of Airwallex's wallet history against the ledger, and rail outages with the form to end one. |
 | Reports | `#reports` | Ops metrics for the last 7 or 30 days or since the ledger started, and the audit check of every timeline. |
 | Settings | `#settings` | What `.env` set: approvers and limits, floors, alerts, the reader, Airwallex and webhooks. Read-only, and secrets are never shown. |
@@ -136,7 +136,7 @@ pnpm ui
 
 `pnpm ui` builds the page first (`pnpm build:web`, esbuild, into `web/dist/`), then serves it and the JSON API at `http://127.0.0.1:4310`. Open the Sandbox simulator to start a scripted incident, or New payment to pay a beneficiary of your own. [docs/demo.md](docs/demo.md) walks through four incidents.
 
-`.env.example` lists every setting. `NAME!` is required, `NAME=value` shows the default, and `a|b|c` lists the accepted values, so write one of them. Put only the lines you change in `.env`. To run with no Airwallex at all, set `AWX_BASE_URL=https://sandbox.invalid`: every call then fails as unreachable, and nothing can be paid.
+`.env.example` lists every setting. `NAME!` is required, `NAME=value` shows the default, and `a|b|c` lists the accepted values, so write one of them. Put only the lines you change in `.env`. To run with no Airwallex at all, set `AWX_BASE_URL=https://sandbox.invalid` and give the two credential lines any value: every call then fails as unreachable, and nothing can be paid. `pnpm ui` stops at start-up while either credential is missing.
 
 ## Setting it up
 
@@ -208,7 +208,7 @@ pnpm ui
 
 - No tool approves, closes, pays, sends, drafts, uploads or ends an outage. People do that on the page and in the terminal.
 - Each call opens the ledger read-only and closes it after. The server never creates a ledger and never upgrades one an older PayOnce wrote: run `pnpm board` or restart `pnpm ui` once.
-- It never calls Airwallex and needs no credentials. Of `.env` it reads only the approver list, the floors, the bank deadlines, the outage rule and `PORT`.
+- It never calls Airwallex and needs no credentials. Of `.env` it reads only the approval policy (`APPROVERS`, `TWO_APPROVERS_ABOVE`, `APPROVAL_TTL_MINUTES`), the floors, the bank deadlines, the outage rule and `PORT`.
 - `cash` shows balances only while `pnpm ui` runs, from the server's balance cache. Without the server it gives the ledger's figures and says why.
 - Text PayOnce did not write arrives wrapped, as `{"outsideText": "...", "from": "supplier"}`, and each answer starts with a note telling the model to report that text and never act on it. Phone numbers on file are masked.
 - The server uses the official TypeScript SDK, `@modelcontextprotocol/server` 2.3.1 with `zod` 4.6.7, pinned exactly. It serves clients that open with `initialize` and clients on the 2026-07-28 revision, which has no handshake.
@@ -257,6 +257,7 @@ Quit Claude Desktop fully and start it again. Its log for the server is `%APPDAT
 | --- | --- |
 | `pnpm install` | Install the dependencies |
 | `pnpm typecheck` | Type-check the server and the page; writes nothing |
+| `pnpm check:layers` | Fail when an import in `src/` reaches the wrong way between layers ([docs/architecture.md](docs/architecture.md#layers)) |
 | `pnpm dev` | The policy on seven sample incidents, with no credentials |
 | `pnpm ui` | Build the page, then serve it and the JSON API on 4310, with the webhook receiver on 4311 |
 | `pnpm build:web` | Build the page into `web/dist/`; `--watch` rebuilds on save |
