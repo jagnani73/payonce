@@ -189,4 +189,4 @@ On 7 November 2026 the script ran against `feat/page` (8e708cb) with Airwallex f
 - With You are set, Home lists the same three payments twice: under Waiting for your approval and under Needs you.
 - "What happened" prints times with no space before them ("failed at the bank at06:25").
 - The warning line that explains the floor decision is a system line, so it is hidden until you click Show system line.
-- Reports' Second bills stopped counts only invoices held as second bills, so it reads 0 although the run skipped one. Paid the first time reads 0%, because every payment this morning failed on purpose. Skip both tiles.
+- Reports' Second bills closed without paying counts only invoices held as second bills, so it reads 0 although the run skipped one. Paid the first time reads 0%, because every payment this morning failed on purpose. Skip both tiles.
