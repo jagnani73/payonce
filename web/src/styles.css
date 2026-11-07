@@ -1869,19 +1869,23 @@ textarea {
   gap: 12px;
 }
 
+/* One grid for every line, so the time column is as wide as its widest time
+   ("6 Nov 2025, 14:20") and the kinds line up below one another. */
 .tl__list {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: max-content 140px minmax(0, 1fr);
+  column-gap: 14px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
 .tl__line {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 6px 14px;
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: start;
+  row-gap: 6px;
   padding: 10px 8px;
   border-top: 1px solid var(--line-faint);
 }
@@ -1901,15 +1905,14 @@ textarea {
 }
 
 .tl__time {
-  flex: 0 0 52px;
   padding-top: 1px;
   font-size: 13px;
   color: var(--text-3);
+  white-space: nowrap;
 }
 
 .tl__kind {
-  display: inline-flex;
-  flex: 0 0 140px;
+  display: flex;
   align-items: flex-start;
   gap: 6px;
   font-size: 13px;
@@ -1922,7 +1925,6 @@ textarea {
 }
 
 .tl__text {
-  flex: 1 1 300px;
   min-width: 0;
 }
 
@@ -1948,6 +1950,7 @@ textarea {
 }
 
 .tl__fold {
+  grid-column: 1 / -1;
   border-top: 1px solid var(--line-faint);
 }
 
@@ -2185,9 +2188,13 @@ textarea {
     padding: 0 14px;
   }
 
-  .tl__time,
-  .tl__kind {
-    flex-basis: auto;
+  /* The time and the kind on one line, the text under them. */
+  .tl__list {
+    grid-template-columns: max-content minmax(0, 1fr);
+  }
+
+  .tl__text {
+    grid-column: 1 / -1;
   }
 
   .details__row {
