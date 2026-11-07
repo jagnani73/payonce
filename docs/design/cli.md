@@ -18,7 +18,7 @@ The terminal commands, one file per command in `src/surfaces/cli/`: how each loa
 - Only `pnpm recover`, `pnpm cash`, `pnpm payrun upload` and `check`, and the live `pnpm reconcile` need credentials. Without one they stop with the client's sentence from `settings.ts`.
 - That sentence is "Missing environment variable AWX_CLIENT_ID. Make a .env file in this folder from the setup lines under Run it in the README", or "... Add AWX_CLIENT_ID to .env" when there is a `.env`.
 - Every other command runs with no credentials. Without a `.env` the defaults apply, and nothing is printed about it.
-- What they take from `.env`: the bank deadlines for `pnpm board`, `supplier` and `outbox`; `APPROVERS` for `pnpm approve`, `board` and `payrun show`, `approve` and `cancel`; `APPROVERS` and the outage rule for `pnpm outage`; the approval policy, floors and reader names for `pnpm ask`.
+- What they take from `.env`: the bank deadlines for `pnpm board`, `supplier`, `outbox` and `outage`; `APPROVERS` for `pnpm approve`, `board` and `payrun show`, `approve` and `cancel`; `APPROVERS` and the outage rule for `pnpm outage`; the approval policy, floors, bank deadlines, quote validity and reader names for `pnpm ask`.
 
 ### Opening the ledger
 - `pnpm ask`, `pnpm metrics`, `pnpm run audit` and `pnpm reconcile show` open `payonce.db` read-only (`new Ledger(LEDGER_PATH, true)`), so they never create, upgrade or hash a file.
@@ -44,9 +44,9 @@ The terminal commands, one file per command in `src/surfaces/cli/`: how each loa
 ### What each command prints
 - `pnpm board [FILTER...]` prints `incidentsView` (outages, wallet totals, payment rows, the scope from the group word), plus `homeView`'s pay runs that need someone under the same filters ([incident-board.md](incident-board.md)).
 - `pnpm board`'s group words `person`, `deadline`, `bank` and `open` print as Needs you, Bank is late, With the bank and PayOnce is handling. Closed payments are not listed.
-- With a group filter, `pnpm board`'s totals still cover every group, because the view's totals follow only the currency and origin, and the heading says "all groups".
+- With a group filter, `pnpm board`'s totals cover that group, because the view's totals follow its scope, and the heading says "Money by wallet in this group".
 - `pnpm approve <INVOICE>` prints `incidentView`: the payment's header (its situation and the incident's cause), the open request's terms and signing, the cautions, and the approve option's consequence.
-- `pnpm approve`'s signing lists each approver's limit and whether they can sign now, and who is barred and why (`signingFields`). The gate is the engine's `pendingApproval`.
+- `pnpm approve`'s signing lists each approver's limit and whether they can sign now, and who is barred and why (`signingFields`). The gate is `pendingApproval` (`store/read/reviews.ts`).
 - `pnpm close <INVOICE>` prints `incidentView`: the payment's header, its emails, the cautions and the close option with its consequence. The option is `close-paid` or `close-unpaid`, picked by `pendingClose`'s kind.
 - `pnpm close` also lists the payouts that only name the invoice and the unrecognised transfers the close covers. `--covers` is checked against `pendingClose().covered`, so a list that changed since the person looked is refused.
 - `pnpm payrun show` prints `runView`: the situation, rows, skip summary, cash at the run's check, the request, cautions, options and the newest 8 timeline lines that are not system lines.
@@ -60,7 +60,7 @@ The terminal commands, one file per command in `src/surfaces/cli/`: how each loa
 
 ### How the views print
 - `view-text.ts` holds the pieces the view commands print with. Every line goes through `printable`, keeping the spaces it starts with (`put`, `putAll`, `heading`).
-- `utc` writes a time as "2 Nov 2026, 09:00 UTC" (through `utcText`), and "a time not on file" for none. Text inside a view field that already holds a time is printed as the view gives it.
+- `utc` writes a time as "2 Nov 2026, 09:00 UTC" (through `utcText`), and "a time not on file" for none. `said` prints a view's `Timed` sentence with each of its times through `utc`.
 - `money` marks an estimated figure "(estimated)". `table` lines up columns, with the columns it names right-aligned, such as amounts. `putFields` prints labelled values with the labels in one column.
 - `putTimeline` prints a timeline's newest lines that are not system lines, oldest first. `signingFields` prints a request's signoffs, approvers and barred names. `putConsequence` and `putOption` print what a decision option does and why it cannot be chosen now.
 - `paymentRow`, `runRow` and `putRows` print list rows. Each row ends with the command that does its primary action, where one does ("Next step: pnpm approve INV").
@@ -80,12 +80,12 @@ The terminal commands, one file per command in `src/surfaces/cli/`: how each loa
 - `printableJson` writes DEL, C1 controls, U+2028, U+2029, format characters and tag characters as `\uXXXX` escapes, so the JSON parses back to the same value. `JSON.stringify` already escapes C0 controls.
 - `oneLine` turns every control character, a line break included, into a space and keeps format characters. It is for text PayOnce stores: every timeline line (`note` and `appendEvent`), the server's typed notes and other free text, and the Airwallex account name in a pay run skip reason.
 - A typed name goes to `personName` as it was sent instead of through `oneLine`, and `personName` refuses any control character.
-- `trimmedLine` is `oneLine` trimmed, for an alert's fields. `capitalise` puts a clause's first letter in capitals.
+- `trimmedLine` is `oneLine` trimmed, for an alert's fields. `capitalise` (`domain/sentences.ts`) puts a clause's first letter in capitals.
 - `shownReference` and `shownFailureCode` print Airwallex's short reference and failure code only in the form Airwallex gives them (`REFERENCE_PATTERN`, `FAILURE_CODE_PATTERN`), and otherwise `UNSHOWN_REFERENCE` or `UNSHOWN_FAILURE_CODE`. Commands and views that print a reference or a code use them.
-- `utcTime` has no caller. The commands write times with `view-text.ts`'s `utc`.
+- `utcText` writes a time for an alert's fields. The commands write times with `view-text.ts`'s `utc`, and a view's `Timed` sentence with its `said`.
 
 ### Fixed words
-- `words.ts` holds fixed words kept apart from the code that writes them, and it imports nothing: `PAID_OUTCOME`, `STAYS_IN_FLIGHT`, `SANDBOX_OUTCOMES`, the sandbox bank lines' endings, `ModelFailure`, `MODEL_FAILURE_WORDS`, `FAILURES_WITH_STATUS` and `TRY_WORDS_SOURCE`.
+- `words.ts` holds fixed words kept apart from the code that writes them, and it imports nothing: `UNNAMED_PAYEE`, `PAID_OUTCOME`, `STAYS_IN_FLIGHT`, `SANDBOX_OUTCOMES`, the sandbox bank lines' endings, `ModelFailure`, `MODEL_FAILURE_WORDS`, `FAILURES_WITH_STATUS` and `TRY_WORDS_SOURCE`.
 - The sandbox bank lines' endings are `SANDBOX_BANK_AFTER`, `SANDBOX_BANK_STOPPED` and `SANDBOX_BANK_RECOVER`. `TRY_WORDS_SOURCE` is the model failure words as a pattern.
 - `why-facts.ts`, the views and the run file parser take the sandbox outcomes and line endings from it without importing `engine/sandbox-bank.ts` or `airwallex/simulation.ts`. `reader/reader-error.ts` takes the model failure words from it without importing a reader.
 - Nothing the MCP server, `why-facts.ts` or `views/metrics.ts` imports at runtime reaches `engine/sandbox-bank.ts` or `airwallex/simulation.ts`.
