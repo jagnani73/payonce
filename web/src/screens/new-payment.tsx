@@ -9,6 +9,7 @@ import { useNameDraft } from "../me";
 import { notify } from "../notices";
 import { usePoll, type Polled } from "../poll";
 import { navigate, paymentHref, supplierHref, type ScreenProps } from "../router";
+import { logAction, useSandboxOutcome } from "../sandbox";
 import { joinNames } from "../text";
 import type {
   BeneficiaryOption,
@@ -22,8 +23,6 @@ import type {
 } from "../types";
 import { BeneficiaryPicker } from "./new-payment/picker";
 import { NextSteps } from "./new-payment/preview";
-import { useSandboxOutcome } from "./simulator/outcome";
-import { logAction } from "./simulator/session-log";
 import "./new-payment.css";
 
 // New payment (ia.md section 4): one supplier invoice, paid once. The form keeps

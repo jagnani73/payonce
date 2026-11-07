@@ -11,9 +11,8 @@ import { useNameDraft } from "../me";
 import { notify } from "../notices";
 import { usePoll, type Polled } from "../poll";
 import { navigate, paymentHref, type Route } from "../router";
+import { logAction, PAID, setSandboxOutcome, useSandboxOutcome, useSessionLog, type LogEntry } from "../sandbox";
 import type { DuplicateLockResult, PaymentCreated, SandboxView, ScenarioInput } from "../types";
-import { PAID, setSandboxOutcome, useSandboxOutcome } from "./simulator/outcome";
-import { logAction, useSessionLog, type LogEntry } from "./simulator/session-log";
 import "./simulator.css";
 
 // The sandbox simulator (ia.md section 11): #sandbox opens this drawer over the
