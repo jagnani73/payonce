@@ -442,7 +442,14 @@ export function approverChoices(snapshot: InvoiceSnapshot, now: number): Approve
     snapshot.signing.barred,
     awaitingSignoffs(request.approval, now),
     isExpired(request.approval, now),
+    "payment",
   );
+}
+
+// checkSigner words a barred approver for a payment. On a run's request the
+// picker names the run instead.
+function forSubject(text: string, subject: "payment" | "run"): string {
+  return subject === "run" ? text.replace(/, so someone else approves this payment$/, ", so someone else approves this run") : text;
 }
 
 export function signerChoices(
@@ -452,6 +459,7 @@ export function signerChoices(
   barred: Barred[],
   waiting: boolean,
   expired: boolean,
+  subject: "payment" | "run",
 ): ApproverChoice[] {
   const signedBy: string[] = request.signoffs.map((signoff: { approver: string }): string => signoff.approver);
   return policy.approvers.map((approver: Approver): ApproverChoice => {
@@ -471,7 +479,7 @@ export function signerChoices(
       try {
         checkSigner(policy, approver.name, amount, barredInWords(barred), signedBy);
       } catch (error: unknown) {
-        why = { code, text: `${error instanceof Error ? error.message : String(error)}.` };
+        why = { code, text: `${forSubject(error instanceof Error ? error.message : String(error), subject)}.` };
       }
     } else if (expired) {
       why = { code: "expired", text: "The request has expired. PayOnce opens a new one at its next check." };

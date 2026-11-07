@@ -263,6 +263,7 @@ export function runRequestView(ledger: Ledger, snapshot: RunSnapshot, now: numbe
         latest.barred,
         awaitingSignoffs(request, now),
         isExpired(request, now),
+        "run",
       ),
       amount.currency,
     ),
