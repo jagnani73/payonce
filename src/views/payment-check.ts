@@ -137,6 +137,14 @@ function outcomeOf(
   };
 }
 
+// Each field's problem as the form shows it under the field: as a sentence, with
+// its full stop.
+export function fieldTexts(fields: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(fields).map(([field, text]: [string, string]): [string, string] => [field, /[.!?]$/.test(text) ? text : `${text}.`]),
+  );
+}
+
 export function paymentCheckView(
   ledger: Ledger,
   settings: Settings,
@@ -160,7 +168,7 @@ export function paymentCheckView(
       headroom?.after !== null && headroom?.after !== undefined && headroom.floorSource === "setting" && headroom.after.minor < 0;
     return {
       view: "payment-check",
-      fields,
+      fields: fieldTexts(fields),
       outcome: outcomeOf(ledger, settings, input, fields, checked),
       headroom,
       warnings: below

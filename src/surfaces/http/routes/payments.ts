@@ -17,7 +17,7 @@ import { readingSoft, type Obligation, type Outage, type TransferMethod } from "
 import { SANDBOX_OUTCOMES } from "../../../text/words.js";
 import type { IncidentView, Notice, PaymentCheckView, PaymentCreated } from "../../../views/contract.js";
 import { incidentView } from "../../../views/incident.js";
-import { paymentCheckView, readRecord, type RecordRead } from "../../../views/payment-check.js";
+import { fieldTexts, paymentCheckView, readRecord, type RecordRead } from "../../../views/payment-check.js";
 import type { HttpApp } from "../app.js";
 import { HttpError, name, readJson, sendJson, text } from "../http.js";
 import type { Route } from "../router.js";
@@ -161,7 +161,7 @@ export function paymentRoutes(app: HttpApp): Route[] {
       : problems[0];
     return new HttpError(taken ? 409 : 400, lead?.text ?? "PayOnce did not start the payment", {
       code: taken ? "duplicate-invoice" : "fields",
-      fields,
+      fields: fieldTexts(fields),
     });
   }
 
