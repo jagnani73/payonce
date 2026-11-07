@@ -9,7 +9,7 @@ import { notify } from "../../notices";
 import { navigate, runHref } from "../../router";
 import { cleanLine } from "../../text";
 import type { Acted, RunsView, RunView } from "../../types";
-import { keep } from "../inbox/kept";
+import { rememberView } from "../../poll";
 
 // Upload pay run (ia.md section 6): the CSV's text and a name go to POST
 // /api/runs, which checks every row against Airwallex (GETs only) before it
@@ -180,7 +180,7 @@ export function RunUpload(props: { runs: RunsView | null; id: string }): JSX.Ele
     const csv: string = file === null ? "" : await file.text();
     setChecking(rowsIn(csv));
     const acted: Acted<RunView> = await postJson<Acted<RunView>>("/api/runs", { fileName: file?.name ?? "", csv, uploadedBy: name });
-    keep(`/api/runs/${acted.view.run.id}`, acted.view);
+    rememberView(`/api/runs/${acted.view.run.id}`, acted.view);
     notify(acted.notice);
     navigate(runHref(acted.view.run.id));
   }

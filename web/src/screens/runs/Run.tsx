@@ -10,7 +10,6 @@ import { SituationHeader, Tag, ToneBadge } from "../../components/Tone";
 import { FAST_MS, SLOW_MS, usePoll, type Polled } from "../../poll";
 import { paymentHref, runHref } from "../../router";
 import type { Caution, RunCashView, RunRowView, RunTermsView, RunView, Tone } from "../../types";
-import { useKept } from "../inbox/kept";
 import { RunDecision } from "./Decision";
 
 // One pay run (ia.md section 6, "Run page"): the header, the Decision panel while
@@ -310,8 +309,8 @@ function CashTab(props: { view: RunView }): JSX.Element {
 
 export function RunPage(props: { id: number; tab: string | undefined; asked: string | null }): JSX.Element {
   const path: string = `/api/runs/${props.id}`;
-  const polled: Polled<RunView> = usePoll<RunView>(path, pace);
-  const view: RunView | null = useKept(path, polled);
+  const polled: Polled<RunView> = usePoll<RunView>(path, pace, { remember: true });
+  const view: RunView | null = polled.data;
   const tab: RunTab = tabOf(props.tab);
   return (
     <div class="run-page" id={`run-${props.id}`}>

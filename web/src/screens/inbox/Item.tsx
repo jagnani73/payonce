@@ -14,7 +14,6 @@ import { SLOW_MS, usePoll, type Polled } from "../../poll";
 import { paymentHref } from "../../router";
 import { cleanLine } from "../../text";
 import type { Acted, CandidateView, InboxItemView, StatusView } from "../../types";
-import { useKept } from "./kept";
 
 // One uploaded email (ia.md section 5, "Item"): its header, the sender check and
 // the match card while it waits, what happened to it once delivered or
@@ -424,8 +423,8 @@ function Dismiss(props: { view: InboxItemView; onActed: (view: InboxItemView) =>
 // preferred: the payment the inbox was opened for (#inbox/N?for=ID).
 export function InboxItem(props: { id: number; preferred: string | null; onActed: () => void }): JSX.Element {
   const path: string = `/api/inbox/${props.id}`;
-  const polled: Polled<InboxItemView> = usePoll<InboxItemView>(path, (): number => SLOW_MS);
-  const view: InboxItemView | null = useKept(path, polled);
+  const polled: Polled<InboxItemView> = usePoll<InboxItemView>(path, (): number => SLOW_MS, { remember: true });
+  const view: InboxItemView | null = polled.data;
   const acted = (fresh: InboxItemView): void => {
     polled.replace(fresh);
     props.onActed();

@@ -8,8 +8,8 @@ import { Callout } from "../../components/Notice";
 import { ToneBadge } from "../../components/Tone";
 import { useNameDraft } from "../../me";
 import { notify } from "../../notices";
+import { rememberView } from "../../poll";
 import type { InboxListView, UploadEmailResult } from "../../types";
-import { keep } from "./kept";
 
 // The upload dialog (ia.md section 5): an .eml file or its pasted source, sent as
 // base64 inside JSON. The server opens the email in a worker before it answers,
@@ -102,7 +102,7 @@ export function UploadDialog(props: {
         fileName: source === "file" ? (file?.name ?? null) : null,
         eml: base64Of(bytes),
       });
-      keep(`/api/inbox/${result.id}`, result.view);
+      rememberView(`/api/inbox/${result.id}`, result.view);
       notify(result.notice);
       props.onUploaded(result.id);
     } catch (caught: unknown) {

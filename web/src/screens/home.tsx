@@ -204,7 +204,7 @@ export function Home(_props: ScreenProps): JSX.Element {
   useTitle("Needs you");
   const me: string | null = useMe();
   // keep: picking another You are keeps Home on screen until its view lands.
-  const home: Polled<HomeView> = usePoll<HomeView>(query("/api/home", { me }), pace, true);
+  const home: Polled<HomeView> = usePoll<HomeView>(query("/api/home", { me }), pace, { keep: true });
   const view: HomeView | null = home.data;
   return (
     <div class="screen home">

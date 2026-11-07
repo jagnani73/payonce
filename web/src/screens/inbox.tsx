@@ -10,7 +10,6 @@ import { SLOW_MS, usePoll, type Polled } from "../poll";
 import { navigate, type ScreenProps } from "../router";
 import type { InboxListView, UploadRow, UploadState } from "../types";
 import { InboxItem } from "./inbox/Item";
-import { useKept } from "./inbox/kept";
 import { UploadDialog } from "./inbox/Upload";
 import "./inbox.css";
 
@@ -121,8 +120,8 @@ export function Inbox(props: ScreenProps): JSX.Element {
   const preferred: string | null = props.route.params.get("for");
   const wide: boolean = useMedia(SIDE_BY_SIDE);
   const listPath: string = query("/api/inbox", { tab });
-  const polled: Polled<InboxListView> = usePoll<InboxListView>(listPath, (): number => SLOW_MS);
-  const list: InboxListView | null = useKept(listPath, polled);
+  const polled: Polled<InboxListView> = usePoll<InboxListView>(listPath, (): number => SLOW_MS, { remember: true });
+  const list: InboxListView | null = polled.data;
   const [uploading, setUploading] = useState<boolean>(preferred !== null && named === null);
   // The email a wide screen opens when the route names none: the tab's first,
   // kept open even when an action moves it to another tab.

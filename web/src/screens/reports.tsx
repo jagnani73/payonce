@@ -178,7 +178,7 @@ export function Reports(props: ScreenProps): JSX.Element {
   useTitle("Reports");
   const period: Period = periodOf(props.route.params);
   // keep: another period keeps this one on screen until its answer lands.
-  const reports: Polled<ReportsView> = usePoll<ReportsView>(query("/api/reports", { period }), (): number => REPORTS_MS, true);
+  const reports: Polled<ReportsView> = usePoll<ReportsView>(query("/api/reports", { period }), (): number => REPORTS_MS, { keep: true });
   const audit: Polled<AuditCheckView> = usePoll<AuditCheckView>("/api/audit", (): number => AUDIT_MS);
   const view: ReportsView | null = reports.data;
   // #reports/audit opens at the audit card once it has its answer.

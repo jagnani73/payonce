@@ -266,7 +266,7 @@ export function Incidents(props: ScreenProps): JSX.Element {
   const filters: Filters = filtersOf(props.route.params);
   const me: string | null = useMe();
   // keep: a new filter keeps the old list on screen until its view lands.
-  const incidents: Polled<IncidentsView> = usePoll<IncidentsView>(viewPath(filters, me), pace, true);
+  const incidents: Polled<IncidentsView> = usePoll<IncidentsView>(viewPath(filters, me), pace, { keep: true });
   const view: IncidentsView | null = incidents.data;
 
   // The search field's draft is the screen's own, so a poll never touches it.

@@ -111,7 +111,7 @@ export function BeneficiaryPicker(props: {
     return (): void => window.clearTimeout(timer);
   }, [typed]);
   // keep: the last list stays on screen while a search runs.
-  const list: Polled<BeneficiaryPickerView> = usePoll<BeneficiaryPickerView>(query("/api/beneficiaries", { q }), (): number => LIST_MS, true);
+  const list: Polled<BeneficiaryPickerView> = usePoll<BeneficiaryPickerView>(query("/api/beneficiaries", { q }), (): number => LIST_MS, { keep: true });
   const view: BeneficiaryPickerView | null = list.data;
   const options: BeneficiaryOption[] = view?.options ?? [];
   const picked: BeneficiaryOption | null = props.picked;

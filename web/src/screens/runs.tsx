@@ -8,7 +8,6 @@ import { useTitle } from "../hooks";
 import { FAST_MS, SLOW_MS, usePoll, type Polled } from "../poll";
 import { runHref, type ScreenProps } from "../router";
 import type { Money as MoneyView, RunListRow, RunsView } from "../types";
-import { useKept } from "./inbox/kept";
 import { RunPage } from "./runs/Run";
 import { RunUpload } from "./runs/Upload";
 import "./runs.css";
@@ -111,8 +110,8 @@ export function Runs(props: ScreenProps): JSX.Element {
   const route: ScreenProps["route"] = props.route;
   const runId: number | null = route.word === "run" ? idOf(route.segments[0]) : null;
   useTitle(runId === null ? "Pay runs" : `Pay run ${runId}`);
-  const polled: Polled<RunsView> = usePoll<RunsView>("/api/runs", pace);
-  const view: RunsView | null = useKept("/api/runs", polled);
+  const polled: Polled<RunsView> = usePoll<RunsView>("/api/runs", pace, { remember: true });
+  const view: RunsView | null = polled.data;
   const [uploading, setUploading] = useState<boolean>(route.word === "runs" && route.segments[0] === "upload");
 
   return (

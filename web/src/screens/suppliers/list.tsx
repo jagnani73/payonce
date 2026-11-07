@@ -149,7 +149,7 @@ export function SupplierList(props: { route: Route }): JSX.Element {
     setDraft((now: string): string => (now.trim() === applied ? now : applied));
   }, [applied]);
 
-  const list: Polled<SuppliersView> = usePoll<SuppliersView>(query("/api/suppliers", { q: applied }), (): number => SLOW_MS, true);
+  const list: Polled<SuppliersView> = usePoll<SuppliersView>(query("/api/suppliers", { q: applied }), (): number => SLOW_MS, { keep: true });
   return (
     <div class="screen sup">
       <header class="sup-head">

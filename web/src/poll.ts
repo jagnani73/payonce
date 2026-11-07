@@ -27,6 +27,17 @@ export interface Polled<T> {
   replace: (data: T) => void;
 }
 
+export interface PollOptions {
+  // When the path changes (say a filter), the old view stays on screen until the
+  // new one lands, instead of going back to loading.
+  keep?: boolean;
+  // The last view each path answered stays in the page. The shell remounts a
+  // screen for another object (#inbox/3 to #inbox/4, #run/6 to #run/7), and a
+  // remembered view is on screen at once until the poll answers, so a list beside
+  // the open item never goes back to loading.
+  remember?: boolean;
+}
+
 interface Held<T> {
   path: string | null;
   data: T | null;
@@ -38,9 +49,29 @@ interface Control<T> {
   replace: (data: T) => void;
 }
 
-// keep: when the path changes (say a filter), the old view stays on screen until
-// the new one lands, instead of going back to loading.
-export function usePoll<T>(path: string | null, every: (data: T | null) => number, keep: boolean = false): Polled<T> {
+const MAX_REMEMBERED: number = 40;
+const remembered: Map<string, unknown> = new Map();
+
+// Keeps a view for a path. An action that moves to another object remembers its
+// answer first, so the next screen shows it at once.
+export function rememberView<T>(path: string, view: T): void {
+  remembered.delete(path);
+  remembered.set(path, view);
+  if (remembered.size > MAX_REMEMBERED) {
+    const oldest: string | undefined = remembered.keys().next().value;
+    if (oldest !== undefined) {
+      remembered.delete(oldest);
+    }
+  }
+}
+
+function recalled<T>(path: string | null): T | null {
+  return path === null ? null : ((remembered.get(path) as T | undefined) ?? null);
+}
+
+export function usePoll<T>(path: string | null, every: (data: T | null) => number, options: PollOptions = {}): Polled<T> {
+  const keep: boolean = options.keep === true;
+  const remember: boolean = options.remember === true;
   const [held, setHeld] = useState<Held<T>>({ path, data: null, error: null });
   const everyRef = useRef<(data: T | null) => number>(every);
   everyRef.current = every;
@@ -62,6 +93,14 @@ export function usePoll<T>(path: string | null, every: (data: T | null) => numbe
       timer = window.setTimeout(read, ms);
     };
 
+    const show = (data: T): void => {
+      latest = data;
+      if (remember) {
+        rememberView(path, data);
+      }
+      setHeld({ path, data, error: null });
+    };
+
     async function read(): Promise<void> {
       window.clearTimeout(timer);
       if (running) {
@@ -73,8 +112,7 @@ export function usePoll<T>(path: string | null, every: (data: T | null) => numbe
       try {
         const data: T = await getJson<T>(path as string);
         if (!stopped && mine === generation) {
-          latest = data;
-          setHeld({ path, data, error: null });
+          show(data);
         }
       } catch (error: unknown) {
         if (!stopped) {
@@ -105,8 +143,7 @@ export function usePoll<T>(path: string | null, every: (data: T | null) => numbe
           return;
         }
         generation += 1;
-        latest = data;
-        setHeld({ path, data, error: null });
+        show(data);
         if (!running) {
           schedule(everyRef.current(data));
         }
@@ -120,7 +157,7 @@ export function usePoll<T>(path: string | null, every: (data: T | null) => numbe
   }, [path]);
 
   const current: boolean = held.path === path;
-  const data: T | null = current || keep ? held.data : null;
+  const data: T | null = (current ? held.data : null) ?? (remember ? recalled<T>(path) : null) ?? (keep ? held.data : null);
   const error: ApiError | null = current ? held.error : null;
   return {
     data,
