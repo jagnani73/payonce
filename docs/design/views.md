@@ -98,6 +98,7 @@ A view is a typed, read-only answer built from the ledger for the page, the MCP 
 - The check shows the record's phone on file by its last four digits only (`phoneEnding`), read from the ledger, so it shows while Airwallex is unreachable.
 - The check warns when the first transfer would leave the wallet below its floor, and says PayOnce does not check a single payment's first transfer against the floor.
 - Every New payment field problem ends with a full stop (`fieldTexts`), in the check view's `fields` and in the `fields` of the start's 400 or 409. The refusal's `error` gives the same text with no stop.
+- A run's approver picker (`signerChoices` with `"run"`) ends a barred approver's line with "so someone else approves this run", for the uploader and for every other bar on a run. `checkSigner` and every invoice's picker say "this payment".
 - `InboxItemView` says whether a delivered email has been read. Only the inbox routes serve the inbox views: MCP and the CLI do not.
 - An uploaded email's view carries its Date header as written, as `Theirs`, and the time it was uploaded. Both are null for an email the simulator played.
 - `SettingsView` names the `.env` variables behind each row (`SettingRow.variables`), and none for a limit fixed in PayOnce, such as Ask why's caps. It never holds a secret: for the Airwallex keys it says only whether each is set.
@@ -133,6 +134,7 @@ A view is a typed, read-only answer built from the ledger for the page, the MCP 
 - `PaymentCheckView` has no count of approvers. Paying a held first payment needs what the engine's held rule reads, the payee's history and the duplicates' transfers, and that rule also writes a timeline line, so no view can say it before a request opens.
 - Nothing is busy in the CLI's and MCP's views, and MCP's payment page has no headroom lines.
 - The headroom lines use the server's cached balance. They agree with the request's floor reason once the cache has read the balance after the bank kept the original's fee. Until then they are off by that fee, so a replacement can show as leaving cash above the invoice's floor while the reason says it goes below. While a page is open, its status poll starts a new read whenever the cache is 30 seconds old.
+- On a run's request, an over-limit approver's line says "... and this payment is ...", in `checkSigner`'s words.
 - With a group filter, `pnpm board`'s wallet totals cover that group, because the list's totals follow its scope. Closed payments are not listed.
 - When `pnpm approve` meets terms PayOnce cannot read, `readableTerms` refuses them before the view is built. `pendingApproval` (`store/read/reviews.ts`) decides whether there is anything to approve, and so the exit code.
 - `pnpm close` picks the close option by `pendingClose`'s kind and checks `--covers` against `pendingClose().covered`.
