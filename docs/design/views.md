@@ -20,7 +20,7 @@ A view is a typed, read-only answer built from the ledger for the page, the MCP 
 ### Builders
 
 - A builder is a function of `(ledger, settings, now, ...)` that returns a view. It only reads: no builder writes the ledger or calls Airwallex.
-- `sandboxView` takes only the email threads, and `contactDetailView` and `ledgerAuditExport` take no settings.
+- `sandboxView` takes only the scripted scenarios and the email threads the route hands it, and `contactDetailView` and `ledgerAuditExport` take no settings.
 - Every builder reads stored JSON soft (`readingSoft`), so a value that does not parse shows as none instead of stopping the view.
 - Two Airwallex reads sit beside the builders for the routes to call, both GETs: `readBeneficiaries` for the New payment picker and `readRecord` for the payment check. The builders take what they read as an argument.
 
@@ -79,8 +79,8 @@ A view is a typed, read-only answer built from the ledger for the page, the MCP 
 
 ### Nothing on a payment path reads a view
 
-- The engine, the policy, the store and the run, outage and reconciliation code import nothing from `src/views/`. Alerts take only `readInvoiceSnapshots` from `snapshot.ts`, to read situations.
-- The views import a few read-only engine helpers, which [architecture.md](../architecture.md#layers) lists. The payment check also takes `firstPaymentFacts`, `firstPaymentHold` and `firstPaymentOutage`, and the checks in `engine/new-payment.ts`.
+- The engine, the policy, the store, alerts and the run, outage and reconciliation code import nothing from `src/views/`. The server hands alerts a reader of situations (`SnapshotsOf`), which loads them with `readInvoiceSnapshots`.
+- Only the payment check imports the engine, the one exception [architecture.md](../architecture.md#layers) lists. It takes `firstPaymentFacts`, `firstPaymentHold` and `firstPaymentOutage` from `engine/first-payment.ts`, and the payee check and the invoice it would open from `engine/new-payment.ts`.
 
 ### Rules in particular views
 
@@ -126,7 +126,7 @@ A view is a typed, read-only answer built from the ledger for the page, the MCP 
 - `PaymentCheckView` has no count of approvers. Paying a held first payment needs what the engine's held rule reads, the payee's history and the duplicates' transfers, and that rule also writes a timeline line, so no view can say it before a request opens.
 - Nothing is busy in the CLI's and MCP's views, and MCP's payment page has no headroom lines.
 - With a group filter, `pnpm board`'s wallet totals cover that group, because the list's totals follow its scope. Closed payments are not listed.
-- When `pnpm approve` meets terms PayOnce cannot read, `readableTerms` refuses them before the view is built. The engine's `pendingApproval` decides whether there is anything to approve, and so the exit code.
+- When `pnpm approve` meets terms PayOnce cannot read, `readableTerms` refuses them before the view is built. `pendingApproval` (`store/read/reviews.ts`) decides whether there is anything to approve, and so the exit code.
 - `pnpm close` picks the close option by `pendingClose`'s kind and checks `--covers` against `pendingClose().covered`.
 - For a pay run file with nothing to pay, nothing is stored, so there is no run view. The upload's 422 gives every checked row as a `RunRowView` (`checkedRowViews`), and `pnpm payrun upload` prints the rows and their skip reasons.
 - With no active outage, `pnpm outage` does not say who may end one, because the view gives the enders on each active card.
