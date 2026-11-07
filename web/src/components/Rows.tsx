@@ -111,6 +111,7 @@ function PaymentRow(props: { row: IncidentRow; kind: ButtonKind; handling: boole
           </span>
           <Theirs text={row.supplier} class="qrow__who" />
         </div>
+        {props.handling || s.why === null ? null : <p class="qrow__why">{`Why: ${s.why.label}`}</p>}
         {props.handling && blocker !== undefined ? (
           <p class="qrow__blocker">
             {"Blocked: "}

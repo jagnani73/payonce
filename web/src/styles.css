@@ -1934,6 +1934,11 @@ textarea {
   color: var(--text-body);
 }
 
+.qrow__why {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
 .qrow__blocker {
   display: flex;
   align-items: flex-start;
@@ -2267,6 +2272,7 @@ textarea {
   }
 
   .qrow__next,
+  .qrow__why,
   .qrow__blocker,
   .qrow__meta,
   .qrow__action {

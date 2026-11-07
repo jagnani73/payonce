@@ -180,34 +180,41 @@ function FirstRun(props: { readiness: ReadinessItem[] }): JSX.Element {
   );
 }
 
+function keyOf(item: QueueItem): string {
+  return item.type === "payment" ? `p-${item.row.invoiceId}` : `r-${item.row.runId}`;
+}
+
 function Queues(props: { view: HomeView; me: string | null }): JSX.Element {
   const view: HomeView = props.view;
-  const mine: QueueItem[] = view.waitingForMe ?? [];
+  const mine: QueueItem[] = props.me === null ? [] : (view.waitingForMe ?? []);
+  // A row under "Waiting for your approval" is not listed again in Needs you.
+  const above: Set<string> = new Set<string>(mine.map(keyOf));
+  const rest: QueueItem[] = view.needsYou.filter((item: QueueItem): boolean => !above.has(keyOf(item)));
   return (
     <>
       <Tiles tiles={view.tiles} />
-      {mine.length === 0 || props.me === null ? null : (
-        <Card title="Waiting for your approval" sub={`Requests ${props.me} can sign now`} flush>
+      {mine.length === 0 ? null : (
+        <Card title="Waiting for your approval" sub={`Requests ${props.me ?? ""} can sign now`} flush>
           <QueueRows items={mine} kind="primary" />
         </Card>
       )}
-      {view.needsYou.length === 0 ? (
-        <Quiet view={view} />
-      ) : (
+      {rest.length > 0 ? (
         <Card
           title="Needs you"
           sub={
             <>
-              <span class="count-pill">{view.needsYou.length}</span>
+              <span class="count-pill">{rest.length}</span>
               <span class="home__order">Urgent first, then the most money, then the oldest.</span>
             </>
           }
           actions={<a href="#incidents?scope=needs-you">Open in Incidents</a>}
           flush
         >
-          <QueueRows items={view.needsYou} />
+          <QueueRows items={rest} />
         </Card>
-      )}
+      ) : mine.length === 0 ? (
+        <Quiet view={view} />
+      ) : null}
       {view.inbox.waiting === 0 ? null : <InboxStrip inbox={view.inbox} />}
       {view.handling.count === 0 || view.needsYou.length === 0 ? null : <Handling handling={view.handling} />}
     </>
