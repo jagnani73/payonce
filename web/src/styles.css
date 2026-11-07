@@ -329,6 +329,13 @@ textarea {
   width: 100%;
 }
 
+/* A button inside a line of text, such as "Show number". */
+.btn--small {
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
 .btn:disabled,
 .btn[aria-disabled="true"] {
   border-color: var(--line);
@@ -1692,6 +1699,46 @@ textarea {
   flex-direction: row;
   flex-wrap: wrap;
   align-items: center;
+}
+
+/* ---------- a contact on file: the phone, an email domain ---------- */
+
+.contact {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.contact__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+
+.contact__row > .icon {
+  color: var(--text-2);
+}
+
+.contact__value {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.contact__line {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+/* Under an option card the phone reads as one of the card's own lines. */
+.option__more .contact {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.option__more .contact__value {
+  font-weight: 500;
 }
 
 /* ---------- queue rows ---------- */

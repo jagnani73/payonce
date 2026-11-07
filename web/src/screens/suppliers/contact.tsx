@@ -5,6 +5,7 @@ import { ActionButton } from "../../components/Action";
 import { Field, NameField, type ControlProps } from "../../components/Form";
 import { Icon } from "../../components/Icon";
 import { Callout, InlineError } from "../../components/Notice";
+import { PhoneOnFile } from "../../components/Phone";
 import { Dotted, Theirs, Time, When } from "../../components/Text";
 import { ToneBadge } from "../../components/Tone";
 import { useNameDraft } from "../../me";
@@ -104,44 +105,6 @@ function Names(props: { names: readonly string[] }): JSX.Element {
 
 // ---------- the phone on file ----------
 
-function Provenance(props: { phone: PhoneOnFileView }): JSX.Element {
-  const phone: PhoneOnFileView = props.phone;
-  // Its since is when PayOnce started keeping it, not when it went on file.
-  if (phone.origin === "migrated") {
-    return <p class="sup-contact__prov">On file from before PayOnce kept who set it.</p>;
-  }
-  if (phone.origin === "scenario") {
-    return (
-      <p class="sup-contact__prov">
-        {"Put on file by the demo scenario "}
-        <When at={phone.since} />.
-      </p>
-    );
-  }
-  return (
-    <p class="sup-contact__prov">
-      {phone.removed ? "Taken off file " : "On file since "}
-      {phone.removed ? <When at={phone.since} /> : <Time at={phone.since} />}
-      {phone.proposedBy === null ? null : (
-        <>
-          {", proposed by "}
-          <Theirs text={phone.proposedBy} />
-          {phone.proposedSource === null ? null : ` (${phone.proposedSource})`}
-        </>
-      )}
-      {phone.confirmedBy === null ? null : (
-        <>
-          {", confirmed by "}
-          <Theirs text={phone.confirmedBy} />
-          {phone.confirmedSource === null ? null : ` (${phone.confirmedSource})`}
-        </>
-      )}
-      {"."}
-      {phone.replacedEnding === null ? null : phone.removed ? ` It was the number ending ${phone.replacedEnding}.` : ` It replaced the number ending ${phone.replacedEnding}.`}
-    </p>
-  );
-}
-
 // "Show number" asks GET …/contact for the number in full. It stays in the page
 // only while shown, and goes when the number on file changes.
 function PhoneLine(props: { supplierKey: string; contact: SupplierContactView }): JSX.Element {
@@ -180,34 +143,35 @@ function PhoneLine(props: { supplierKey: string; contact: SupplierContactView })
   const barred: string[] = props.contact.callbackBarred;
   return (
     <div class={ending === null ? "sup-contact__line sup-contact__line--none" : "sup-contact__line"}>
-      <div class="sup-contact__row">
-        <Icon name="callback" />
-        <span class="sup-contact__value">
-          {"Phone: "}
-          {ending === null ? "none on file" : full === null ? `ending ${ending}` : <Theirs text={full} class="mono" />}
-        </span>
-        {ending === null ? null : (
-          <button type="button" class="btn btn--secondary sup-btn--small" aria-pressed={full !== null} disabled={busy} onClick={(): void => void show()}>
-            {busy ? "Getting the number…" : full === null ? "Show number" : "Hide number"}
-          </button>
+      <PhoneOnFile
+        phone={phone}
+        ending={ending}
+        label="Phone"
+        full={full}
+        actions={
+          <>
+            {ending === null ? null : (
+              <button type="button" class="btn btn--secondary btn--small" aria-pressed={full !== null} disabled={busy} onClick={(): void => void show()}>
+                {busy ? "Getting the number…" : full === null ? "Show number" : "Hide number"}
+              </button>
+            )}
+            <InlineError message={error} />
+          </>
+        }
+      >
+        {ending !== null ? null : (
+          <p class="contact__line">
+            Nobody can record a callback to confirm new bank details for this supplier until a number is on file. Putting one on file takes two
+            people: one proposes it, and someone else confirms it from their own source.
+          </p>
         )}
-        <InlineError message={error} />
-      </div>
-      {phone === null ? null : <Provenance phone={phone} />}
-      {ending !== null ? null : (
-        <p class="sup-contact__prov">
-          Nobody can record a callback to confirm new bank details for this supplier until a number is on file. Putting one on file takes two
-          people: one proposes it, and someone else confirms it from their own source.
-        </p>
-      )}
-      {/* The server also marks a removal as changed; its words are about a new number. */}
-      {phone === null || phone.removed || phone.changed === null ? null : <Callout tone="warning">{phone.changed.text}</Callout>}
-      {barred.length === 0 ? null : (
-        <p class="sup-contact__prov">
-          <Names names={barred} />
-          {" put this number on file, so someone else records any callback on it."}
-        </p>
-      )}
+        {barred.length === 0 ? null : (
+          <p class="contact__line">
+            <Names names={barred} />
+            {" put this number on file, so someone else records any callback on it."}
+          </p>
+        )}
+      </PhoneOnFile>
     </div>
   );
 }
@@ -517,11 +481,11 @@ function Domains(props: { domains: SupplierContactView["emailDomains"] }): JSX.E
   if (props.domains.length === 0) {
     return (
       <div class="sup-contact__line">
-        <div class="sup-contact__row">
+        <div class="contact__row">
           <Icon name="email" />
-          <span class="sup-contact__value">Email domain: none on file</span>
+          <span class="contact__value">Email domain: none on file</span>
         </div>
-        <p class="sup-contact__prov">The sender check flags every email on these payments.</p>
+        <p class="contact__line">The sender check flags every email on these payments.</p>
       </div>
     );
   }
@@ -530,9 +494,9 @@ function Domains(props: { domains: SupplierContactView["emailDomains"] }): JSX.E
       {props.domains.map(
         (entry: SupplierContactView["emailDomains"][number]): JSX.Element => (
           <div class="sup-contact__line" key={entry.domain}>
-            <div class="sup-contact__row">
+            <div class="contact__row">
               <Icon name="email" />
-              <span class="sup-contact__value">
+              <span class="contact__value">
                 {"Email domain: "}
                 <Theirs text={entry.domain} />
               </span>

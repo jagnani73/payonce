@@ -289,36 +289,9 @@ a.sup-row:hover {
   background: var(--warn-fill);
 }
 
-.sup-contact__row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 12px;
-}
-
-.sup-contact__row > .icon {
-  color: var(--text-2);
-}
-
-.sup-contact__value {
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-
-.sup-contact__meta,
-.sup-contact__prov {
-  font-size: 13px;
-  color: var(--text-2);
-}
-
 .sup-contact__meta {
-  color: var(--text-3);
-}
-
-.sup-btn--small {
-  padding: 0 12px;
   font-size: 13px;
-  font-weight: 500;
+  color: var(--text-3);
 }
 
 .sup-contact__rule {
