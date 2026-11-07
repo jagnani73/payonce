@@ -10,7 +10,7 @@ An outage is PayOnce stopping new transfers on one rail after payouts to several
 - A failure counts when a transfer reads FAILED or CANCELLED with `failure.code` in `RAIL_FAILURE_CODES`: 91401, 91402, 99901 and 99902, the codes `FAILURE_CODES` in `src/domain/failure-codes.ts` marks `rail`.
 - Mixed codes add up, and the outage records the codes it counted (`outages.codes`). Account codes, unknown codes and a transfer with no code never count. Webhook bodies never count.
 - An outage is declared when payouts to `OUTAGE_FAILURES` different payees (2 to 100, default 3) fail on the rail within `OUTAGE_WINDOW_MINUTES` (1 to 1440, default 30).
-- `loadSettings` reads the rule into `Settings.outageRule`. A value outside its range falls back to the default with a `problem`, which the start-up line (`describeOutageRule`) names.
+- `loadSettings` reads the rule into `Settings.outageRule`, and `createEngine` puts it on the engine as `Engine.outageRule`. `railFailureSeen` takes the rule and the bank deadlines as arguments, and `outagesReport` takes the rule. A value outside its range falls back to the default with a `problem`, which the start-up line (`describeOutageRule`) names.
 - The look calls `railFailureSeen` after the `bank` line of each attempt its first pass reads as failed (`notePayment`), and `syncOutsidePayouts` calls it for an outside payout that reads failed. The later pass that records a kept transfer again does not.
 - The sweep calls `railFailureSeen` for every listed transfer, after it is tied or taken on, so the failure names its invoice. The watcher, the listing before a payment and webhooks never call it.
 - `railFailureSeen` never throws. A failure it could not record is recorded by the next look or sweep, because the transfer id makes the record idempotent.
@@ -60,7 +60,7 @@ An outage is PayOnce stopping new transfers on one rail after payouts to several
 ### Views
 
 - `OutageHolding` is what an active outage holds now, as the board lists it: invoices with what of each it holds, runs, and `sends`, the `OutageSend`s per currency.
-- `HoldingOf` works an `OutageHolding` out. `outageHolding` in `src/views/incident-board.ts` gives it, so `outages.ts` has no board code. `outagesReport` and `endOutage` take a `HoldingOf`, and `outageView` takes an `OutageHolding`.
+- `HoldingOf` works an `OutageHolding` out. `outageHolding(ledger, deadlines)` in `src/views/incident-board.ts` gives it, so `outages.ts` has no board code. `outagesReport` and `endOutage` take a `HoldingOf`, and `outageView` takes an `OutageHolding`.
 - `sendsText` writes the sends for the CLIs. The page's Outages tab and `pnpm outage` read `outagesView` (`src/views/treasury.ts`), built on `outagesReport`, and the board builds its outages from `outageView`.
 - The timeline lines are `holdLine`, `waitingLine`, `runHoldLine`, `runWaitingLine`, and the declared and end lines.
 

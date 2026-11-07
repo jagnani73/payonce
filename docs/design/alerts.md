@@ -21,7 +21,7 @@ Alerts post to a Slack or Discord incoming webhook when something waits on a per
 
 ### Invoice conditions
 
-- `invoice:<id>` stands for an escalated invoice whose situation needs a person: `situationOf` on a snapshot of every escalated invoice (`readInvoiceSnapshots`, `invoiceCondition`).
+- `invoice:<id>` stands for an escalated invoice whose situation needs a person: `situationOf` on a snapshot of every escalated invoice (`invoiceCondition`). The server hands `Alerts` a `SnapshotsOf` reader, which loads them with `readInvoiceSnapshots`.
 - The need (`situationNeed`): `needs-approval` is `approve-held` for a first payment and `approve` for a replacement; `paid-twice` and `unrecognised-transfer` are `twice`; `bank-late` is `bank`; `ready-to-close` is `close`.
 - `needs-decision` is `held` for a held invoice or one a person closed before, and `check` otherwise. `no-approvers` is `check`, `needs-callback` is `callback` and `needs-phone` is `phone`.
 - `with-bank` is `outside` for a payout sent outside PayOnce, `callback` when the bank details are in question and a phone is on file, and `check` otherwise. Every other state needs nobody.
@@ -69,7 +69,7 @@ Alerts post to a Slack or Discord incoming webhook when something waits on a per
 - 2xx is sent. 429 waits `Retry-After` or Discord's `retry_after`, between 1 second and 15 minutes. A 5xx, network error or timeout waits 30 seconds times 4 to the power of (tries made less one). Five tries in all, then `failed`.
 - A 3xx, a 400 or any other 4xx fails at once. 401, 403, 404 and 410 also stop this process posting until a restart, and queued alerts wait.
 - `last_error` keeps the status with Slack's lower-case code or Discord's numeric `code`, and nothing else from the answer, not even Discord's `message`. For a network error or timeout it keeps Node's error text.
-- The webhook address, its path and its query are cut out of every error and log line (`redact`).
+- The webhook address, its path and its query are cut out of every error and log line in every form `redactKey` cuts a key: URL-encoded, in either case, cut short, or with spaces or line breaks between its characters (`redact`, `redactKeys`).
 - `GET /api/alerts` lists the 50 latest alerts with their titles and how they went, and never the address.
 
 ### Message text

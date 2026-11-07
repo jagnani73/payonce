@@ -59,7 +59,7 @@ The ops metrics: eight tables of how a period went, built from the ledger alone 
 - Outage codes come back as text, and `outageCodes` parses them inside a try.
 
 ### Where it is shown
-- `GET /api/metrics?period=7d|30d|all` (7d when left out) answers the `MetricsReport`. Anything else answers 400 "The period is 7d, 30d or all". `GET /api/reports` answers `ReportsView`: the tiles and the same report.
+- `GET /api/metrics?period=7d|30d|all` (7d when left out) answers the `MetricsReport`. Anything else answers 400 "The period is 7d, 30d or all". `GET /api/reports` answers `ReportsView`: the tiles and the report as `ShownMetrics` (`shownMetrics` in `src/views/reports.ts`), which gives each amount as `Money` and fixed words beside each payment kind, rail, failure stage, close and close group (`whatText`, `railText`, `stageText`, `howText`, `groupText`).
 - The server keeps the last three reports (`METRICS_KEPT`), keyed by the period, `Ledger.changeStamp()` and the minute. Home, Reports and the metrics route share them.
 - `changeStamp` is `PRAGMA data_version` and `total_changes()`, so another connection's commit, or the server's own write, builds the report again.
 - The Reports screen (`web/src/screens/reports.tsx`) is `#reports`, with `?period=30d` or `?period=all` in the address. Three period buttons carry `aria-pressed`. `#metrics` redirects to `#reports`.
@@ -67,7 +67,7 @@ The ops metrics: eight tables of how a period went, built from the ledger alone 
 - Reports shows the tiles, the ledger-wide audit card and the eight tables (`ReportTables`). A period with nothing at all in it says so and offers the period since the ledger started.
 - `pnpm metrics [7d|30d|all] [json]` opens `payonce.db` read-only, loads no `.env`, and prints each table in the page's order in its own words, with the period's bounds as ISO times in UTC. With `json` it prints the route's answer through `printableJson`.
 - `pnpm metrics` refuses a missing file and a file `schemaGaps` finds gaps in, and says to restart `pnpm ui` or run `pnpm board` once, which upgrades it.
-- The MCP `metrics` tool takes an optional `period` and answers `reportsView`: the tiles and the report. `REPORTS_FIELDS` (in `src/views/outside-fields.ts`) lists its plain paths, the tiles' three fields and the four label paths. Every other string is a token, so nothing in its answer is wrapped.
+- The MCP `metrics` tool takes an optional `period` and answers `reportsView`: the tiles and the report. `REPORTS_FIELDS` (in `src/views/outside-fields.ts`) lists its plain paths: the tiles' three fields, the paths of those fixed words and the four label paths. Every other string is a token, money text included, so nothing in its answer is wrapped.
 
 ## Why
 

@@ -37,7 +37,7 @@ Reconciliation matches every wallet movement in Airwallex's balance history to t
 - Hold rows count only in the running balance, and the wallet's totals show them apart from money in and out.
 - A debit is compared with `debitOf`, and a `FEE` row with `feeOf`, never with the fee in the ledger.
 - A refund must be the whole debit back in the wallet it left, or, for a transfer that converts, the transfer amount in the transfer currency.
-- A transfer's debit is due at `created_at` plus the method's bank deadline (`deadlineMinutes`).
+- A transfer's debit is due at `created_at` plus the method's bank deadline (`deadlineMinutes`). The deadlines come from the settings: `ReconRunner`, `reconcileOnce`, `reconcileOffline`, `commitRun` and `movementsView` take them and pass them to `match` (`MatchInput.deadlines`).
 - A failed transfer's refund is due at the earlier of its `updated_at` and the first check that read it failed, plus the deadline. `SCHEDULED` and `OVERDUE` transfers wait with no due time.
 - Inside its window an item is waiting, kept in the run's summary, never a break. A transfer created before `started_at` is matched only for paid-then-returned.
 - A movement PayOnce cannot read holds its transfer for that check. When its source cannot be read it holds every transfer in its wallet, and when its currency cannot be read either, every transfer in every wallet.
@@ -94,10 +94,10 @@ Reconciliation matches every wallet movement in Airwallex's balance history to t
 - `reconReport` gives the last committed run, the latest failed or stale run after it, the wallets from that run's summary, and the newest 500 open breaks (`MAX_OPEN_SHOWN`).
 - `reconReport` also gives `openCount`, counts by kind and how many are pending (all three with `COUNT(*)`), the waiting items, the last 50 explained and the audit line. The page and the CLI give the full counts and say how many are not listed.
 - `GET /api/reconcile` answers `reconReport` as a `ReconView` (`reconView` in `src/views/treasury.ts`).
-- `GET /api/reconcile/movements?currency=USD` gives the 500 newest stored movements, with what explains each now, from the matcher run again with no balances (`movementsView`).
+- `GET /api/reconcile/movements?currency=USD` answers `reconMovementsView` (`src/views/treasury.ts`): the 500 newest stored movements (`MOVEMENTS_SHOWN`), each with its amount and balance as `Money` and what explains it now in words (`howText`), from the matcher run again with no balances (`movementsView`).
 - `POST /api/reconcile/explain` takes `{ breaks: [{ id, fingerprint }], explainedBy, note }`. It answers 200 with the `ReconView` and a notice, 400, 404 with `unknown`, or 409 with `changed`. The route table is in [web-server.md](web-server.md).
 - On the page, reconciliation is the Reconciliation tab of Treasury (`web/src/screens/treasury/`). `#recon` redirects to it (`web/src/router.ts`), and the tab reads `/api/reconcile` only while it is on screen.
-- The tab shows the last check with Check now, a card per wallet with its movements on request, the breaks that need a person by kind with a checkbox each and a name and note form, what is waiting, the last explanations and the audit line.
+- The tab shows the last check with Check now and, after a failed check, when the last good one ran (`lastCheck.lastOkAt`). It shows a card per wallet with its movements on request, the breaks that need a person by kind with a checkbox each and a name and note form, what is waiting, the last explanations and the audit line.
 - The alert condition is `recon`, standing while any break is open. Its fingerprint is the highest `recon_events` id of kind `found`, `changed` or `reopened` in any state.
 - The break the alert names is the open one with the newest such line, so a break found once and opened on a later check is named on the alert its own line raised.
 - The alert's title is "N wallet movements need a person", or "The USD balance does not add up from its movements" when that break is `balance-gap` or `balance-differs`.
