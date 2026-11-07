@@ -2,9 +2,9 @@ import type { JSX } from "preact";
 import { Icon } from "../../components/Icon";
 import { ClickRow } from "../../components/Layout";
 import { HandlingRows, QueueRows } from "../../components/Rows";
-import { Day, Money, Said, saidKey, Theirs, Time } from "../../components/Text";
+import { Day, Figure, Money, Said, saidKey, Theirs, Time } from "../../components/Text";
 import { Tag, ToneBadge } from "../../components/Tone";
-import { navigate, paymentHref } from "../../router";
+import { navigate, paymentHref, runHref } from "../../router";
 import { count } from "../../text";
 import type { Blocker, IncidentRow, Money as MoneyView, OutageStrip, QueueGroup, QueueItem, RowTag, WalletTotals } from "../../types";
 import { waitingOnText } from "../../words";
@@ -39,18 +39,41 @@ export function OutageStrips(props: { outages: OutageStrip[] }): JSX.Element {
   );
 }
 
-function Figure(props: { label: string; money: MoneyView }): JSX.Element {
+// "Promised 4,000.00": the wallet leads the row, so the figure goes without it.
+function Total(props: { label: string; money: MoneyView }): JSX.Element {
   // Nothing is estimated about nothing.
   const money: MoneyView = props.money.minor === 0 ? { ...props.money, estimated: false } : props.money;
   return (
     <span class="itotals__figure">
-      <span class="itotals__label">{props.label}</span> <Money money={money} />
+      <span class="itotals__label">{props.label}</span> <Figure money={money} />
     </span>
   );
 }
 
-// Per wallet: promised, waiting on people, with the bank. The view counts every
-// payment not yet closed in the wallet and origin chosen, whatever the tab.
+// "Pay run 7 waiting: 81.00 USD", each run linked.
+function RunsWaiting(props: { total: WalletTotals }): JSX.Element {
+  const runs: number[] = props.total.runsWaiting;
+  return (
+    <span class="itotals__figure itotals__runs">
+      {runs.length === 0
+        ? "Pay runs waiting"
+        : runs.map(
+            (id: number, index: number): JSX.Element => (
+              <span key={id}>
+                {index === 0 ? null : index === runs.length - 1 ? " and " : ", "}
+                <a href={runHref(id)}>{`Pay run ${id}`}</a>
+              </span>
+            ),
+          )}
+      {runs.length === 0 ? ": " : " waiting: "}
+      <Money money={props.total.runWaiting} />
+    </span>
+  );
+}
+
+// Per wallet: promised, waiting on people, with the bank, and the pay runs that
+// wait. The view counts every payment not yet closed in the wallet and origin
+// chosen, whatever the tab.
 export function Totals(props: { totals: WalletTotals[] }): JSX.Element {
   if (props.totals.length === 0) {
     return <p class="itotals itotals--none">No money in play.</p>;
@@ -62,11 +85,11 @@ export function Totals(props: { totals: WalletTotals[] }): JSX.Element {
         (total: WalletTotals): JSX.Element => (
           <div class="itotals__wallet" key={total.wallet}>
             <strong class="itotals__code">{total.wallet}</strong>
-            <Figure label="Promised" money={total.promised} />
-            <Figure label="Waiting on people" money={total.waitingOnPeople} />
-            {total.pausedByOutage.minor === 0 ? null : <Figure label="Paused by an outage" money={total.pausedByOutage} />}
-            <Figure label="With the bank" money={total.withBank} />
-            {total.runWaiting.minor === 0 ? null : <Figure label="Pay runs waiting" money={total.runWaiting} />}
+            <Total label="Promised" money={total.promised} />
+            <Total label="Waiting on people" money={total.waitingOnPeople} />
+            {total.pausedByOutage.minor === 0 ? null : <Total label="Paused by an outage" money={total.pausedByOutage} />}
+            <Total label="With the bank" money={total.withBank} />
+            {total.runWaiting.minor === 0 ? null : <RunsWaiting total={total} />}
             {total.feeUnknown === 0 ? null : <span class="itotals__note">{`fee not known on ${total.feeUnknown}`}</span>}
           </div>
         ),

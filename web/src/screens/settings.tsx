@@ -195,6 +195,27 @@ function Alerts(props: { view: SettingsView["alerts"] }): JSX.Element {
   );
 }
 
+// "Sends email text to api.example.com": where a model service is, under the
+// line that turns it on.
+function Hosts(props: { what: string; hosts: string[] }): JSX.Element | null {
+  if (props.hosts.length === 0) {
+    return null;
+  }
+  return (
+    <span class="set-row__when">
+      {`Sends ${props.what} to `}
+      {props.hosts.map(
+        (host: string, index: number): JSX.Element => (
+          <span key={host}>
+            {index === 0 ? null : index === props.hosts.length - 1 ? " and " : ", "}
+            <span class="mono">{host}</span>
+          </span>
+        ),
+      )}
+    </span>
+  );
+}
+
 function Reader(props: { view: SettingsView["reader"] }): JSX.Element {
   const r: SettingsView["reader"] = props.view;
   const ask: SettingsView["reader"]["askWhy"] = r.askWhy;
@@ -202,10 +223,12 @@ function Reader(props: { view: SettingsView["reader"] }): JSX.Element {
     <Section id="reader" title="Email reader and Ask why">
       <Line label="Email reader" vars={r.variables}>
         {r.isModel ? `Model reader: ${r.name}` : "Keyword reader: no model key is set, so PayOnce reads emails by keywords"}
+        {r.isModel ? <Hosts what="email text" hosts={r.hosts} /> : null}
       </Line>
       {r.notice === null ? null : <Callout tone="warning">{r.notice}</Callout>}
       <Line label="Ask why" vars={ask.variables} tone={ask.on ? undefined : "off"}>
         {ask.on ? `On · ${ask.models}` : "Off: Ask why needs a model key"}
+        {ask.on ? <Hosts what="a payment's facts" hosts={ask.hosts} /> : null}
       </Line>
       {ask.on
         ? ask.limits.map(
@@ -214,6 +237,15 @@ function Reader(props: { view: SettingsView["reader"] }): JSX.Element {
         : null}
     </Section>
   );
+}
+
+// Whether the client id and the API key are set. Their values never reach the page.
+function keysText(keys: NonNullable<SettingsView["airwallex"]>["keys"]): string {
+  if (keys.clientId && keys.apiKey) {
+    return "The client id and the API key are set. PayOnce never shows them.";
+  }
+  const missing: string[] = [keys.clientId ? null : "client id", keys.apiKey ? null : "API key"].filter((part: string | null): part is string => part !== null);
+  return `No ${missing.join(" or ")} is set, so PayOnce can't log in to Airwallex.`;
 }
 
 function Airwallex(props: { view: SettingsView["airwallex"] }): JSX.Element {
@@ -241,6 +273,9 @@ function Airwallex(props: { view: SettingsView["airwallex"] }): JSX.Element {
             <span class="mono">{a.host}</span>
           </>
         )}
+      </Line>
+      <Line label="Keys" vars={a.variables.keys} tone={a.keys.clientId && a.keys.apiKey ? undefined : "warn"}>
+        {keysText(a.keys)}
       </Line>
       <div class="set-row">
         <span class="set-row__label">Connection</span>

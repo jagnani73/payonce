@@ -549,6 +549,12 @@ function ClosedVersion(props: { version: PhoneVersionView }): JSX.Element {
           </>
         )}{" "}
         <When at={v.closedAt} />
+        {v.closeNote === null || v.closeNote.trim() === "" ? null : (
+          <>
+            {": "}
+            <Theirs text={v.closeNote} quote />
+          </>
+        )}
       </>
     );
   return (

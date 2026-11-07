@@ -6,7 +6,7 @@ import { Icon, type IconName } from "../components/Icon";
 import { Card } from "../components/Layout";
 import { HandlingRows, QueueRows } from "../components/Rows";
 import { Delayed, LoadError, Loading } from "../components/States";
-import { Time } from "../components/Text";
+import { Ref, Time } from "../components/Text";
 import { useTitle } from "../hooks";
 import { useMe } from "../me";
 import { FAST_MS, SLOW_MS, usePoll, type Polled } from "../poll";
@@ -74,14 +74,28 @@ function HomeLoading(): JSX.Element {
   );
 }
 
+// "2 emails waiting · 1 suggests INV-671104". The strip is one link to the
+// inbox, so the invoice numbers are text in it.
 function InboxStrip(props: { inbox: HomeView["inbox"] }): JSX.Element {
-  const { waiting, suggested } = props.inbox;
+  const { waiting, suggested, invoices } = props.inbox;
   return (
     <a class="strip" href="#inbox">
       <Icon name="mail" size={18} class="strip__icon" />
       <span class="strip__lead">{`${count(waiting, "email")} waiting`}</span>
       {suggested === 0 ? null : (
-        <span class="muted">{suggested === 1 ? "1 suggests a payment" : `${suggested} suggest a payment`}</span>
+        <span class="muted">
+          {suggested === 1 ? "1 suggests " : `${suggested} suggest `}
+          {invoices.length === 0
+            ? "a payment"
+            : invoices.map(
+                (id: string, index: number): JSX.Element => (
+                  <span key={id}>
+                    {index === 0 ? null : index === invoices.length - 1 ? " and " : ", "}
+                    <Ref>{id}</Ref>
+                  </span>
+                ),
+              )}
+        </span>
       )}
       <span class="strip__go">Open inbox</span>
     </a>

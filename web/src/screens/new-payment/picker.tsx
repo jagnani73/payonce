@@ -33,6 +33,7 @@ function factsOf(option: BeneficiaryOption): string {
   return parts.filter((part: string): boolean => part !== "").join(" · ");
 }
 
+// "Last paid 2 Nov to ···6789, P2611…".
 function LastPaid(props: { option: BeneficiaryOption }): JSX.Element {
   const paid: BeneficiaryOption["lastPaid"] = props.option.lastPaid;
   if (paid === null) {
@@ -41,7 +42,7 @@ function LastPaid(props: { option: BeneficiaryOption }): JSX.Element {
   return (
     <span class="np-option__paid">
       {"Last paid "}
-      {paid.at === null ? null : <Time at={paid.at} />}
+      {paid.at === null ? null : <Time at={paid.at} mode="day" />}
       {paid.ending === null ? null : ` to ···${paid.ending}`}
       {paid.reference === null ? null : (
         <>

@@ -135,7 +135,8 @@
   color: var(--text-3);
 }
 
-.itotals__note {
+.itotals__note,
+.itotals__runs {
   color: var(--text-2);
 }
 

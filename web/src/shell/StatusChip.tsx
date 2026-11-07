@@ -9,19 +9,23 @@ import { count } from "../text";
 import type { OutageStrip, SettingsView, StatusView } from "../types";
 
 // The status pill in the top bar and its popover, from GET /api/status (polled
-// by the shell every 10 s). The check pace comes from the settings, read once.
+// by the shell every 10 s). Whether webhooks are on comes from the settings,
+// read once.
 
 type ChipTone = StatusView["chip"]["tone"];
 
-function PaymentChecks(props: { settings: SettingsView | null }): JSX.Element {
-  const airwallex: SettingsView["airwallex"] | undefined = props.settings?.airwallex;
-  if (airwallex === null || airwallex === undefined) {
-    return <>{props.settings === null ? "Reading the settings…" : "Only pnpm ui checks payments."}</>;
+// "Checking payments with the bank every 3 s (webhooks off)", then how often
+// Airwallex's transfers are listed.
+function PaymentChecks(props: { pace: StatusView["pace"]; settings: SettingsView | null }): JSX.Element {
+  if (props.pace === null) {
+    return <>Only pnpm ui checks payments.</>;
   }
+  const webhooks: boolean | undefined = props.settings?.airwallex?.webhooks.on;
   return (
     <>
-      {`Checking payments with the bank every ${airwallex.checksEverySeconds} s`}
-      {airwallex.webhooks.on ? " · webhooks on" : " (webhooks off)"}
+      {`Checking payments with the bank every ${props.pace.checksEverySeconds} s`}
+      {webhooks === undefined ? null : webhooks ? " · webhooks on" : " (webhooks off)"}
+      <span class="status-pop__line">{`Listing Airwallex's transfers every ${props.pace.listingEverySeconds} s`}</span>
     </>
   );
 }
@@ -48,7 +52,7 @@ function StatusList(props: { status: StatusView; settings: SettingsView | null }
       </dd>
       <dt>Payment checks</dt>
       <dd>
-        <PaymentChecks settings={props.settings} />
+        <PaymentChecks pace={status.pace} settings={props.settings} />
       </dd>
       <dt>Outages</dt>
       <dd class={status.outages.length > 0 ? "status-pop__warn" : undefined}>
