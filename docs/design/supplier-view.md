@@ -146,7 +146,7 @@ The supplier view shows one Airwallex beneficiary record at a time: what PayOnce
 - A failure code such as `constructor`, `toString` or `__proto__` gets no words.
 - A run's outage hold on a skipped or dropped row stays off that row's record.
 - In a ledger not yet seeded with phones on file, the phone comes from the newest invoice that has one ([supplier-contacts.md](supplier-contacts.md)).
-- After a callback's number is replaced, the view's latest applied callback is still the newest applied one, so `callback-verified` and `verifiedBy` can name it. `verifiedBankChange`, which the engine reads, no longer counts it once the number it was made on is off file.
+- Once the number a callback was made on is replaced, that callback no longer counts, in the view as in `verifiedBankChange`. `callback-verified` and `verifiedBy` do not name it, and only a callback on the number on file now verifies the account again.
 - The view reads stored JSON soft (`readingSoft`), so when it does not parse, an unreadable account, ending or findings is left out and the rest of the record still shows.
 
 Dated checks: [verification/supplier-view.md](../verification/supplier-view.md).
