@@ -1,5 +1,5 @@
 import type { JSX } from "preact";
-import { useEffect, useId, useState } from "preact/hooks";
+import { useEffect, useId, useRef, useState } from "preact/hooks";
 import { postJson } from "../../api";
 import { ApproveForm, DecisionCard, OptionCard, Options, RequestLine, Signers } from "../../components/Decision";
 import { EndOutageForm } from "../../components/EndOutage";
@@ -135,6 +135,14 @@ function OptionForm(props: { option: DecisionOption; acts: Acts }): JSX.Element 
   }
 }
 
+// What the options are now: which there are, which are allowed and suggested,
+// and the request an approval would sign.
+function shapeOf(options: DecisionOption[]): string {
+  return options
+    .map((option: DecisionOption): string => `${option.kind}:${option.can.allowed}:${option.suggested}:${option.kind === "approve" ? option.requestId : ""}`)
+    .join(",");
+}
+
 // The option a link asked for, else the one the server suggests. Nothing is
 // chosen for the person when no option fits better than the others.
 function firstChoice(options: DecisionOption[], want: Kind | null): Kind | null {
@@ -151,17 +159,31 @@ function Choices(props: {
 }): JSX.Element {
   const name: string = useId();
   const [picked, setPicked] = useState<Kind | null>(null);
+  // The option the link asked for, until the options change.
+  const [asked, setAsked] = useState<Kind | null>(props.want);
   // Forms stay mounted once opened, so going back to one keeps what was typed.
   const [opened, setOpened] = useState<ReadonlySet<Kind>>(new Set<Kind>());
   useEffect((): void => {
     if (props.want !== null) {
       setPicked(props.want);
+      setAsked(props.want);
     }
   }, [props.want]);
   const options: DecisionOption[] = props.options;
+  // Once an action or a look changes the options (a callback opens a new
+  // request, a signoff lands), the panel moves on to the one that fits now.
+  const shape: string = shapeOf(options);
+  const shown = useRef<string>(shape);
+  useEffect((): void => {
+    if (shown.current !== shape) {
+      shown.current = shape;
+      setPicked(null);
+      setAsked(null);
+    }
+  }, [shape]);
   const usable = (kind: Kind | null): boolean =>
     kind !== null && options.some((option: DecisionOption): boolean => option.kind === kind && option.can.allowed);
-  const chosen: Kind | null = usable(picked) ? picked : firstChoice(options, props.want);
+  const chosen: Kind | null = usable(picked) ? picked : firstChoice(options, asked);
   useEffect((): void => {
     if (chosen !== null && !opened.has(chosen)) {
       setOpened(new Set<Kind>([...opened, chosen]));

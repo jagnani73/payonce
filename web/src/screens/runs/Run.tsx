@@ -1,5 +1,5 @@
 import type { JSX } from "preact";
-import { useState } from "preact/hooks";
+import { useRef, useState } from "preact/hooks";
 import { Details } from "../../components/Action";
 import { Icon } from "../../components/Icon";
 import { Tabs } from "../../components/Layout";
@@ -312,6 +312,12 @@ export function RunPage(props: { id: number; tab: string | undefined; asked: str
   const polled: Polled<RunView> = usePoll<RunView>(path, pace, { remember: true });
   const view: RunView | null = polled.data;
   const tab: RunTab = tabOf(props.tab);
+  // A link's ?do= picks an option on the request it was opened on. A request
+  // opened after it, by a re-check, starts on the suggested option.
+  const askedFor = useRef<number | null | undefined>(undefined);
+  if (askedFor.current === undefined && view?.decision !== null && view?.decision !== undefined) {
+    askedFor.current = view.decision.request?.id ?? null;
+  }
   return (
     <div class="run-page" id={`run-${props.id}`}>
       <LoadError what={`pay run ${props.id}`} error={polled.error} />
@@ -333,7 +339,7 @@ export function RunPage(props: { id: number; tab: string | undefined; asked: str
               key={view.decision.request?.id ?? 0}
               view={view}
               decision={view.decision}
-              asked={props.asked}
+              asked={(view.decision.request?.id ?? null) === askedFor.current ? props.asked : null}
               onActed={(fresh: RunView): void => polled.replace(fresh)}
               refresh={(): void => polled.refresh()}
             />
