@@ -90,6 +90,9 @@ A view is a typed, read-only answer built from the ledger for the page, the MCP 
 - The advice for a payment sent today is given only while the payment can still be sent: for a request that is open (`requestOpen`), for a run's request only while the run waits, and for a run row only while the run waits. A sent transfer's estimate never gets it.
 - A run row's fee line (`feeSeenText`) is built only for a vouched estimate and a currency in `CURRENCY_PATTERN`.
 - The cash view lists a currency that has a floor set, a line in the ledger, an open invoice with an invoice floor, or a balance that is not zero (`cashReport`).
+- The payment page's headroom lines, in the Money panel and under the Decision panel, are one `HeadroomLine` from `headroomOf`. While the invoice is open they are worked above the floor `floorFor` holds its payments to, which `heldFloor` (`domain/reserve.ts`) gives along with its source. Where the invoice's own floor is stricter than the wallet's, or the wallet has none, that floor is the invoice's and `floorSource` is `invoice`.
+- A settled or rejected invoice's headroom lines use its wallet's floor.
+- The cash panel and the payment page work headroom out with the same `headroomAbove` (`store/read/cash.ts`): the available balance less the floor and the `FIRM_KINDS` lines. The panel takes each wallet's own floor.
 - `PaymentCheckView` asks `startPayment`'s outage gate and holds, in their order, on facts read without a lease (`firstPaymentFacts`, `firstPaymentHold`, `firstPaymentOutage`), so it says what a start would do. It writes nothing.
 - The check gives back the invoice number it checked. For an empty field that is the number `newInvoiceId` made, and the page sends it on later checks and on start, so the payment starts under the number the person saw.
 - The check shows the record's phone on file by its last four digits only (`phoneEnding`), read from the ledger, so it shows while Airwallex is unreachable.
@@ -115,6 +118,8 @@ A view is a typed, read-only answer built from the ledger for the page, the MCP 
 - Estimates are vouched for in the shared builder, so text stored in an estimate never reaches a sentence that MCP passes as plain, and the page, MCP and the CLI give the same advice.
 - The advice shows only while the payment can be sent, because "If sent today" means nothing for a payment already sent or a request that can no longer be used.
 - The check asks the start's own holds, so the preview cannot drift from what starting the payment does.
+- An open invoice's headroom is worked above the floor its payments are held to, so the line agrees with the request's floor reason. A settled or rejected invoice pays nothing more, so only its wallet's floor counts, as on the cash panel, which lists invoice floors for open invoices only.
+- The panel and the page share `headroomAbove`, so they cannot work headroom out two ways.
 - The status view stays small because it is read every 10 seconds by every open page.
 - The audit view is cached because building it hashes every line in the ledger again.
 
@@ -125,6 +130,7 @@ A view is a typed, read-only answer built from the ledger for the page, the MCP 
 - The payment check skips `linkUnseenPayouts`, because it writes, so an outside payout with the new invoice number that the sweep has not tied yet is the one hold the check can miss.
 - `PaymentCheckView` has no count of approvers. Paying a held first payment needs what the engine's held rule reads, the payee's history and the duplicates' transfers, and that rule also writes a timeline line, so no view can say it before a request opens.
 - Nothing is busy in the CLI's and MCP's views, and MCP's payment page has no headroom lines.
+- The headroom lines use the server's cached balance. They agree with the request's floor reason once the cache has read the balance after the bank kept the original's fee. Until then they are off by that fee, so a replacement can show as leaving cash above the invoice's floor while the reason says it goes below. While a page is open, its status poll starts a new read whenever the cache is 30 seconds old.
 - With a group filter, `pnpm board`'s wallet totals cover that group, because the list's totals follow its scope. Closed payments are not listed.
 - When `pnpm approve` meets terms PayOnce cannot read, `readableTerms` refuses them before the view is built. `pendingApproval` (`store/read/reviews.ts`) decides whether there is anything to approve, and so the exit code.
 - `pnpm close` picks the close option by `pendingClose`'s kind and checks `--covers` against `pendingClose().covered`.
