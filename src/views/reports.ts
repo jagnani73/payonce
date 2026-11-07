@@ -140,7 +140,7 @@ export function reportTiles(report: MetricsReport): ReportsView["tiles"] {
     },
     {
       key: "second-bills",
-      label: "Second bills stopped",
+      label: "Second bills closed without paying",
       value: String(stopped),
       sub: amounts(report.duplicates.rows.map((row: DuplicateRow) => ({ minor: row.stoppedMinor, currency: row.currency }))),
     },
