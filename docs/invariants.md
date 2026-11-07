@@ -43,7 +43,7 @@ A guarantee enforced "in SQL" is a condition inside the statement that writes, r
     Where: `decide` checks `outsidePayoutLive` first; `holdForOutsidePayout` and `holdPending` in the engine; `LIVE_OUTSIDE_PAYOUT` in the SQL of `useApproval` and `releaseFor`; the check in `replaceUnderLock`'s transaction. Details: [engine-rules.md](design/engine-rules.md).
 
 13. A payout sent outside PayOnce counts as paying an invoice only when it is paid and a look found that it delivered the invoice's amount and currency to the account PayOnce would pay without a person; one PayOnce could not judge counts as not paying.\
-    Where: `payoutVerdict` and `payoutPays` in `src/store/payouts.ts`; `judgePayouts` and `payingRoute` in `src/engine/outside.ts`; `CloseStore.paidOutside`. Details: [engine-rules.md](design/engine-rules.md).
+    Where: `payoutVerdict` in `src/store/payouts.ts` and `payoutPays` in `src/domain/live.ts`; `judgePayouts` and `payingRoute` in `src/engine/outside.ts`; `CloseStore.paidOutside`. Details: [engine-rules.md](design/engine-rules.md).
 
 14. Every first payment passes `startPayment`'s holds in the transaction that opens its attempt: a missing beneficiary, a likely second bill, an invoice number already on file for the supplier, a live outside payout, an account that changed since the last checked payment or was never confirmed, emails on file, and a payment from another currency's wallet.\
     Where: `startPayment`, `heldForOthers` and `lastPaidHold` in `src/engine/first-payment.ts`; `likelyDuplicates`, `sameNumberForSupplier` and `sameInvoiceNumber` in `src/domain/duplicates.ts`. Details: [engine-rules.md](design/engine-rules.md).
@@ -74,10 +74,10 @@ A guarantee enforced "in SQL" is a condition inside the statement that writes, r
 22. Wherever a decision or an approval pinned an account, PayOnce compares the full account key, and the route key only answers whether new details still go to the same account and never goes in terms.\
     Where: `accountKeyOf` in `src/domain/approval.ts`; `routeKeyOf`, `NOT_ROUTING_FIELDS` and `ROUTE_SCHEME` in `src/domain/assess.ts`; `holdsAccount` in `src/store/attempts.ts`. Details: [accounts.md](design/accounts.md).
 
-23. New bank details never come from an email or the email reader; they enter only through a callback to the phone number on file, which a person records.\
-    Where: `recordBankChange` in `src/engine/bank-change.ts`, the only caller of `updateBankDetails`, which checks the number with `isNumberOnFile` and refuses in the cases `callbackBlocked` (`src/domain/callback.ts`) gives; the reader returns only true or false findings (`EmailFindings` in `src/reader/emails.ts`). Details: [engine-rules.md](design/engine-rules.md).
+23. New bank details never come from an email or the email reader; they enter only through a callback to the phone number on file, which a person records. That number goes on file or changes only when one person proposes it and another confirms it, and a callback counts only while the number it was made on is still on file.\
+    Where: `recordBankChange` in `src/engine/bank-change.ts`, the only caller of `updateBankDetails`, which checks the number with `isNumberOnFile` and refuses in the cases `callbackBlocked` (`src/domain/callback.ts`) gives; `ContactStore.confirmContact` in `src/store/contacts.ts`, which refuses the proposer and a number typed differently; `addBankChange` in `src/store/bank-changes.ts`, which writes a callback only while its number is on file, and `verifiedBankChange`, which counts one only while its `contact_id` is the number on file now; the reader returns only true or false findings (`EmailFindings` in `src/domain/emails.ts`). Details: [engine-rules.md](design/engine-rules.md), [supplier-contacts.md](design/supplier-contacts.md).
 
-24. A payment to an account the original did not go to gets an approval request only after a verified callback, needs two approvers, and cannot be approved by whoever recorded that callback.\
+24. A payment to an account the original did not go to gets an approval request only after a verified callback, needs two approvers, and cannot be approved by whoever recorded that callback or proposed or confirmed the number it was made on.\
     Where: `escalate` in `src/engine/escalated.ts` waits while `assessment.bankChange` is null; `verifiedBankChange` in `src/store/bank-changes.ts`; `signoffsNeeded` in `src/domain/approvers.ts`; `barredFrom` in `src/domain/barred.ts`. Details: [engine-rules.md](design/engine-rules.md).
 
 25. A first payment to a supplier whose record no longer holds the account of PayOnce's last checked payment, or whose earlier payments kept no account, is held for a person.\
@@ -165,7 +165,7 @@ A guarantee enforced "in SQL" is a condition inside the statement that writes, r
     Where: `CloseStore.reject` (`LIVE_ATTEMPT`, `BLOCKING_OUTSIDE_PAYOUT` in its SQL). Details: [engine-rules.md](design/engine-rules.md).
 
 51. The only close without a payment that PayOnce makes by itself is `rejectAgain`, of an invoice a person had already closed without paying.\
-    Where: `rejectAgain` is called by `continueEscalated` and `closeAgain` in `src/engine/held.ts`; `reject` is called only from `closeIncident`. Details: [engine-rules.md](design/engine-rules.md).
+    Where: PayOnce calls `rejectAgain` by itself only from `continueEscalated` in `src/engine/escalated.ts` and `closeAgain` in `src/engine/held.ts`, and a person's `closeIncident` calls it too; `reject` is called only from `closeIncident`. Details: [engine-rules.md](design/engine-rules.md).
 
 52. When a held invoice's release, an approved replacement and a close without paying race from different processes, at most one of them succeeds.\
     Where: the conditions on `state = 'escalated'` and `LIVE_ATTEMPT` in the SQL of `releaseFor`, `useApproval` and `reject`, each under the write lock. Details: [engine-rules.md](design/engine-rules.md).

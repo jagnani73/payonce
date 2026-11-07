@@ -7,7 +7,7 @@ The supplier view shows one Airwallex beneficiary record at a time: what PayOnce
 ### Records
 - A supplier record is one Airwallex beneficiary record: `obligations.beneficiary_id`, and `run_rows.beneficiary_id` for a pay row of the waiting run that no invoice holds yet.
 - A skip row never makes a record, since its id may be one Airwallex does not have.
-- The key in every route, link and command is the id, checked against `SUPPLIER_KEY_PATTERN` (`BENEFICIARY_ID_PATTERN` from `src/runs/run-file.ts`). A stored id outside the pattern is listed with `key: null` and no link.
+- The key in every route, link and command is the id, checked against `SUPPLIER_KEY_PATTERN` (`BENEFICIARY_ID_PATTERN` from `src/domain/patterns.ts`). A stored id outside the pattern is listed with `key: null` and no link.
 - Every control keys on the record (`lastPaidTransfer`, `verifiedBankChange`, `payeeRule`, the run check), so the view shows what the next payment is checked against.
 - Records are never merged. Records that share a name (`sameSupplier`, through `supplierNameKey`) or an account are linked, for display only.
 - Two records share an account when an account key is on file under both, or when both failed to one `rail_failures.payee`.
