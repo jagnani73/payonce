@@ -13,7 +13,7 @@ PayOnce reaches Airwallex through one HTTP client and one module per API area, a
 - An unset or empty `AWX_BASE_URL` is the default, `https://api.sandbox.airwallex.com`.
 - The refusal is in PayOnce's words. It names `AWX_BASE_URL`, the three addresses, and of the bad value only its host.
 - For a value with `|` in it, the refusal says it looks like the list of choices from `.env.example`, and to keep one of them.
-- `Settings.airwallex.client()` builds the client from `AWX_BASE_URL`, `AWX_CLIENT_ID` and `AWX_API_KEY` only when a command asks for it, so no copy of the settings holds the credentials.
+- `Settings.airwallex.client()` builds the client from `AWX_BASE_URL`, `AWX_CLIENT_ID` and `AWX_API_KEY` only when a command asks for it, so no copy of the settings holds the credentials. `Settings.airwallex.keys` says only whether each credential is set, for the settings view.
 - A missing credential throws "Missing environment variable X. Add X to .env", or with no `.env`, "Make a .env file in this folder from the setup lines under Run it in the README". `createEngine` returns that as its `problem`.
 - `AirwallexClient.host` is the host every call goes to. `describeAirwallex` is `pnpm ui`'s start-up line naming it, and on `OFFLINE_HOST` it says no call reaches Airwallex and nothing can be paid.
 - Every call uses `redirect: "manual"`. A 3xx, or an opaque redirect, is an `AirwallexError` in PayOnce's words, so a payment stays pending, as on a 5xx.

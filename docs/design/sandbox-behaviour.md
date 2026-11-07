@@ -57,7 +57,7 @@ This note records what the Airwallex sandbox and its simulator do, found by runn
 - Any other original gets the outcome `expectOriginal` recorded in this process, else what `outcomeOf` reads from the ledger (a pay run row's `sandbox_outcome`), else it is paid.
 - `expectOriginal` takes only a simulator name (`[A-Z_]+`). Anything else, such as the CLI's `-` placeholder, is ignored, and the bank pays the original.
 - The bank reads each sent transfer first, trying up to four times in all on a server error or a lost connection, as the simulation calls do.
-- A transfer that converts is left alone, and before its deadline the bank says so once.
+- A transfer that converts is left alone, and before its deadline (by the bank deadlines `SandboxBank` is given) the bank says so once.
 - `SandboxBankError` is thrown when the simulator refuses or does not answer a move, when a read the bank needs fails with an `AirwallexError` or `AirwallexUnreachableError`, or when `waitForTransfer` gives up on a transfer still `SCHEDULED` (`TransferWaitError`).
 - Any other error, such as a `TypeError`, is thrown unchanged, with its own message and stack trace.
 - A `SandboxBankError` is a `LineError` of kind `bank`. Its `what` is PayOnce's words: the simulator did not move transfer REF to a status this time, the bank could not read the transfer, the transfer stayed `SCHEDULED`, or the simulator does not move a transfer that converts.
@@ -84,7 +84,7 @@ This note records what the Airwallex sandbox and its simulator do, found by runn
 
 ### Sandbox routes
 
-- `pnpm ui` always serves the sandbox routes, since PayOnce only ever runs against the sandbox. `GET /api/sandbox` answers `SandboxView`: the scenarios, the bank outcomes, the email threads and the defaults.
+- `pnpm ui` always serves the sandbox routes, since PayOnce only ever runs against the sandbox. `GET /api/sandbox` answers `SandboxView`: the scenarios, the bank outcomes, the email threads and the defaults. The route hands `sandboxView` the scenarios and defaults from `engine/scenario.ts` as a `SandboxScenarios` (`views/sandbox.ts`), because the views do not import the engine.
 - `POST /api/sandbox/scenarios` starts a scripted incident and answers 202 with `PaymentCreated`. It refuses an unknown bank outcome, email thread or scenario (400), a due date `dueDateProblem` refuses (400), and a malformed invoice number (400).
 - It also refuses an invoice number already in the ledger or on the waiting run (409). A `dueDate` of null is no due date.
 - When Airwallex fails before the invoice is stored, it answers 502 with `airwallexAdvice`, and nothing is sent or stored. Otherwise the script runs in the background, and its failures go on the invoice's timeline.

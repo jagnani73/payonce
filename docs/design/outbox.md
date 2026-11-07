@@ -24,7 +24,7 @@ The outbox drafts messages for a person to send to the supplier or to Airwallex.
 - `checking` fits an open or escalated invoice with emails on file and promises nothing. It is suggested on an escalated invoice unless `payment-sent` or `callback-notice` is suggested.
 - `callback-notice` fits an open or escalated invoice with a phone on file when the findings say the supplier asks for new bank details or the reason's code is about bank details (`aboutBankDetailsReason`). It is always suggested.
 - `callback-notice` says PayOnce calls the number on file before paying any other account, and asks the supplier not to send bank details by email or in a reply. Without a phone it is listed in `notOffered`, with why.
-- `bank-trace` fits when an attempt is in flight (`inFlight`) past its bank deadline (`pastDeadline`, `deadlineMinutes` of the invoice's method). It is always suggested.
+- `bank-trace` fits when an attempt is in flight (`inFlight`) past its bank deadline (`pastDeadline`, `deadlineMinutes` of the invoice's method, with the bank deadlines the caller passes to `outboxOf`, `createDraft` and `markDraft`). It is always suggested.
 - `bank-trace` gives the reference, invoice, amount, the transfer's creation time and status, the method, and on a cross-currency invoice what the transfer took from the wallet. It gives no deadline.
 - `refund-trace` (audience `bank`) fits when reconciliation has an open `refund-missing` break on one of the invoice's own transfers, matched by `attempts.transfer_id` only (`ReconStore.refundBreaks`). The latest such attempt wins. It is always suggested.
 - `refund-trace` fits a settled or rejected invoice too.
@@ -50,7 +50,7 @@ The outbox drafts messages for a person to send to the supplier or to Airwallex.
 
 ### Timeline lines
 - Lines are kind `outbox` with topic `outbox:<id>`, appended by `DraftStore` inside the transaction that writes the draft. They are standing lines.
-- The lines: `Draft N for the supplier created by NAME: "LABEL". Text SHA-256 HASH. PayOnce does not send it`, `Draft N copied by NAME` (or `Draft N copied`), `Draft N marked sent by NAME. PayOnce did not send it`, and `Draft N dismissed by NAME: NOTE`.
+- The lines: `Draft N for the supplier created by NAME: "LABEL". Text SHA-256 HASH. PayOnce does not send it` ("for the bank" for a draft to Airwallex), `Draft N copied by NAME` (or `Draft N copied`), `Draft N marked sent by NAME. PayOnce did not send it`, and `Draft N dismissed by NAME: NOTE`.
 - The draft's text is never on the timeline.
 
 ### Where people see it
