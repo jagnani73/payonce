@@ -220,28 +220,6 @@
   color: var(--text-body);
 }
 
-/* ---------- forms in a card: fields side by side, the button at the end ---------- */
-
-.form-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 10px 14px;
-}
-
-.form-row > .field {
-  flex: 0 1 220px;
-}
-
-.form-row > .form-row__wide {
-  flex: 1 1 300px;
-  max-width: none;
-}
-
-.form-row > .action {
-  align-self: flex-end;
-}
-
 .form-note {
   font-size: 13px;
 }
@@ -531,20 +509,6 @@
 
   .facts dd {
     margin-bottom: 6px;
-  }
-
-  .form-row > .field,
-  .form-row > .form-row__wide {
-    flex: 1 1 100%;
-    max-width: none;
-  }
-
-  .form-row > .action {
-    width: 100%;
-  }
-
-  .form-row > .action > .btn {
-    width: 100%;
   }
 
   .recon-wallets,

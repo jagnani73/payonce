@@ -4,16 +4,12 @@ import { postJson } from "../../api";
 import { ActionButton, Details } from "../../components/Action";
 import { Field, NameField, type ControlProps } from "../../components/Form";
 import { Ref } from "../../components/Text";
-import { sameMe, useMe, useNameDraft } from "../../me";
-import { notify } from "../../notices";
-import { joinNames } from "../../text";
+import { useNameDraft } from "../../me";
 import type {
   Acted,
   ClosePaidOption,
   CloseUnpaidOption,
   CoveredTransferView,
-  EndOutageOption,
-  EndOutageResult,
   IncidentView,
   NamingPayoutView,
 } from "../../types";
@@ -140,97 +136,6 @@ export function CloseForm(props: { option: ClosePaidOption | CloseUnpaidOption; 
           });
           setNote("");
           props.acts.done(acted);
-        }}
-        onError={props.acts.refresh}
-      />
-    </div>
-  );
-}
-
-// The enders as a select when there is an approver list, a free name otherwise.
-function EnderField(props: { enders: string[] | null; value: string; onInput: (value: string) => void; error: string | null }): JSX.Element {
-  const enders: string[] | null = props.enders;
-  if (enders === null) {
-    return <NameField label="Ended by" value={props.value} onInput={props.onInput} error={props.error} hint="Anyone can end it while no approver list is set." />;
-  }
-  return (
-    <Field label="Ended by" class="field--name" error={props.error} hint={`${joinNames(enders, "or")} can end it.`}>
-      {(control: ControlProps): JSX.Element => (
-        <select
-          {...control}
-          class="select"
-          value={props.value}
-          onChange={(event: Event): void => props.onInput((event.currentTarget as HTMLSelectElement).value)}
-        >
-          {props.value === "" ? <option value="">Choose a name</option> : null}
-          {enders.map(
-            (ender: string): JSX.Element => (
-              <option key={ender} value={ender}>
-                {ender}
-              </option>
-            ),
-          )}
-        </select>
-      )}
-    </Field>
-  );
-}
-
-export function OutageForm(props: { option: EndOutageOption; acts: Acts }): JSX.Element {
-  const o: EndOutageOption = props.option;
-  const me: string | null = useMe();
-  const [picked, setPicked] = useState<string | null>(null);
-  const [note, setNote] = useState<string>("");
-  const [noteError, setNoteError] = useState<string | null>(null);
-  const [nameError, setNameError] = useState<string | null>(null);
-  const fromMe: string = me === null ? "" : (o.enders === null ? me : (o.enders.find((ender: string): boolean => sameMe(ender, me)) ?? ""));
-  const name: string = picked ?? fromMe;
-  return (
-    <div class="option-form">
-      <EnderField
-        enders={o.enders}
-        value={name}
-        error={nameError}
-        onInput={(value: string): void => {
-          setPicked(value);
-          setNameError(null);
-        }}
-      />
-      <Field label="Note" error={noteError} hint="Say why the rail is back.">
-        {(control: ControlProps): JSX.Element => (
-          <input
-            {...control}
-            class="input"
-            type="text"
-            maxLength={MAX_NOTE}
-            placeholder={`Airwallex confirmed ${o.rail} is back`}
-            value={note}
-            onInput={(event: Event): void => {
-              setNote((event.currentTarget as HTMLInputElement).value);
-              setNoteError(null);
-            }}
-          />
-        )}
-      </Field>
-      <ActionButton
-        kind="primary"
-        label={`End outage ${o.outageId}`}
-        busyLabel="Ending…"
-        disabled={!o.can.allowed}
-        reason={o.can.why?.text ?? null}
-        onAction={async (): Promise<void> => {
-          if (note.trim() === "" || name.trim() === "") {
-            setNoteError(note.trim() === "" ? "Add a note saying why the rail is back." : null);
-            setNameError(name.trim() === "" ? "Choose who is ending it." : null);
-            return;
-          }
-          const ended: EndOutageResult = await postJson<EndOutageResult>(`/api/outages/${o.outageId}/end`, {
-            endedBy: name.trim(),
-            note: note.trim(),
-          });
-          setNote("");
-          notify(ended.notice);
-          props.acts.refresh();
         }}
         onError={props.acts.refresh}
       />

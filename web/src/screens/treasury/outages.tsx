@@ -1,29 +1,18 @@
 import type { JSX } from "preact";
-import { useState } from "preact/hooks";
-import { postJson, type ApiError } from "../../api";
-import { ActionButton } from "../../components/Action";
-import { Field, NameField, type ControlProps } from "../../components/Form";
+import { EndOutageForm } from "../../components/EndOutage";
 import { Card } from "../../components/Layout";
 import { Callout } from "../../components/Notice";
 import { Empty, LoadError, Loading } from "../../components/States";
 import { Ref, Theirs, Time } from "../../components/Text";
 import { ToneBadge } from "../../components/Tone";
 import { useScrollTo } from "../../hooks";
-import { sameMe, useMe, useNameDraft } from "../../me";
-import { notify } from "../../notices";
 import type { Polled } from "../../poll";
 import { paymentHref, runHref } from "../../router";
-import type { EndOutageInput, EndOutageResult, OutageCardView, OutagesView } from "../../types";
+import type { EndOutageResult, OutageCardView, OutagesView } from "../../types";
 
 // Treasury › Outages (ia.md section 8.3): the rule, each active outage with what
 // it counted and what it pauses, the form to end it, and the outages that ended.
 // The Treasury screen polls GET /api/outages, since its tab shows the count.
-
-// What a form still needs, shown under its field.
-interface Missing {
-  name: string | null;
-  note: string | null;
-}
 
 type Pausing = OutageCardView["pausing"][number];
 
@@ -62,98 +51,6 @@ function List(props: { children: JSX.Element[] }): JSX.Element {
         ),
       )}
     </>
-  );
-}
-
-// Who ends it: the approver list when there is one, any name when there is none.
-function EndForm(props: { card: OutageCardView; polled: Polled<OutagesView> }): JSX.Element {
-  const card: OutageCardView = props.card;
-  const me: string | null = useMe();
-  const enders: string[] | null = card.end.enders;
-  const [typed, setTyped] = useNameDraft();
-  const [chosen, setChosen] = useState<string | null>(null);
-  const [note, setNote] = useState<string>("");
-  const [missing, setMissing] = useState<Missing>({ name: null, note: null });
-  const listed: string = enders?.find((name: string): boolean => me !== null && sameMe(name, me)) ?? enders?.[0] ?? "";
-  const endedBy: string = enders === null ? typed : (chosen ?? listed);
-
-  async function end(): Promise<void> {
-    const problems: Missing = {
-      name: endedBy.trim() === "" ? "Enter your name." : null,
-      note: note.trim() === "" ? "Add a note saying why the rail is back." : null,
-    };
-    setMissing(problems);
-    if (problems.name !== null || problems.note !== null) {
-      return;
-    }
-    const body: EndOutageInput = { endedBy: endedBy.trim(), note: note.trim() };
-    const result: EndOutageResult = await postJson<EndOutageResult>(`/api/outages/${card.id}/end`, body);
-    props.polled.replace(result.view);
-    notify(result.notice);
-  }
-
-  return (
-    <div class="form-row outage__form">
-      {enders === null ? (
-        <NameField
-          label="Ended by"
-          value={typed}
-          error={missing.name}
-          onInput={(value: string): void => {
-            setTyped(value);
-            setMissing((now: Missing): Missing => ({ ...now, name: null }));
-          }}
-        />
-      ) : (
-        <Field label="Ended by" class="field--name" error={missing.name}>
-          {(control: ControlProps): JSX.Element => (
-            <select
-              {...control}
-              class="select"
-              value={endedBy}
-              disabled={enders.length === 0}
-              onChange={(event: Event): void => setChosen((event.currentTarget as HTMLSelectElement).value)}
-            >
-              {enders.map(
-                (name: string): JSX.Element => (
-                  <option key={name} value={name}>
-                    {me !== null && sameMe(name, me) ? `${name} (you)` : name}
-                  </option>
-                ),
-              )}
-            </select>
-          )}
-        </Field>
-      )}
-      <Field label="Note" error={missing.note} class="form-row__wide">
-        {(control: ControlProps): JSX.Element => (
-          <input
-            {...control}
-            class="input"
-            type="text"
-            maxLength={200}
-            autocomplete="off"
-            placeholder={`Airwallex confirmed ${card.rail} is back`}
-            value={note}
-            onInput={(event: Event): void => {
-              setNote((event.currentTarget as HTMLInputElement).value);
-              setMissing((now: Missing): Missing => ({ ...now, note: null }));
-            }}
-          />
-        )}
-      </Field>
-      <ActionButton
-        label={`End outage ${card.id}`}
-        busyLabel="Ending…"
-        kind="primary"
-        onError={(error: ApiError): void => {
-          if (error.status === 404 || error.status === 409) {
-            props.polled.refresh();
-          }
-        }}
-        onAction={end}
-      />
-    </div>
   );
 }
 
@@ -211,7 +108,16 @@ function ActiveCard(props: { card: OutageCardView; polled: Polled<OutagesView> }
       </dl>
       {card.sendsText === null ? null : <p class="outage__sends">{card.sendsText}</p>}
       {card.end.allowed ? (
-        <EndForm card={card} polled={props.polled} />
+        <div class="outage__form">
+          <EndOutageForm
+            outageId={card.id}
+            rail={card.rail}
+            enders={card.end.enders}
+            row
+            onEnded={(result: EndOutageResult): void => props.polled.replace(result.view)}
+            onRefused={props.polled.refresh}
+          />
+        </div>
       ) : (
         <p class="outage__form outage__refused">{card.end.why?.text ?? "Nobody can end this outage now."}</p>
       )}

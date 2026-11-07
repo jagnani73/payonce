@@ -3,13 +3,14 @@ import { useState } from "preact/hooks";
 import { postJson } from "../../api";
 import { ActionButton } from "../../components/Action";
 import { ApproveForm, DecisionCard, OptionCard, Options, RequestLine, Signers } from "../../components/Decision";
+import { EndOutageForm } from "../../components/EndOutage";
 import { Field, NameField, type ControlProps } from "../../components/Form";
 import { Callout } from "../../components/Notice";
 import { Said, Theirs } from "../../components/Text";
 import { useNameDraft } from "../../me";
 import { notify } from "../../notices";
 import { joinNames, moneyText } from "../../text";
-import type { Acted, Caution, EndOutageOption, EndOutageResult, RunCashView, RunDecisionOption, RunRequestView, RunTermsView, RunView } from "../../types";
+import type { Acted, Caution, RunCashView, RunDecisionOption, RunRequestView, RunTermsView, RunView } from "../../types";
 
 // A waiting pay run's Decision panel (ia.md section 6, as the payment page's
 // 3.3): what an approval covers, the cautions, the signoffs, who can and can't
@@ -186,59 +187,6 @@ function CancelForm(props: { runId: number; onActed: (view: RunView) => void }):
   );
 }
 
-function EndOutageForm(props: { option: EndOutageOption; onEnded: () => void }): JSX.Element {
-  const [name, setName] = useNameDraft();
-  const [note, setNote] = useState<string>("");
-  const [missing, setMissing] = useState<boolean>(false);
-  const enders: string[] | null = props.option.enders;
-  return (
-    <div class="option-form">
-      <NameField
-        label="Ending as"
-        value={name}
-        onInput={setName}
-        hint={enders === null || enders.length === 0 ? undefined : `${joinNames(enders, "or")} can end it.`}
-      />
-      <Field label="What did you check?" error={missing ? "Say what you checked." : null}>
-        {(control: ControlProps): JSX.Element => (
-          <input
-            {...control}
-            class="input"
-            type="text"
-            maxLength={200}
-            required
-            placeholder="Airwallex status page shows USD local payouts working again"
-            value={note}
-            onInput={(event: Event): void => {
-              setNote((event.currentTarget as HTMLInputElement).value);
-              setMissing(false);
-            }}
-          />
-        )}
-      </Field>
-      <div>
-        <ActionButton
-          label={`End outage ${props.option.outageId}`}
-          busyLabel="Ending…"
-          kind="primary"
-          onAction={async (): Promise<void> => {
-            if (note.trim() === "") {
-              setMissing(true);
-              return;
-            }
-            const result: EndOutageResult = await postJson<EndOutageResult>(`/api/outages/${props.option.outageId}/end`, {
-              endedBy: name,
-              note: note.trim(),
-            });
-            notify(result.notice);
-            props.onEnded();
-          }}
-        />
-      </div>
-    </div>
-  );
-}
-
 function CashLine(props: { cash: RunCashView[] }): JSX.Element | null {
   if (props.cash.length === 0) {
     return null;
@@ -310,7 +258,7 @@ export function RunDecision(props: {
       ) : chosen.kind === "cancel" ? (
         <CancelForm runId={runId} onActed={props.onActed} />
       ) : (
-        <EndOutageForm option={chosen} onEnded={props.refresh} />
+        <EndOutageForm outageId={chosen.outageId} rail={chosen.rail} enders={chosen.enders} can={chosen.can} onEnded={props.refresh} onRefused={props.refresh} />
       )}
       <CashLine cash={props.view.cash.currencies} />
     </DecisionCard>

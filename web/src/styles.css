@@ -1384,6 +1384,27 @@ textarea {
   resize: vertical;
 }
 
+/* Fields side by side in a card, the button at the end. */
+.form-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 14px;
+}
+
+.form-row > .field {
+  flex: 0 1 220px;
+}
+
+.form-row > .form-row__wide {
+  flex: 1 1 300px;
+  max-width: none;
+}
+
+.form-row > .action {
+  align-self: flex-end;
+}
+
 .input[aria-invalid="true"],
 .textarea[aria-invalid="true"] {
   border-color: var(--danger);
@@ -2078,6 +2099,17 @@ textarea {
 
   .option__more {
     margin-left: 0;
+  }
+
+  .form-row > .field,
+  .form-row > .form-row__wide {
+    flex: 1 1 100%;
+    max-width: none;
+  }
+
+  .form-row > .action,
+  .form-row > .action > .btn {
+    width: 100%;
   }
 }
 

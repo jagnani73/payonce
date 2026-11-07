@@ -2,11 +2,12 @@ import type { JSX } from "preact";
 import { useEffect, useId, useState } from "preact/hooks";
 import { postJson } from "../../api";
 import { ApproveForm, DecisionCard, OptionCard, Options, RequestLine, Signers } from "../../components/Decision";
+import { EndOutageForm } from "../../components/EndOutage";
 import { Callout } from "../../components/Notice";
 import { Money, Said, Theirs, Time, When } from "../../components/Text";
 import type { Acted, Caution, DecisionOption, DecisionPanel, HeadroomLine, IncidentPhoneView, IncidentView, RequestView } from "../../types";
 import { CallbackForm } from "./callback";
-import { CloseForm, OutageForm, TraceForm } from "./forms";
+import { CloseForm, TraceForm } from "./forms";
 import type { Acts } from "./parts";
 import { CallbackPhone } from "./phone";
 import { Terms } from "./terms";
@@ -128,7 +129,7 @@ function OptionForm(props: { option: DecisionOption; acts: Acts }): JSX.Element 
     case "close-unpaid":
       return <CloseForm option={o} acts={acts} />;
     case "end-outage":
-      return <OutageForm option={o} acts={acts} />;
+      return <EndOutageForm outageId={o.outageId} rail={o.rail} enders={o.enders} can={o.can} onEnded={acts.refresh} onRefused={acts.refresh} />;
     case "trace":
       return <TraceForm acts={acts} allowed={o.can.allowed} why={o.can.why?.text ?? null} />;
   }
