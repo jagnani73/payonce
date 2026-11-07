@@ -37,15 +37,15 @@ How PayOnce records why an invoice went to a person, as text with codes beside i
 
 ### What live means
 
-- `domain/live.ts` defines each test of "live" for one transfer: `ownLive`, `mismatchedLive`, `liveAtBank`, `withBank`, `sending`, `inFlight`, `sentToBank`, `unrecognisedLive`, `unrecognisedPaid` and `unrecognisedUncleared`.
-- It also defines, for one transfer, `stillWithBank`, `nothingWithBank`, `keptFailedLive`, `neverSent`, `sentSomething` and `failedForGood`.
-- For one outside payout: `payoutLive`, `payoutNotFailed`, `payoutPays`, `payoutBlocking` and `payoutNamesOnly`.
+- `domain/live.ts` defines each test of "live" for one transfer: `ownLive`, `mismatchedLive`, `liveAtBank`, `withBank`, `sending`, `inFlight`, `unrecognisedLive`, `unrecognisedPaid` and `unrecognisedUncleared`.
+- It also defines, for one transfer, `stillWithBank`, `nothingWithBank`, `keptFailedLive` and `neverSent`.
+- For one outside payout: `payoutLive`, `payoutNotFailed`, `payoutPays` and `payoutNamesOnly`.
 - For one payment over its transfers and payouts: `lateBesideLive`, `paidOnce`, `paidByReplacement`, `closeRefusedBy`, `closesItself`, `paidOutside`, `paidMismatched`, `couldStillPay`, `heldBeforePaying` and `watching`.
 - For one request: `expiryOf`, `isExpired`, `awaitingSignoffs`, `approvedUnspent`, `requestOpen`, `requestExpired` and `approvedUnderway`.
 - `deadlineAt` counts a bank deadline from the creation time Airwallex gave. `pastDeadline` compares it with now, and with no creation time on file it asks whether the reason is a deadline reason.
-- The SQL guards in the store's write transactions are the same tests over rows: `LIVE_ATTEMPT` is `liveAtBank`, `LIVE_OUTSIDE_PAYOUT` is `payoutNotFailed`, `BLOCKING_OUTSIDE_PAYOUT` is `payoutBlocking`, `UNCLEARED_MISMATCH` is `unrecognisedUncleared` and `SENT_ATTEMPT` is `sentSomething`.
+- Three SQL guards in the store's write transactions are the same tests over rows: `LIVE_ATTEMPT` is `liveAtBank`, `LIVE_OUTSIDE_PAYOUT` is `payoutNotFailed` and `UNCLEARED_MISMATCH` is `unrecognisedUncleared`. Two have no test in code: `BLOCKING_OUTSIDE_PAYOUT` (a payout in flight, in an unknown status, or paid and paying the invoice) and `SENT_ATTEMPT` (an attempt with a transfer, or not failed).
 - Where a predicate restates a guard, the guard inside its write transaction stays the authority. `closeRefusedBy` restates what `CloseStore.settle` refuses, and settle's SQL decides.
-- `store/attempts.ts` and `store/approvals.ts` keep the store's own `liveAtBank`, `ownLive`, `mismatchedLive`, `withBank`, `lateBesideLive`, `expiryOf` and `isExpired`, with the same bodies.
+- The store keeps only the SQL forms. Where store code tests a row in TypeScript (`store/closes.ts`, `store/payouts.ts`, `store/read/`), it imports the test from `domain/live.ts`.
 
 ### The snapshot
 
@@ -87,7 +87,7 @@ How PayOnce records why an invoice went to a person, as text with codes beside i
 - The outbox suggests a callback notice by `aboutBankDetailsReason` and a bank trace on `inFlight` and `pastDeadline` ([outbox.md](outbox.md)).
 - Metrics count reasons by `familyOf`, and `REASON_LABELS` is keyed by family ([metrics.md](metrics.md)).
 - Ask why takes the escalation reason from its codes and reads every other reason text with `parseReason` and `parseClause` ([ask-why.md](ask-why.md)).
-- The incident board (`views/incident-board.ts`, `pnpm board`) reads the reason text, not the codes: it tests the text's start against `DEADLINE_REASONS` and `BANK_DETAILS_REASONS` ([incident-board.md](incident-board.md)).
+- The incident board (`views/incident-board.ts`, `pnpm board`) reads the reason text, not the codes: it tests the text's start against `DEADLINE_REASONS`, `BANK_DETAILS_REASONS` and `OUTAGE_REASON` ([incident-board.md](incident-board.md)).
 - The engine reads its own reasons by code where it needs to, takes `closeKindFor` for `pendingClose` and `paidByReplacement` for the look's own close, and reads no situation.
 
 ## Why
@@ -108,7 +108,7 @@ How PayOnce records why an invoice went to a person, as text with codes beside i
 - Older wordings still parse: the second bill's "case, spacing, zeros or a letter suffix" and the misdirected transfer's "the ones it was approved for". They carry `wording: "legacy"` and render back as written.
 - A rate mismatch can have no rate on the transfer, an amount that could not be read, or no approved quote at all, and each renders as the engine wrote it.
 - A held invoice whose reason is `unrecognised` has no codes to join a clause to, so the ask not to pay is added as text by `decide.ts`'s `namingNotToPay`, and the result stays `unrecognised`.
-- `account-unknown-before-send` (`ACCOUNT_UNKNOWN_REASON`) is family `bank-details`, label "Bank details not known before sending". Neither `accountChangedReason` nor the situation's `detailsChanged` names it, so its decision variant is `other` or `held`, not `details-changed`.
+- `account-unknown-before-send` (`ACCOUNT_UNKNOWN_REASON`) is family `bank-details`, label "Bank details not known before sending". The situation's `detailsChanged` names it, so it waits on a person as `details-changed`. Its next step says PayOnce does not know which details the payment was for and will not send it again. `accountChangedReason` does not name it, because the supplier caution that test feeds says the details changed.
 - `escalateIfOpen` leaves all four reason columns as they are on an invoice that is already escalated, so the reason it went to a person for stands.
 - An escalated payment whose own transfer is with the bank is `with-bank`, in the `with-bank` group, not `needs-you`. Alerts give it a need all the same ([alerts.md](alerts.md)).
 - A request whose terms do not parse is told apart by the invoice: a held invoice's is a payment, any other a replacement.
