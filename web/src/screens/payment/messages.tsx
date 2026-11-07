@@ -4,11 +4,11 @@ import { postJson } from "../../api";
 import { ActionButton } from "../../components/Action";
 import { Field, NameField, type ControlProps } from "../../components/Form";
 import { Empty } from "../../components/States";
-import { Theirs, Time } from "../../components/Text";
+import { Dotted, Theirs, Time } from "../../components/Text";
 import { ToneBadge } from "../../components/Tone";
 import { useNameDraft } from "../../me";
 import type { Acted, DraftOfferView, DraftView, IncidentView, MessagesTab as MessagesView, Tone } from "../../types";
-import { Dotted, sentence, type Acts } from "./parts";
+import type { Acts } from "./parts";
 
 // The Messages tab (ia.md 3.4): messages PayOnce drafts for a person to send,
 // suggested first, then the drafts on file. PayOnce never sends one: a person
@@ -280,7 +280,7 @@ export function MessagesTab(props: { view: IncidentView; acts: Acts; openDraft: 
           {m.notOffered.map(
             (item: { label: string; why: string }): JSX.Element => (
               <p class="pay-offers__not" key={item.label}>
-                {`Not offered: ${item.label}. ${sentence(item.why)}`}
+                {`Not offered: ${item.label}. ${item.why}`}
               </p>
             ),
           )}

@@ -2,11 +2,12 @@ import type { ComponentChildren, JSX } from "preact";
 import { useId, useState } from "preact/hooks";
 import { Icon } from "../../components/Icon";
 import { Card } from "../../components/Layout";
-import { Money, Ref, Said, Theirs, Time } from "../../components/Text";
+import { Dotted, Money, Ref, Said, Theirs, Time, When } from "../../components/Text";
 import { Tag, ToneBadge } from "../../components/Tone";
 import { paymentHref, runHref, supplierHref } from "../../router";
+import { capitalised } from "../../text";
 import type { IncidentRow, SupplierAccountView, SupplierListRow, SupplierView, WalletTotals } from "../../types";
-import { capital, Dotted, InvoiceLink, InvoiceLinks, When } from "./parts";
+import { InvoiceLink, InvoiceLinks } from "./parts";
 import { accountsText, CALLBACK_STATES, closedText, endingText, recordFacts, SECOND_BILL_KINDS, SEEN_AS } from "./words";
 
 // The supplier record's sections after the contact card (ia.md section 7, items
@@ -66,7 +67,7 @@ function Account(props: { account: SupplierAccountView; anyPaid: boolean; view: 
           {a.letter}
         </span>
         <span class="visually-hidden">{`Account ${a.letter}: `}</span>
-        {a.ending === null ? <span>{capital(a.label)}</span> : <span class="mono">{endingText(a.ending)}</span>}
+        {a.ending === null ? <span>{capitalised(a.label)}</span> : <span class="mono">{endingText(a.ending)}</span>}
         {a.onFile ? <Tag>On file</Tag> : null}
       </h3>
       <Seen account={a} />

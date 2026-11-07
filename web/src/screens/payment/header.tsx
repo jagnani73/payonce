@@ -1,13 +1,13 @@
 import type { JSX } from "preact";
 import { ActionButton } from "../../components/Action";
 import { Icon } from "../../components/Icon";
-import { Day, Money, Theirs, Time } from "../../components/Text";
+import { Day, Dotted, Money, Theirs, Time } from "../../components/Text";
 import { SituationHeader } from "../../components/Tone";
 import { postJson } from "../../api";
 import { runHref, supplierHref } from "../../router";
 import { parseDay, useNow } from "../../time";
 import type { Acted, IncidentView, PaymentFacts } from "../../types";
-import { Dotted, methodText, type Acts } from "./parts";
+import { methodText, type Acts } from "./parts";
 
 // The payment page's header (ia.md 3.1): what the payment is, its one state with
 // the next step and what blocks it, the incident on it, and Check now.

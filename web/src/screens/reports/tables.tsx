@@ -2,8 +2,8 @@ import type { ComponentChildren, JSX } from "preact";
 import { Card, Table, type Column } from "../../components/Layout";
 import { Time } from "../../components/Text";
 import { count } from "../../text";
+import { secondsText } from "../../time";
 import type { ReportsView } from "../../types";
-import { secondsText } from "../treasury/format";
 
 // The eight tables of Reports (ia.md section 9), from the metrics as the server
 // keeps them. Each says in one line what puts a row in the period. Amounts are

@@ -3,7 +3,7 @@ import { Details, LinkButton } from "../../components/Action";
 import { Icon } from "../../components/Icon";
 import { Card } from "../../components/Layout";
 import { Empty, LoadError, Loading } from "../../components/States";
-import { Theirs, Time } from "../../components/Text";
+import { Dotted, Theirs, Time } from "../../components/Text";
 import { useTitle } from "../../hooks";
 import { notify } from "../../notices";
 import { FAST_MS, SLOW_MS, usePoll, type Polled } from "../../poll";
@@ -11,7 +11,7 @@ import { supplierHref, type Route } from "../../router";
 import { cleanLine } from "../../text";
 import type { Acted, IncidentRow, SupplierAccountView, SupplierCaution, SupplierListRow, SuppliersView, SupplierView } from "../../types";
 import { ContactCard } from "./contact";
-import { Dotted, InvoiceLinks, sentence } from "./parts";
+import { InvoiceLinks } from "./parts";
 import { Accounts, Callbacks, InboxEmails, Messages, Outages, Payments, Related, RunRows, SecondBills, type Others } from "./sections";
 import { accountsText, endingText, phoneText, recordFacts } from "./words";
 
@@ -95,7 +95,7 @@ function Header(props: { view: SupplierView; others: Others }): JSX.Element {
               <Icon name="plus" />
               New payment to this supplier
             </button>
-            {view.can.newPayment.why === null ? null : <span class="action__reason">{sentence(view.can.newPayment.why.text)}</span>}
+            {view.can.newPayment.why === null ? null : <span class="action__reason">{view.can.newPayment.why.text}</span>}
           </span>
         )}
       </div>

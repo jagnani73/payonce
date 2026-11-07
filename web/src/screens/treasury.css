@@ -39,22 +39,6 @@
   color: var(--text-3);
 }
 
-/* ---------- figures in a wallet's own column ---------- */
-
-.figure {
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-
-.figure.is-negative {
-  color: var(--danger);
-  font-weight: 600;
-}
-
-.figure.is-empty {
-  color: var(--text-3);
-}
-
 /* ---------- the wallet table ---------- */
 
 .cash-table .table {

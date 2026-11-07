@@ -6,7 +6,7 @@ import { Field, NameField, type ControlProps } from "../../components/Form";
 import { Icon } from "../../components/Icon";
 import { Callout } from "../../components/Notice";
 import { Empty, LoadError, Loading } from "../../components/States";
-import { Ref, Theirs, Time } from "../../components/Text";
+import { Money, Ref, Theirs, Time } from "../../components/Text";
 import { ToneBadge } from "../../components/Tone";
 import { useNameDraft } from "../../me";
 import { notify } from "../../notices";
@@ -120,7 +120,7 @@ function CandidateLine(props: { candidate: CandidateView }): JSX.Element {
       <span class="sep" aria-hidden="true">
         {" · "}
       </span>
-      <span class="money">{candidate.amount.text}</span>
+      <Money money={candidate.amount} />
       <ToneBadge tone={candidate.situation.tone} label={candidate.situation.label} />
     </span>
   );

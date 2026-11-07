@@ -4,7 +4,7 @@ import type { Blocker, IncidentRow, Money as MoneyView, QueueItem, RowTag, RunRo
 import { waitingOnText } from "../words";
 import { LinkButton, type ButtonKind } from "./Action";
 import { Icon } from "./Icon";
-import { Money, Said, saidKey, Theirs, Time } from "./Text";
+import { Dotted, Money, Said, saidKey, Theirs, Time } from "./Text";
 import { Tag, ToneBadge } from "./Tone";
 
 // One payment or one pay run as a row of a queue: Home's lists, and the cards
@@ -13,25 +13,6 @@ import { Tag, ToneBadge } from "./Tone";
 
 // A row says these in words already, so their tags would repeat them.
 const SAID_IN_ROW: ReadonlySet<RowTag["code"]> = new Set<RowTag["code"]>(["blocked", "cross-currency"]);
-
-function Meta(props: { parts: ComponentChildren[] }): JSX.Element | null {
-  const parts: ComponentChildren[] = props.parts.filter((part: ComponentChildren): boolean => part !== null && part !== false);
-  if (parts.length === 0) {
-    return null;
-  }
-  return (
-    <span class="qrow__meta-text">
-      {parts.map(
-        (part: ComponentChildren, index: number): JSX.Element => (
-          <span key={index}>
-            {index === 0 ? null : " · "}
-            {part}
-          </span>
-        ),
-      )}
-    </span>
-  );
-}
 
 // "Waiting on: approvers · waiting 20 min · request open until 15:13".
 function paymentMeta(row: IncidentRow): ComponentChildren[] {
@@ -144,7 +125,7 @@ function PaymentRow(props: { row: IncidentRow; kind: ButtonKind; handling: boole
         )}
         {props.handling ? null : (
           <div class="qrow__meta">
-            <Meta parts={paymentMeta(row)} />
+            <Dotted class="qrow__meta-text" parts={paymentMeta(row)} />
             {tags.map(
               (tag: RowTag): JSX.Element => (
                 <Tag key={tag.code}>{tag.text}</Tag>
@@ -188,7 +169,8 @@ function RunRow(props: { row: RunRowItem; kind: ButtonKind }): JSX.Element {
           <Said text={row.next} />
         </p>
         <div class="qrow__meta">
-          <Meta
+          <Dotted
+            class="qrow__meta-text"
             parts={[
               <>
                 {"waiting "}

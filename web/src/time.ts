@@ -92,6 +92,27 @@ export function durationText(ms: number): string {
   return `${Math.floor(span / DAY_MS)}${NBSP}d`;
 }
 
+// "3 s", "12 min", "2 h 5 min", "3 d 4 h": how long a measured step took, for
+// a table. Null is "none".
+export function secondsText(seconds: number | null): string {
+  if (seconds === null) {
+    return "none";
+  }
+  if (seconds < 60) {
+    return `${seconds}${NBSP}s`;
+  }
+  const minutes: number = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}${NBSP}min`;
+  }
+  const hours: number = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return minutes % 60 === 0 ? `${hours}${NBSP}h` : `${hours}${NBSP}h ${minutes % 60}${NBSP}min`;
+  }
+  const days: number = Math.floor(hours / 24);
+  return hours % 24 === 0 ? `${days}${NBSP}d` : `${days}${NBSP}d ${hours % 24}${NBSP}h`;
+}
+
 // "12 min ago", "just now".
 export function agoText(date: Date, now: Date = new Date()): string {
   const ms: number = now.getTime() - date.getTime();

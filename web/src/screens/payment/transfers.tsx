@@ -1,10 +1,9 @@
 import type { JSX } from "preact";
 import { Details } from "../../components/Action";
-import { Money, Ref, Theirs, Time } from "../../components/Text";
+import { Dotted, Money, Ref, Theirs, Time } from "../../components/Text";
 import { ToneBadge } from "../../components/Tone";
 import { Empty } from "../../components/States";
 import type { IncidentView, TransferView } from "../../types";
-import { Dotted } from "./parts";
 
 // The Transfers tab (ia.md 3.4): every transfer on the payment, newest first,
 // each with its state, a failure in words, money, the account and what the

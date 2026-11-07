@@ -5,10 +5,10 @@ import { ActionButton } from "../../components/Action";
 import { Field, NameField, type ControlProps } from "../../components/Form";
 import { Icon } from "../../components/Icon";
 import { Callout, InlineError } from "../../components/Notice";
-import { Theirs, Time } from "../../components/Text";
+import { Dotted, Theirs, Time, When } from "../../components/Text";
 import { ToneBadge } from "../../components/Tone";
 import { useNameDraft } from "../../me";
-import { joinNames } from "../../text";
+import { capitalised, joinNames } from "../../text";
 import type {
   Acted,
   Can,
@@ -21,7 +21,6 @@ import type {
   SupplierView,
 } from "../../types";
 import { actionOf, SOURCES, type ConfirmInput, type ContactSource, type ProposeInput, type WithdrawInput } from "./contact-model";
-import { capital, Dotted, sentence, When } from "./parts";
 import { seenInEmailsText } from "./words";
 
 // "Contact on file" on the supplier record (supplier-contacts.md section 7): the
@@ -294,7 +293,7 @@ function ConfirmForm(props: { supplierKey: string; proposal: PhoneProposalView; 
         </>
       ) : (
         <div class="sup-proposal__off">
-          <p>{sentence(props.can.why?.text ?? "Nobody can confirm it now.")}</p>
+          <p>{props.can.why?.text ?? "Nobody can confirm it now."}</p>
           {withdrawButton}
         </div>
       )}
@@ -340,7 +339,7 @@ function WithdrawForm(props: { supplierKey: string; proposal: PhoneProposalView;
           </div>
         </>
       ) : (
-        <p class="sup-proposal__off">{sentence(props.can.why?.text ?? "Nobody can withdraw it now.")}</p>
+        <p class="sup-proposal__off">{props.can.why?.text ?? "Nobody can withdraw it now."}</p>
       )}
     </div>
   );
@@ -405,7 +404,7 @@ function Proposal(props: { supplierKey: string; view: SupplierView; proposal: Ph
         {proposal.source === null ? null : (
           <>
             <dt>Source</dt>
-            <dd>{capital(proposal.source)}</dd>
+            <dd>{capitalised(proposal.source)}</dd>
           </>
         )}
         {note === "" ? null : (
@@ -694,7 +693,7 @@ export function ContactCard(props: { view: SupplierView; onActed: Acting }): JSX
           </button>
         )}
       </div>
-      {propose === null || propose.allowed || propose.why === null ? null : <p class="sup-contact__why">{sentence(propose.why.text)}</p>}
+      {propose === null || propose.allowed || propose.why === null ? null : <p class="sup-contact__why">{propose.why.text}</p>}
       <PhoneLine supplierKey={key} contact={contact} />
       {proposing && propose !== null && propose.allowed ? (
         <ProposeForm supplierKey={key} first={first} onActed={acted} onCancel={(): void => setProposing(false)} />

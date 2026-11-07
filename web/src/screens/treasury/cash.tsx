@@ -5,11 +5,10 @@ import { ActionButton } from "../../components/Action";
 import { Icon } from "../../components/Icon";
 import { Callout } from "../../components/Notice";
 import { Empty, LoadError, Loading } from "../../components/States";
-import { Money, Ref, Time } from "../../components/Text";
+import { Figure, Money, Ref, Time } from "../../components/Text";
 import { FAST_MS, SLOW_MS, usePoll, type Polled } from "../../poll";
 import { paymentHref, runHref } from "../../router";
 import type { CashView, CashWorksheetGroup, WalletCashView } from "../../types";
-import { Figure } from "./format";
 
 // Treasury › Cash (ia.md section 8.1): one row per wallet down to its headroom,
 // and the worksheet of the wallet a person opens. GET /api/cash answers from the

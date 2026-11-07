@@ -1,3 +1,5 @@
+import type { Money } from "./types";
+
 // Text PayOnce did not write is cleaned before it is shown, as pnpm ask prints
 // it: format characters (bidi controls, zero-width characters and the rest of
 // Unicode's Cf) and the tag block are dropped, so a name cannot reverse or hide
@@ -32,4 +34,28 @@ export function joinNames(names: readonly string[], word: "or" | "and"): string 
 // "1 payment", "4 payments".
 export function count(n: number, one: string, many: string = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;
+}
+
+// "supplier emails arrived…" as the start of a line: a stored reason or summary
+// starts in lower case, because PayOnce also writes it inside a sentence.
+export function capitalised(text: string | null | undefined): string {
+  const clean: string = cleanLine(text);
+  return clean === "" ? clean : `${clean.charAt(0).toUpperCase()}${clean.slice(1)}`;
+}
+
+// A sentence ends with a full stop on the page, whether or not it came with one.
+export function sentenceEnd(text: string): string {
+  const trimmed: string = text.trim();
+  return trimmed === "" || /[.!?…]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
+const MINUS: string = String.fromCharCode(0x2212);
+
+// "4,000.00 EUR" as the view writes it, with a true minus sign when negative
+// ("−7.05 EUR", glossary.md section 4). bare: the figure without its currency,
+// for a column or a row that names the wallet already.
+export function moneyText(money: Money, bare: boolean = false): string {
+  const suffix: string = ` ${money.currency}`;
+  const figure: string = bare && money.currency !== "" && money.text.endsWith(suffix) ? money.text.slice(0, -suffix.length) : money.text;
+  return money.minor < 0 ? `${MINUS}${figure.replace(/^[-−]/, "")}` : figure;
 }

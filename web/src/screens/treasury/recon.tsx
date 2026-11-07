@@ -7,7 +7,7 @@ import { Icon } from "../../components/Icon";
 import { Card } from "../../components/Layout";
 import { Callout } from "../../components/Notice";
 import { Empty, LoadError, Loading } from "../../components/States";
-import { Ref, Theirs, Time } from "../../components/Text";
+import { Dotted, Money, Ref, Theirs, Time } from "../../components/Text";
 import { useNameDraft } from "../../me";
 import { notify } from "../../notices";
 import { FAST_MS, SLOW_MS, usePoll, type Polled } from "../../poll";
@@ -100,8 +100,9 @@ function BreakRow(props: { item: BreakItemView; picked: boolean; onPick: (picked
       <input id={id} type="checkbox" class="break__box" checked={props.picked} onChange={(event: Event): void => props.onPick((event.currentTarget as HTMLInputElement).checked)} />
       <label for={id} class="break__text">
         <span>{item.text}</span>
-        <span class="break__meta">
-          {[
+        <Dotted
+          class="break__meta"
+          parts={[
             item.currency,
             item.invoiceId === null ? null : (
               <a class="ref" href={paymentHref(item.invoiceId)}>
@@ -113,17 +114,8 @@ function BreakRow(props: { item: BreakItemView; picked: boolean; onPick: (picked
               {"found "}
               <Time at={item.openedAt ?? item.foundAt} />
             </>,
-          ]
-            .filter((part: JSX.Element | string | null): boolean => part !== null)
-            .map(
-              (part: JSX.Element | string | null, index: number): JSX.Element => (
-                <span key={index}>
-                  {index === 0 ? null : " · "}
-                  {part}
-                </span>
-              ),
-            )}
-        </span>
+          ]}
+        />
       </label>
     </li>
   );
@@ -342,7 +334,7 @@ function MovementList(props: { currency: string; moves: Moves }): JSX.Element {
                 {row.breakId === null ? null : ` · break ${row.breakId}`}
               </span>
             </span>
-            <span class="move__amount">{row.amount === null ? "Can't be read" : row.amount.text}</span>
+            <span class="move__amount">{row.amount === null ? "Can't be read" : <Money money={row.amount} />}</span>
           </li>
         ),
       )}
@@ -357,7 +349,12 @@ function WalletCard(props: { wallet: Wallet; breaks: number; moves: Moves | null
       <h3 class="recon-wallet__title">{w.currency}</h3>
       <p>{`${count(w.movements, "movement")} · ${props.breaks === 0 ? "no breaks" : count(props.breaks, "break")}`}</p>
       <p class={w.addsUp ? "recon-wallet__status" : "recon-wallet__status recon-wallet__status--check"}>{w.text}</p>
-      {w.reserved === null ? null : <p class="muted">{`Reserved by Airwallex: ${w.reserved.text}`}</p>}
+      {w.reserved === null ? null : (
+        <p class="muted">
+          {"Reserved by Airwallex: "}
+          <Money money={w.reserved} />
+        </p>
+      )}
       {w.movements === 0 ? null : (
         <button type="button" class="btn btn--secondary recon-wallet__toggle" aria-expanded={props.moves !== null} onClick={props.onToggle}>
           {props.moves === null ? "Show movements" : "Hide movements"}

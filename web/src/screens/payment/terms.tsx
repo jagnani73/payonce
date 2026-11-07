@@ -1,9 +1,10 @@
 import type { JSX } from "preact";
-import { Money, Ref, Theirs, Time } from "../../components/Text";
+import { Dotted, Money, Ref, Theirs, Time } from "../../components/Text";
 import { sameMe } from "../../me";
 import { paymentHref } from "../../router";
+import { capitalised } from "../../text";
 import type { ApproverChoice, Barred, DuplicateView, RequestView, TermsView } from "../../types";
-import { Dotted, PayTo, sentence } from "./parts";
+import { PayTo } from "./parts";
 
 // What an approval covers (ia.md 3.3, item 1): the request's terms line by line,
 // then who has signed, who can and who can't.
@@ -102,7 +103,7 @@ export function Terms(props: { terms: TermsView; wallet: string; callbackOnFile:
             <Time at={t.fx.validTo} mode="until" />
           </li>
         )}
-        <li>{`Why: ${sentence(t.reason.text)}`}</li>
+        <li>{`Why: ${capitalised(t.reason.text)}`}</li>
         {t.original === null ? null : <Original original={t.original} />}
         {t.emails === null ? null : <li>{`Emails: ${t.emails}`}</li>}
         {t.duplicates.map(

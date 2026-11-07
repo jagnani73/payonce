@@ -14,7 +14,6 @@ import { notify } from "../../notices";
 import type { Polled } from "../../poll";
 import { paymentHref, runHref } from "../../router";
 import type { EndOutageInput, EndOutageResult, OutageCardView, OutagesView } from "../../types";
-import { railWords, sentence } from "./format";
 
 // Treasury › Outages (ia.md section 8.3): the rule, each active outage with what
 // it counted and what it pauses, the form to end it, and the outages that ended.
@@ -134,7 +133,7 @@ function EndForm(props: { card: OutageCardView; polled: Polled<OutagesView> }): 
             type="text"
             maxLength={200}
             autocomplete="off"
-            placeholder={`Airwallex confirmed ${railWords(card.rail)} is back`}
+            placeholder={`Airwallex confirmed ${card.rail} is back`}
             value={note}
             onInput={(event: Event): void => {
               setNote((event.currentTarget as HTMLInputElement).value);
@@ -165,13 +164,13 @@ function ActiveCard(props: { card: OutageCardView; polled: Polled<OutagesView> }
     <article class="card outage" id={outageAnchor(card.id)} aria-labelledby={titleId} tabIndex={-1}>
       <div class="outage__head">
         <ToneBadge tone="blocked" label="Active" />
-        <h2 class="outage__title" id={titleId}>{`Outage ${card.id} on ${railWords(card.rail)}`}</h2>
+        <h2 class="outage__title" id={titleId}>{`Outage ${card.id} on ${card.rail}`}</h2>
         <span class="muted">
           {"active since "}
           <Time at={card.declaredAt} />
         </span>
       </div>
-      <p>{sentence(railWords(card.text))}</p>
+      <p>{card.text}</p>
       <dl class="facts">
         <dt>Codes</dt>
         <dd>
@@ -224,7 +223,7 @@ function EndedLine(props: { card: OutageCardView }): JSX.Element {
   const card: OutageCardView = props.card;
   return (
     <li class="ended" id={outageAnchor(card.id)} tabIndex={-1}>
-      {`Outage ${card.id} on ${railWords(card.rail)} · `}
+      {`Outage ${card.id} on ${card.rail} · `}
       <Time at={card.declaredAt} />
       {card.endedAt === null ? null : (
         <>

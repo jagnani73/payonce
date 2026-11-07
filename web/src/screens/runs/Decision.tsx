@@ -7,7 +7,7 @@ import { Callout } from "../../components/Notice";
 import { Said, Theirs, Time } from "../../components/Text";
 import { sameMe, useMe, useNameDraft } from "../../me";
 import { notify } from "../../notices";
-import { joinNames } from "../../text";
+import { joinNames, moneyText } from "../../text";
 import type {
   Acted,
   ApproverChoice,
@@ -434,9 +434,9 @@ function CashLine(props: { cash: RunCashView[] }): JSX.Element | null {
         (wallet: RunCashView, index: number): JSX.Element => (
           <span key={wallet.currency} class={wallet.short === null ? undefined : "is-warn"}>
             {index === 0 ? null : " · "}
-            {`${wallet.currency} wallet ${wallet.left === null ? "not known" : `${wallet.left.text} left`}`}
-            {wallet.floor === null ? ", no reserve floor set" : `, floor ${wallet.floor.text}`}
-            {wallet.short === null ? null : `, short by ${wallet.short.text}`}
+            {`${wallet.currency} wallet ${wallet.left === null ? "not known" : `${moneyText(wallet.left)} left`}`}
+            {wallet.floor === null ? ", no reserve floor set" : `, floor ${moneyText(wallet.floor)}`}
+            {wallet.short === null ? null : `, short by ${moneyText(wallet.short)}`}
           </span>
         ),
       )}

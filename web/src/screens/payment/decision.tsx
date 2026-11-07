@@ -6,7 +6,7 @@ import { useMe } from "../../me";
 import type { Caution, DecisionOption, DecisionPanel, HeadroomLine, IncidentPhoneView, IncidentView, RequestView } from "../../types";
 import { CallbackForm } from "./callback";
 import { ApproveForm, CloseForm, OutageForm, TraceForm } from "./forms";
-import { sentence, type Acts } from "./parts";
+import type { Acts } from "./parts";
 import { PhoneOnFile } from "./phone";
 import { Signers, Terms } from "./terms";
 
@@ -150,7 +150,7 @@ function OptionCard(props: {
               </span>
             ),
           )}
-          {off && o.can.why !== null ? <span class="pay-option__why">{sentence(o.can.why.text)}</span> : null}
+          {off && o.can.why !== null ? <span class="pay-option__why">{o.can.why.text}</span> : null}
         </span>
       </label>
       {o.kind === "callback" ? <PhoneOnFile phone={props.phone} supplierKey={props.supplierKey} blocked={off} /> : null}

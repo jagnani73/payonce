@@ -2,10 +2,10 @@ import type { JSX } from "preact";
 import { useId, useState } from "preact/hooks";
 import { postJson } from "../../api";
 import { ActionButton } from "../../components/Action";
-import { Said, Theirs, Time } from "../../components/Text";
+import { Said, Theirs, Time, WithRefs } from "../../components/Text";
 import { useSettings } from "../../settings";
 import type { AskWhyAnswer, IncidentView, SettingsView, SummaryBullet } from "../../types";
-import { WithRefs, type Acts } from "./parts";
+import type { Acts } from "./parts";
 
 // "What happened" (ia.md 3.2): up to five bullets PayOnce builds from the ledger,
 // and Ask why, where a model explains the same facts. The answer is never stored:

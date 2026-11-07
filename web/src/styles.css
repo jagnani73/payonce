@@ -185,6 +185,21 @@ textarea {
   color: var(--text-3);
 }
 
+/* An amount in a wallet's own column or row, without its currency. */
+.figure {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.figure.is-negative {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.figure.is-empty {
+  color: var(--text-3);
+}
+
 /* Text PayOnce did not write. Inline it reads as the mockup draws it; quoted
    inside PayOnce's own sentence it is set off by quotation marks; a block
    (an email body, a draft) sits in its own framed box. */

@@ -5,8 +5,8 @@ import { Icon } from "../../components/Icon";
 import { Callout } from "../../components/Notice";
 import { Empty } from "../../components/States";
 import { Theirs, Time } from "../../components/Text";
+import { capitalised } from "../../text";
 import type { EmailsTab as EmailsTabView, EmailView, IncidentView } from "../../types";
-import { sentence } from "./parts";
 
 // The Emails tab (ia.md 3.4): what PayOnce read in the supplier's emails, the
 // sender check, then each email as written. Everything in an email is text
@@ -26,7 +26,7 @@ function Read(props: { tab: EmailsTabView }): JSX.Element | null {
       <h3 class="pay-read__title">What PayOnce read</h3>
       {t.findings === null ? null : (
         <>
-          <p class="pay-read__summary">{t.findings.summary === "" ? "Nothing that affects this payment" : sentence(t.findings.summary)}</p>
+          <p class="pay-read__summary">{t.findings.summary === "" ? "Nothing that affects this payment" : capitalised(t.findings.summary)}</p>
           {t.findings.readBy === null ? null : (
             <p class="pay-read__line">
               {"Read by: "}
