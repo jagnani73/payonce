@@ -67,13 +67,11 @@ The policy is `decide` in `src/domain/decide.ts`. It is a pure function from an 
 
 Layers that sit beside each other (`text/` and the parser, the store and the Airwallex client, the engine and its subsystems) may import each other in one direction only, and the check fails on a cycle among them. A type-only import may also name a row, an Airwallex payload, a subsystem's record or the settings from any layer, but it never reaches into the engine, the views or a surface.
 
-Settings reach the code as arguments. The `Engine` carries the approval policy, the reserve floors, the bank deadlines, the quote validity and the outage rule, and their callers hand reconciliation and Ask why what they read. Alerts get the situations they alert on from a reader the server passes in (`SnapshotsOf`), which loads them the way the views do.
+Settings reach the code as arguments, and nothing keeps a loaded copy. The `Engine` carries the approval policy, the reserve floors, the bank deadlines, the quote validity and the outage rule, and callers hand reconciliation and Ask why the settings they read. The views take the bank deadlines and the outage rule from the `Settings` they are built with, and the outbox takes the deadlines from its caller. The sandbox route hands its view the scripted incidents, which live in `engine/scenario.ts`. Alerts get the situations they alert on from a reader the server passes in (`SnapshotsOf`), which loads them the way the views do.
 
-The check keeps a short list of imports that break the rule on purpose, each with its reason in the script:
+The check allows one exception, with its reason in the script:
 
 - `views/payment-check.ts` imports `engine/first-payment.ts` and `engine/new-payment.ts`. The New payment preview runs the same outage gate, holds and payee check as `startPayment`, on facts read without a lease, so it says what the start would do.
-- `views/incident-board.ts`, `views/settings-view.ts`, `views/snapshot.ts` and `outbox/drafts.ts` take a bank deadline from `deadlineMinutes` in `settings.ts`, which reads the loaded settings, because their callers do not pass settings yet. `outagesReport` in `outages/outages.ts` reads the outage rule the same way. These are the last callers of `currentSettings`.
-- `domain/situation.ts` imports `capitalise` from `text/printable.ts`.
 
 The engine and the policy never read the views, reconciliation, metrics, the supplier view, Ask why or the MCP server. Those read the ledger and move no money.
 
