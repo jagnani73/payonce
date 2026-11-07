@@ -78,7 +78,7 @@ A person uploads a raw supplier email on the page. PayOnce parses it, matches it
 - `candidatesFor` takes an `InvoiceIndex` from `invoiceIndex`, so several uploads matched against one ledger share one index.
 - Exact matches rank first, then the subject before the body before attachment names. Each candidate says whether the email's sender passes the check against that invoice's supplier domain.
 - An invoice is suggested only when exactly one invoice matches, in any state, that invoice is open or escalated, and its number was not found as all digits next to other digits.
-- Nothing is delivered by itself. A person presses Deliver beside the suggestion ("Deliver to INV-..."), beside another candidate, or after typing another invoice number (`web/src/screens/inbox/Item.tsx`).
+- Nothing is delivered by itself. A person presses Deliver beside the suggestion ("Deliver to INV-..."), beside another candidate, or after typing another invoice number, on the Inbox screen (`web/src/screens/inbox/`).
 
 ### Delivering
 

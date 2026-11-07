@@ -311,7 +311,7 @@ The SQLite ledger: its tables, columns, indexes and triggers, its transactions, 
 - A number already on file reaching `openObligation`, as when another process opened it after `openPayment`'s check, writes nothing, not even a line, and the caller gets the row on file.
 - A held invoice whose `duplicate_of` does not parse stays held, and `pendingApproval` throws on it too, so nobody can approve paying it.
 - In a view, unreadable terms or a kept quote give the panel's line amount no quote, the board tells a held request from a replacement by the invoice, and findings that do not parse or fit their shape (such as `{}`) stand as not read.
-- An outage with no readable codes says "a rail-level code", as its alert does, and the Outages card (`web/src/screens/treasury/outages.tsx`) shows "none on file".
+- An outage with no readable codes says "a rail-level code", as its alert does, and its card on Treasury's Outages tab (`web/src/screens/treasury/`) shows "none on file".
 - The stored shapes accept every version on file. A replacement's terms may lack `accountKey` (rows before 2026-10-28) and `evidence.emails` (the first terms), and `evidence.bankChange` may be missing or null. Held terms always have `accountKey`.
 - Stored findings may lack `asksNotToPay`, `emailsRead`, `unread`, `unverifiedSenders` and `readBy`.
 - A line with no hash, written by older code, is reported as written outside the chain, and the next line chains from the last line with a hash.

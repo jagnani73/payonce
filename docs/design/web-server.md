@@ -178,7 +178,7 @@ The table lists every route in `src/surfaces/http/routes/`. Views and their buil
 - The page renders the server's views and keeps no copy of a rule, a failure-code table or a wording.
 - It talks to the server only by JSON GETs and POSTs under /api/ (`getJson` and `postJson` in `web/src/api.ts`), sent `no-store` and same-origin.
 - `index.html` loads one module script and one stylesheet, both from the server. The page has no inline script or style, no `style` attribute in HTML, no outside request and only system fonts. Preact's `style` prop sets CSSOM properties, which the CSP allows.
-- Text PayOnce did not write goes through `<Theirs>` (`web/src/components/Text.tsx`): cleaned by `cleanLine` or `cleanBlock`, isolated in `<bdi>`, and only ever a text node.
+- Text PayOnce did not write goes through `<Theirs>` (in `web/src/components/`): cleaned by `cleanLine` or `cleanBlock`, isolated in `<bdi>`, and only ever a text node.
 - Nothing in the page uses `dangerouslySetInnerHTML`.
 - A refusal shows beside the button that caused it, in the server's words, cleaned. An action's notice shows as a toast.
 - A time shows in the viewer's time zone on a 24-hour clock, "14:20" today and "6 Nov, 14:20" on another day (`web/src/time.ts`). `parseIso` gives null for anything that is not a non-empty string.

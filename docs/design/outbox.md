@@ -1,6 +1,6 @@
 # Outbox
 
-The outbox drafts messages for a person to send to the supplier or to Airwallex. PayOnce never sends them. The code is `src/outbox/drafts.ts` (the templates, `outboxOf`, `createDraft`, `markDraft`, `textHash`, `MOVES_FROM`), the `outbox` table in `src/store/drafts.ts`, `pnpm outbox` (`src/surfaces/cli/outbox.ts`), the routes in `src/surfaces/http/routes/outbox.ts` and the payment page's Messages tab (`web/src/screens/payment/messages.tsx`). It leans on the reason codes ([reasons.md](reasons.md)), the phone on file ([supplier-contacts.md](supplier-contacts.md)), the route advisory ([route-advisory.md](route-advisory.md)) and reconciliation's breaks ([reconciliation.md](reconciliation.md)).
+The outbox drafts messages for a person to send to the supplier or to Airwallex. PayOnce never sends them. The code is `src/outbox/drafts.ts` (the templates, `outboxOf`, `createDraft`, `markDraft`, `textHash`, `MOVES_FROM`), the `outbox` table in `src/store/drafts.ts`, `pnpm outbox` (`src/surfaces/cli/outbox.ts`), the routes in `src/surfaces/http/routes/outbox.ts` and the payment page's Messages tab (`web/src/screens/payment/`). It leans on the reason codes ([reasons.md](reasons.md)), the phone on file ([supplier-contacts.md](supplier-contacts.md)), the route advisory ([route-advisory.md](route-advisory.md)) and reconciliation's breaks ([reconciliation.md](reconciliation.md)).
 
 ## Rules
 

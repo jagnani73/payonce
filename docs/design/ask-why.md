@@ -1,6 +1,6 @@
 # Ask why
 
-A person asks a model why PayOnce did what it did on one invoice. The facts are built in `src/explain/why-facts.ts`, the model call, what is shown and the page's limits are in `src/explain/explainer.ts`, the route is `src/surfaces/http/routes/why.ts`, the CLI is `src/surfaces/cli/ask.ts` and the card is in `web/src/screens/payment/summary.tsx`. The model services are the email reader's ([email-reader.md](email-reader.md)), and every reason is read through the grammar in [reasons.md](reasons.md).
+A person asks a model why PayOnce did what it did on one invoice. The facts are built in `src/explain/why-facts.ts`, the model call, what is shown and the page's limits are in `src/explain/explainer.ts`, the route is `src/surfaces/http/routes/why.ts`, the CLI is `src/surfaces/cli/ask.ts` and the card is in the payment page's summary (`web/src/screens/payment/`). The model services are the email reader's ([email-reader.md](email-reader.md)), and every reason is read through the grammar in [reasons.md](reasons.md).
 
 ## Rules
 

@@ -111,7 +111,7 @@ The supplier view shows one Airwallex beneficiary record at a time: what PayOnce
 - The record is polled every 5 seconds, and every 1.5 seconds while PayOnce is working on one of its payments.
 - The record shows its header, the cautions, the contact on file beside the accounts, then each section that has something to show: payments, callbacks, possible second bills, pay run rows, inbox emails, messages, outages and related records.
 - When the record has related records, the page also reads `GET /api/suppliers` every 30 seconds, to tell the others apart by currency, method, account ending and phone ending.
-- Names and other text PayOnce did not write go through `Theirs` (`web/src/components/Text.tsx`), which cleans them with `cleanLine` and puts them in text nodes ([web-server.md](web-server.md)).
+- Names and other text PayOnce did not write go through `<Theirs>` (in `web/src/components/`), which cleans them with `cleanLine` and puts them in text nodes ([web-server.md](web-server.md)).
 
 ### `pnpm supplier`
 - `pnpm supplier` prints the list, or one record's sections ([cli.md](cli.md)). A word is a record id first, then an invoice number, which prints "INV pays supplier record X" first. Any other word prints the usage and exits 1.

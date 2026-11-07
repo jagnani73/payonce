@@ -96,7 +96,7 @@ Reconciliation matches every wallet movement in Airwallex's balance history to t
 - `GET /api/reconcile` answers `reconReport` as a `ReconView` (`reconView` in `src/views/treasury.ts`).
 - `GET /api/reconcile/movements?currency=USD` gives the 500 newest stored movements, with what explains each now, from the matcher run again with no balances (`movementsView`).
 - `POST /api/reconcile/explain` takes `{ breaks: [{ id, fingerprint }], explainedBy, note }`. It answers 200 with the `ReconView` and a notice, 400, 404 with `unknown`, or 409 with `changed`. The route table is in [web-server.md](web-server.md).
-- On the page, reconciliation is the Reconciliation tab of Treasury (`web/src/screens/treasury/recon.tsx`). `#recon` redirects to it (`web/src/router.ts`), and the tab reads `/api/reconcile` only while it is on screen.
+- On the page, reconciliation is the Reconciliation tab of Treasury (`web/src/screens/treasury/`). `#recon` redirects to it (`web/src/router.ts`), and the tab reads `/api/reconcile` only while it is on screen.
 - The tab shows the last check with Check now, a card per wallet with its movements on request, the breaks that need a person by kind with a checkbox each and a name and note form, what is waiting, the last explanations and the audit line.
 - The alert condition is `recon`, standing while any break is open. Its fingerprint is the highest `recon_events` id of kind `found`, `changed` or `reopened` in any state.
 - The break the alert names is the open one with the newest such line, so a break found once and opened on a later check is named on the alert its own line raised.
