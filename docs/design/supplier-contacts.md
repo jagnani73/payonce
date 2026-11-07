@@ -48,7 +48,7 @@ A callback is how PayOnce checks new bank details, so the phone number it is mad
 - A proposal line names the number by its last four digits only, so the confirmer has to find it themselves. The confirm line, the record of what went on file, gives the full number.
 - `escalation_reason` never holds a phone number. No new escalation reason comes from a contact change.
 - An alert `contact:<beneficiary id>` goes out while a person's proposal waits and for 24 hours after one went on file; a changed number is urgent. Its facts never carry the number, a domain or a person's name ([alerts.md](alerts.md)).
-- The full number is served only by `GET /api/suppliers/:key/contact`, which MCP has no tool for. Every other view gives the last four digits. MCP masks every number the ledger holds (`Ledger.storedPhones()`).
+- The full number is served by `GET /api/suppliers/:key/contact` and by the callback form (`GET /api/incidents/:id/bank-details`, `phoneOnFile`), and the timeline's confirm, callback and waiting lines quote it. Every other view field gives the last four digits. MCP has no tool for either route, and it masks every number the ledger holds (`Ledger.storedPhones()`).
 
 ## Why
 
@@ -71,7 +71,7 @@ A callback is how PayOnce checks new bank details, so the phone number it is mad
 - Confirming a lapsed proposal is refused with the lapse line and "Propose it again".
 - A look that read the record before a change and opens a request after it is caught before the spend, because `verifiedBankChange` no longer verifies the callback.
 - A payout sent outside PayOnce to an account whose callback was retired stops counting as paying the invoice, because the payout's verdict reads `verifiedBankChange`. A person can still close the invoice without paying.
-- A removal confirmed by two people leaves `''` on file. The record reads as having no phone, and the `no-phone` caution says to put one on file.
+- A removal confirmed by two people leaves `''` on file. The record reads as having no phone and gets no `phone-changed` caution. The `no-phone` caution, on an invoice that needs a callback, says to put one on file.
 
 ## Not built
 
