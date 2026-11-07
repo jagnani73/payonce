@@ -65,6 +65,7 @@ The ops metrics: eight tables of how a period went, built from the ledger alone 
 - The Reports screen (`web/src/screens/reports.tsx`) is `#reports`, with `?period=30d` or `?period=all` in the address. Three period buttons carry `aria-pressed`. `#metrics` redirects to `#reports`.
 - Reports polls `GET /api/reports` 30 seconds after the last answer or failure. It keeps the shown period on screen until another period's answer lands, and says that one is loading.
 - Reports shows the tiles, the ledger-wide audit card and the eight tables (`ReportTables`). A period with nothing at all in it says so and offers the period since the ledger started.
+- The `second-bills` tile, "Second bills closed without paying", sums the duplicates table's `stopped`: invoices held as a likely second bill that a person closed without paying. Its `sub` gives their amounts by currency.
 - `pnpm metrics [7d|30d|all] [json]` opens `payonce.db` read-only, loads no `.env`, and prints each table in the page's order in its own words, with the period's bounds as ISO times in UTC. With `json` it prints the route's answer through `printableJson`.
 - `pnpm metrics` refuses a missing file and a file `schemaGaps` finds gaps in, and says to restart `pnpm ui` or run `pnpm board` once, which upgrades it.
 - The MCP `metrics` tool takes an optional `period` and answers `reportsView`: the tiles and the report. `REPORTS_FIELDS` (in `src/views/outside-fields.ts`) lists its plain paths: the tiles' three fields, the paths of those fixed words and the four label paths. Every other string is a token, money text included, so nothing in its answer is wrapped.
@@ -79,6 +80,7 @@ The ops metrics: eight tables of how a period went, built from the ledger alone 
 - Every JSON read is wrapped in `json_valid` because SQLite evaluates both sides of an AND, and a JSON function throws on text that is not JSON. Without it, one bad row would fail the whole report.
 - The report is cached by the change stamp and the minute. Durations still running and requests open now move with the clock, so a cached report is kept for at most a minute even when nothing was written.
 - A refusal with no code is still a refusal, since `refused_at` is written on every refusal and tells a 4xx without a code apart from an attempt Airwallex never created.
+- The second bills tile leaves out pay run rows skipped as likely second bills. Such a row never becomes an invoice, its skip reason is text with no code, and the duplicates table counts held invoices by their state. Counting the rows would need a skip code on run rows.
 
 ## Edge cases
 
@@ -89,6 +91,7 @@ The ops metrics: eight tables of how a period went, built from the ledger alone 
 - A stored code such as `toString` or `constructor` gets no label, and in the failures table it counts as `other` unless it is five digits.
 - When reason codes do not render the text, as when an older PayOnce rewrote the reason, the text is parsed instead, and the first such row in a process logs one warning.
 - A held duplicate released and paying counts as released, not still held.
+- A row a pay run skipped as a likely second bill does not move the second bills tile. With no held invoice closed without paying, the tile reads 0 even after a run skipped one.
 - An invoice called `metrics` has its page at `#incident/metrics`, and `#metrics` goes to Reports.
 - With no reconciliation tables yet, the breaks table has `ran: false` and no rows.
 
