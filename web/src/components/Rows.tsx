@@ -4,7 +4,7 @@ import type { Blocker, IncidentRow, Money as MoneyView, QueueItem, RowTag, RunRo
 import { waitingOnText } from "../words";
 import { LinkButton, type ButtonKind } from "./Action";
 import { Icon } from "./Icon";
-import { Dotted, Money, Said, saidKey, Theirs, Time } from "./Text";
+import { Dotted, Money, Said, saidKey, Theirs, Time, When } from "./Text";
 import { Tag, ToneBadge } from "./Tone";
 
 // One payment or one pay run as a row of a queue: Home's lists, and the cards
@@ -14,7 +14,8 @@ import { Tag, ToneBadge } from "./Tone";
 // A row says these in words already, so their tags would repeat them.
 const SAID_IN_ROW: ReadonlySet<RowTag["code"]> = new Set<RowTag["code"]>(["blocked", "cross-currency"]);
 
-// "Waiting on: approvers · waiting 20 min · request open until 15:13".
+// "Waiting on: approvers · waiting 20 min · request open until 15:13". A closed
+// payment waits for nothing: its time is when it closed.
 function paymentMeta(row: IncidentRow): ComponentChildren[] {
   const s: IncidentRow["situation"] = row.situation;
   const who: string | null = waitingOnText(s.waitingOn);
@@ -27,7 +28,12 @@ function paymentMeta(row: IncidentRow): ComponentChildren[] {
         <Time at={deadline} />
       </>
     ) : null,
-    row.waitingSince === null ? null : (
+    row.waitingSince === null ? null : s.group === "closed" ? (
+      <>
+        {"closed "}
+        <When at={row.waitingSince} />
+      </>
+    ) : (
       <>
         {"waiting "}
         <Time at={row.waitingSince} mode="age" />

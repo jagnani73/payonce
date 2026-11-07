@@ -209,8 +209,7 @@ export function PaymentsTable(props: { groups: Group[]; headings: boolean }): JS
 }
 
 // On a phone each payment is a queue card, as on Home. The payments PayOnce is
-// handling, and closed ones, get Home's shorter cards with only Open: a queue
-// card's "waiting 4 d" would read wrong on a closed payment.
+// handling get Home's shorter cards, with the blocker and only Open.
 export function PaymentCards(props: { groups: Group[]; headings: boolean }): JSX.Element {
   return (
     <>
@@ -223,7 +222,7 @@ export function PaymentCards(props: { groups: Group[]; headings: boolean }): JSX
                 <span class="count-pill">{group.total}</span>
               </h2>
             ) : null}
-            {group.group === "payonce" || group.group === "closed" ? (
+            {group.group === "payonce" ? (
               <HandlingRows rows={group.rows} />
             ) : (
               <QueueRows items={group.rows.map((row: IncidentRow): QueueItem => ({ type: "payment", row }))} />
