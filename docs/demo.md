@@ -116,7 +116,7 @@ That ends at 4:35 and leaves 25 seconds for the sandbox.
 
 ### 3. The floor (2:25, 40 s)
 
-- Do: Home, then Review and approve on the EUR payment (Example Supplier GmbH, 4,000.00 EUR). Scroll to the timeline and click the first "Show 1 system line", which opens them all. Read the lines from the bottom up.
+- Do: Home, then Review and approve on the EUR payment (Example Supplier GmbH, 4,000.00 EUR). Scroll to the timeline and read the lines from the bottom up. Warning and decision lines never fold away, so the lines this beat needs are already on screen.
 - Say: "Same failure as the pay run row, a channel timeout. The plan was to wait while the bank had it. Then new information: it failed, and the bank keeps the fee on a failed SWIFT transfer, so a replacement pays 13.91 EUR a second time. With that fee the wallet goes below its floor. So the decision changed: this one goes to a person instead of being resent." (26, 27)
 - Point at the warning line ("A replacement costs 4,013.91 EUR with a second 13.91 EUR transfer fee. Cash after it ..., reserve floor ...") and the decision under it ("Sent to a person: a replacement and its transfer fee would push cash below the reserve floor").
 - Say: "This scripted invoice carries a tight floor of its own, so the demo can run short of cash without draining the sandbox."
@@ -184,9 +184,5 @@ The duplicate lock test, the callback and reconciliation make none. Every take n
 
 On 7 November 2026 the script ran against `feat/page` (8e708cb) with Airwallex faked by the replay rig, in real time, on Chrome at 1566 CSS pixels: the setup script, then every beat as written, the MCP `waiting_for` and `audit` answers, and `pnpm run audit`. No sandbox call was made, so the sandbox times above come from the runs on 6 October and 3 November. Things to know from that run:
 
-- After Record callback, the Decision panel stays on Record a callback with an empty form. Choose Approve this replacement yourself.
-- After Yash signs, Approving as stays on "Yash · signed already". Pick Kim yourself.
-- With You are set, Home lists the same three payments twice: under Waiting for your approval and under Needs you.
-- "What happened" prints times with no space before them ("failed at the bank at06:25").
-- The warning line that explains the floor decision is a system line, so it is hidden until you click Show system line.
+- Later commits on `feat/page` fixed five page problems this run found: the Decision panel now moves on after a callback, Approving as moves off a name that has signed, Home lists each payment once with its reason, times have a space before them, and warning lines never fold away.
 - Reports' Second bills closed without paying counts only invoices held as second bills, so it reads 0 although the run skipped one. Paid the first time reads 0%, because every payment this morning failed on purpose. Skip both tiles.
