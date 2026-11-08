@@ -140,6 +140,7 @@ function keptAccount(attempt: Attempt, payTo: string | null, detail: SupplierDet
 
 function ownTransfer(snapshot: InvoiceSnapshot, attempt: Attempt, detail: SupplierDetail | null, now: number): TransferView {
   const state: TransferState = transferState(attempt);
+  const paidAt: string | null = snapshot.times.paidAt[snapshot.attempts.indexOf(attempt)] ?? null;
   const due: number | null = deadlineAt(attempt, snapshot.deadlineMinutes);
   const request: RequestSnapshot | undefined = snapshot.requests.find(
     (item: RequestSnapshot): boolean => item.approval.id === attempt.approvalId,
@@ -156,6 +157,7 @@ function ownTransfer(snapshot: InvoiceSnapshot, attempt: Attempt, detail: Suppli
     took: attempt.amountMinor === null || attempt.currency === null ? null : money(attempt.amountMinor, attempt.currency),
     fee: attempt.feeMinor === null || attempt.feeCurrency === null ? null : money(attempt.feeMinor, attempt.feeCurrency),
     sentAt: attempt.bankCreatedAt,
+    paidAt: state === "paid" ? paidAt : null,
     deadlineAt: iso(due),
     pastDeadline: inFlight(attempt) && pastDeadline(attempt, snapshot.deadlineMinutes, snapshot.reason, now),
     account:
@@ -194,6 +196,7 @@ function unrecognisedTransfer(attempt: Attempt): TransferView {
         : money(attempt.mismatchedAmountMinor, attempt.mismatchedCurrency),
     fee: null,
     sentAt: null,
+    paidAt: null,
     deadlineAt: null,
     pastDeadline: false,
     account: null,
@@ -226,6 +229,7 @@ function payoutTransfer(snapshot: InvoiceSnapshot, payout: OutsidePayout, index:
     took: payout.amountMinor === null || payout.currency === null ? null : money(payout.amountMinor, payout.currency),
     fee: payout.feeMinor === null || payout.feeCurrency === null ? null : money(payout.feeMinor, payout.feeCurrency),
     sentAt: snapshot.times.foundAt[index] ?? null,
+    paidAt: null,
     deadlineAt: null,
     pastDeadline: false,
     account: { ...(accountView(null, payout.sentEnding ?? null) ?? { label: "an account PayOnce did not read", ending: null }), check: "outside" },

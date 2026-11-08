@@ -112,6 +112,12 @@ function Transfer(props: { transfer: TransferView; wallet: string }): JSX.Elemen
         </p>
       )}
       <AccountLine transfer={t} />
+      {t.paidAt === null ? null : (
+        <p class="pay-transfer__line">
+          {"Paid "}
+          <Time at={t.paidAt} />
+        </p>
+      )}
       {t.onRequest === null ? null : (
         <p class="pay-transfer__line">
           {`On request #${t.onRequest.id}`}
@@ -160,7 +166,6 @@ function Transfer(props: { transfer: TransferView; wallet: string }): JSX.Elemen
           { label: "Transfer id", value: t.details.transferId, copy: true },
           { label: "Request id", value: t.details.requestId, copy: true },
           { label: "Bank status", value: t.details.bankStatus },
-          { label: "Created at", value: t.details.createdAt },
           { label: "Failure code", value: t.failure?.code ?? null },
         ]}
       />

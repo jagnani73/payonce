@@ -434,6 +434,9 @@ export interface TransferView {
   took: Money | null;
   fee: Money | null;
   sentAt: Iso | null;
+  // When the ledger recorded the bank paying it. Null until then, and for a
+  // transfer PayOnce did not send.
+  paidAt: Iso | null;
   deadlineAt: Iso | null;
   pastDeadline: boolean;
   account: (AccountView & { check: "matches" | "misdirected" | "not-kept" | "no-details" | "outside" }) | null;
