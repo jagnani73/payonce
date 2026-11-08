@@ -740,6 +740,37 @@ export function breakView(item: ReconBreak): BreakView {
   };
 }
 
+export interface MissingRefund {
+  currency: string;
+  invoiceId: string | null;
+  reference: string | null;
+  // Null when the stored facts give no amount PayOnce can read.
+  expectedMinor: number | null;
+}
+
+// Money that left a wallet on a failed transfer and has not come back, from the
+// open refund missing breaks. The cash view shows it beside its figures, never in
+// them: available and headroom already leave it out.
+export function missingRefunds(ledger: Ledger): MissingRefund[] {
+  return ledger
+    .recon()
+    .openBreaksOf("refund-missing")
+    .map((item: ReconBreak): MissingRefund => {
+      let expected: unknown;
+      try {
+        expected = (JSON.parse(item.facts) as { expectedMinor?: unknown }).expectedMinor;
+      } catch {
+        expected = null;
+      }
+      return {
+        currency: item.currency,
+        invoiceId: shownInvoice(item.invoiceId),
+        reference: referenceOf(item),
+        expectedMinor: typeof expected === "number" && Number.isSafeInteger(expected) && expected >= 0 ? expected : null,
+      };
+    });
+}
+
 function summaryOf(run: ReconRun | undefined): RunSummary | null {
   if (run?.summary === null || run?.summary === undefined) {
     return null;

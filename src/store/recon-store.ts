@@ -1043,6 +1043,19 @@ export class ReconStore {
     ).map(toBreak);
   }
 
+  // The open breaks of one kind, oldest first. None on a file reconciliation
+  // never opened.
+  openBreaksOf(kind: BreakKind, limit: number = 500): ReconBreak[] {
+    if (!this.hasTables()) {
+      return [];
+    }
+    return (
+      this.db
+        .prepare("SELECT * FROM recon_breaks WHERE state = 'open' AND kind = ? ORDER BY id LIMIT ?")
+        .all(kind, limit) as unknown as BreakRow[]
+    ).map(toBreak);
+  }
+
   // Breaks in these states by kind, counted in full, the kind with the newest
   // break first.
   kindTotals(states: BreakState[]): KindTotal[] {

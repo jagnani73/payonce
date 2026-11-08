@@ -13,10 +13,12 @@ import {
   type OutageView,
 } from "../outages/outages.js";
 import {
+  missingRefunds,
   movementsView,
   reconReport,
   type BreakView,
   type KindCount,
+  type MissingRefund,
   type MovementView,
   type ReconReport,
   type ReconRunner,
@@ -87,7 +89,7 @@ function sumOf(cash: CurrencyCash, kinds: ReadonlySet<CashKind>): Money {
   );
 }
 
-function walletOf(cash: CurrencyCash): WalletCashView {
+function walletOf(cash: CurrencyCash, refunds: MissingRefund[]): WalletCashView {
   const of = (minor: number | null): Money | null => (minor === null ? null : money(minor, cash.currency));
   const floorText: string =
     cash.floor.source === "unreadable"
@@ -137,6 +139,13 @@ function walletOf(cash: CurrencyCash): WalletCashView {
             },
           ];
     }),
+    refundsMissing: refunds
+      .filter((refund: MissingRefund): boolean => refund.currency === cash.currency)
+      .map((refund: MissingRefund) => ({
+        invoiceId: refund.invoiceId,
+        reference: refund.reference,
+        amount: refund.expectedMinor === null ? null : money(refund.expectedMinor, cash.currency),
+      })),
   };
 }
 
@@ -158,6 +167,7 @@ export function cashView(
       payRunLines: payRunLines(ledger, now),
       now,
     });
+    const refunds: MissingRefund[] = missingRefunds(ledger);
     return {
       view: "cash",
       generatedAt: report.generatedAt,
@@ -177,7 +187,7 @@ export function cashView(
       },
       checksLastRanAt: report.ledger.statesCheckedAt,
       floorsProblem: report.floors.problem === null ? null : FLOORS_UNREADABLE,
-      wallets: report.currencies.map(walletOf),
+      wallets: report.currencies.map((cash: CurrencyCash): WalletCashView => walletOf(cash, refunds)),
     };
   });
 }

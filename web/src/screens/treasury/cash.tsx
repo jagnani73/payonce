@@ -27,10 +27,16 @@ const BUCKET_WORDS: Record<CashWorksheetGroup["bucket"], string> = {
   "fees-kept": "Fees kept on failed transfers",
 };
 
-// Nothing promised, waiting on people, with the bank or kept as a fee, and a
-// floor PayOnce can read.
+// Nothing promised, waiting on people, with the bank, kept as a fee or not back
+// from a failed transfer, and a floor PayOnce can read.
 function idle(wallet: WalletCashView): boolean {
-  return wallet.worksheet.length === 0 && wallet.invoiceFloors.length === 0 && wallet.tone === "ok" && wallet.floor.source !== "unreadable";
+  return (
+    wallet.worksheet.length === 0 &&
+    wallet.refundsMissing.length === 0 &&
+    wallet.invoiceFloors.length === 0 &&
+    wallet.tone === "ok" &&
+    wallet.floor.source !== "unreadable"
+  );
 }
 
 function Floor(props: { wallet: WalletCashView }): JSX.Element {
@@ -245,6 +251,44 @@ function Group(props: { group: CashWorksheetGroup }): JSX.Element {
   );
 }
 
+// Money failed transfers took that Airwallex has not given back yet, as
+// reconciliation found it. For information only: it is in no figure above.
+function RefundsMissing(props: { wallet: WalletCashView }): JSX.Element | null {
+  const refunds: WalletCashView["refundsMissing"] = props.wallet.refundsMissing;
+  if (refunds.length === 0) {
+    return null;
+  }
+  return (
+    <section class="sheet-group" aria-label="Not back from failed transfers">
+      <div class="sheet-group__head">
+        <h3 class="sheet-group__title">Not back from failed transfers</h3>
+        <span class="sheet-group__bucket">For information</span>
+      </div>
+      <ul class="sheet-lines">
+        {refunds.map(
+          (refund: WalletCashView["refundsMissing"][number], index: number): JSX.Element => (
+            <li class="sheet-line" key={`${refund.reference ?? ""}-${index}`}>
+              <span class="sheet-line__what">
+                {refund.invoiceId === null ? null : (
+                  <a class="ref" href={paymentHref(refund.invoiceId)}>
+                    {refund.invoiceId}
+                  </a>
+                )}
+                {refund.reference === null ? null : <Ref class="sheet-line__ref">{refund.reference}</Ref>}
+              </span>
+              {refund.amount === null ? <span class="sheet-line__amount">amount not known</span> : <Money money={refund.amount} class="sheet-line__amount" />}
+            </li>
+          ),
+        )}
+      </ul>
+      <p class="sheet-note">
+        These transfers failed and their money hasn't come back to this wallet yet. The available balance already leaves it out, so headroom goes up
+        when it lands. Reconciliation lists them under Clearing by themselves.
+      </p>
+    </section>
+  );
+}
+
 // "INV-671104 keeps its own floor of 9,979,789.97 EUR.", with the payment linked.
 function InvoiceFloor(props: { floor: WalletCashView["invoiceFloors"][number] }): JSX.Element {
   const { invoiceId, text } = props.floor;
@@ -277,6 +321,7 @@ function Worksheet(props: { wallet: WalletCashView | null }): JSX.Element {
           ) : (
             w.worksheet.map((group: CashWorksheetGroup): JSX.Element => <Group key={group.kind} group={group} />)
           )}
+          <RefundsMissing wallet={w} />
           {w.invoiceFloors.map(
             (floor: WalletCashView["invoiceFloors"][number]): JSX.Element => (
               <InvoiceFloor key={floor.invoiceId} floor={floor} />

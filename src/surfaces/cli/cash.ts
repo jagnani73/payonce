@@ -56,6 +56,13 @@ function putWallet(wallet: WalletCashView): void {
     put(wallet.floor.text, 1);
   }
   putAll(wallet.invoiceFloors.map((floor: WalletCashView["invoiceFloors"][number]): string => floor.text), 1);
+  putAll(
+    wallet.refundsMissing.map(
+      (refund: WalletCashView["refundsMissing"][number]): string =>
+        `Not back from failed transfer ${refund.reference ?? "(no reference)"}${refund.invoiceId === null ? "" : ` for ${refund.invoiceId}`}: ${shown(refund.amount)}. Available already leaves it out.`,
+    ),
+    1,
+  );
 }
 
 // Reads the balances once, fresh, fills in fees the ledger is missing, and prints

@@ -1200,6 +1200,11 @@ export interface WalletCashView {
   tone: "ok" | "low" | "below";
   invoiceFloors: { invoiceId: InvoiceId; floor: Money; text: string }[];
   worksheet: CashWorksheetGroup[];
+  // Money that left the wallet on a failed transfer and has not come back, as
+  // reconciliation's open refund missing breaks say. Information only: available
+  // and headroom already leave it out, and it is in no figure above. amount is
+  // null when the break's facts give none PayOnce can read.
+  refundsMissing: { invoiceId: InvoiceId | null; reference: Reference | null; amount: Money | null }[];
 }
 
 export interface CashView {
