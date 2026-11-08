@@ -6,6 +6,13 @@
 // The supplier view never links records by it.
 export const UNNAMED_PAYEE: string = "Unnamed payee";
 
+// A payment's first line when a person starts it, followed by their name, and
+// the line PayOnce closes it with when its first transfer paid it and nothing on
+// the way was an incident. Older timelines say "Incident opened by" and
+// "Incident closed: the original payment arrived" instead.
+export const PAYMENT_STARTED_BY: string = "Payment started by";
+export const PAID_FIRST_TIME_LINE: string = "Payment closed: the bank paid its first transfer";
+
 // The bank outcome that pays a transfer. Any other outcome is the failure type
 // the simulator fails it with.
 export const PAID_OUTCOME: string = "PAID";

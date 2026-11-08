@@ -6,6 +6,7 @@ import {
   type ReasonColumns,
   type StoredReason,
 } from "../domain/reasons.js";
+import { PAYMENT_STARTED_BY } from "../text/words.js";
 import type { ContactStore } from "./contacts.js";
 import { storedStrings, type Db } from "./db.js";
 import type { Timelines } from "./timeline.js";
@@ -213,7 +214,7 @@ export class InvoiceStore {
         this.timelines.appendEvent(
           input.invoiceId,
           "payment",
-          input.startedBy === null ? "Incident opened" : `Incident opened by ${input.startedBy}`,
+          input.startedBy === null ? "Incident opened" : `${PAYMENT_STARTED_BY} ${input.startedBy}`,
           null,
         );
         const phone: string = (input.supplierPhone ?? "").trim();

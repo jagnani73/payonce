@@ -1,27 +1,43 @@
 import { liveAtBank, mismatchedLive } from "../domain/live.js";
-import { reasonFor, type Reason } from "../domain/reasons.js";
-import type { Attempt, Ledger, ObligationState } from "../store/ledger.js";
+import { reasonFor, routineApproval, type Reason } from "../domain/reasons.js";
+import type { Attempt, Ledger, Obligation, ObligationState } from "../store/ledger.js";
+import { PAID_FIRST_TIME_LINE } from "../text/words.js";
 import { anyLive, coveredByClose, type CoveredTransfer } from "../store/read/facts.js";
 import { listOf } from "../text/printable.js";
 import type { Engine, NextLook } from "./engine.js";
 import { note } from "./lines.js";
 
-// Closes the incident on the state the look read the invoice in. False, with
-// nothing changed, when the ledger refuses (see settle).
+// True for a payment that never had an incident: its original was PayOnce's only
+// payment for it, nothing was sent outside PayOnce, and nothing sent it to a
+// person but the approval every payment a person starts waits for.
+function paidFirstTime(ledger: Ledger, invoiceId: string, attempts: Attempt[]): boolean {
+  const obligation: Obligation | undefined = ledger.obligation(invoiceId);
+  return (
+    obligation !== undefined &&
+    obligation.origin === "payonce" &&
+    attempts.length === 1 &&
+    ledger.outsidePayouts(invoiceId).length === 0 &&
+    (obligation.escalationReason === "" || routineApproval(ledger.reasonOf(obligation)))
+  );
+}
+
+// Closes the invoice on the state the look read it in. False, with nothing
+// changed, when the ledger refuses (see settle).
 export function close(engine: Engine, invoiceId: string, from: ObligationState): boolean {
   if (!engine.ledger.settle(invoiceId, false, from)) {
     return false;
   }
-  const replaced: boolean = engine.ledger
-    .attempts(invoiceId)
-    .some((attempt: Attempt): boolean => attempt.kind === "replacement");
+  const attempts: Attempt[] = engine.ledger.attempts(invoiceId);
+  const replaced: boolean = attempts.some((attempt: Attempt): boolean => attempt.kind === "replacement");
   note(
     engine.ledger,
     invoiceId,
     "closed",
     replaced
       ? "Incident closed: the original failed and one replacement was paid"
-      : "Incident closed: the original payment arrived",
+      : paidFirstTime(engine.ledger, invoiceId, attempts)
+        ? PAID_FIRST_TIME_LINE
+        : "Incident closed: the original payment arrived",
   );
   return true;
 }

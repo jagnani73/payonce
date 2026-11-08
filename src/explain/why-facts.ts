@@ -43,7 +43,14 @@ import { currencyFloor, debitCurrency, floorFor, type ReservePolicy } from "../d
 import { committedMinor } from "../store/read/cash.js";
 import { heldBeforePaying } from "../store/read/facts.js";
 import { pendingApproval, pendingClose, type CloseReview, type PendingApproval } from "../store/read/reviews.js";
-import { SANDBOX_BANK_AFTER, SANDBOX_BANK_RECOVER, SANDBOX_BANK_STOPPED, TRY_WORDS_SOURCE } from "../text/words.js";
+import {
+  PAID_FIRST_TIME_LINE,
+  PAYMENT_STARTED_BY,
+  SANDBOX_BANK_AFTER,
+  SANDBOX_BANK_RECOVER,
+  SANDBOX_BANK_STOPPED,
+  TRY_WORDS_SOURCE,
+} from "../text/words.js";
 import { CURRENCY_PATTERN, CURRENCY_SOURCE, FAILURE_CODE_SOURCE, METHOD_PATTERN, METHOD_SOURCE, REFERENCE_PATTERN, REFERENCE_SOURCE, STATUS_PATTERN, STATUS_SOURCE } from "../domain/patterns.js";
 import { FAILURE_WORDS, RAIL_FAILURE_CODES, RESENDABLE_FAILURE_CODES } from "../domain/failure-codes.js";
 import { capitalise } from "../domain/sentences.js";
@@ -740,7 +747,11 @@ const FIXED_LINES: ReadonlyMap<string, readonly Source[]> = new Map<string, read
   ),
   ...fixedFrom(
     [CLOSED],
-    ["Incident closed: the original failed and one replacement was paid", "Incident closed: the original payment arrived"],
+    [
+      "Incident closed: the original failed and one replacement was paid",
+      "Incident closed: the original payment arrived",
+      PAID_FIRST_TIME_LINE,
+    ],
   ),
   ...fixedFrom(
     [ERROR],
@@ -1078,6 +1089,9 @@ const LINE_RULES: readonly LineRule[] = [
   ),
   rule([PAYMENT], "Incident opened(?: by ([\\s\\S]+))?", (match: RegExpExecArray, builder: FactsBuilder): string =>
     match[1] === undefined ? "Incident opened" : `Incident opened by ${builder.aliases.person(match[1])}`,
+  ),
+  rule([PAYMENT], `${PAYMENT_STARTED_BY} ([\\s\\S]+)`, (match: RegExpExecArray, builder: FactsBuilder): string =>
+    `${PAYMENT_STARTED_BY} ${builder.aliases.person(match[1] ?? "")}`,
   ),
 
   // Closing.
