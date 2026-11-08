@@ -6,6 +6,7 @@ import {
   isNumberOnFile,
   lapsed,
   lapseLine,
+  mismatchLine,
   notTheNumber,
   notWaiting,
   phoneDigits,
@@ -53,6 +54,8 @@ interface ContactRow {
   closed_at: string | null;
   close_note: string | null;
   withdrawn_requests: number;
+  // Absent on a file opened read-only from before the column.
+  mismatched_confirms?: number;
 }
 
 function toContact(row: ContactRow): Contact {
@@ -79,6 +82,7 @@ function toContact(row: ContactRow): Contact {
     closedAt: row.closed_at,
     closeNote: row.close_note,
     withdrawnRequests: row.withdrawn_requests,
+    mismatchedConfirms: row.mismatched_confirms ?? 0,
   };
 }
 
@@ -386,9 +390,12 @@ export class ContactStore {
   // approved request that relies on one, for this record's invoices and for the
   // waiting run's rows to it. While a released pay run row to the record waits to
   // be sent on a callback, a change is refused, since its send does not check
-  // the callback again.
+  // the callback again. A number that does not match is refused too, but it
+  // could be someone trying a number they do not have, so it is kept first: the
+  // proposal counts it, for the contact alert, and the record's timelines get a
+  // line, and the refusal is thrown once that commits.
   confirmContact(beneficiaryId: string, id: number, input: ConfirmedContact, now: number): ContactChange {
-    return this.db.transaction((): ContactChange => {
+    const done: ContactChange | ContactError = this.db.transaction((): ContactChange | ContactError => {
       const at: string = new Date(now).toISOString();
       const proposal: Contact = this.proposalOf(beneficiaryId, id);
       if (proposal.state !== "proposed") {
@@ -401,7 +408,13 @@ export class ContactStore {
         throw new ContactError("refused", selfConfirm(proposal.proposedBy));
       }
       if (!sameNumber(proposal, input)) {
-        throw new ContactError("input", notTheNumber(proposal));
+        this.db
+          .prepare(
+            "UPDATE supplier_contacts SET mismatched_confirms = mismatched_confirms + 1 WHERE id = ? AND state = 'proposed'",
+          )
+          .run(proposal.id);
+        this.line(this.targets(beneficiaryId), mismatchLine(proposal, input.confirmedBy));
+        return new ContactError("input", notTheNumber(proposal));
       }
       const onFile: Contact | undefined = this.reads.onFile(beneficiaryId, proposal.field);
       if ((onFile?.id ?? null) !== proposal.replacesId) {
@@ -437,6 +450,10 @@ export class ContactStore {
       this.lookNow(beneficiaryId, at);
       return { contact: this.require(proposal.id), invoices: targets.open };
     });
+    if (done instanceof ContactError) {
+      throw done;
+    }
+    return done;
   }
 
   withdrawContact(beneficiaryId: string, id: number, by: string, note: string, now: number): ContactChange {

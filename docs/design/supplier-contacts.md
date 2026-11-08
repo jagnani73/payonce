@@ -19,7 +19,8 @@ A callback is how PayOnce checks new bank details, so the phone number it is mad
 
 ### Two people
 - One person proposes a number; a different person confirms it by typing it again from their own source (the blind re-key, `sameNumber`). It goes on file only when the digits match.
-- The proposer cannot confirm (`selfConfirm`, compared with `sameName`). Anyone with a PayOnce name may propose or confirm: confirmers are not limited to `APPROVERS`.
+- A confirmation whose digits do not match is refused, but it is recorded first, in one transaction: the proposal's `mismatched_confirms` goes up by one, and the record's lines get `mismatchLine` ("Tom's confirmation of the phone number Priya proposed did not match. Nothing changed"), which holds no digits. The refusal is thrown once that commits. The proposal keeps waiting, and nothing else changes.
+- The proposer cannot confirm (`selfConfirm`, compared with `sameName`). That refusal writes nothing. Anyone with a PayOnce name may propose or confirm: confirmers are not limited to `APPROVERS`.
 - A first number, a change and a removal take the same two steps.
 - A proposal lapses 72 hours after it was made (`PROPOSAL_LAPSES_MS`). The next proposal for the record marks it `lapsed`, with its line, in its own transaction. A lapsed proposal blocks nothing, and confirming one is refused.
 - Anyone may withdraw a waiting proposal with a name and a note of 1 to 200 characters.
@@ -47,7 +48,7 @@ A callback is how PayOnce checks new bank details, so the phone number it is mad
 - Lines go on every open or escalated invoice of the record. With none, they go on its newest invoice, and with no invoice, on the waiting run that names the record. Their kind is `contact`.
 - A proposal line names the number by its last four digits only, so the confirmer has to find it themselves. The confirm line, the record of what went on file, gives the full number.
 - `escalation_reason` never holds a phone number. No new escalation reason comes from a contact change.
-- An alert `contact:<beneficiary id>` goes out while a person's proposal waits and for 24 hours after one went on file; a changed number is urgent. Its facts never carry the number, a domain or a person's name ([alerts.md](alerts.md)).
+- An alert `contact:<beneficiary id>` goes out while a person's proposal waits and for 24 hours after one went on file; a changed number is urgent. Each confirmation that did not match posts it again, also urgent. Its facts never carry the number, a domain or a person's name ([alerts.md](alerts.md)).
 - The full number is served by `GET /api/suppliers/:key/contact` and by the callback form (`GET /api/incidents/:id/bank-details`, `phoneOnFile`), and the timeline's confirm, callback and waiting lines quote it. Every other view field gives the last four digits. MCP has no tool for either route, and it masks every number the ledger holds (`Ledger.storedPhones()`).
 
 ## Why
@@ -60,6 +61,8 @@ A callback is how PayOnce checks new bank details, so the phone number it is mad
 - A change voids requests in its own transaction instead of through the terms. Binding the number into terms would change the frozen terms builders and catch a change only at the next look. The void is atomic: `useApproval`, `releaseFor` and `releaseRun` move only `approved` rows, so once it commits nothing it covered can be spent.
 - Invoices read the number through the record because a subquery column on the invoice reads lets every existing reader follow the record unchanged: the callback form, waiting lines, alerts, the board, drafts, Ask why, the supplier view and MCP. Copying the number onto invoices would touch the INSERTs in `releaseRun` and `adoptPayout`, which are money transactions, and rewrite closed invoices.
 - The seen-in-email count warns and never refuses, because a real supplier's signature carries the real number.
+- A confirmation that does not match is recorded because it may be an attack: someone trying a number they do not have, or a proposal the confirmer's own source contradicts, which is what the second person is there to catch. The line and the alert leave out the digits, so neither tells anyone what the right number is.
+- A self-confirm is refused with no trace because it is a slip, not an attempt. The proposer already typed the number, and someone acting in bad faith would type another name, which the re-key then checks.
 
 ## Edge cases
 
@@ -69,6 +72,7 @@ A callback is how PayOnce checks new bank details, so the phone number it is mad
 - PayOnce refuses a proposal that matches what is on file, a removal with nothing on file, and a second proposal while one waits (naming who proposed it).
 - When the number on file changed after a proposal was made, confirming the proposal is refused because `replaces_id` no longer matches. Withdraw it and propose again.
 - Confirming a lapsed proposal is refused with the lapse line and "Propose it again".
+- A confirmation that does not match on a record with no invoice and no waiting run that names it raises the count and the alert, and writes no line, because there is no timeline to write it on.
 - A look that read the record before a change and opens a request after it is caught before the spend, because `verifiedBankChange` no longer verifies the callback.
 - A payout sent outside PayOnce to an account whose callback was retired stops counting as paying the invoice, because the payout's verdict reads `verifiedBankChange`. A person can still close the invoice without paying.
 - A removal confirmed by two people leaves `''` on file. The record reads as having no phone and gets no `phone-changed` caution. The `no-phone` caution, on an invoice that needs a callback, says to put one on file.

@@ -41,6 +41,9 @@ export interface Contact {
   closeNote: string | null;
   // How many approval requests the change withdrew when it went on file.
   withdrawnRequests: number;
+  // How many times someone typed a number that did not match it when they tried
+  // to confirm it.
+  mismatchedConfirms: number;
 }
 
 // What a refusal is: what was typed, who typed it, a proposal that is not there,
@@ -282,6 +285,13 @@ export function setterCalls(name: string, role: "proposed" | "confirmed"): strin
 
 export function selfConfirm(name: string): string {
   return `${name} proposed this phone number, so someone else confirms it from their own source`;
+}
+
+// A confirmation whose number did not match the proposal. It holds no digits, so
+// the line gives away neither number.
+export function mismatchLine(proposal: Contact, by: string): string {
+  const what: string = proposal.value === "" ? "the removal" : "the phone number";
+  return `${by}'s confirmation of ${what} ${proposal.proposedBy ?? "someone"} proposed did not match. Nothing changed`;
 }
 
 export function notTheNumber(proposal: Contact): string {

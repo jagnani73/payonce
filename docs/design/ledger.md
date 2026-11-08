@@ -207,6 +207,7 @@ The SQLite ledger: its tables, columns, indexes and triggers, its transactions, 
 
 - `supplier_contacts` is in `SCHEMA`: one row per version of a record's phone, with `state` `proposed`, `on_file`, `replaced`, `withdrawn` or `lapsed`. [supplier-contacts.md](supplier-contacts.md) has the phone rules.
 - `one_contact_on_file` and `one_open_proposal` allow one row on file and one proposal per record and field. `contacts_by_beneficiary` indexes the rows by record.
+- `supplier_contacts.mismatched_confirms`, in `ADDED_COLUMNS`, counts the confirmations of a proposal whose number did not match. `confirmContact` raises it in the transaction that writes the mismatch line, and the contact alert reads it.
 - `bank_changes.contact_id`, in `ADDED_COLUMNS`, is the contact row of the number a callback was made on. `addBankChange` inserts a callback only while that row is still on file.
 - `seedContacts` runs once, at the end of `Schema.addColumns`' transaction, and sets `meta.contacts_seeded_at`. For each record, the phone on its newest invoice that has one becomes the row on file, and each callback made on that number gets its `contact_id`.
 - `Obligation.supplierPhone` is read through `ContactReads.phoneColumn()`, the record's row on file, on every invoice read and the supplier list. `''` on file, a removed number, reads as null.
@@ -237,7 +238,7 @@ The SQLite ledger: its tables, columns, indexes and triggers, its transactions, 
 - A timeline line is one line. `note` and `runNote` run the message through `oneLine` before the dedupe, the write and the console line, and `appendEvent` and `addRunEventRow` do it again for lines written without them.
 - `addEvent` and `addRunEvent` read the last hash, insert the line and update the running hash in one `BEGIN IMMEDIATE` transaction. `note` runs its dedupe before, outside the lock.
 - `Timelines.appendEvent` and `addRunEventRow` run inside a transaction the caller holds.
-- The store methods that write a line with their change call them: `openObligation`, `adoptPayout`, `releaseRun`, `createDraft`, `markDraft`, `recordRailFailure`, `holdForOutage`, `endOutage`, `proposeContact`, `confirmContact` and `withdrawContact`.
+- The store methods that write a line with their change call them: `openObligation`, `adoptPayout`, `releaseRun`, `createDraft`, `markDraft`, `recordRailFailure`, `holdForOutage`, `endOutage`, `proposeContact`, `confirmContact` (its mismatch line included) and `withdrawContact`.
 - Every other line is written after the commit. Apart from hashing the lines already there when a chain starts, no code updates or deletes a line.
 - Every invoice gets its first line in the transaction that writes it: "Payment started by NAME" from `openObligation` ("Incident opened by NAME" on lines written before it), the found payout's line from `adoptPayout`, each released row's line from `releaseRun`. A run's upload line follows `createRun` with nothing awaited between them.
 

@@ -500,6 +500,10 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     // before it.
     account_failure: "TEXT",
   },
+  supplier_contacts: {
+    // How many confirmations of a proposal typed a number that did not match it.
+    mismatched_confirms: "INTEGER NOT NULL DEFAULT 0",
+  },
   bank_changes: {
     // The supplier_contacts row of the phone number the callback was made on.
     // Only while that row is on file does the callback verify bank details.

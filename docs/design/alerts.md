@@ -41,8 +41,8 @@ Alerts post to a Slack or Discord incoming webhook when something waits on a per
 - `outage:<id>` stands while an outage is active and for 24 hours after it ended, with its state as the fingerprint. It posts "Outage declared on USD LOCAL" once and "Outage on USD LOCAL ended" once, then clears with nothing posted.
 - An outage alert's facts are the rail, the codes (labelled from `RAIL_FAILURE_CODES` in the message), payees, window, up to five short references, the times and how many invoices and runs it held. That count is its hold rows other than `counted`, as the Outages card lists them.
 - An outage alert never names who ended it or their note. A reference outside `REFERENCE_PATTERN` is left out, and the Payouts field with it when none is left. The alert still posts.
-- `contact:<beneficiary id>` stands while a person's proposed phone number waits for a second person (`waiting`), and for 24 hours after a person's number went on file. Its fingerprint is `waiting:<id>`, `set:<id>` or `changed:<id>`, so each posts once.
-- A contact alert's facts are the record's key (in its own form only, for the `#supplier/<key>` link), the supplier name as outside text, the field, whether it is a first number, a change or a removal, when, open payments and requests withdrawn.
+- `contact:<beneficiary id>` stands while a person's proposed phone number waits for a second person (`waiting`), and for 24 hours after a person's number went on file. Its fingerprint is `waiting:<id>`, `set:<id>` or `changed:<id>`, so each posts once. A waiting proposal that someone failed to confirm has `waiting:<id>:mismatched:<n>`, `n` being its `mismatched_confirms`, so each confirmation that did not match posts it again.
+- A contact alert's facts are the record's key (in its own form only, for the `#supplier/<key>` link), the supplier name as outside text, the field, whether it is a first number, a change or a removal, when, open payments and requests withdrawn, and `mismatched` only when a confirmation did not match. With `mismatched` the title is "A confirmation of a supplier phone number did not match", the message gives the count, and it is urgent.
 - A contact alert never holds the number, an email domain or anyone's name. `changed` is urgent. Only rows a person made alert ([supplier-contacts.md](supplier-contacts.md#lines-alerts-and-display)).
 - `recon` stands while any reconciliation break waits on a person (`reconCondition`, [reconciliation.md](reconciliation.md)). A break of a kind that clears by itself, such as a missing refund, never raises it, however long it stays open, since the Reconciliation page lists it apart from the breaks that need a person.
 
@@ -116,6 +116,7 @@ Alerts post to a Slack or Discord incoming webhook when something waits on a per
 - The link goes to 127.0.0.1 and never to the tunnel because the page has no login and works only on the machine running PayOnce, as every message says.
 - The server reads balances with no page open so that the cash condition sees a falling balance while nobody is looking.
 - Only phone numbers a person put on file alert, because a number the demo scenario or the one-off migration put there is no news. A changed number is urgent because a callback made on the old one no longer verifies bank details.
+- A confirmation that did not match is urgent because it may be someone trying a number they do not have, or a proposal the confirmer's source contradicts ([supplier-contacts.md](supplier-contacts.md#why)).
 
 ## Edge cases
 

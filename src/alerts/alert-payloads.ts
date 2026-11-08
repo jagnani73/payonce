@@ -145,6 +145,9 @@ export interface ContactAlertFacts {
   openInvoices: number;
   // Approval requests the change withdrew because they relied on a callback.
   withdrawn: number;
+  // Confirmations of the waiting number that typed one that did not match.
+  // Absent when there were none.
+  mismatched?: number;
 }
 
 export interface SummaryAlertFacts {
@@ -595,23 +598,31 @@ const CONTACT_NEXT: Record<ContactAlertFacts["state"], string> = {
   changed: "A callback made on the old number no longer verifies bank details",
 };
 
+// A waiting number someone failed to confirm: they typed one that did not match.
+const MISMATCH_TITLE: string = "A confirmation of a supplier phone number did not match";
+const MISMATCH_NEXT: string =
+  "Nothing changed. The number goes on file only once someone else finds the same number in their own source and confirms it. If the proposal is wrong, withdraw it";
+
 function contactMessage(facts: ContactAlertFacts, base: string): AlertMessage {
   const key: string | null = facts.supplierKey !== null && SUPPLIER_KEY.test(facts.supplierKey) ? facts.supplierKey : null;
   const withdrawn: number = Number.isSafeInteger(facts.withdrawn) ? facts.withdrawn : 0;
+  const mismatched: number =
+    facts.state === "waiting" && Number.isSafeInteger(facts.mismatched) ? (facts.mismatched ?? 0) : 0;
   return {
-    title: CONTACT_TITLES[facts.state],
+    title: mismatched > 0 ? MISMATCH_TITLE : CONTACT_TITLES[facts.state],
     line: [ours("Supplier"), theirs(facts.supplier, NO_NAME)],
     fields: [
       field("Supplier", theirs(facts.supplier, NO_NAME)),
       field("What", ours(CONTACT_CHANGES[facts.change]), false),
       field(facts.state === "waiting" ? "Proposed" : "Put on file", ours(utcText(facts.at))),
+      ...(mismatched > 0 ? [field("Confirmations that did not match", ours(String(mismatched)))] : []),
       field("Open payments", ours(String(Number.isSafeInteger(facts.openInvoices) ? facts.openInvoices : 0))),
       ...(facts.state === "changed" ? [field("Approval requests withdrawn", ours(String(withdrawn)))] : []),
-      field("Next", ours(CONTACT_NEXT[facts.state]), false),
+      field("Next", ours(mismatched > 0 ? MISMATCH_NEXT : CONTACT_NEXT[facts.state]), false),
     ],
     link: key === null ? `${base}/` : `${base}/#supplier/${key}`,
     linkText: key === null ? "Open PayOnce" : "Open the supplier record in PayOnce",
-    urgent: facts.state === "changed",
+    urgent: facts.state === "changed" || mismatched > 0,
   };
 }
 

@@ -446,8 +446,10 @@ function outageConditions(ledger: Ledger, now: number): FoundCondition[] {
 
 // A supplier record's phone: while a new number two people have not yet put on
 // file waits, and for a day after two people put one on file, with which it is
-// as the fingerprint, so each posts once. A number the demo scenario or an older
-// invoice put there is no news. Never the number or a name.
+// as the fingerprint, so each posts once. Each confirmation of a waiting number
+// that did not match is in the fingerprint too, so it posts again, and a waiting
+// number nobody mistyped keeps the fingerprint it always had. A number the demo
+// scenario or an older invoice put there is no news. Never the number or a name.
 function contactConditions(ledger: Ledger, now: number): FoundCondition[] {
   const byRecord: Map<string, Contact[]> = new Map<string, Contact[]>();
   for (const contact of ledger.contactsOf(null)) {
@@ -474,6 +476,7 @@ function contactConditions(ledger: Ledger, now: number): FoundCondition[] {
       row.value === "" ? "removal" : replaced === undefined || replaced.value === "" ? "first" : "change";
     const state: ContactAlertFacts["state"] = proposal !== undefined ? "waiting" : change === "first" ? "set" : "changed";
     const invoices: Obligation[] = ledger.obligationsFor(beneficiaryId);
+    const mismatched: number = proposal?.mismatchedConfirms ?? 0;
     const facts: ContactAlertFacts = {
       kind: "contact",
       supplierKey: BENEFICIARY_ID_PATTERN.test(beneficiaryId) ? beneficiaryId : null,
@@ -486,8 +489,11 @@ function contactConditions(ledger: Ledger, now: number): FoundCondition[] {
         (obligation: Obligation): boolean => obligation.state === "open" || obligation.state === "escalated",
       ).length,
       withdrawn: row.withdrawnRequests,
+      ...(mismatched === 0 ? {} : { mismatched }),
     };
-    found.push(condition(`contact:${beneficiaryId}`, `${state}:${row.id}`, facts));
+    found.push(
+      condition(`contact:${beneficiaryId}`, `${state}:${row.id}${mismatched === 0 ? "" : `:mismatched:${mismatched}`}`, facts),
+    );
   }
   return found;
 }
