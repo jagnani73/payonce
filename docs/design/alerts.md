@@ -27,6 +27,7 @@ Alerts post to a Slack or Discord incoming webhook when something waits on a per
 - `with-bank` is `outside` for a payout sent outside PayOnce, `callback` when the bank details are in question and a phone is on file, and `check` otherwise. Every other state needs nobody.
 - While a person's approval is underway (`approvedUnderway`: approved and not expired, or used with its payment pending or in flight), only `approve`, `approve-held`, `bank` and `twice` stand (`needOf`). The approval every payment a person starts waits for (terms whose reason is `person-started`) does not count as underway (`underway`), so an invoice that goes to a person while that payment is with the bank alerts as it would without it.
 - `twice` and `bank` are urgent. Their titles are "INV may have been paid twice" and "Bank deadline passed on INV". Every other title is the invoice and the need's words (`NEED_TITLES`).
+- An `approve-held` invoice whose stored reason is the routine approval alone (`routineApproval` of `parseReason`: `person-started` with no clause) reads "INV waits for approval of its first transfer", not "is held" (`needTitle`). Only the title changes, so the fingerprint and the stored facts stay the same, and a condition already recorded does not post again.
 - The fingerprint is the need, the reason without its floor clauses (`reasonText(withoutClauses(reason, FLOOR_CLAUSES))`), and for a request waiting for signoffs its action, amount, currency, `accountKey` and signoffs needed.
 - The `NOT_TO_PAY_CLAUSE` stays in the fingerprint's reason.
 
@@ -117,6 +118,7 @@ Alerts post to a Slack or Discord incoming webhook when something waits on a per
 - The server reads balances with no page open so that the cash condition sees a falling balance while nobody is looking.
 - Only phone numbers a person put on file alert, because a number the demo scenario or the one-off migration put there is no news. A changed number is urgent because a callback made on the old one no longer verifies bank details.
 - A confirmation that did not match is urgent because it may be someone trying a number they do not have, or a proposal the confirmer's source contradicts ([supplier-contacts.md](supplier-contacts.md#why)).
+- A new payment waiting for its routine approval has its own title because nothing went wrong with it, and "is held" reads like a problem.
 
 ## Edge cases
 

@@ -7,6 +7,7 @@
 import { isBreakKind, KIND_LABELS } from "../recon/recon-match.js";
 import { CURRENCY_PATTERN, REFERENCE_PATTERN } from "../domain/patterns.js";
 import { RAIL_FAILURE_CODES } from "../domain/failure-codes.js";
+import { parseReason, routineApproval } from "../domain/reasons.js";
 import { trimmedLine, utcText } from "../text/printable.js";
 
 export type AlertFormat = "slack" | "discord";
@@ -240,6 +241,16 @@ const NEED_TITLES: Record<InvoiceNeed, string> = {
   check: "needs a person",
 };
 
+// approve-held for a payment held only by the approval every payment a person
+// starts waits for: nothing went wrong, so it is not "held".
+const FIRST_TRANSFER_TITLE: string = "waits for approval of its first transfer";
+
+function needTitle(facts: InvoiceAlertFacts): string {
+  return facts.need === "approve-held" && routineApproval(parseReason(facts.reason))
+    ? FIRST_TRANSFER_TITLE
+    : NEED_TITLES[facts.need];
+}
+
 // Escapes each character, then cuts to max characters with an ellipsis. It cuts
 // between whole characters, so neither an escape nor a surrogate pair is split,
 // and the result is never longer than max.
@@ -337,7 +348,7 @@ function invoiceMessage(facts: InvoiceAlertFacts, base: string): AlertMessage {
   const title: string =
     facts.need === "bank"
       ? `Bank deadline passed on ${invoice}`
-      : `${known ? invoice : "An invoice"} ${NEED_TITLES[facts.need]}`;
+      : `${known ? invoice : "An invoice"} ${needTitle(facts)}`;
   return {
     title,
     line: [ours(`${facts.amount} to`), theirs(facts.supplier, NO_NAME)],
