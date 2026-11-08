@@ -2,12 +2,13 @@ import { findBeneficiary, type BeneficiaryRecord } from "../airwallex/beneficiar
 import { AirwallexError, AirwallexUnreachableError, type AirwallexClient } from "../airwallex/client.js";
 import type { TransferBankDetails } from "../airwallex/transfers.js";
 import { accountKeyOf, heldTermsFor, paymentAmount, type AccountFailure, type HeldPaymentTerms } from "../domain/approval.js";
-import type { ApprovalPolicy, SignoffRule } from "../domain/approvers.js";
+import { sameName, type ApprovalPolicy, type Barred, type SignoffRule } from "../domain/approvers.js";
+import { barredWords } from "../domain/barred.js";
 import { routeKeyOf } from "../domain/assess.js";
 import { phoneEnding } from "../domain/contacts.js";
 import { formatMoney } from "../domain/money.js";
-import { failedAccountCaution, reasonText, reasonView } from "../domain/reasons.js";
-import { currencyFloor, type CurrencyFloor } from "../domain/reserve.js";
+import { failedAccountCaution, neededWhyOf, reasonText, reasonView } from "../domain/reasons.js";
+import { currencyFloor, debitCurrency, type CurrencyFloor } from "../domain/reserve.js";
 import { signerChoices, type ApproverChoice as DomainChoice } from "../domain/situation.js";
 import {
   accountFailureOn,
@@ -15,9 +16,10 @@ import {
   firstPaymentHold,
   firstPaymentOutage,
   heldPaymentRule,
+  payeeRule,
   type FirstPaymentHold,
 } from "../engine/first-payment.js";
-import { asOpened, checkedPayee, newObligation, type NewPayment, type Payee, type PayeeCheck } from "../engine/new-payment.js";
+import { asOpened, checkedPayee, domainOnFile, newObligation, type NewPayment, type Payee, type PayeeCheck } from "../engine/new-payment.js";
 import { railWords } from "../domain/patterns.js";
 import type { Settings } from "../settings.js";
 import { readingSoft, type Ledger, type Obligation, type Outage, type TransferMethod } from "../store/ledger.js";
@@ -26,7 +28,7 @@ import { barredOnFile } from "../store/read/reviews.js";
 import { PAID_OUTCOME, STAYS_IN_FLIGHT } from "../text/words.js";
 import type { HeadroomLine, PaymentCheckView } from "./contract.js";
 import { money } from "./parts.js";
-import { approverViews } from "./requests.js";
+import { approverViews, neededWhyText } from "./requests.js";
 
 // The New payment form's "What happens next": what PayOnce would do with the
 // payment if it started now, from the ledger, the beneficiary record as last
@@ -92,11 +94,13 @@ function headroomAfter(ledger: Ledger, settings: Settings, payment: NewPayment, 
 
 // The contact the payment would have, as the payment page shows it: the last
 // four digits of the record's phone on file, which a callback for it dials, and
-// the email domain the payee carries, once the record is read.
+// the email domain the payee carries, else the newest one on file for the record,
+// once the record is read.
 function contactOf(ledger: Ledger, beneficiaryId: string, payee: Payee | null): PaymentCheckView["contact"] {
+  const domain: string = payee === null ? "" : payee.supplierDomain || domainOnFile(ledger, beneficiaryId);
   return {
     phoneEnding: phoneEnding(ledger.contactOnFile(beneficiaryId, "phone")?.value ?? null),
-    emailDomain: payee === null || payee.supplierDomain === "" ? null : payee.supplierDomain,
+    emailDomain: domain === "" ? null : domain,
   };
 }
 
@@ -117,21 +121,57 @@ function namesOf(names: string[], last: "or" | "and"): string {
   return names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} ${last} ${names.at(-1)}`;
 }
 
+// Why a second approver is needed, as a request shows it.
+function becauseText(why: string): string {
+  const found: { code: string; text: string } | null = neededWhyOf(why);
+  return found === null ? why : neededWhyText(found.code, found.text);
+}
+
+// Approvers on the list the account bars, other than the person starting the
+// payment, each with why: "Alex recorded the callback …, so can't approve it."
+function barredText(policy: ApprovalPolicy, barred: Barred[], starter: string | null): string {
+  const shown: string[] = barred
+    .filter((entry: Barred): boolean => starter === null || !sameName(entry.name, starter))
+    .filter((entry: Barred): boolean => policy.approvers.some((approver: { name: string }): boolean => sameName(approver.name, entry.name)))
+    .map((entry: Barred): string => ` ${entry.name} ${barredWords(entry.why)}, so ${entry.name} can't approve it.`);
+  return [...new Set<string>(shown)].join("");
+}
+
 // The line saying who could approve the first transfer, from the approvers who
 // could sign it now.
-function approversText(policy: ApprovalPolicy, rule: SignoffRule, able: string[]): string {
+function approversText(policy: ApprovalPolicy, rule: SignoffRule, able: string[], barred: string): string {
   if (policy.problem !== null) {
     return `Needs approval, and approvals are refused: ${policy.problem}.`;
   }
-  const because: string = rule.needed === 1 ? "" : `, because ${rule.why}`;
+  const because: string = rule.needed === 1 ? "" : `, because ${becauseText(rule.why)}`;
   if (able.length < rule.needed) {
     const who: string = able.length === 0 ? "nobody on the approver list can give it" : `only ${namesOf(able, "and")} can give it`;
-    return `Needs approval from ${rule.needed === 1 ? "one person" : `${rule.needed} people`}${because}, and ${who}. Change APPROVERS and restart PayOnce.`;
+    return `Needs approval from ${rule.needed === 1 ? "one person" : `${rule.needed} people`}${because}, and ${who}.${barred} Change APPROVERS and restart PayOnce.`;
   }
   if (rule.needed === 1) {
-    return `Needs approval from ${able.length === 1 ? "" : "one of "}${namesOf(able, "or")} before PayOnce sends it.`;
+    return `Needs approval from ${able.length === 1 ? "" : "one of "}${namesOf(able, "or")} before PayOnce sends it.${barred}`;
   }
-  return `Needs approval from ${able.length === rule.needed ? "both" : "two of"} ${namesOf(able, "and")} before PayOnce sends it${because}.`;
+  return `Needs approval from ${able.length === rule.needed ? "both" : "two of"} ${namesOf(able, "and")} before PayOnce sends it${because}.${barred}`;
+}
+
+// Who could approve a first transfer from another currency's wallet. Approver
+// limits are checked against what the quote takes from the wallet, which is not
+// known before PayOnce gets one, so the line names nobody, only how many it needs
+// when the payee's rule asks for two, and who the account bars.
+function rateApproversOf(
+  ledger: Ledger,
+  policy: ApprovalPolicy,
+  obligation: Obligation,
+  record: TransferBankDetails,
+): PaymentCheckView["approvers"] {
+  const rule: SignoffRule | null = payeeRule(ledger, obligation, record);
+  const barred: string = barredText(policy, barredOnFile(ledger, obligation, accountKeyOf(record), routeKeyOf(record)), obligation.startedBy);
+  const wallet: string = debitCurrency(obligation);
+  const text: string =
+    policy.problem !== null
+      ? `Needs approval, and approvals are refused: ${policy.problem}.`
+      : `Needs a person to approve the exchange rate before PayOnce sends it${rule === null ? "" : `, and two approvers, because ${becauseText(rule.why)}`}. Who can approve depends on what the quote takes from the ${wallet} wallet, so PayOnce names them once it has a quote.${barred}`;
+  return { needed: rule?.needed ?? 1, why: rule?.why ?? null, choices: [], text };
 }
 
 // Who could approve a first transfer held only because a person started it, as
@@ -147,11 +187,12 @@ function approversOf(
 ): PaymentCheckView["approvers"] {
   const terms: HeldPaymentTerms = heldTermsFor(obligation, record, [], null, null, null, null, accountFailureOn(ledger, record));
   const rule: SignoffRule = heldPaymentRule(policy, ledger, obligation, record, terms);
+  const barred: Barred[] = barredOnFile(ledger, obligation, accountKeyOf(record), routeKeyOf(record));
   const choices: DomainChoice[] = signerChoices(
     policy,
     { state: "requested", signoffs: [] },
     paymentAmount(terms),
-    barredOnFile(ledger, obligation, accountKeyOf(record), routeKeyOf(record)),
+    barred,
     true,
     false,
     "payment",
@@ -161,7 +202,7 @@ function approversOf(
     needed: rule.needed,
     why: rule.needed === 1 ? null : rule.why,
     choices: approverViews(choices, paymentAmount(terms).currency),
-    text: approversText(policy, rule, able),
+    text: approversText(policy, rule, able, barredText(policy, barred, obligation.startedBy)),
   };
 }
 
@@ -205,9 +246,13 @@ function outcomeOf(
     return {
       outcome: { kind: "hold", reason: reasonView(held.reason), text: `It will wait for a person: ${reasonText(held.reason)}.` },
       approvers:
-        held.reason.code === "person-started" && record !== undefined
-          ? approversOf(ledger, settings.approvals, obligation, record)
-          : null,
+        record === undefined
+          ? null
+          : held.reason.code === "person-started"
+            ? approversOf(ledger, settings.approvals, obligation, record)
+            : held.reason.code === "new-rate-first-payment"
+              ? rateApproversOf(ledger, settings.approvals, obligation, record)
+              : null,
     };
   }
   return {

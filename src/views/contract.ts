@@ -811,7 +811,9 @@ export interface PaymentCheckView {
   // Who could approve the first transfer when it would wait only because a
   // person started it: how many approvers it needs and why a second, each
   // approver on the list and whether they could sign it, and the line the form
-  // shows. Null for any other outcome.
+  // shows. For a first transfer from another currency's wallet, which waits for
+  // a person to approve its rate, choices is empty, since limits are checked
+  // against the quote. Null for any other outcome.
   approvers: { needed: number; why: string | null; choices: ApproverChoice[]; text: string } | null;
 }
 
