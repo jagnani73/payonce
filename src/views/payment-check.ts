@@ -1,18 +1,31 @@
 import { findBeneficiary, type BeneficiaryRecord } from "../airwallex/beneficiaries.js";
 import { AirwallexError, AirwallexUnreachableError, type AirwallexClient } from "../airwallex/client.js";
+import type { TransferBankDetails } from "../airwallex/transfers.js";
+import { accountKeyOf, heldTermsFor, paymentAmount, type HeldPaymentTerms } from "../domain/approval.js";
+import type { ApprovalPolicy, SignoffRule } from "../domain/approvers.js";
+import { routeKeyOf } from "../domain/assess.js";
 import { phoneEnding } from "../domain/contacts.js";
 import { formatMoney } from "../domain/money.js";
 import { reasonText, reasonView } from "../domain/reasons.js";
 import { currencyFloor, type CurrencyFloor } from "../domain/reserve.js";
-import { firstPaymentFacts, firstPaymentHold, firstPaymentOutage, type FirstPaymentHold } from "../engine/first-payment.js";
+import { signerChoices, type ApproverChoice as DomainChoice } from "../domain/situation.js";
+import {
+  firstPaymentFacts,
+  firstPaymentHold,
+  firstPaymentOutage,
+  heldPaymentRule,
+  type FirstPaymentHold,
+} from "../engine/first-payment.js";
 import { asOpened, checkedPayee, newObligation, type NewPayment, type Payee, type PayeeCheck } from "../engine/new-payment.js";
 import { railWords } from "../domain/patterns.js";
 import type { Settings } from "../settings.js";
 import { readingSoft, type Ledger, type Obligation, type Outage, type TransferMethod } from "../store/ledger.js";
 import type { CashReport, CurrencyCash } from "../store/read/cash.js";
+import { barredOnFile } from "../store/read/reviews.js";
 import { PAID_OUTCOME, STAYS_IN_FLIGHT } from "../text/words.js";
 import type { HeadroomLine, PaymentCheckView } from "./contract.js";
 import { money } from "./parts.js";
+import { approverViews } from "./requests.js";
 
 // The New payment form's "What happens next": what PayOnce would do with the
 // payment if it started now, from the ledger, the beneficiary record as last
@@ -98,20 +111,77 @@ function sandboxLine(payment: NewPayment, outcome: string): PaymentCheckView["sa
   return { bankOutcome: outcome, text };
 }
 
+// Names as a person reads a list of them: "A", "A or B", "A, B or C".
+function namesOf(names: string[], last: "or" | "and"): string {
+  return names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} ${last} ${names.at(-1)}`;
+}
+
+// The line saying who could approve the first transfer, from the approvers who
+// could sign it now.
+function approversText(policy: ApprovalPolicy, rule: SignoffRule, able: string[]): string {
+  if (policy.problem !== null) {
+    return `Needs approval, and approvals are refused: ${policy.problem}.`;
+  }
+  const because: string = rule.needed === 1 ? "" : `, because ${rule.why}`;
+  if (able.length < rule.needed) {
+    const who: string = able.length === 0 ? "nobody on the approver list can give it" : `only ${namesOf(able, "and")} can give it`;
+    return `Needs approval from ${rule.needed === 1 ? "one person" : `${rule.needed} people`}${because}, and ${who}. Change APPROVERS and restart PayOnce.`;
+  }
+  if (rule.needed === 1) {
+    return `Needs approval from ${able.length === 1 ? "" : "one of "}${namesOf(able, "or")} before PayOnce sends it.`;
+  }
+  return `Needs approval from ${able.length === rule.needed ? "both" : "two of"} ${namesOf(able, "and")} before PayOnce sends it${because}.`;
+}
+
+// Who could approve a first transfer held only because a person started it, as
+// continueHeld would ask on these facts: the request's terms would name no match
+// and no quote, so the payee's rule or the policy's says how many approvers it
+// needs, and the starter is barred with anyone barredFrom bars for the account.
+function approversOf(
+  ledger: Ledger,
+  policy: ApprovalPolicy,
+  obligation: Obligation,
+  record: TransferBankDetails,
+): PaymentCheckView["approvers"] {
+  const terms: HeldPaymentTerms = heldTermsFor(obligation, record, [], null, null, null);
+  const rule: SignoffRule = heldPaymentRule(policy, ledger, obligation, record, terms);
+  const choices: DomainChoice[] = signerChoices(
+    policy,
+    { state: "requested", signoffs: [] },
+    paymentAmount(terms),
+    barredOnFile(ledger, obligation, accountKeyOf(record), routeKeyOf(record)),
+    true,
+    false,
+    "payment",
+  );
+  const able: string[] = choices.filter((choice: DomainChoice): boolean => choice.canApprove).map((choice: DomainChoice): string => choice.name);
+  return {
+    needed: rule.needed,
+    why: rule.needed === 1 ? null : rule.why,
+    choices: approverViews(choices, paymentAmount(terms).currency),
+    text: approversText(policy, rule, able),
+  };
+}
+
+// What the start would do, and who could approve it when it would wait only for
+// an approval.
 function outcomeOf(
   ledger: Ledger,
   settings: Settings,
   input: PaymentCheckInput,
   fields: Record<string, string>,
   checked: PayeeCheck | null,
-): PaymentCheckView["outcome"] {
+): Pick<PaymentCheckView, "outcome" | "approvers"> {
   if (Object.keys(fields).length > 0) {
-    return { kind: "unknown", text: "PayOnce can't start it until you fix the problems in the form." };
+    return { outcome: { kind: "unknown", text: "PayOnce can't start it until you fix the problems in the form." }, approvers: null };
   }
   if (input.record?.kind !== "read" || checked === null || !checked.ok) {
     return {
-      kind: "unknown",
-      text: `${input.record?.kind === "failed" ? `${input.record.problem} ` : ""}PayOnce can't say what happens next until it can read the beneficiary.`,
+      outcome: {
+        kind: "unknown",
+        text: `${input.record?.kind === "failed" ? `${input.record.problem} ` : ""}PayOnce can't say what happens next until it can read the beneficiary.`,
+      },
+      approvers: null,
     };
   }
   const { payment }: PaymentCheckInput = input;
@@ -119,21 +189,31 @@ function outcomeOf(
   const outage: Outage | undefined = firstPaymentOutage(ledger, obligation);
   if (outage !== undefined) {
     return {
-      kind: "paused",
-      outageId: outage.id,
-      text: `It will wait: outage ${outage.id} on ${railWords(outage.currency, outage.method)} is active. PayOnce sends it once a person ends the outage.`,
+      outcome: {
+        kind: "paused",
+        outageId: outage.id,
+        text: `It will wait: outage ${outage.id} on ${railWords(outage.currency, outage.method)} is active. PayOnce sends it once a person ends the outage.`,
+      },
+      approvers: null,
     };
   }
-  const held: FirstPaymentHold | null = firstPaymentHold(
-    { ledger, reserve: settings.reserve },
-    firstPaymentFacts(obligation, input.record.record?.beneficiary?.bank_details),
-  );
+  const record: TransferBankDetails | undefined = input.record.record?.beneficiary?.bank_details;
+  const held: FirstPaymentHold | null = firstPaymentHold({ ledger, reserve: settings.reserve }, firstPaymentFacts(obligation, record));
   if (held !== null) {
-    return { kind: "hold", reason: reasonView(held.reason), text: `It will wait for a person: ${reasonText(held.reason)}.` };
+    return {
+      outcome: { kind: "hold", reason: reasonView(held.reason), text: `It will wait for a person: ${reasonText(held.reason)}.` },
+      approvers:
+        held.reason.code === "person-started" && record !== undefined
+          ? approversOf(ledger, settings.approvals, obligation, record)
+          : null,
+    };
   }
   return {
-    kind: "send",
-    text: `PayOnce sends ${formatMoney(payment.amountMinor, payment.currency)} by ${METHOD_WORDS[payment.transferMethod]} from the ${payment.wallet} wallet as soon as you start it.`,
+    outcome: {
+      kind: "send",
+      text: `PayOnce sends ${formatMoney(payment.amountMinor, payment.currency)} by ${METHOD_WORDS[payment.transferMethod]} from the ${payment.wallet} wallet as soon as you start it.`,
+    },
+    approvers: null,
   };
 }
 
@@ -166,10 +246,11 @@ export function paymentCheckView(
       : headroomAfter(ledger, settings, payment, cash);
     const below: boolean =
       headroom?.after !== null && headroom?.after !== undefined && headroom.floorSource === "setting" && headroom.after.minor < 0;
+    const { outcome, approvers }: Pick<PaymentCheckView, "outcome" | "approvers"> = outcomeOf(ledger, settings, input, fields, checked);
     return {
       view: "payment-check",
       fields: fieldTexts(fields),
-      outcome: outcomeOf(ledger, settings, input, fields, checked),
+      outcome,
       headroom,
       warnings: below
         ? [`This would leave ${payment.wallet} below its reserve floor. PayOnce doesn't check a single payment's first transfer against the floor.`]
@@ -180,6 +261,7 @@ export function paymentCheckView(
         input.fields["supplierKey"] === undefined
           ? contactOf(ledger, input.beneficiaryId, checked?.ok === true ? checked.payee : null)
           : null,
+      approvers,
     };
   });
 }

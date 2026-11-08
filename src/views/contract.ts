@@ -806,6 +806,11 @@ export interface PaymentCheckView {
   // The contact the payment would have: the record's phone on file, by its last
   // four digits, and the payee's email domain. Null until a beneficiary is picked.
   contact: { phoneEnding: string | null; emailDomain: Theirs | null } | null;
+  // Who could approve the first transfer when it would wait only because a
+  // person started it: how many approvers it needs and why a second, each
+  // approver on the list and whether they could sign it, and the line the form
+  // shows. Null for any other outcome.
+  approvers: { needed: number; why: string | null; choices: ApproverChoice[]; text: string } | null;
 }
 
 export interface PaymentCreated {
@@ -1353,6 +1358,8 @@ export interface SettingsView {
   approvals: {
     approvers: { name: string; limit: Money }[];
     rows: SettingRow[];
+    // Every payment a person starts waits for an approval before its first transfer.
+    newPaymentRule: string;
     barredRule: string;
     closeRule: string;
     problem: string | null;

@@ -14,6 +14,7 @@ import {
 import { newInvoiceId } from "../../../engine/scenario.js";
 import { amountMinorOf, amountProblem } from "../../../runs/run-file.js";
 import { readingSoft, type Obligation, type Outage, type TransferMethod } from "../../../store/ledger.js";
+import { heldBeforePaying } from "../../../store/read/facts.js";
 import { SANDBOX_OUTCOMES } from "../../../text/words.js";
 import type { IncidentView, Notice, PaymentCheckView, PaymentCreated } from "../../../views/contract.js";
 import { incidentView } from "../../../views/incident.js";
@@ -188,7 +189,9 @@ export function paymentRoutes(app: HttpApp): Route[] {
   function noticeFor(invoiceId: string): Notice {
     const obligation: Obligation | undefined = engine.ledger.obligation(invoiceId);
     if (obligation?.state === "escalated") {
-      return { tone: "warning", text: `${invoiceId} is on hold: ${obligation.escalationReason}.` };
+      return engine.ledger.reasonOf(obligation)?.code === "person-started"
+        ? { tone: "info", text: `${invoiceId} started. It waits for someone else's approval before its first transfer.` }
+        : { tone: "warning", text: `${invoiceId} is on hold: ${obligation.escalationReason}.` };
     }
     if (engine.ledger.attempts(invoiceId).length > 0) {
       return { tone: "success", text: `${invoiceId} started. PayOnce is sending the first transfer.` };
@@ -226,6 +229,13 @@ export function paymentRoutes(app: HttpApp): Route[] {
     }
     agent.wake(invoiceId);
     await agent.whenIdle(invoiceId);
+    // A first payment the look held waits for a person, and the next look, due at
+    // once, opens the request, so the answer already says who can approve it.
+    const held: Obligation | undefined = engine.ledger.obligation(invoiceId);
+    if (held !== undefined && heldBeforePaying(engine.ledger, held)) {
+      agent.wake(invoiceId);
+      await agent.whenIdle(invoiceId);
+    }
     const view: IncidentView | null = incidentView(engine.ledger, settings, Date.now(), invoiceId, live, readingSoft(cash));
     if (view === null) {
       throw new Error(`${invoiceId} is not in the ledger`);

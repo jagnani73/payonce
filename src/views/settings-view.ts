@@ -30,6 +30,8 @@ const NO_LOGIN: string =
 const BARRED_RULE: string =
   "Whoever started a payment, uploaded its pay run, or recorded a callback for its bank details cannot approve it.";
 const CLOSE_RULE: string = "Anyone with a name can close a payment without paying or cancel a waiting pay run.";
+const NEW_PAYMENT_RULE: string =
+  "Every payment a person starts waits for someone else's approval before its first transfer. Pay run rows don't wait again, because the run is approved as a whole.";
 
 // An approver's limit applies in whichever currency a payment is paid from.
 function limitOf(minor: number): Money {
@@ -93,6 +95,7 @@ export function settingsView(ledger: Ledger, settings: Settings, _now: number, s
         row("Requests expire after", `${policy.expiresAfterMs / MINUTE_MS} minutes`, ["APPROVAL_TTL_MINUTES"]),
         row("An approved request has at least", `${APPROVED_USE_WITHIN_MS / MINUTE_MS} more minutes to be used`, []),
       ],
+      newPaymentRule: NEW_PAYMENT_RULE,
       barredRule: BARRED_RULE,
       closeRule: CLOSE_RULE,
       problem: policy.problem,

@@ -114,6 +114,9 @@ function Approvals(props: { view: SettingsView["approvals"] }): JSX.Element {
             <Row key={row.label} row={row} />
           ),
         )}
+      <Line label="New payments" vars={null}>
+        {a.newPaymentRule}
+      </Line>
       <Line label="Who can't approve" vars={null}>
         {a.barredRule}
       </Line>

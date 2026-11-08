@@ -97,6 +97,11 @@ export function NextSteps(props: {
         <Line icon={look.icon} tone={look.tone} live>
           {outcomeText}
         </Line>
+        {props.waitingFor !== null || fieldProblems || check?.approvers === null || check?.approvers === undefined ? null : (
+          <Line icon="approval" tone="plain">
+            {check.approvers.text}
+          </Line>
+        )}
 
         {headroom !== null ? (
           <Line icon="bank" tone="plain">

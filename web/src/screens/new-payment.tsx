@@ -386,7 +386,7 @@ export function NewPayment(props: ScreenProps): JSX.Element {
                 label="Started by"
                 value={name}
                 onInput={setName}
-                hint="You won't be able to approve this payment's transfers."
+                hint="Someone else approves this payment before its first transfer. You won't be able to approve its transfers."
                 error={errorOf("startedBy")}
               />
             </div>
