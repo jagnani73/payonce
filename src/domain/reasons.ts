@@ -1,5 +1,5 @@
 import type { Transfer } from "../airwallex/transfers.js";
-import { rateText, type FxTerms } from "./approval.js";
+import { rateText, type AccountFailure, type FxTerms } from "./approval.js";
 import { debitOf, type Debit } from "./assess.js";
 import {
   BELOW_FLOOR_REASON,
@@ -30,7 +30,7 @@ import {
 } from "./decide.js";
 import { ACCOUNT_FAILURE_CODES, FAILURE_WORDS } from "./failure-codes.js";
 import { formatMoney } from "./money.js";
-import { CURRENCY_SOURCE, REFERENCE_SOURCE } from "./patterns.js";
+import { CURRENCY_SOURCE, REFERENCE_PATTERN, REFERENCE_SOURCE } from "./patterns.js";
 
 // Every reason PayOnce stores, as a code with its slots and the clauses the
 // engine adds, and the exact text each renders to. The engine builds reasons as
@@ -951,12 +951,28 @@ export type NeededWhyCode =
   | "run-above-threshold"
   | "uploader-unknown";
 
-// The words of every account-level failure code, as runs.ts names a row's failed
-// account (failedAccountText).
+// An account a transfer failed on with an account-level code, in PayOnce's words:
+// "the account that transfer P261102-0000002 failed on (account closed)". The
+// reference shows only in its own pattern and the code only by its words.
+export function failedAccountText(failure: AccountFailure): string {
+  const transfer: string =
+    failure.reference !== null && REFERENCE_PATTERN.test(failure.reference) ? `transfer ${failure.reference}` : "a transfer";
+  return `the account that ${transfer} failed on (${FAILURE_WORDS[failure.failureCode] ?? "an account-level code"})`;
+}
+
+// What a person does about a payment to an account a transfer failed on, as for a
+// replacement to the account its original failed on.
+export const CHECK_ACCOUNT_FIRST: string = "Check the account with the supplier first";
+
+// The words of every account-level failure code, as failedAccountText gives them.
 const ACCOUNT_FAILURE_WORDS: string = [
   ...[...ACCOUNT_FAILURE_CODES].map((code: string): string => FAILURE_WORDS[code] ?? ""),
   "an account-level code",
 ].join("|");
+
+// What a second approver's reason says of a failed account, after "row N" for a
+// pay run row.
+const FAILED_ACCOUNT_SOURCE: string = `goes to the account that (?:transfer ${REFERENCE_SOURCE}|a transfer) failed on \\((?:${ACCOUNT_FAILURE_WORDS})\\)`;
 
 // The words approvers.ts, the engine and runs.ts give for a second approver,
 // each whole, with the older wordings still on file.
@@ -974,10 +990,7 @@ const NEEDED_WHY: readonly [NeededWhyCode, RegExp][] = [
   ],
   ["run-new-payee", /^row [0-9]+ pays .+, which PayOnce has never paid on a person's approval$/],
   ["run-callback-account", /^row [0-9]+ pays an account a callback verified, not the one PayOnce last paid .+$/],
-  [
-    "run-account-failed",
-    new RegExp(`^row [0-9]+ goes to the account that (?:transfer ${REFERENCE_SOURCE}|a transfer) failed on \\((?:${ACCOUNT_FAILURE_WORDS})\\)$`),
-  ],
+  ["run-account-failed", new RegExp(`^row [0-9]+ ${FAILED_ACCOUNT_SOURCE}$`)],
   ["run-above-threshold", new RegExp(`^the ${CURRENCY_SOURCE} total is above ${MONEY}$`)],
   ["uploader-unknown", /^PayOnce does not know who uploaded this run$/],
 ];

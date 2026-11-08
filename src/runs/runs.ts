@@ -28,8 +28,8 @@ import {
 import { arrivalFor, ifSentOn, today } from "../domain/arrival.js";
 import { knownRoute, routeKeyOf } from "../domain/assess.js";
 import { callbackBars, type CallbackBar } from "../domain/barred.js";
-import { FAILURE_WORDS } from "../domain/failure-codes.js";
 import { isExpired } from "../domain/live.js";
+import { CHECK_ACCOUNT_FIRST, failedAccountText } from "../domain/reasons.js";
 import { withCurrencyLocks } from "../engine/currency-lock.js";
 import type { Dispatcher } from "../engine/dispatcher.js";
 import {
@@ -74,7 +74,7 @@ import { runRequestTerms } from "../store/stored.js";
 import { oneLine, printable, say, sayError } from "../text/printable.js";
 import { currencyFloor, type CurrencyFloor, type FloorSource } from "../domain/reserve.js";
 import { rowFromCells, type RunFile, type RunFileRow } from "./run-file.js";
-import { REFERENCE_PATTERN, TRANSFER_METHODS } from "../domain/patterns.js";
+import { TRANSFER_METHODS } from "../domain/patterns.js";
 
 // What the CLI says for an invoice number the ledger has no invoice for: that it
 // is a pay row of the run waiting for approval, which is no invoice until the run
@@ -654,19 +654,6 @@ export function domainText(check: DomainCheck): string {
   }
   return `${gives}, ${parts.join(", ")}`;
 }
-
-// A pay row's failed account in PayOnce's words: "the account that transfer
-// P261102-0000002 failed on (account closed)". The reference shows only in its
-// own pattern and the code only by its words.
-export function failedAccountText(failure: AccountFailure): string {
-  const transfer: string =
-    failure.reference !== null && REFERENCE_PATTERN.test(failure.reference) ? `transfer ${failure.reference}` : "a transfer";
-  return `the account that ${transfer} failed on (${FAILURE_WORDS[failure.failureCode] ?? "an account-level code"})`;
-}
-
-// What a person does about a row to an account a transfer failed on, as for a
-// replacement to the account its original failed on.
-export const CHECK_ACCOUNT_FIRST: string = "Check the account with the supplier first";
 
 // The caution on a pay row to an account a transfer failed on, as the run's page
 // and pnpm payrun show it.
