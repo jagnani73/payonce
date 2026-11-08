@@ -2290,6 +2290,11 @@ textarea {
     grid-column: 1;
   }
 
+  /* The id and the name wrap apart, so no dot is left at a line's end. */
+  .qrow__title > .sep {
+    display: none;
+  }
+
   .qrow__money {
     grid-column: 2;
     grid-row: 2;
