@@ -1,3 +1,4 @@
+import { FAILURE_CODES, type FailureCode } from "../domain/failure-codes.js";
 import { RAIL_WORDS_PATTERN, REFERENCE_PATTERN } from "../domain/patterns.js";
 import type { ReasonView } from "../domain/reasons.js";
 import { UNSHOWN_REFERENCE } from "../text/printable.js";
@@ -159,6 +160,40 @@ const FIXED_NEEDED_WHY: readonly string[] = [
 ];
 
 const WHY_TEXT: Checked = quotedUnless(codeIn(FIXED_WHY));
+
+function escaped(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// The situation's sentences, and the parts between its times, that are whole in
+// PayOnce's fixed words with only counts and references in them (situation.ts).
+// Any other one can name a person or a stored reason, so it stays quoted.
+const FIXED_SITUATION: RegExp = new RegExp(
+  `^(${[
+    "Closed by PayOnce",
+    "[0-9]{1,6} paid, [0-9]{1,6} with the bank, [0-9]{1,6} need you\\.",
+    "((On hold before the first transfer|Replacement) · )?[0-9]{1,3} of [0-9]{1,3} signoffs( · open until )?",
+    "[.,;:() ]{1,3}",
+    "(An email in the inbox|[0-9]{1,6} emails in the inbox) (names|name|may be) (only this payment|about this payment)\\.",
+    escaped("The supplier asked to be paid to other bank details. This request pays the account on file."),
+    escaped("This replacement goes to the account the original failed on. Check the account with the supplier first."),
+  ].join("|")})$`,
+);
+const SITUATION_TEXT: Checked = quotedUnless(fits(FIXED_SITUATION));
+
+// An incident's cause as incidentOf words it from a failure code's table words,
+// or one of its fixed causes. A cause that names a reason or a code stays quoted.
+const FAILURE_WORDS: string = [
+  ...new Set<string>(Object.values(FAILURE_CODES).map((code: FailureCode): string => code.words)),
+  "no failure code",
+  "a code PayOnce has no words for",
+]
+  .map(escaped)
+  .join("|");
+const FIXED_CAUSE: RegExp = new RegExp(
+  `^((Original|Replacement) failed: (${FAILURE_WORDS})|(Original|Replacement) (turned up late at the bank|was never sent)|Found: a payout sent outside PayOnce|A payout sent outside PayOnce names it|Paused by outage [0-9]{1,9}|Closed without paying|A transfer turned up late)$`,
+);
+const CAUSE: Checked = quotedUnless(fits(FIXED_CAUSE));
 const RAIL: Checked = { from: "unknown", plainWhen: fits(RAIL_WORDS_PATTERN) };
 const REFERENCE: Checked = { from: "airwallex", plainWhen: fits(REFERENCE_PATTERN) };
 // A reference as shownReference gives it: in its own form, or PayOnce's words for one that is not.
@@ -230,11 +265,11 @@ const OUTAGE_STRIP = { rail: RAIL, sendsText: "plain" } as const satisfies Field
 // stored reason, so they are quoted.
 const SITUATION = {
   label: "plain",
-  "detail[]": "quoted",
-  "next[]": "quoted",
+  "detail[]": SITUATION_TEXT,
+  "next[]": SITUATION_TEXT,
   ...under("why", REASON),
   "blockers[].text[]": "plain",
-  "also[]": "quoted",
+  "also[]": SITUATION_TEXT,
   "waitingOn.names[]": "person",
   ...under("can.approve", CAN),
   ...under("can.recordCallback", CAN),
@@ -245,12 +280,18 @@ const SITUATION = {
   ...under("can.checkNow", CAN),
 } as const satisfies Fields<Situation>;
 
-const RUN_SITUATION = { label: "plain", "detail[]": "quoted", "next[]": "quoted", why: "quoted", "waitingOn.names[]": "person" } as const satisfies Fields<RunSituation>;
+const RUN_SITUATION = {
+  label: "plain",
+  "detail[]": SITUATION_TEXT,
+  "next[]": SITUATION_TEXT,
+  why: "quoted",
+  "waitingOn.names[]": "person",
+} as const satisfies Fields<RunSituation>;
 
 const INCIDENT_ROW = {
   supplier: "supplier",
   ...under("situation", SITUATION),
-  "incident.cause": "quoted",
+  "incident.cause": CAUSE,
   "tags[].text": "plain",
   "primary.label": "plain",
   "primary.href": ROW_LINK,
@@ -310,7 +351,7 @@ export const INCIDENT_FIELDS = {
   "payment.supplier": "supplier",
   "payment.startedBy": "person",
   ...under("situation", SITUATION),
-  "incident.cause": "quoted",
+  "incident.cause": CAUSE,
   "summary[].lead": "plain",
   "summary[].text[]": "quoted",
   "summary[].refs[].reference": SHOWN_REFERENCE,
