@@ -481,7 +481,7 @@ How the agent works an invoice, look by look: sending and retrying payments, hol
 - Reading the record last under the lease costs one beneficiary read more for every original.
 - An outside payout with the new invoice's number that the sweep has not tied yet is the one hold the New payment preview can miss.
 - `pnpm recover` refuses a malformed invoice number, and one on a waiting pay run, with one line and nothing stored.
-- A first payment a person started that waits only for its approval has `person-started` as its reason until something else sends it to a person. Released and paid, it closes by itself, and its reason stays on file.
+- A first payment a person started that waits only for its approval has `person-started` as its reason until something else sends it to a person. Released and paid, it closes by itself, and its reason stays on file. The views and the metrics read that reason, with no clause, as part of the payment and not as an incident ([reasons.md](reasons.md), [metrics.md](metrics.md)).
 - Every original a person started goes out on an approval, so once paid it counts as paid on a person's approval (`paidOnApproval`). A later held invoice to the same account then needs one approver below `TWO_APPROVERS_ABOVE`, not the two a payee nobody approved a payment to takes.
 - The server's restart pickup (`pickUpInterrupted`) resumes an original paid on an approval after a hold, so after a restart the sandbox bank plays every such original that is still in flight.
 

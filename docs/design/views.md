@@ -46,7 +46,7 @@ A view is a typed, read-only answer built from the ledger for the page, the MCP 
 - `parts.ts` holds the pieces every view is built from: money, failures, accounts, rates, arrival estimates, timelines and the audit line.
 - `requests.ts` builds `RequestView`, `TermsView` and `RunRequestView`, `rows.ts` builds `IncidentRow` and `RunRowItem` with their ranking and each row's one action, and `decision.ts` builds the Decision panel.
 - A row's action only opens the payment or run with that option chosen. Nothing irreversible happens from a row.
-- `summary.ts` writes "What happened" in at most five bullets, from ledger fields and the situation by fixed templates, and `cautions.ts` words each caution from a code, a clause or a fixed line. No model writes either.
+- `summary.ts` writes "What happened" in at most five bullets, from ledger fields and the situation by fixed templates, and `cautions.ts` words each caution from a code, a clause or a fixed line. No model writes either. The summary's "PayOnce did" names the approval every payment a person starts waits for only while nothing since says more.
 - The views reuse three read models as they are: `incident-board.ts` ([incident-board.md](incident-board.md)), `suppliers.ts` ([supplier-view.md](supplier-view.md)) and `metrics.ts` ([metrics.md](metrics.md)).
 - `outside-fields.ts` lists, view by view, which strings are text PayOnce did not write, for the MCP projection ([mcp-server.md](mcp-server.md)).
 
@@ -103,6 +103,8 @@ A view is a typed, read-only answer built from the ledger for the page, the MCP 
 - `InboxItemView` says whether a delivered email has been read. Only the inbox routes serve the inbox views: MCP and the CLI do not.
 - An uploaded email's view carries its Date header as written, as `Theirs`, and the time it was uploaded. Both are null for an email the simulator played.
 - `SettingsView` names the `.env` variables behind each row (`SettingRow.variables`), and none for a limit fixed in PayOnce, such as Ask why's caps. It never holds a secret: for the Airwallex keys it says only whether each is set.
+- Without `clean`, `IncidentsView` leaves out closed payments with no incident (`incidentOf` null). A payment that is not closed is always listed, so a new payment waiting for its approval shows under Needs you.
+- Home's `lastClosedAt` ("Last incident closed") is the latest close among payments that had an incident.
 - `IncidentsView.totals` follow every filter the rows do, scope, search and `me` included, and count the waiting pay run's rows while the run passes them. Each wallet names the runs in `runWaiting` (`runsWaiting`). `wallets` lists every wallet a payment in the ledger is paid from, closed payments included.
 - A supplier hint, in the list and on the record, is its bank country (from the newest transfer PayOnce sent there), currencies and methods, such as "US · USD · Local", and the page shows the account and phone endings beside it. Search adds the account ending to it. It never shows the record's id.
 - `ReconView.lastCheck.at` is the latest check that ran, failed or not, and `lastOkAt` the latest one that read Airwallex in full.

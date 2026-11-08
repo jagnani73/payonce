@@ -8,7 +8,7 @@ The first part defines the words PayOnce shows people. The second defines the wo
 
 **Invoice, invoice number.** The supplier's bill and the number on it. The invoice number identifies the payment.
 
-**Incident.** Anything off the normal path for a payment: a failed or refused transfer, a replacement, a hold before paying, a time it went to a person, a payout sent outside PayOnce, an outage pause, an unrecognised or late transfer, or a close without paying. A payment paid by its first transfer never had one. An incident ends when the payment is closed. No table holds incidents; they are worked out from the ledger.
+**Incident.** Anything off the normal path for a payment: a failed or refused transfer, a replacement, a hold before paying, a time it went to a person, a payout sent outside PayOnce, an outage pause, an unrecognised or late transfer, or a close without paying. The approval every payment a person starts waits for before its first transfer is part of the payment, not an incident, so a payment that waits only for it has none. A payment paid by its first transfer never had one, whether or not it waited for that approval. An incident ends when the payment is closed. No table holds incidents; they are worked out from the ledger.
 
 **Transfer.** One Airwallex transfer for a payment, shown by its bank reference, such as `P261103-77F2G5X`.
 

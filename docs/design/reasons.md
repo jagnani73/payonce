@@ -23,8 +23,8 @@ How PayOnce records why an invoice went to a person, as text with codes beside i
 - `withClause` joins a clause last, unless the lead or a clause already names it. The engine adds clauses in `src/engine/reason-text.ts` ([uploaded-emails.md](uploaded-emails.md) has the ask not to pay).
 - The policy's text reasons become codes as they leave `decide` (`policyReason`, `floorClause`). A text with no code throws, and the look fails closed.
 - Every reason has a family (`familyOf`, a `ReasonFamily` such as `bank-details` or `paid-twice`) and a label for people (`labelOf`). `reasonView` gives a view the code, family, label, text and each clause's label.
-- `aboutBankDetailsReason`, `accountChangedReason` and `deadlineReason` answer what a reason is about, by code.
-- `person-started` (`PERSON_STARTED_REASON`, "a person started this payment, so someone else approves it before PayOnce pays it") is the reason a payment a person started waits for an approval when nothing more specific holds it. Its family is `approval`, its label "New payment to approve", and the metrics label of its family "Started by a person and approved before it went out".
+- `aboutBankDetailsReason`, `accountChangedReason`, `deadlineReason` and `routineApproval` answer what a reason is about, by code.
+- `person-started` (`PERSON_STARTED_REASON`, "a person started this payment, so someone else approves it before PayOnce pays it") is the reason a payment a person started waits for an approval when nothing more specific holds it. Its family is `approval`, and both its label and the metrics label of its family are "New payment to approve". `routineApproval` is true for that reason with no clause joined on. That approval is part of the payment, so the incident, the summary and the metrics do not treat it as an incident (below, and [metrics.md](metrics.md)).
 - `neededWhyOf` reads why a request needs a second approver (`approvals.needed_why`) to a `NeededWhyCode`. No codes are stored for it.
 
 ### How a reason is stored
@@ -74,6 +74,7 @@ How PayOnce records why an invoice went to a person, as text with codes beside i
 - `approverChoices` gives each approver and whether they can sign the latest request, with `checkSigner`'s own words when they cannot. `whyNoRequest` says why an escalated payment a person could pay has no request.
 - Blockers: Airwallex unreachable or answering with an error at the last check, an outage that would hold an approval given now, the email reader failing, and a check more than 2 minutes overdue while no step runs.
 - `incidentOf` gives a payment's incident (its cause, when it opened and ended, whether it needed a person), or null for one paid by its first transfer with nothing else on file.
+- A reason that is only the routine approval (`routineApproval`) opens no incident: a payment waiting for that approval has none, and neither does one its first transfer pays after it. The time the payment first went to a person for that approval is not when an incident opened, and a first transfer sent on it is not a held payment, so a later incident's cause is its own reason's label, not "On hold: ...". `routineRequest` reads a request's terms to tell.
 - `requestStateOf` gives a request's state for people: `waiting`, `approved`, `used`, `expired`, `replaced` or `withdrawn`.
 - `runSituationOf` does the same for a pay run, `runStatusOf` is `runStatus`'s rule with the clock passed in, and `runRowStateOf` gives a run row's state.
 
@@ -82,11 +83,12 @@ How PayOnce records why an invoice went to a person, as text with codes beside i
 - Alerts work out an invoice's need from `situationOf` and leave the floor clauses out of the fingerprint with `withoutClauses(reason, FLOOR_CLAUSES)` ([alerts.md](alerts.md)).
 - The page's Incidents and home screens, search, the inbox's candidates and the pay run views read situations (`views/incidents.ts`, `views/rows.ts`, `views/home.ts`, `views/search.ts`, `views/inbox.ts`, `views/runs.ts`).
 - The incident view (`views/incident.ts`) reads the situation and `incidentOf`. The request view reads the terms' reason with `parseReason` and why a second approver is needed with `neededWhyOf`.
+- The summary's "PayOnce did" (`views/summary.ts`) names the routine approval only when PayOnce did nothing since that says more, such as a replacement it sent by itself. Home's last close (`lastClosedAt`, "Last incident closed") counts only payments with an incident, and the Incidents list without `clean` leaves out closed payments with none.
 - The payment check, the summary and the decision card read `reasonView`, `reasonText` and `closeKindOf`. `views/contract.ts` re-exports the domain types unchanged.
 - The incident's cautions (`views/cautions.ts`) come from clause codes, the situation's extra lines and blockers, and the reason's code.
 - The supplier view's cautions test `accountChangedReason` on `Ledger.reasonOf`, and the `paid-twice` and `needs-phone` states ([supplier-view.md](supplier-view.md)).
 - The outbox suggests a callback notice by `aboutBankDetailsReason` and a bank trace on `inFlight` and `pastDeadline` ([outbox.md](outbox.md)).
-- Metrics count reasons by `familyOf`, and `REASON_LABELS` is keyed by family ([metrics.md](metrics.md)).
+- Metrics count reasons by `familyOf`, and `REASON_LABELS` is keyed by family. A closed invoice whose reason is only the routine approval counts by what happened after it (`closeHow`, [metrics.md](metrics.md)).
 - Ask why takes the escalation reason from its codes and reads every other reason text with `parseReason` and `parseClause` ([ask-why.md](ask-why.md)).
 - The incident board (`views/incident-board.ts`, `pnpm board`) reads the reason text, not the codes: it tests the text's start against `DEADLINE_REASONS`, `BANK_DETAILS_REASONS` and `OUTAGE_REASON` ([incident-board.md](incident-board.md)).
 - The engine reads its own reasons by code where it needs to, takes `closeKindFor` for `pendingClose` and `paidByReplacement` for the look's own close, and reads no situation.
@@ -100,6 +102,7 @@ How PayOnce records why an invoice went to a person, as text with codes beside i
 - `situationOf` is pure, and the page's screens, alerts, the supplier cautions and MCP answers all call it on the same kind of snapshot, so they cannot disagree about what a payment waits on.
 - The guard inside the write transaction stays the authority because a view reads a snapshot that may already be stale, and two processes share the ledger.
 - `live.ts` gives one definition of each kind of live, and the situation, alerts, the outbox and the views import it, so they read a transfer as live or not in the same way.
+- Every payment a person starts waits for the routine approval, so counting it as an incident would make each of them one and put it under Needed a person in Reports. Its reason stays stored as it is, because terms and bindings hold the text, and only the views and the metrics read it as routine. Alerts, the board and the situation still show the wait, since a person has to approve.
 - The supplier view's cautions load no approver list (`situationsOf` passes `policyFromEnv({})`) because `paid-twice` and `needs-phone` come before every state the approver list decides.
 
 ## Edge cases
@@ -111,6 +114,8 @@ How PayOnce records why an invoice went to a person, as text with codes beside i
 - A held invoice whose reason is `unrecognised` has no codes to join a clause to, so the ask not to pay is added as text by `decide.ts`'s `namingNotToPay`, and the result stays `unrecognised`.
 - `account-unknown-before-send` (`ACCOUNT_UNKNOWN_REASON`) is family `bank-details`, label "Bank details not known before sending". The situation's `detailsChanged` names it, so it waits on a person as `details-changed`. Its next step says PayOnce does not know which details the payment was for and will not send it again. `accountChangedReason` does not name it, because the supplier caution that test feeds says the details changed.
 - `escalateIfOpen` leaves all four reason columns as they are on an invoice that is already escalated, so the reason it went to a person for stands.
+- A payment a person started and closed without paying while it waited for the routine approval has the incident "Closed without paying", which needed a person.
+- The routine reason stops being routine once a clause joins it, as when the supplier asks not to pay. The payment then has an incident, and metrics count it with a person.
 - An escalated payment whose own transfer is with the bank is `with-bank`, in the `with-bank` group, not `needs-you`. Alerts give it a need all the same ([alerts.md](alerts.md)).
 - A request whose terms do not parse is told apart by the invoice: a held invoice's is a payment, any other a replacement.
 - No caller passes `lastCheck`, so the two Airwallex blockers do not show, and `sending` reads as retrying from the attempt's last try time alone.

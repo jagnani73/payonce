@@ -46,10 +46,10 @@ The ops metrics: eight tables of how a period went, built from the ledger alone 
 - A median and p90 are by nearest rank. Every median has its n, and p90 is null below 10.
 
 ### Reasons
-- An invoice needed a person when `escalation_reason` is set.
+- An invoice needed a person when `escalation_reason` is set, unless that reason is only the approval every payment a person starts waits for (`routineApproval`).
 - The reasons table counts each closed invoice under `familyOf` its reason's lead code, read from `MetricsObligation.reason` as `Ledger.reasonOf` reads it: the stored codes when they render the text exactly, else the text parsed.
 - A reason PayOnce does not write is `unrecognised`, which counts as `other`. Only the family leaves the read: `REASON_LABELS` is keyed by `ReasonFamily`.
-- A payment a person started keeps `person-started` as its reason when nothing else sent it to a person, so once paid it counts as closed with a person, under the family `approval` ("Started by a person and approved before it went out").
+- That approval is part of the payment. A payment a person started keeps `person-started` as its reason when nothing else sent it to a person, and once closed it counts by what happened after the approval (`closeHow`): `first-time` when its first transfer paid it, `replaced` when PayOnce's own replacement did. Closed without paying, it is `not-paid` under the family `approval` ("New payment to approve"). A payment that went to a person for anything else, or whose reason gained a clause, counts by that reason.
 
 ### Only fixed strings
 - Every string in a report is a code from a fixed set, a five-digit failure code, a currency code, an ISO time with a four-digit year, or a fixed label.
@@ -92,6 +92,8 @@ The ops metrics: eight tables of how a period went, built from the ledger alone 
 - A stored code such as `toString` or `constructor` gets no label, and in the failures table it counts as `other` unless it is five digits.
 - When reason codes do not render the text, as when an older PayOnce rewrote the reason, the text is parsed instead, and the first such row in a process logs one warning.
 - A held duplicate released and paying counts as released, not still held.
+- The time with a person runs from `escalated_at`, the first time an invoice went to a person. For a payment a person started that later went to a person for another reason, that first time is the routine approval's hold, so the time includes the wait for that approval and the bank's time.
+- A payment a person started that an outage paused while it waited for its approval counts as `first-time` once its first transfer pays it, while its page shows the pause as its incident.
 - A row a pay run skipped as a likely second bill does not move the second bills tile. With no held invoice closed without paying, the tile reads 0 even after a run skipped one.
 - An invoice called `metrics` has its page at `#incident/metrics`, and `#metrics` goes to Reports.
 - With no reconciliation tables yet, the breaks table has `ran: false` and no rows.

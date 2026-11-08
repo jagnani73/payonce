@@ -27,3 +27,13 @@ Checked again on 2026-11-03 after a cold review and a verifier, on ledger copies
 - At 360px the top bar was 129px and stuck to the top. It is static now and scrolls away. With no `APPROVERS`, the approval card's caution pushed the page to 372px. Every view at 360, 400, 480, 560, 561, 600, 760 and 1280px now has no sideways scroll and no console error.
 - 17 stored JSON columns on the board, outage and incident list paths, each made not JSON on its own on a seeded copy: before, 15 of them made all three views throw, approval terms only on an open request, and the run's cash and run approval terms none. Now none does. Through the server, outage codes that are not JSON answered 500 on the three routes before and 200 now. What PayOnce writes reads as before: the three views were byte-identical to main's on copies of the main ledger and a seeded one.
 - The verifier's hand-written SQL matched every figure on the seeded, main, 5,000-invoice and real-run copies. `pnpm dev` printed the same 7 decisions as main, and the default demo against a stub wrote the same rows as main apart from the new columns.
+
+## 2026-11-08: the approval a person's payment waits for
+
+Checked on 2026-11-08 with the replay rig (`rig-v3`), main at 2d4ff17 against `fix/routine-approval`, with Airwallex faked and no sandbox call:
+
+- All 36 journeys ran on both. The ledgers, the fake bank and its reads, the alerts and the server logs came out byte for byte the same. Every other difference was in the incident brief, the summary, Home's last close, the closed rows of the Incidents list without `clean`, and the metrics and Reports answers with their CLI and MCP forms.
+- `approve-own-payment`: two payments approved and paid by their first transfer read "paid after a person" 2 under the family `approval` on main, and "paid the first time" 2 on the branch. Needed a person went from 2 to 0.
+- `timeout-replace` and `ask-why-facts`: originals sent on the routine approval that failed and that PayOnce replaced by itself read "paid after a person" on main and "replaced by PayOnce" on the branch, as the rig run on main 5db2ff4, from before that approval, counted them.
+- `rail-outage`: the payment the outage paused while it waited for its approval counts as paid the first time, and the outage's own escalation still counts under Rail outage.
+- A paid original sent on the routine approval that later went to a person for a supplier email read "On hold: supplier says it has not arrived" as its incident on main, and "Supplier says it has not arrived" on the branch.
