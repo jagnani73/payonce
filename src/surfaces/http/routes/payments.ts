@@ -33,6 +33,8 @@ import type { Route } from "../router.js";
 const RECORD_EVERY_MS: number = 60_000;
 // Twelve digits, a point and two decimals, with room to spare.
 const MAX_AMOUNT_LENGTH: number = 20;
+// "50,00": a decimal comma, which amountProblem would take for a thousands separator.
+const DECIMAL_COMMA: RegExp = /^[0-9]+,[0-9]{1,2}$/;
 
 // What the form sent, read field by field: the payment, with the invoice number
 // given or one PayOnce made, the beneficiary, the sandbox bank's outcome if one
@@ -60,7 +62,11 @@ export function paymentRoutes(app: HttpApp): Route[] {
     // The problem names what was typed, so an amount far longer than any is not
     // repeated back.
     const badAmount: string | null =
-      amount.length > MAX_AMOUNT_LENGTH ? "The amount is not an amount such as 40.00" : amountProblem(amount);
+      amount.length > MAX_AMOUNT_LENGTH
+        ? "The amount is not an amount such as 40.00"
+        : DECIMAL_COMMA.test(amount)
+          ? `The amount ${amount} uses a comma for the decimals. Use a point instead, such as ${amount.replace(",", ".")}`
+          : amountProblem(amount);
     if (badAmount !== null) {
       fields["amount"] = badAmount;
     }
