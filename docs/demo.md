@@ -1,6 +1,6 @@
 # Demo script
 
-This is the script for the video, which runs about 4 minutes 35 seconds. It tells one morning in an AP team: a pay run went out overnight, two payments went wrong, and three things are waiting for a person. Each beat shows guarantees from [invariants.md](invariants.md) at work, with their numbers in brackets. Everything runs against the Airwallex sandbox. A full take makes 7 sandbox transfers.
+This is the script for the video, which runs about 4 minutes 35 seconds. It tells one morning in an AP team: a pay run went out overnight, four payments failed, PayOnce fixed one, and three things are waiting for a person. Each beat shows guarantees from [invariants.md](invariants.md) at work, with their numbers in brackets. Everything runs against the Airwallex sandbox. A full take makes 7 sandbox transfers.
 
 The voice is Yash's, acting as Alex, one of four names in `APPROVERS`. PayOnce has no login, so the page asks who you are and records that name.
 
@@ -27,6 +27,7 @@ READER_API_KEY=your-gemini-key
 - `READER_API_KEY` (or `CLAUDE_API_KEY`) is optional. With it, a model reads the supplier's email and the Emails tab says which one. Without it, the keyword reader reads it and the story is the same.
 - Leave `TWO_APPROVERS_ABOVE`, `APPROVAL_TTL_MINUTES` and `RECON_EVERY_MINUTES` at their defaults (5000, 60, 10).
 - In Airwallex, keep transfer notifications off (Settings > User settings > Notifications), or each transfer sends an email.
+- Turn off Grammarly and any other writing extension for 127.0.0.1, or record in a Chrome profile without them: they draw icons and underlines in the callback's note field.
 - Add PayOnce's MCP server to Claude Desktop or Claude Code as the README's "Read PayOnce from Claude" says, and check it once with any question.
 
 ### Reset, start, set up the morning
@@ -84,8 +85,8 @@ That ends at 4:35 and leaves 25 seconds for the sandbox.
 ### 0. The morning (0:00, 20 s)
 
 - Show: the Slack channel with PayOnce's three alerts. Then switch to the browser, on Home.
-- Say: "PayOnce runs supplier payments on Airwallex. It pays each invoice once, fixes what its policy says is safe, and hands the rest to a person. Overnight two payments went wrong, and three things need me."
-- Point at the "Why" on the bank-change alert: "supplier asked for payment to different bank details". Say: "The alert says why in PayOnce's own words. None of the phishing email reaches Slack." (62)
+- Say: "PayOnce runs supplier payments on Airwallex. It pays each invoice once, fixes what its policy allows, and hands the rest to a person. Overnight four payments failed. PayOnce fixed one by itself, and three need me."
+- Point at the "Why" on the bank-change alert: "supplier asked for payment to different bank details". Say: "The alert says why in PayOnce's words. None of the phishing email reaches Slack." (62)
 - Without Slack, open on Home and point at "Waiting for your approval". Say: "There's no login. I'm Alex, and this is what Alex can sign." (44)
 
 ### 1. Last night's pay run (0:20, 45 s)
@@ -96,7 +97,7 @@ That ends at 4:35 and leaves 25 seconds for the sandbox.
 - Say: "It needed two approvers because this supplier was new, and Kim uploaded it, so Kim couldn't be one of them." (45, 46)
 - Do: Rows tab, click INV-RUN-1001. Point at "Original ... CANCELLED, 91402 Channel timeout", then "Resending: original failed, a resend can fix it", then "Replacement ... PAID".
 - Say: "This row hit a channel timeout. That's the sending side, so PayOnce resent it by itself after checking the wallet stays above its floor. Paid." (27)
-- Do: open the Simulator (top bar). Under Test the duplicate lock, the invoice is already INV-RUN-1001. Press Test the duplicate lock.
+- Do: open the Simulator (top bar) and scroll the drawer down to Test the duplicate lock. The invoice is already INV-RUN-1001. Press Test the duplicate lock on INV-RUN-1001.
 - Say: "Could it pay this twice? I'm asking the ledger for a second payment. Refused. A unique index in SQLite allows one live payment per invoice, whatever the code above it does." (2) Close the drawer.
 - Sandbox timing: none. The lock test never reaches Airwallex.
 
@@ -108,11 +109,12 @@ That ends at 4:35 and leaves 25 seconds for the sandbox.
 - Say: "What's on offer pays the account on file. No button anywhere pays the account in an email. New bank details get in one way: a callback to the phone number on file." (23)
 - Do: choose Record a callback and fill it in. Number you called `+1 212 555 0147`. Who you spoke to `Dana Lee`. What they confirmed `New account at Bank of America, read back. The email was not from them`. Account name `Example Supplier LLC`, account number `987654321`, routing number `026009593`, bank name `Bank of America`. Recording as stays Alex. Press Record callback.
 - Say, while typing: "I called the number on file. They did change banks, but not to the bank in that email."
-- Do: choose Approve this replacement. Point at "Pay 4,000.00 USD to ... Bank of America, NA, account ending 4321", "It needs two approvers", and Approving as. It reads "Choose who is approving", with "Alex recorded the callback for the new bank details, so someone else approves this payment" under it.
+- Do: the panel has already moved on to Approve this replacement. Point at "Pay 4,000.00 USD to ... Bank of America, NA, account ending 4321", "It needs two approvers", and Approving as. It reads "Choose who is approving", with "Alex recorded the callback for the new bank details, so someone else approves this payment" under it.
 - Say: "PayOnce updated the record in Airwallex, withdrew the old request and opened one that needs two approvers. I made the call, so I can't be one of them." (24, 46)
 - Do: choose Yash in Approving as and press Approve as Yash. The picker goes back to "Choose who is approving", since the page never picks a name for you. Choose Kim and press Approve as Kim.
-- Say: "Yash, then Kim. PayOnce reads the record again before it sends, and the replacement goes to the account the callback confirmed, ending 4321, and not to the account in the email." (20) Wait for "Replacement ... PAID" and "Incident closed" on the timeline.
+- Say: "Yash, then Kim. PayOnce reads the record again before it sends, and the replacement goes to the account the callback confirmed, ending 4321, and not to the account in the email." (20) Click the Timeline tab (Emails is still open, and the tabs move up as the Decision panel shrinks) and wait for "Replacement ... PAID" and "Incident closed".
 - Sandbox timing: the callback takes about 2 seconds (Airwallex updates the record and PayOnce reads it back). After the second approval the replacement read PAID in about 5 seconds on 8 November. The longest seen was 65 seconds, when the simulator answered 500 once.
+- After each signoff the Decision panel shrinks and the page jumps. Wait a moment before you click the tabs.
 - Typing the callback takes about 30 seconds. Talk over it, or speed that stretch up in the edit.
 
 ### 3. The floor (2:25, 40 s)
@@ -147,7 +149,7 @@ That ends at 4:35 and leaves 25 seconds for the sandbox.
 ### 6. The audit check (4:15, 20 s)
 
 - Do: in the terminal, `pnpm run audit`. Every invoice and the pay run print "intact", and the running hashes match.
-- Say: "Every line PayOnce wrote this morning is on a hash chain. The audit check walks every chain and the running hashes. Intact. Each of these invoices was paid once, and the record shows who decided what." (61)
+- Say: "Every line PayOnce wrote this morning is on a hash chain. The audit check walks every chain and the running hashes. Intact. No invoice here was paid twice, and the record shows who decided what." (61)
 - If the terminal is awkward on screen: Reports, Audit trail, Check now shows the same check.
 
 ## If the sandbox is slow or refuses
@@ -178,6 +180,8 @@ The duplicate lock test, the callback and reconciliation make none. Every take n
 - With fewer transfers: remove INV-RUN-1002 from the script's CSV. That saves one transfer, but beat 5 then finds nothing waiting on Alex, so ask Claude `Is PayOnce's audit trail intact?` instead and use its `audit` answer for beat 6.
 
 ## Checked
+
+On 8 November 2026 the final dress rehearsal ran on main at 5c58281 against the real sandbox: the setup, then every beat as written. The setup took 41 seconds and the take made 7 transfers. This time the sandbox reversed all four failed transfers, so beat 4 showed no break. The EUR SWIFT fee was 14.03 EUR.
 
 On 8 November 2026 a dress rehearsal ran the setup and every beat against the real sandbox. The setup took 43 seconds and the whole take made 7 transfers. The EUR SWIFT fee was 14.03 EUR. The sandbox never refunded P261108-WOU3MC3, INV-RUN-1002's failed original: 29 minutes after it failed it still read FAILED, and its 980.00 USD had not come back. The rehearsal found seven page and alert problems, fixed on `fix/rehearsal`: a reconciliation alert for that refund while the page said no break needed a person, a USD card reading "no breaks" beside a movement tagged "break 1", a supplier caution on the payment page that named "Account A" and showed one of two, a callback note field that cut the typed note off, a tick on a skipped run row, a next check time that ignored the timer, and an Approving as that moved to another name after a signoff. The second "needs an approval" alert for the bank change is by design.
 
