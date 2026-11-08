@@ -2,6 +2,20 @@
 
 How the rules in [design/engine-rules.md](../design/engine-rules.md) were checked, as written at the time. Only paths have been updated to the current layout, so a note may describe behaviour that has changed since.
 
+## 2026-11-08: a held payment to an account a transfer just failed on (`accountFailure`)
+
+A new payment to an account where a transfer had just failed with 90701 asked for one approver and showed no caution, though a pay run row to the same account got both. Checked with the replay rig on Airwallex faked, against a run of main 6a9d663 with the same rig, 40 journeys on each side.
+
+The 39 journeys main already had, the two real ledger copies among them, came out byte for byte the same: of 345 files compared, only the new journey's 8 differ. The symmetric semantic compare finds the same decisions, attempts, transfer outcomes, bank writes and closes in every journey, with every chain intact. Its one difference is an alert in the new journey.
+
+The new journey pays Payee B once on a person's approval, opens a second payment to it, then fails a third with 90701 (account closed):
+
+- Before, the waiting request kept its one approver, the New payment preview for a fourth payment named one approver and gave no warning, and that payment went out on one signoff.
+- After, the waiting request is replaced by one that needs two, because "it goes to the account that transfer P261102-0000002 failed on (account closed)" (`account-failed`). The page, `pnpm approve` and the preview give the caution, and the fourth payment needs two signoffs. Once it is paid the failure lifts, and the waiting request is replaced again, on terms whose binding matches the first request's byte for byte. One approver pays it.
+- The move to two approvers raises one more "is held" alert, saying it waits on 2 approvers, because the alert condition counts the approvers a request needs. The replaced requests and the second signoff add three timeline lines, one approve call and one beneficiary read.
+
+On copies of the main ledger and the smoke run's ledger, all 19 stored requests still hash to their bindings and pass the strict reader and `pnpm approve`'s reader. All 6 held requests rebuild byte for byte through `heldTermsFor` with no failed account, and none goes to an account with a failure on file, so no binding moves.
+
 ## 2026-11-08: new payments' sender domain, second bills on a shared account, and their timeline lines
 
 These are the four gaps that the real-sandbox test of new payments found. They were checked with the replay rig on Airwallex faked, against a run of main a9fd3a9 with the same rig.

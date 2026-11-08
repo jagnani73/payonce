@@ -144,7 +144,7 @@ A guarantee enforced "in SQL" is a condition inside the statement that writes, r
 44. Only a name in `APPROVERS` may approve, within its limit as compared with what the payment takes from its wallet, and without `APPROVERS` every approval is refused.\
     Where: `checkSigner` and `policyFromEnv` in `src/domain/approvers.ts`; `paymentAmount` and `runAmount` in `src/domain/approval.ts`. Details: [engine-rules.md](design/engine-rules.md).
 
-45. Two different approvers are needed above `TWO_APPROVERS_ABOVE`, for an account the original did not go to, and when PayOnce does not know who started the payment, with further cases for a held invoice's first payment and for a pay run, such as a row to an account a transfer failed on with an account-level code.\
+45. Two different approvers are needed above `TWO_APPROVERS_ABOVE`, for an account the original did not go to, and when PayOnce does not know who started the payment, with further cases for a held invoice's first payment and for a pay run, such as a payment or a run row to an account a transfer failed on with an account-level code.\
     Where: `signoffsNeeded` in `src/domain/approvers.ts`; `payeeRule` and `heldPaymentRule` in `src/engine/first-payment.ts`; `runRule` in `src/runs/runs.ts`. Details: [engine-rules.md](design/engine-rules.md), [pay-runs.md](design/pay-runs.md).
 
 46. Whoever started the incident, a pay run's uploader, anyone who recorded a callback for the account, and anyone who proposed or confirmed the phone number that callback was made on cannot approve the payment. The bar is the same for an invoice and a pay run row, and holds whether or not PayOnce has paid that account since.\
