@@ -221,7 +221,8 @@ const NEVER_SYSTEM: ReadonlySet<EventKind> = new Set<EventKind>(["approval"]);
 
 // Newest first. Repeated identical error lines fold into the newest of them. The
 // sandbox bank's lines are system lines, as errors are, because they say what
-// the simulator did and not what the bank did.
+// the simulator did and not what the bank did. A cost line is a system line
+// unless it is a warning, which gives the figures behind a floor decision.
 export function timelineView(events: LedgerEvent[]): TimelineView {
   const latestOnTopic: Map<string, number> = new Map<string, number>();
   for (const event of events) {
@@ -261,7 +262,7 @@ export function timelineView(events: LedgerEvent[]): TimelineView {
         !NEVER_SYSTEM.has(event.kind) &&
         (event.kind === "error" ||
         event.kind === "sandbox" ||
-        event.topic === "cost" ||
+        (event.topic === "cost" && event.kind !== "warning") ||
         (event.topic !== null && latestOnTopic.get(event.topic) !== event.id) ||
         arrivalLine(event.message)),
       repeat: null,
