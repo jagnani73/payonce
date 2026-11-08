@@ -282,8 +282,9 @@ export interface KindTotal {
   count: number;
 }
 
+// Only the breaks of the kinds the alert asks for count here.
 export interface ReconAlertState {
-  // Every open break, counted in full.
+  // Every such open break, counted in full.
   open: number;
   kinds: KindTotal[];
   currencies: string[];
@@ -1156,16 +1157,18 @@ export class ReconStore {
     }));
   }
 
-  // The open breaks counted in full, and the newest line saying any break is new
-  // or has new facts, whatever state that break is in now. A break clearing or
-  // explained adds no such line, so it never moves the alert. The break named
-  // newest is found by the same lines, among the open ones.
-  alertState(): ReconAlertState {
-    const kinds: KindTotal[] = this.kindTotals(["open"]);
+  // The open breaks of these kinds counted in full, and the newest line saying a
+  // break of these kinds is new or has new facts, whatever state that break is
+  // in now. A break clearing or explained adds no such line, so it never moves
+  // the alert. The break named newest is found by the same lines, among the open
+  // ones.
+  alertState(alerting: readonly BreakKind[]): ReconAlertState {
+    const kinds: KindTotal[] = this.kindTotals(["open"]).filter((entry: KindTotal): boolean => alerting.includes(entry.kind));
+    const these: string = alerting.map((): string => "?").join(", ");
     const currencies: string[] = (
       this.db
-        .prepare("SELECT DISTINCT currency FROM recon_breaks WHERE state = 'open' ORDER BY currency")
-        .all() as unknown as { currency: string }[]
+        .prepare(`SELECT DISTINCT currency FROM recon_breaks WHERE state = 'open' AND kind IN (${these}) ORDER BY currency`)
+        .all(...alerting) as unknown as { currency: string }[]
     ).map((row: { currency: string }): string => row.currency);
     const news: string = NEWS_KINDS.map((): string => "?").join(", ");
     // CROSS JOIN keeps the lines as the outer loop, newest first, so the first
@@ -1174,15 +1177,18 @@ export class ReconStore {
       (this.db
         .prepare(
           `SELECT b.* FROM recon_events e CROSS JOIN recon_breaks b ON b.id = e.break_id
-            WHERE e.kind IN (${news}) AND b.state = 'open' ORDER BY e.id DESC LIMIT 1`,
+            WHERE e.kind IN (${news}) AND b.state = 'open' AND b.kind IN (${these}) ORDER BY e.id DESC LIMIT 1`,
         )
-        .get(...NEWS_KINDS) as unknown as BreakRow | undefined) ??
+        .get(...NEWS_KINDS, ...alerting) as unknown as BreakRow | undefined) ??
       (this.db
-        .prepare("SELECT * FROM recon_breaks WHERE state = 'open' ORDER BY id DESC LIMIT 1")
-        .get() as unknown as BreakRow | undefined);
+        .prepare(`SELECT * FROM recon_breaks WHERE state = 'open' AND kind IN (${these}) ORDER BY id DESC LIMIT 1`)
+        .get(...alerting) as unknown as BreakRow | undefined);
     const row: { newest: number | null } = this.db
-      .prepare(`SELECT MAX(id) AS newest FROM recon_events WHERE kind IN (${news})`)
-      .get(...NEWS_KINDS) as unknown as { newest: number | null };
+      .prepare(
+        `SELECT MAX(e.id) AS newest FROM recon_events e CROSS JOIN recon_breaks b ON b.id = e.break_id
+          WHERE e.kind IN (${news}) AND b.kind IN (${these})`,
+      )
+      .get(...NEWS_KINDS, ...alerting) as unknown as { newest: number | null };
     return {
       open: kinds.reduce((total: number, entry: KindTotal): number => total + entry.count, 0),
       kinds,

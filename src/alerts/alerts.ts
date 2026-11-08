@@ -63,7 +63,7 @@ import type {
 import { formatMoney } from "../domain/money.js";
 import { say, sayWarning } from "../text/printable.js";
 import { redactKeys } from "../text/redact.js";
-import { shownCurrency, shownInvoice, shownReference } from "../recon/recon-match.js";
+import { BREAK_KINDS, clearsByItself, shownCurrency, shownInvoice, shownReference, type BreakKind } from "../recon/recon-match.js";
 import type { KindTotal, ReconAlertState, ReconBreak } from "../store/recon-store.js";
 import { runStatus } from "../runs/runs.js";
 
@@ -503,9 +503,14 @@ function inboxCondition(inbox: InboxWaiting): FoundCondition | null {
   return condition(INBOX_KEY, { newest: inbox.newest }, facts);
 }
 
+// The kinds of break that wait on a person, as the Reconciliation page lists
+// them. A kind that clears by itself never alerts.
+const PERSON_KINDS: readonly BreakKind[] = BREAK_KINDS.filter((kind: BreakKind): boolean => !clearsByItself(kind));
+
 // Reconciliation's breaks that wait on a person, as one condition. Its
-// fingerprint is the newest line saying a break is new or has new facts, in any
-// state, so a new or changed break alerts and one clearing or explained does not.
+// fingerprint is the newest line saying such a break is new or has new facts, in
+// any state, so a new or changed break alerts and one clearing or explained does
+// not.
 function reconCondition(state: ReconAlertState): FoundCondition | null {
   const newest: ReconBreak | undefined = state.newestOpen;
   if (newest === undefined) {
@@ -757,7 +762,7 @@ export class Alerts {
     }
     found.push(...outageConditions(this.ledger, now));
     found.push(...contactConditions(this.ledger, now));
-    const recon: ReconAlertState = this.ledger.recon().alertState();
+    const recon: ReconAlertState = this.ledger.recon().alertState(PERSON_KINDS);
     const wallet: FoundCondition | null = reconCondition(recon);
     if (wallet !== null) {
       found.push(wallet);

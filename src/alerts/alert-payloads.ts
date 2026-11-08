@@ -539,11 +539,7 @@ function outageMessage(facts: OutageAlertFacts, base: string): AlertMessage {
   };
 }
 
-const BALANCE_KINDS: readonly string[] = ["balance-gap", "balance-differs"];
-
 function reconMessage(facts: ReconAlertFacts, base: string): AlertMessage {
-  const currency: string | null =
-    facts.newestCurrency !== null && CURRENCY_PATTERN.test(facts.newestCurrency) ? facts.newestCurrency : null;
   const kinds: string = facts.kinds
     .map((entry: { kind: string; count: number }): string =>
       isBreakKind(entry.kind) && Number.isSafeInteger(entry.count) ? `${KIND_LABELS[entry.kind]}: ${entry.count}` : "",
@@ -560,10 +556,7 @@ function reconMessage(facts: ReconAlertFacts, base: string): AlertMessage {
     ...(invoice === "" ? [] : [invoice]),
   ];
   return {
-    title:
-      BALANCE_KINDS.includes(facts.newestKind) && currency !== null
-        ? `The ${currency} balance does not add up from its movements`
-        : `${plural(facts.open, "wallet movement needs", "wallet movements need")} a person`,
+    title: `${plural(facts.open, "wallet movement needs", "wallet movements need")} a person`,
     line: [
       ours(
         "PayOnce matched each wallet's movements in Airwallex with its transfers and its ledger. It moved no money and changed no invoice",
