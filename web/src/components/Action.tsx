@@ -12,6 +12,9 @@ import { InlineError } from "./Notice";
 
 export type ButtonKind = "primary" | "secondary" | "danger" | "quiet";
 
+// The form a button acts on, for clearing its refusal when the form changes.
+const FORM_SCOPE: string = "form, fieldset, [role='group'], .option-form, .sup-proposal__form, .card";
+
 export function ActionButton(props: {
   label: string;
   // "Approving…"
@@ -29,12 +32,27 @@ export function ActionButton(props: {
   const [busy, setBusy] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const mounted = useRef<boolean>(true);
+  const root = useRef<HTMLSpanElement>(null);
   useEffect((): (() => void) => {
     mounted.current = true;
     return (): void => {
       mounted.current = false;
     };
   }, []);
+  // A refusal answers the form as it was, so typing or choosing in it clears it.
+  useEffect((): (() => void) | undefined => {
+    const scope: Element | null | undefined = error === null ? null : root.current?.closest(FORM_SCOPE);
+    if (scope === null || scope === undefined) {
+      return undefined;
+    }
+    const clear = (): void => setError(null);
+    scope.addEventListener("input", clear);
+    scope.addEventListener("change", clear);
+    return (): void => {
+      scope.removeEventListener("input", clear);
+      scope.removeEventListener("change", clear);
+    };
+  }, [error]);
 
   async function run(): Promise<void> {
     if (busy) {
@@ -59,7 +77,7 @@ export function ActionButton(props: {
 
   const off: boolean = props.disabled === true || busy;
   return (
-    <span class="action">
+    <span class="action" ref={root}>
       <button type="button" class={`btn btn--${props.kind ?? "secondary"}`} disabled={off} aria-busy={busy} onClick={(): void => void run()}>
         {props.icon}
         {busy ? props.busyLabel : props.label}
