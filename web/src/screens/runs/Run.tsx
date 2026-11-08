@@ -321,7 +321,8 @@ function CashTab(props: { view: RunView }): JSX.Element {
   );
 }
 
-export function RunPage(props: { id: number; tab: string | undefined; asked: string | null }): JSX.Element {
+// onActed: an action answered with the fresh run, so the list beside it reads again.
+export function RunPage(props: { id: number; tab: string | undefined; asked: string | null; onActed: () => void }): JSX.Element {
   const path: string = `/api/runs/${props.id}`;
   const polled: Polled<RunView> = usePoll<RunView>(path, pace, { remember: true });
   const view: RunView | null = polled.data;
@@ -354,7 +355,10 @@ export function RunPage(props: { id: number; tab: string | undefined; asked: str
               view={view}
               decision={view.decision}
               asked={(view.decision.request?.id ?? null) === askedFor.current ? props.asked : null}
-              onActed={(fresh: RunView): void => polled.replace(fresh)}
+              onActed={(fresh: RunView): void => {
+                polled.replace(fresh);
+                props.onActed();
+              }}
               refresh={(): void => polled.refresh()}
             />
           )}

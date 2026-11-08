@@ -165,7 +165,7 @@ export function Runs(props: ScreenProps): JSX.Element {
           </Empty>
         ) : null
       ) : (
-        <RunPage id={runId} tab={route.segments[1]} asked={route.params.get("do")} />
+        <RunPage id={runId} tab={route.segments[1]} asked={route.params.get("do")} onActed={(): void => polled.refresh()} />
       )}
     </div>
   );
