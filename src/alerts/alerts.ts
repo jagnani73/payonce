@@ -37,7 +37,7 @@ import {
 import { waiting, type Contact } from "../domain/contacts.js";
 import { BENEFICIARY_ID_PATTERN } from "../domain/patterns.js";
 import { approvedUnderway, heldBeforePaying } from "../domain/live.js";
-import { FLOOR_CLAUSES, reasonText, withoutClauses } from "../domain/reasons.js";
+import { FLOOR_CLAUSES, parseReason, reasonText, withoutClauses } from "../domain/reasons.js";
 import {
   aboutBankDetails,
   situationOf,
@@ -176,6 +176,18 @@ function situationNeed(snapshot: InvoiceSnapshot, situation: Situation): Invoice
   }
 }
 
+// Whether a person already approved what the invoice went to a person for, and
+// PayOnce is sending that payment or it is with the bank. The approval every
+// payment a person starts waits for is not one: it came before anything went
+// wrong, so a reason the invoice went to a person for since is news.
+function underway(snapshot: InvoiceSnapshot, now: number): boolean {
+  const latest: RequestSnapshot | undefined = snapshot.requests.at(-1);
+  if (latest?.terms?.action === "pay" && parseReason(latest.terms.evidence.reason).code === "person-started") {
+    return false;
+  }
+  return approvedUnderway(latest?.approval, snapshot.attempts, now);
+}
+
 // The need, unless a person already approved and PayOnce is sending that payment
 // or it is with the bank: then only a payment that may pay twice and a bank that
 // is late are news.
@@ -186,7 +198,7 @@ function needOf(snapshot: InvoiceSnapshot, situation: Situation, now: number): I
     need === "approve-held" ||
     need === "bank" ||
     need === "twice" ||
-    !approvedUnderway(snapshot.requests.at(-1)?.approval, snapshot.attempts, now)
+    !underway(snapshot, now)
     ? need
     : null;
 }
