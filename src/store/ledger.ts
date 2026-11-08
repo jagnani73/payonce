@@ -284,6 +284,10 @@ export class Ledger {
     return this.repos.bankChanges.accountRoutes();
   }
 
+  recordsOnRoute(route: string): Set<string> {
+    return this.repos.bankChanges.recordsOnRoute(route);
+  }
+
   chainStarted(): boolean {
     return this.repos.timelines.chainStarted();
   }

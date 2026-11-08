@@ -58,13 +58,15 @@ export interface FirstPaymentHold {
 // or as it would be opened, and what was read from Airwallex for it. record is the
 // beneficiary record's bank details, undefined when Airwallex has none and for a
 // pay run row, whose record accountProblem checks. account is what is wrong with
-// the account the payment would go to, or null. cash is a pay run row's wallet as
+// the account the payment would go to, or null, and route is the routeKey of
+// that account, null when there is none to pay. cash is a pay run row's wallet as
 // read under the lease, and null for any other first payment, which is not held
 // to the floor.
 export interface FirstPaymentFacts {
   obligation: Obligation;
   record: TransferBankDetails | undefined;
   account: Reason | null;
+  route: string | null;
   cash: { availableMinor: number; committedBefore: Map<string, number> } | null;
 }
 
@@ -148,7 +150,8 @@ function recordAccount(record: TransferBankDetails | undefined): { problem: Reas
 // The facts of a first payment that is not a pay run row's, from a record read
 // with no lease held, for a preview of what startPayment would do with it.
 export function firstPaymentFacts(obligation: Obligation, record: TransferBankDetails | undefined): FirstPaymentFacts {
-  return { obligation, record, account: recordAccount(record).problem, cash: null };
+  const checked: { problem: Reason | null; route: string | null } = recordAccount(record);
+  return { obligation, record, account: checked.problem, route: checked.route, cash: null };
 }
 
 // The active outage on the rail a first payment goes by, which holds it before
@@ -163,16 +166,27 @@ function heldForAccount(_engine: HoldReads, facts: FirstPaymentFacts): FirstPaym
   return facts.account === null ? null : heldFor(facts.account);
 }
 
+// The other beneficiary records the ledger has seen paying the account a first
+// payment would go to. Their invoices count as the same supplier's, so a second
+// bill sent through another record for the same account is held too.
+function recordsSharing(ledger: Ledger, facts: FirstPaymentFacts): Set<string> {
+  const records: Set<string> = facts.route === null ? new Set<string>() : ledger.recordsOnRoute(facts.route);
+  records.delete(facts.obligation.beneficiaryId);
+  return records;
+}
+
 // Why a new invoice is held before paying because of other invoices: it looks
 // like a second bill for one, it has the number of another invoice to the same
-// supplier, for any amount, or a payout for it sent outside PayOnce is live.
+// supplier, for any amount, or a payout for it sent outside PayOnce is live. The
+// same supplier includes another record that pays the same account.
 function heldForOthers(engine: HoldReads, facts: FirstPaymentFacts): FirstPaymentHold | null {
   const { ledger }: HoldReads = engine;
   const obligation: Obligation = facts.obligation;
-  const duplicates: string[] = likelyDuplicates(ledger, obligation).map(
+  const sharing: Set<string> = recordsSharing(ledger, facts);
+  const duplicates: string[] = likelyDuplicates(ledger, obligation, sharing).map(
     (other: ScannedObligation): string => other.invoiceId,
   );
-  const sameNumber: string[] = sameNumberForSupplier(ledger, obligation)
+  const sameNumber: string[] = sameNumberForSupplier(ledger, obligation, sharing)
     .map((other: ScannedObligation): string => other.invoiceId)
     .filter((other: string): boolean => !duplicates.includes(other));
   const duplicateOf: string[] = [...duplicates, ...sameNumber];
@@ -365,6 +379,7 @@ export async function startPayment(
           obligation: now,
           record,
           account: checked.problem,
+          route: checked.route,
           cash: availableMinor === null ? null : { availableMinor, committedBefore: before },
         });
         if (held !== null) {

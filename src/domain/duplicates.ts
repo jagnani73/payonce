@@ -84,11 +84,25 @@ export interface Bill {
   amountMinor: number;
 }
 
-function sameBill(obligation: Bill, bill: Bill): boolean {
+// The other beneficiary records that pay the same account as the bill's, which
+// a first payment's holds count as the same supplier too. None by default.
+const NO_RECORDS: ReadonlySet<string> = new Set<string>();
+
+// The same supplier: the same beneficiary record, the same name, or a record in
+// sharing that pays the same account.
+function sameSupplierOf(other: Bill, bill: Bill, sharing: ReadonlySet<string>): boolean {
+  return (
+    other.beneficiaryId === bill.beneficiaryId ||
+    sameSupplier(other.supplier, bill.supplier) ||
+    sharing.has(other.beneficiaryId)
+  );
+}
+
+function sameBill(obligation: Bill, bill: Bill, sharing: ReadonlySet<string> = NO_RECORDS): boolean {
   return (
     obligation.currency === bill.currency &&
     obligation.amountMinor === bill.amountMinor &&
-    (obligation.beneficiaryId === bill.beneficiaryId || sameSupplier(obligation.supplier, bill.supplier))
+    sameSupplierOf(obligation, bill, sharing)
   );
 }
 
@@ -102,36 +116,45 @@ export function sameBillAndNumber(
 }
 
 // The other invoices this one may be a second bill for, oldest first: the same
-// supplier, by beneficiary or by name, the same amount and currency, and an
-// invoice number sameInvoiceNumber matches. An invoice closed without paying as a
-// duplicate is left out, since the one it duplicated is listed already.
-export function likelyDuplicates(ledger: Ledger, obligation: ScannedObligation): ScannedObligation[] {
+// supplier, by beneficiary, by name or, given sharing, by a record that pays the
+// same account, the same amount and currency, and an invoice number
+// sameInvoiceNumber matches. An invoice closed without paying as a duplicate is
+// left out, since the one it duplicated is listed already.
+export function likelyDuplicates(
+  ledger: Ledger,
+  obligation: ScannedObligation,
+  sharing: ReadonlySet<string> = NO_RECORDS,
+): ScannedObligation[] {
   return ledger
     .scannedObligations()
     .filter(
       (other: ScannedObligation): boolean =>
         other.invoiceId !== obligation.invoiceId &&
         other.state !== "rejected" &&
-        sameBill(other, obligation) &&
+        sameBill(other, obligation, sharing) &&
         numbersOf(obligation).some((number: string): boolean => knownAs(other, number)),
     )
     .reverse();
 }
 
-// The other invoices to the same supplier, by beneficiary or by name, whose
-// number sameInvoiceNumber matches this one's, whatever their amount and
-// currency, oldest first. PayOnce pays an invoice number once, so a payment for
-// such an invoice waits for a person. Rejected invoices are left out, as in
+// The other invoices to the same supplier, by beneficiary, by name or, given
+// sharing, by a record that pays the same account, whose number
+// sameInvoiceNumber matches this one's, whatever their amount and currency,
+// oldest first. PayOnce pays an invoice number once, so a payment for such an
+// invoice waits for a person. Rejected invoices are left out, as in
 // likelyDuplicates.
-export function sameNumberForSupplier(ledger: Ledger, obligation: ScannedObligation): ScannedObligation[] {
+export function sameNumberForSupplier(
+  ledger: Ledger,
+  obligation: ScannedObligation,
+  sharing: ReadonlySet<string> = NO_RECORDS,
+): ScannedObligation[] {
   return ledger
     .scannedObligations()
     .filter(
       (other: ScannedObligation): boolean =>
         other.invoiceId !== obligation.invoiceId &&
         other.state !== "rejected" &&
-        (other.beneficiaryId === obligation.beneficiaryId ||
-          sameSupplier(other.supplier, obligation.supplier)) &&
+        sameSupplierOf(other, obligation, sharing) &&
         numbersOf(obligation).some((number: string): boolean => knownAs(other, number)),
     )
     .reverse();

@@ -151,6 +151,49 @@ export class BankChangeStore {
     return routes;
   }
 
+  // The beneficiary records the ledger has seen paying where this route goes, as
+  // the supplier view links records that share an account: an attempt's account
+  // or where its transfer went, a payout sent outside PayOnce, a pay run row, an
+  // approval request, and the details a callback kept. A route from another
+  // scheme never matches.
+  recordsOnRoute(route: string): Set<string> {
+    const records: Set<string> = new Set<string>();
+    if (knownRoute(route) === null) {
+      return records;
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT obligations.beneficiary_id AS id FROM attempts
+           JOIN obligations ON obligations.invoice_id = attempts.invoice_id
+          WHERE attempts.route_key = ? OR attempts.sent_route = ?
+         UNION SELECT COALESCE(outside_payouts.beneficiary_id, obligations.beneficiary_id) FROM outside_payouts
+           JOIN obligations ON obligations.invoice_id = outside_payouts.invoice_id
+          WHERE outside_payouts.sent_route = ?
+         UNION SELECT obligations.beneficiary_id FROM approvals
+           JOIN obligations ON obligations.invoice_id = approvals.invoice_id
+          WHERE approvals.route_key = ?
+         UNION SELECT beneficiary_id FROM run_rows WHERE route_key = ? AND beneficiary_id IS NOT NULL`,
+      )
+      .all(route, route, route, route, route) as unknown as { id: string }[];
+    for (const row of rows) {
+      records.add(row.id);
+    }
+    const callbacks = this.db
+      .prepare("SELECT beneficiary_id, applied_key, old_details FROM bank_changes")
+      .all() as unknown as { beneficiary_id: string; applied_key: string | null; old_details: string | null }[];
+    for (const callback of callbacks) {
+      const before: unknown = callback.old_details === null ? null : parsedOf(callback.old_details);
+      const oldRoute: string | null =
+        before !== null && typeof before === "object" && !Array.isArray(before)
+          ? routeKeyOf(before as TransferBankDetails)
+          : null;
+      if (oldRoute === route || (callback.applied_key !== null && routeOfDetailsKey(callback.applied_key) === route)) {
+        records.add(callback.beneficiary_id);
+      }
+    }
+    return records;
+  }
+
   // Written before the supplier's record is changed, so a change that fails part
   // way is still on file. One statement, written only while the number called is
   // still the record's phone on file, so a callback on a number that changed
