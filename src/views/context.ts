@@ -43,9 +43,23 @@ export function askWhyOn(settings: Settings): boolean {
 
 const FREE_TIER_NOTICE: string = "A model on Google's free tier reads uploaded emails. Don't upload anything you can't share with Google.";
 
+// The notice when Google's free tier only stands in for the service asked first.
+function fallbackNotice(first: ServiceView): string {
+  const who: string = first.claude ? "Claude" : `The model at ${first.host}`;
+  return `${who} reads uploaded emails first. If it can't answer, a model on Google's free tier reads them instead, so don't upload anything you can't share with Google.`;
+}
+
+function noticeOf(services: ServiceView[]): string | null {
+  const first: ServiceView | undefined = services[0];
+  if (first === undefined || !services.some((service: ServiceView): boolean => service.googleFreeTier)) {
+    return null;
+  }
+  return first.googleFreeTier ? FREE_TIER_NOTICE : fallbackNotice(first);
+}
+
 // The email reader PayOnce reads with: its name, the hosts of its model services,
 // and the notice to give before an upload when a model on Google's free tier is
-// one of them.
+// one of them, first or as a fallback.
 export function readerOf(settings: Settings): { name: string; isModel: boolean; hosts: string[]; notice: string | null } {
   const reader: EmailReader = readerFor(settings.models.readerServices());
   const services: ServiceView[] = reader instanceof ModelReader ? reader.views : [];
@@ -53,7 +67,7 @@ export function readerOf(settings: Settings): { name: string; isModel: boolean; 
     name: readerLabel(reader.name),
     isModel: !(reader instanceof KeywordReader),
     hosts: [...new Set<string>(services.map((service: ServiceView): string => service.host))],
-    notice: services.some((service: ServiceView): boolean => service.googleFreeTier) ? FREE_TIER_NOTICE : null,
+    notice: noticeOf(services),
   };
 }
 

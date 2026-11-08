@@ -73,7 +73,7 @@ How PayOnce reads a supplier email into three findings, with a model or with the
 - The other Gemini models did worse. `gemini-3.8-flash`, the model in Google's examples, answered 503 "high demand" on 5 of 8 calls, `gemini-3.5-flash-lite` took 8 to 18 seconds, and the 2.5 models return 404 for new users.
 - The timeout is 8 seconds because reads on the default models usually took 1 to 6 seconds, and a model that hangs then holds the look for at most 8 seconds before the next one is asked.
 - Ask why's page limits leave room for the reader because `gemini-3.5-flash` returns 429 after about six calls in a minute and answers again a minute later. Daily limits are shown only in AI Studio.
-- The page warns about Google's free tier because Google may use free-tier content to improve its products. The fixtures are synthetic.
+- The page warns about Google's free tier because Google may use free-tier content to improve its products. When another service is asked first, as Claude is, the warning says Google's free tier reads only when that one can't answer. The fixtures are synthetic.
 
 ## Edge cases
 
