@@ -74,14 +74,23 @@ function Supplier(props: { supplier: SupplierBrief }): JSX.Element {
   );
 }
 
+// Paid from the wallet once it is paid; closed unpaid, nothing left it.
+function walletLine(view: IncidentView): string {
+  const wallet: string = view.payment.wallet;
+  const closed: IncidentView["decision"]["closed"] = view.decision.closed;
+  if (closed === null) {
+    return `Pays from the ${wallet} wallet`;
+  }
+  return closed.kind === "paid" ? `Paid from the ${wallet} wallet` : `Closed without paying. Nothing left the ${wallet} wallet`;
+}
+
 function MoneyBox(props: { view: IncidentView }): JSX.Element {
   const m: IncidentView["money"] = props.view.money;
-  const wallet: string = props.view.payment.wallet;
   const from: MoneyView | null = m.fromWallet;
   return (
     <Box title="Money">
       <Money money={m.amount} class="pay-box__amount" />
-      <p class="pay-box__line">{`Paid from the ${wallet} wallet`}</p>
+      <p class="pay-box__line">{walletLine(props.view)}</p>
       {from === null || sameMoney(from, m.amount) ? null : (
         <p class="pay-box__line">
           {"Promised, waiting or with the bank: "}
