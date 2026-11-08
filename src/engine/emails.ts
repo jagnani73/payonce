@@ -4,7 +4,7 @@ import { isExpired } from "../domain/live.js";
 import { ModelReadError, triesText } from "../reader/reader-error.js";
 import { checkedObject, type Approval, type Ledger, type Obligation } from "../store/ledger.js";
 import { findingsOnFile, isStoredFindings, requestTerms, type StoredFindings } from "../store/stored.js";
-import { sayWarning } from "../text/printable.js";
+import { lineAbout, sayWarning } from "../text/printable.js";
 import type { Engine } from "./engine.js";
 import { messageOf, note } from "./lines.js";
 
@@ -120,7 +120,7 @@ export async function readNewEmails(engine: Engine, obligation: Obligation, held
       unread = true;
       note(engine.ledger, invoiceId, "email", readFailureLine(error, held));
       if (!(error instanceof ModelReadError)) {
-        sayWarning(`  reader   ${invoiceId}: ${messageOf(error)}`);
+        sayWarning(lineAbout(invoiceId, "reader", messageOf(error), true));
       }
       break;
     }

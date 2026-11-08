@@ -77,6 +77,7 @@ The terminal commands, one file per command in `src/surfaces/cli/`: how each loa
 ### Printing
 - Every console line PayOnce prints goes through `say`, `sayWarning` or `sayError` (`printable.ts`), so Airwallex names and errors, typed names and notes, and pay run cells cannot move the cursor or write the clipboard.
 - `pnpm mcp` points `console.log` at stderr, so `say` writes there and stdout carries only the protocol.
+- Only `pnpm ui` calls `stampLines`. A command prints its timeline and error lines with no time and no invoice number before the kind, because it works on one invoice or run at a time ([web-server.md](web-server.md)).
 - `printable` makes one line: a control character becomes a space, a format character or a tag character goes, and the line is trimmed.
 - `printableLines` does the same line by line and keeps the line breaks and each line's indent. `printableError` gives an error with its stack trace through it.
 - `printableJson` writes DEL, C1 controls, U+2028, U+2029, format characters and tag characters as `\uXXXX` escapes, so the JSON parses back to the same value. `JSON.stringify` already escapes C0 controls.

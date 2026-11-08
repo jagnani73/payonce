@@ -3,7 +3,7 @@ import type { Transfer } from "../airwallex/transfers.js";
 import { formatMoney, toMinor } from "../domain/money.js";
 import type { EventKind, Ledger, LedgerEvent } from "../store/ledger.js";
 import { LineError } from "../text/line-error.js";
-import { oneLine, say, sayError } from "../text/printable.js";
+import { errorAbout, lineAbout, oneLine, say, sayError } from "../text/printable.js";
 
 export function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -64,7 +64,7 @@ export function note(
     return;
   }
   ledger.addEvent(invoiceId, kind, line, topic);
-  say(`  ${kind.padEnd(8)} ${line}`);
+  say(lineAbout(invoiceId, kind, line));
 }
 
 // Puts a failure on the incident's timeline. It must not throw, because it runs
@@ -76,10 +76,10 @@ export function note(
 export function noteError(ledger: Ledger, invoiceId: string, error: unknown): void {
   sayError(
     error instanceof AirwallexError || error instanceof AirwallexUnreachableError
-      ? `  error    ${invoiceId}: ${messageOf(error)}`
+      ? lineAbout(invoiceId, "error", messageOf(error), true)
       : error instanceof LineError
-        ? `  ${error.kind.padEnd(8)} ${invoiceId}: ${error.detail}`
-        : error,
+        ? lineAbout(invoiceId, error.kind, error.detail, true)
+        : errorAbout(invoiceId, error),
   );
   try {
     note(ledger, invoiceId, error instanceof LineError ? error.kind : "error", messageOf(error));

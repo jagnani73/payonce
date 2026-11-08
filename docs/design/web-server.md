@@ -16,6 +16,7 @@
 - The rest of the start-up lines are the email reader's name, `describePolicy`, `describeFloors`, `describeQuotes`, `describeOutageRule`, `describeAlerts` and `describeReconSetting`.
 - Once listening, it starts one balance read, wakes interrupted payments (`pickUpInterrupted`), starts the watcher, the alerts and the reconciliation timer, and connects webhooks without waiting for them (`connectWebhooks`).
 - The server prints an unhandled rejection and keeps running. On exit it stops the tunnel, and SIGINT and SIGTERM exit 0.
+- `main` calls `stampLines` before anything prints, so every console line about one invoice or pay run starts with the time (UTC, `HH:mm:ss`) and the invoice number or `run N`: timeline lines from `note` and `runNote`, `noteError`'s and `runNoteError`'s errors with their stack traces, a look's transfer status, the reader's console line, a found payout's line and the outbox lines (`lineAbout`, `errorAbout`, `stampOf`). Several invoices' looks run at once, and the stamp keeps their lines apart in `server.log`.
 
 ### Picking up after a restart
 

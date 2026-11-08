@@ -17,7 +17,7 @@ import {
 } from "../store/ledger.js";
 import { heldBeforePaying, paidTwice } from "../store/read/facts.js";
 import { capitalise } from "../domain/sentences.js";
-import { say } from "../text/printable.js";
+import { lineAbout, say } from "../text/printable.js";
 import { assess } from "./assessment.js";
 import { close, closeRefused } from "./close.js";
 import { withCurrencyLock } from "./currency-lock.js";
@@ -308,7 +308,7 @@ function notePayment(look: Look, attempt: Attempt, transfer: Transfer): void {
   } else if (attempt.kind === "replacement" && originalStateOf(transfer) === "in_flight") {
     look.liveReplacement = transfer;
   }
-  say(`  ${attempt.kind} ${describe(transfer)}`);
+  say(lineAbout(invoiceId, attempt.kind, describe(transfer)));
 }
 
 // An invoice the bank has no original for: a new one sends its first payment, one

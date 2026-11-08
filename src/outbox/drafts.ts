@@ -17,7 +17,7 @@ import {
   type Obligation,
 } from "../store/ledger.js";
 import { formatMoney, invoiceMoney } from "../domain/money.js";
-import { say } from "../text/printable.js";
+import { lineAbout, say } from "../text/printable.js";
 import { failedBy, type ReconTransfer } from "../recon/recon-match.js";
 import type { RefundBreak } from "../store/recon-store.js";
 import { CURRENCY_PATTERN, METHOD_PATTERN, REFERENCE_PATTERN, STATUS_PATTERN } from "../domain/patterns.js";
@@ -764,7 +764,7 @@ export function createDraft(
     (draftId: number): string =>
       `Draft ${draftId} for the ${template.audience} created by ${createdBy}: "${template.label}". Text SHA-256 ${hash}. PayOnce does not send it`,
   );
-  say(`  outbox   Draft ${id} created by ${createdBy}: ${template.label}`);
+  say(lineAbout(obligation.invoiceId, "outbox", `Draft ${id} created by ${createdBy}: ${template.label}`));
   const draft: Draft | undefined = ledger.draft(id);
   if (draft === undefined) {
     throw new Error(`Draft ${id} could not be read back`);
@@ -823,5 +823,5 @@ export function markDraft(
   if (!ledger.markDraft(obligation.invoiceId, draftId, move, MOVES_FROM[move], by, note, line)) {
     throw new DraftMoveError(`Draft ${draftId} is already ${ledger.draft(draftId)?.state ?? draft.state}, so it cannot be marked ${move}`);
   }
-  say(`  outbox   ${line}`);
+  say(lineAbout(obligation.invoiceId, "outbox", line));
 }

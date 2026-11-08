@@ -18,7 +18,7 @@ import {
 } from "../store/ledger.js";
 import { toMinor } from "../domain/money.js";
 import { railFailureSeen } from "../outages/outages.js";
-import { oneLine, say, sayWarning } from "../text/printable.js";
+import { lineAbout, oneLine, say, sayWarning } from "../text/printable.js";
 import { TRANSFER_METHODS } from "../domain/patterns.js";
 
 const METHODS: ReadonlySet<string> = new Set<string>(TRANSFER_METHODS);
@@ -102,7 +102,7 @@ function adopt(engine: Engine, transfer: Transfer, state: FoundState): string | 
     line,
   );
   // The line is written with the invoice, so it is printed here as note prints one.
-  say(`  ${"bank".padEnd(8)} ${oneLine(line)}`);
+  say(lineAbout(invoiceId, "bank", oneLine(line)));
   return invoiceId;
 }
 

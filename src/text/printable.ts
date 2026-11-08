@@ -118,6 +118,37 @@ export function printableError(problem: unknown): string {
   return printableLines(typeof problem === "string" ? problem : inspect(problem));
 }
 
+// The server looks at many invoices at once, so once its entry point calls
+// stampLines, every line it prints about one invoice or pay run starts with the
+// time, UTC, and what the line is about. A command prints as it always did.
+let stamped: boolean = false;
+
+export function stampLines(): void {
+  stamped = true;
+}
+
+// "09:00:05 INV-100101", or null outside the server.
+export function stampOf(subject: string): string | null {
+  return stamped ? `${new Date().toISOString().slice(11, 19)} ${subject}` : null;
+}
+
+// A console line about one invoice: "  decision Escalate: ..." from a command,
+// or "  error    INV-100101: ..." when named, and "  09:00:05 INV-100101 decision
+// Escalate: ..." from the server.
+export function lineAbout(invoiceId: string, kind: string, text: string, named: boolean = false): string {
+  const stamp: string | null = stampOf(invoiceId);
+  return stamp !== null
+    ? `  ${stamp} ${kind.padEnd(8)} ${text}`
+    : `  ${kind.padEnd(8)} ${named ? `${invoiceId}: ` : ""}${text}`;
+}
+
+// An error with its stack trace about one invoice or run, as sayError takes it:
+// from the server after the time and the subject, and from a command unchanged.
+export function errorAbout(subject: string, problem: unknown): unknown {
+  const stamp: string | null = stampOf(subject);
+  return stamp === null ? problem : `  ${stamp} ${"error".padEnd(8)} ${printableError(problem)}`;
+}
+
 export function say(text: string = ""): void {
   console.log(printableLines(text));
 }

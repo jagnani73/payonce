@@ -23,7 +23,7 @@ import { releaseRun, runNoteError } from "../../runs/runs.js";
 import { loadSettings, type Settings } from "../../settings.js";
 import { LeaseLostError, type Ledger } from "../../store/ledger.js";
 import { cashReport, payRunLines, type CashReport } from "../../store/read/cash.js";
-import { printableError, say, sayError } from "../../text/printable.js";
+import { printableError, say, sayError, stampLines } from "../../text/printable.js";
 import { readInvoiceSnapshots } from "../../views/snapshot.js";
 import { httpApp, type HttpApp } from "./app.js";
 import { HOST, requestListener, type Route } from "./router.js";
@@ -59,6 +59,7 @@ function main(): void {
   loadEnvIfPresent();
   const settings: Settings = loadSettings();
   const port: number = settings.server.port;
+  stampLines();
 
   // A credential missing from .env, or an address that is not the sandbox, stops
   // the server in PayOnce's words and with no stack trace, before anything opens.

@@ -71,7 +71,7 @@ import { formatAmount, formatMoney } from "../domain/money.js";
 import { runHoldLine, runWaitingLine } from "../outages/outages.js";
 import { committedAcross, committedByInvoice, type CommittedExcept } from "../store/read/cash.js";
 import { runRequestTerms } from "../store/stored.js";
-import { oneLine, printable, say, sayError } from "../text/printable.js";
+import { errorAbout, oneLine, printable, say, sayError, stampOf } from "../text/printable.js";
 import { currencyFloor, type CurrencyFloor, type FloorSource } from "../domain/reserve.js";
 import { rowFromCells, type RunFile, type RunFileRow } from "./run-file.js";
 import { TRANSFER_METHODS } from "../domain/patterns.js";
@@ -814,13 +814,14 @@ export function runNote(
     return;
   }
   ledger.addRunEvent(runId, kind, line, topic);
-  say(`  run ${runId}    ${kind.padEnd(8)} ${line}`);
+  const stamp: string | null = stampOf(`run ${runId}`);
+  say(stamp === null ? `  run ${runId}    ${kind.padEnd(8)} ${line}` : `  ${stamp} ${kind.padEnd(8)} ${line}`);
 }
 
 // Puts a failure on the run's timeline. It must not throw, because it runs from
 // error handlers.
 export function runNoteError(ledger: Ledger, runId: number, error: unknown, what: string = ""): void {
-  sayError(error);
+  sayError(errorAbout(`run ${runId}`, error));
   try {
     runNote(ledger, runId, "error", `${what}${error instanceof Error ? error.message : String(error)}`);
   } catch (inner: unknown) {
