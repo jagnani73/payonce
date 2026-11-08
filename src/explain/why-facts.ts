@@ -17,6 +17,7 @@ import { deadlineMinutes, type BankDeadlineMinutes } from "../domain/deadlines.j
 import { EMAILS_UNREAD_REASON } from "../domain/decide.js";
 import {
   clauseText,
+  FAILED_ACCOUNT_SOURCE,
   parseClause,
   parseReason,
   reasonText,
@@ -476,6 +477,7 @@ const WHY_PARTS: readonly ReasonPart[] = [
   fixedPart("it pays an account PayOnce has not paid this supplier before"),
   fixedPart("PayOnce paid this supplier before it kept which account each payment went to"),
   slotPart(`the amount is above (${MONEY})`, (match: RegExpExecArray): string => match[0]),
+  slotPart(`it ${FAILED_ACCOUNT_SOURCE}`, (match: RegExpExecArray): string => match[0]),
   slotPart(
     `it pays (?:a different account from the one|another account than the one) (${INV}) was (sent|paid) to`,
     (match: RegExpExecArray, builder: FactsBuilder) => {

@@ -10,6 +10,7 @@ import { reasonText, reasonView } from "../domain/reasons.js";
 import { currencyFloor, type CurrencyFloor } from "../domain/reserve.js";
 import { signerChoices, type ApproverChoice as DomainChoice } from "../domain/situation.js";
 import {
+  accountFailureOn,
   firstPaymentFacts,
   firstPaymentHold,
   firstPaymentOutage,
@@ -135,7 +136,8 @@ function approversText(policy: ApprovalPolicy, rule: SignoffRule, able: string[]
 
 // Who could approve a first transfer held only because a person started it, as
 // continueHeld would ask on these facts: the request's terms would name no match
-// and no quote, so the payee's rule or the policy's says how many approvers it
+// and no quote, and the account a transfer failed on when there is one, so the
+// failed account, the payee's rule or the policy's says how many approvers it
 // needs, and the starter is barred with anyone barredFrom bars for the account.
 function approversOf(
   ledger: Ledger,
@@ -143,7 +145,7 @@ function approversOf(
   obligation: Obligation,
   record: TransferBankDetails,
 ): PaymentCheckView["approvers"] {
-  const terms: HeldPaymentTerms = heldTermsFor(obligation, record, [], null, null, null);
+  const terms: HeldPaymentTerms = heldTermsFor(obligation, record, [], null, null, null, null, accountFailureOn(ledger, record));
   const rule: SignoffRule = heldPaymentRule(policy, ledger, obligation, record, terms);
   const choices: DomainChoice[] = signerChoices(
     policy,

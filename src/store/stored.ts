@@ -108,6 +108,12 @@ function isReplacementEvidence(evidence: unknown): boolean {
   );
 }
 
+function isAccountFailure(value: unknown): boolean {
+  return isFields(value) && isTextOrNull(value["reference"]) && isText(value["failureCode"]);
+}
+
+// A held payment's evidence. Terms from before a held payment kept a failed
+// account have none.
 function isHeldEvidence(evidence: unknown): boolean {
   return (
     isFields(evidence) &&
@@ -115,7 +121,8 @@ function isHeldEvidence(evidence: unknown): boolean {
     Array.isArray(evidence["duplicates"]) &&
     evidence["duplicates"].every(isFields) &&
     isOptionalText(evidence["emails"]) &&
-    (evidence["bankChange"] === undefined || isFields(evidence["bankChange"]))
+    (evidence["bankChange"] === undefined || isFields(evidence["bankChange"])) &&
+    (evidence["accountFailure"] === undefined || isAccountFailure(evidence["accountFailure"]))
   );
 }
 
@@ -138,10 +145,6 @@ export function isApprovalTerms(terms: unknown): terms is ApprovalTerms {
     return isOptionalText(terms["accountKey"]) && isReplacementEvidence(terms["evidence"]);
   }
   return terms["action"] === "pay" && isText(terms["accountKey"]) && isHeldEvidence(terms["evidence"]);
-}
-
-function isAccountFailure(value: unknown): boolean {
-  return isFields(value) && isTextOrNull(value["reference"]) && isText(value["failureCode"]);
 }
 
 // One pay row of a run's terms. Rows from before PayOnce kept a row's supplier

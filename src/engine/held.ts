@@ -29,7 +29,7 @@ import { listOf } from "../text/printable.js";
 import { withCurrencyLock } from "./currency-lock.js";
 import { emailsNotRead, readNewEmails } from "./emails.js";
 import { RETRY_FAILED_LOOK_MS, type Engine, type NextLook, type Rate } from "./engine.js";
-import { heldIfRefused, heldPaymentRule } from "./first-payment.js";
+import { accountFailureOn, heldIfRefused, heldPaymentRule } from "./first-payment.js";
 import { note } from "./lines.js";
 import { holdForOutsidePayout, linkUnseenPayouts, syncOutsidePayouts } from "./outside.js";
 import { rateFor } from "./rates.js";
@@ -140,6 +140,7 @@ export async function continueHeld(engine: Engine, obligation: Obligation): Prom
     read.evidence,
     arrivalOf(engine.ledger, obligation, account.bankDetails),
     account.bankChange,
+    accountFailureOn(engine.ledger, account.bankDetails),
   );
   const rule: SignoffRule = heldRule(engine, obligation, account.bankDetails, duplicates, terms);
   const approval: Approval | undefined = engine.ledger.latestApproval(invoiceId);
@@ -358,9 +359,10 @@ function heldAccount(
 
 // How many approvers paying a held invoice needs. A second bill paid to a
 // different account from the first is the pattern of an invoice resent with new
-// bank details, so it needs two approvers. So do a payee PayOnce has never paid
-// on a person's approval, and an account it has not paid this supplier before,
-// as for a pay run's row.
+// bank details, so it needs two approvers. So do an account a transfer failed on
+// with an account-level code, a payee PayOnce has never paid on a person's
+// approval, and an account it has not paid this supplier before, as for a pay
+// run's row.
 function heldRule(
   engine: Engine,
   obligation: Obligation,

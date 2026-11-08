@@ -1,12 +1,13 @@
 import { getAvailableMinor } from "../airwallex/balances.js";
 import { findBeneficiary, type BeneficiaryRecord } from "../airwallex/beneficiaries.js";
 import type { Transfer, TransferBankDetails } from "../airwallex/transfers.js";
-import { accountKeyOf, paymentAmount, type HeldPaymentTerms } from "../domain/approval.js";
+import { accountKeyOf, paymentAmount, type AccountFailure, type HeldPaymentTerms } from "../domain/approval.js";
 import { signoffsNeeded, type ApprovalPolicy, type SignoffRule } from "../domain/approvers.js";
 import { routeKeyOf } from "../domain/assess.js";
 import { likelyDuplicates, recordsSharing, sameNumberForSupplier } from "../domain/duplicates.js";
 import { formatMoney } from "../domain/money.js";
 import {
+  failedAccountText,
   heldAsSecondBill,
   heldForRate,
   heldForSameNumber,
@@ -280,10 +281,19 @@ export function payeeRule(ledger: Ledger, obligation: Obligation, bankDetails: T
   return ledger.paidOnApproval(obligation.beneficiaryId) ? null : { needed: 2, why: PAID_ONLY_BY_ITSELF };
 }
 
+// The latest transfer that failed on these bank details with an account-level
+// code, when nothing to them was paid since, or null. A held invoice's terms
+// carry it, from continueHeld and from the New payment preview alike.
+export function accountFailureOn(ledger: Ledger, bankDetails: TransferBankDetails): AccountFailure | null {
+  return ledger.accountFailure(accountKeyOf(bankDetails), routeKeyOf(bankDetails)) ?? null;
+}
+
 // How many approvers paying a held invoice on these terms needs when none of the
-// invoices it matches was paid to another account: the payee's rule, else the
-// policy's. continueHeld asks it, and the New payment preview asks it on the
-// terms a hold for approval alone would open its request on.
+// invoices it matches was paid to another account: two when the terms carry an
+// account a transfer failed on (accountFailure), as for a pay run's row, else the
+// payee's rule, else the policy's. continueHeld asks it, and the New payment
+// preview asks it on the terms a hold for approval alone would open its request
+// on.
 export function heldPaymentRule(
   approvals: ApprovalPolicy,
   ledger: Ledger,
@@ -291,6 +301,10 @@ export function heldPaymentRule(
   bankDetails: TransferBankDetails,
   terms: HeldPaymentTerms,
 ): SignoffRule {
+  const failure: AccountFailure | undefined = terms.evidence.accountFailure;
+  if (failure !== undefined) {
+    return { needed: 2, why: `it goes to ${failedAccountText(failure)}` };
+  }
   return (
     payeeRule(ledger, obligation, bankDetails) ??
     signoffsNeeded(approvals, paymentAmount(terms), false, obligation.startedBy)

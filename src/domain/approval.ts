@@ -49,6 +49,9 @@ export interface HeldEvidence {
   // ones PayOnce last paid this supplier. Only then, so every other held invoice
   // keeps its terms and its binding.
   bankChange?: BankChangeEvidence;
+  // The latest transfer that failed on the account with an account-level code,
+  // when nothing to the account was paid after it. Only then, as bankChange.
+  accountFailure?: AccountFailure;
 }
 
 // The locked exchange rate a payment from another currency's wallet is sent
@@ -285,7 +288,9 @@ function callbackEvidence(bankChange: BankChange): BankChangeEvidence {
 // at. emails is the email evidence, null when the invoice has no emails. arrival
 // is when the payment usually arrives, given only for an invoice with a due date.
 // bankChange is the callback that verified those details when they are not the
-// ones PayOnce last paid this supplier, and null otherwise.
+// ones PayOnce last paid this supplier, and null otherwise. accountFailure is the
+// transfer that failed on those details with an account-level code, when nothing
+// to them was paid since, and null otherwise.
 export function heldTermsFor(
   obligation: Obligation,
   bankDetails: TransferBankDetails,
@@ -294,6 +299,7 @@ export function heldTermsFor(
   emails: string | null,
   arrival: ArrivalTerms | null,
   bankChange: BankChange | null = null,
+  accountFailure: AccountFailure | null = null,
 ): HeldPaymentTerms {
   return {
     action: "pay",
@@ -310,6 +316,9 @@ export function heldTermsFor(
       duplicates,
       ...(emails === null ? {} : { emails }),
       ...(bankChange === null ? {} : { bankChange: callbackEvidence(bankChange) }),
+      ...(accountFailure === null
+        ? {}
+        : { accountFailure: { reference: accountFailure.reference, failureCode: accountFailure.failureCode } }),
     },
   };
 }

@@ -120,7 +120,8 @@ export function readableTerms(terms: unknown): terms is ApprovalTerms {
     terms["action"] === "pay" &&
     Array.isArray(evidence["duplicates"]) &&
     evidence["duplicates"].every(readableDuplicate) &&
-    (evidence["emails"] === undefined || isText(evidence["emails"]))
+    (evidence["emails"] === undefined || isText(evidence["emails"])) &&
+    (evidence["accountFailure"] === undefined || readableAccountFailure(evidence["accountFailure"]))
   );
 }
 

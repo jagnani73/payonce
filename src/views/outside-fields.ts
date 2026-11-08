@@ -152,6 +152,7 @@ const FIXED_NEEDED_WHY: readonly string[] = [
   "account-not-paid-before",
   "never-paid-on-approval",
   "other-invoice-account",
+  "account-failed",
   "run-account-failed",
   "run-above-threshold",
   "uploader-unknown",

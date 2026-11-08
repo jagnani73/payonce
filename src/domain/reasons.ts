@@ -945,6 +945,7 @@ export type NeededWhyCode =
   | "account-not-paid-before"
   | "never-paid-on-approval"
   | "other-invoice-account"
+  | "account-failed"
   | "run-new-payee"
   | "run-callback-account"
   | "run-account-failed"
@@ -970,9 +971,9 @@ const ACCOUNT_FAILURE_WORDS: string = [
   "an account-level code",
 ].join("|");
 
-// What a second approver's reason says of a failed account, after "row N" for a
-// pay run row.
-const FAILED_ACCOUNT_SOURCE: string = `goes to the account that (?:transfer ${REFERENCE_SOURCE}|a transfer) failed on \\((?:${ACCOUNT_FAILURE_WORDS})\\)`;
+// What a second approver's reason says of a failed account: after "row N" for a
+// pay run row, and after "it" for a held payment. Ask why reads it too.
+export const FAILED_ACCOUNT_SOURCE: string = `goes to the account that (?:transfer ${REFERENCE_SOURCE}|a transfer) failed on \\((?:${ACCOUNT_FAILURE_WORDS})\\)`;
 
 // The words approvers.ts, the engine and runs.ts give for a second approver,
 // each whole, with the older wordings still on file.
@@ -988,6 +989,7 @@ const NEEDED_WHY: readonly [NeededWhyCode, RegExp][] = [
     "other-invoice-account",
     new RegExp(`^it pays (?:a different account from the one|another account than the one) ${INVOICE} was (?:sent|paid) to$`),
   ],
+  ["account-failed", new RegExp(`^it ${FAILED_ACCOUNT_SOURCE}$`)],
   ["run-new-payee", /^row [0-9]+ pays .+, which PayOnce has never paid on a person's approval$/],
   ["run-callback-account", /^row [0-9]+ pays an account a callback verified, not the one PayOnce last paid .+$/],
   ["run-account-failed", new RegExp(`^row [0-9]+ ${FAILED_ACCOUNT_SOURCE}$`)],
