@@ -41,8 +41,8 @@ function HeadroomText(props: { headroom: HeadroomLine }): JSX.Element {
   if (after !== null) {
     return (
       <>
-        {`${wallet} headroom after it: `}
-        <Money money={after} />
+        {`${wallet} headroom after it: ${after.estimated === true ? "about " : ""}`}
+        <Money money={{ minor: after.minor, currency: after.currency, text: after.text }} />
         {`.${floorNote}`}
       </>
     );
