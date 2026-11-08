@@ -1,5 +1,6 @@
+import type { ApprovalTerms } from "../domain/approval.js";
 import { debitCurrency } from "../domain/reserve.js";
-import type { ClauseCode } from "../domain/reasons.js";
+import { failedAccountCaution, type ClauseCode } from "../domain/reasons.js";
 import type { Blocker, InvoiceSnapshot, Situation } from "../domain/situation.js";
 import { timeAt, timed, type TimePart } from "../domain/timed.js";
 import type { Caution, FxView, RequestView } from "./contract.js";
@@ -47,6 +48,14 @@ export function cautionsOf(snapshot: InvoiceSnapshot, situation: Situation, requ
   }
   if (situation.also.includes(SAME_ACCOUNT)) {
     add(said("same-account-failed", SAME_ACCOUNT));
+  }
+  // A held payment to an account a transfer failed on, as its request's terms
+  // carry it.
+  const terms: ApprovalTerms | null | undefined = snapshot.requests.at(-1)?.terms;
+  const failed: string | null =
+    terms?.action === "pay" && terms.evidence.accountFailure !== undefined ? failedAccountCaution(terms.evidence.accountFailure) : null;
+  if (failed !== null && situation.also.includes(failed)) {
+    add(said("same-account-failed", failed));
   }
   if (situation.also.includes(OTHER_DETAILS)) {
     add(said("bank-details-question", OTHER_DETAILS));

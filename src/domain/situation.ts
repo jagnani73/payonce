@@ -1,4 +1,4 @@
-import { paymentAmount, runAmount, type ApprovalTerms, type PaymentAmount, type RunTerms } from "./approval.js";
+import { paymentAmount, runAmount, type AccountFailure, type ApprovalTerms, type PaymentAmount, type RunTerms } from "./approval.js";
 import { checkSigner, eligibleApprovers, sameName, type ApprovalPolicy, type Approver, type Barred } from "./approvers.js";
 import { barredInWords } from "./barred.js";
 import { FAILURE_WORDS, RESENDABLE_FAILURE_CODES } from "./failure-codes.js";
@@ -32,6 +32,7 @@ import { formatAmount, formatMoney } from "./money.js";
 import { RAIL_PATTERN, railWords } from "./patterns.js";
 import {
   aboutBankDetailsReason,
+  failedAccountCaution,
   labelOf,
   parseReason,
   reasonText,
@@ -1069,6 +1070,10 @@ function alsoOf(f: Facts, state: PaymentState): string[] {
     !RESENDABLE_FAILURE_CODES.has(terms.evidence.failureCode)
   ) {
     also.push("This replacement goes to the account the original failed on. Check the account with the supplier first.");
+  }
+  const failure: AccountFailure | undefined = terms?.action === "pay" ? terms.evidence.accountFailure : undefined;
+  if (state === "needs-approval" && failure !== undefined) {
+    also.push(failedAccountCaution(failure));
   }
   if (state !== "bank-late" && f.overdue !== undefined) {
     also.push(`${capitalise(transferName(f, f.overdue))} is past its bank deadline.`);

@@ -965,6 +965,12 @@ export function failedAccountText(failure: AccountFailure): string {
 // replacement to the account its original failed on.
 export const CHECK_ACCOUNT_FIRST: string = "Check the account with the supplier first";
 
+// The caution on a held payment to an account a transfer failed on, as the
+// payment's page, pnpm approve and the New payment preview show it.
+export function failedAccountCaution(failure: AccountFailure): string {
+  return `This payment goes to ${failedAccountText(failure)}. ${CHECK_ACCOUNT_FIRST}.`;
+}
+
 // The words of every account-level failure code, as failedAccountText gives them.
 const ACCOUNT_FAILURE_WORDS: string = [
   ...[...ACCOUNT_FAILURE_CODES].map((code: string): string => FAILURE_WORDS[code] ?? ""),

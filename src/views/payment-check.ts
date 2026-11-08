@@ -1,12 +1,12 @@
 import { findBeneficiary, type BeneficiaryRecord } from "../airwallex/beneficiaries.js";
 import { AirwallexError, AirwallexUnreachableError, type AirwallexClient } from "../airwallex/client.js";
 import type { TransferBankDetails } from "../airwallex/transfers.js";
-import { accountKeyOf, heldTermsFor, paymentAmount, type HeldPaymentTerms } from "../domain/approval.js";
+import { accountKeyOf, heldTermsFor, paymentAmount, type AccountFailure, type HeldPaymentTerms } from "../domain/approval.js";
 import type { ApprovalPolicy, SignoffRule } from "../domain/approvers.js";
 import { routeKeyOf } from "../domain/assess.js";
 import { phoneEnding } from "../domain/contacts.js";
 import { formatMoney } from "../domain/money.js";
-import { reasonText, reasonView } from "../domain/reasons.js";
+import { failedAccountCaution, reasonText, reasonView } from "../domain/reasons.js";
 import { currencyFloor, type CurrencyFloor } from "../domain/reserve.js";
 import { signerChoices, type ApproverChoice as DomainChoice } from "../domain/situation.js";
 import {
@@ -249,14 +249,22 @@ export function paymentCheckView(
     const below: boolean =
       headroom?.after !== null && headroom?.after !== undefined && headroom.floorSource === "setting" && headroom.after.minor < 0;
     const { outcome, approvers }: Pick<PaymentCheckView, "outcome" | "approvers"> = outcomeOf(ledger, settings, input, fields, checked);
+    // The account a transfer failed on, which the payment's request would carry
+    // and caution about, once the record is read and could be paid.
+    const details: TransferBankDetails | undefined =
+      checked?.ok === true && input.record?.kind === "read" ? input.record.record?.beneficiary?.bank_details : undefined;
+    const failure: AccountFailure | null = details === undefined ? null : accountFailureOn(ledger, details);
     return {
       view: "payment-check",
       fields: fieldTexts(fields),
       outcome,
       headroom,
-      warnings: below
-        ? [`This would leave ${payment.wallet} below its reserve floor. PayOnce doesn't check a single payment's first transfer against the floor.`]
-        : [],
+      warnings: [
+        ...(below
+          ? [`This would leave ${payment.wallet} below its reserve floor. PayOnce doesn't check a single payment's first transfer against the floor.`]
+          : []),
+        ...(failure === null ? [] : [failedAccountCaution(failure)]),
+      ],
       sandbox: sandboxLine(payment, input.bankOutcome ?? PAID_OUTCOME),
       invoiceId: payment.invoiceId,
       contact:
