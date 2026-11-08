@@ -4,6 +4,7 @@ import type { TransferBankDetails } from "../airwallex/transfers.js";
 import type { Settings } from "../settings.js";
 import { readingSoft, type LastPaid, type Ledger, type TransferMethod } from "../store/ledger.js";
 import type { BeneficiaryOption, BeneficiaryPickerView } from "./contract.js";
+import { routeKeyOf } from "../domain/assess.js";
 import { REFERENCE_PATTERN } from "../domain/patterns.js";
 import { supplierKeyOf } from "./context.js";
 import { iso, why } from "./parts.js";
@@ -68,7 +69,34 @@ function lastPaidOf(ledger: Ledger, beneficiaryId: string): BeneficiaryOption["l
   };
 }
 
-function optionOf(ledger: Ledger, record: BeneficiaryRecord & { id: string }, summaries: Map<string, SupplierSummary>): BeneficiaryOption {
+// How many of the records read hold each account, by routeKeyOf, so a record
+// that shares its account with another is marked whether or not the ledger has
+// seen either of them.
+function accountCounts(records: BeneficiaryRecord[]): Map<string, number> {
+  const counts: Map<string, number> = new Map<string, number>();
+  for (const record of records) {
+    const details: TransferBankDetails | undefined = record.beneficiary?.bank_details;
+    if (details !== undefined) {
+      const key: string = routeKeyOf(details);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
+function cautionsOf(record: BeneficiaryRecord & { id: string }, summaries: Map<string, SupplierSummary>, shared: Map<string, number>): string[] {
+  const details: TransferBankDetails | undefined = record.beneficiary?.bank_details;
+  const labels: string[] = (summaries.get(record.id)?.cautions ?? []).map((code: SupplierSummary["cautions"][number]): string => CAUTION_LABELS[code]);
+  const sharing: boolean = details !== undefined && (shared.get(routeKeyOf(details)) ?? 0) > 1;
+  return sharing && !labels.includes(CAUTION_LABELS["shared-account"]) ? [...labels, CAUTION_LABELS["shared-account"]] : labels;
+}
+
+function optionOf(
+  ledger: Ledger,
+  record: BeneficiaryRecord & { id: string },
+  summaries: Map<string, SupplierSummary>,
+  shared: Map<string, number>,
+): BeneficiaryOption {
   const details: TransferBankDetails | undefined = record.beneficiary?.bank_details;
   const ending: string | null = endingOf(details);
   const country: unknown = details?.["bank_country_code"];
@@ -84,7 +112,7 @@ function optionOf(ledger: Ledger, record: BeneficiaryRecord & { id: string }, su
         ? null
         : { label: [details?.bank_name, ending === null ? null : `account ending ${ending}`].filter((part: string | null | undefined): part is string => typeof part === "string").join(", "), ending },
     lastPaid: lastPaidOf(ledger, record.id),
-    cautions: (summaries.get(record.id)?.cautions ?? []).map((code: SupplierSummary["cautions"][number]): string => CAUTION_LABELS[code]),
+    cautions: cautionsOf(record, summaries, shared),
     onRecord: summaries.has(record.id),
   };
 }
@@ -109,12 +137,13 @@ export function beneficiaryPicker(ledger: Ledger, settings: Settings, now: numbe
         summary.key === null ? [] : [[summary.key, summary]],
       ),
     );
+    const shared: Map<string, number> = accountCounts(read.records);
     return {
       view: "beneficiaries",
       q,
       options: read.records
         .filter((record: BeneficiaryRecord): record is BeneficiaryRecord & { id: string } => typeof record.id === "string" && supplierKeyOf(record.id) !== null)
-        .map((record: BeneficiaryRecord & { id: string }): BeneficiaryOption => optionOf(ledger, record, summaries))
+        .map((record: BeneficiaryRecord & { id: string }): BeneficiaryOption => optionOf(ledger, record, summaries, shared))
         .filter((option: BeneficiaryOption): boolean => q === "" || matches(option, q))
         .slice(0, SHOWN),
       problem: null,
