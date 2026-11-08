@@ -1400,7 +1400,7 @@ function cautionsOf(
       code: "shared-account",
       text:
         names.length === 0
-          ? "An account this record paid is also on another supplier record. PayOnce treats the two as separate suppliers: a callback or a payment on one does not count for the other."
+          ? "Bank details on this record are also on another supplier record. PayOnce treats the two as separate suppliers: a callback or a payment on one does not count for the other."
           : `${subject} ${names.length === 1 ? "is" : "are"} also on another supplier record. PayOnce treats the two as separate suppliers: a callback or a payment on one does not count for the other.`,
       accounts: labels,
       keys: sharedKeys.sort(),
@@ -1410,12 +1410,22 @@ function cautionsOf(
     if (key === "") {
       continue;
     }
+    // A payment to the account the bank paid after a failure shows the account
+    // takes money again, so only failures since the latest paid one count.
+    const paidSince: number = Math.max(
+      Number.NEGATIVE_INFINITY,
+      ...facts.attempts
+        .filter((attempt: SupplierAttempt): boolean => attempt.state === "paid" && attemptKey(attempt) === key)
+        .map(sentAtOf)
+        .filter((at: number): boolean => Number.isFinite(at)),
+    );
     const failed: SupplierAttempt[] = facts.attempts.filter(
       (attempt: SupplierAttempt): boolean =>
         failedAttempt(attempt) &&
         attemptKey(attempt) === key &&
         ACCOUNT_FAILURE_CODES.has(attempt.failureCode ?? "") &&
-        now - sentAtOf(attempt) <= RECENT_MS,
+        now - sentAtOf(attempt) <= RECENT_MS &&
+        sentAtOf(attempt) > paidSince,
     );
     const latest: SupplierAttempt | undefined = failed.at(-1);
     if (latest !== undefined) {
@@ -1503,7 +1513,7 @@ function cautionsOf(
       since: earliest(recent.map(sentAtOf)),
     });
   }
-  const nonReceipt: SupplierObligation[] = facts.obligations.filter(
+  const nonReceipt: SupplierObligation[] = openOnes.filter(
     (obligation: SupplierObligation): boolean => facts.findings.get(obligation.invoiceId)?.claimsNonReceipt === true,
   );
   if (nonReceipt.length > 0) {
