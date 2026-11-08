@@ -66,13 +66,13 @@ The supplier view shows one Airwallex beneficiary record at a time: what PayOnce
   - `unconfirmed-account`;
   - `misdirected`;
   - `shared-account`;
-  - `account-failure`: a code in `ACCOUNT_FAILURE_CODES` (90701, 90101, 90802) on the last paid or last stored account in the last 30 days;
+  - `account-failure`: a code in `ACCOUNT_FAILURE_CODES` (90701, 90101, 90802) on the last paid or last stored account in the last 30 days, sent after the latest payment to that account the bank paid, so a later paid payment clears it;
   - `domain-changed`;
   - `asks-not-to-pay` and `asks-new-details` (open invoices only);
   - `paid-twice`;
   - `no-phone`;
   - `recent-failures`, by `bank_created_at`, else `opened_at` (a failed attempt the bank still has live is not one);
-  - `non-receipt`, `flagged-senders`, `no-domain`, `outside-payout`, `held-duplicate`;
+  - `non-receipt` (open invoices only), `flagged-senders`, `no-domain`, `outside-payout`, `held-duplicate`;
   - `outage`: an active outage on an open invoice's rail.
 - `paid-twice` and `no-phone` take the open invoices in situation state `paid-twice` and `needs-phone` (`situationOf`). `situationsOf` builds those situations with an empty approver list (`policyFromEnv({})`), since neither state depends on it.
 - `no-phone` ends "Put one on file below. It takes two people."
@@ -101,7 +101,9 @@ The supplier view shows one Airwallex beneficiary record at a time: what PayOnce
 - The contact block gives the phone on file by its ending, who proposed and confirmed it, a proposal waiting, the earlier versions, who may not record a callback on it, and what a person can do now (`propose`, `confirm`, `withdraw`). The full number is served only by the contact route ([supplier-contacts.md](supplier-contacts.md)).
 - A payment with no transfer says it was not sent, with no account or send time.
 - Starting a new payment from the record is allowed, and `can.newPayment.href` opens New payment with the record picked.
-- The phone on file gives no `since` for a migrated number, because PayOnce knows only when it moved it. A removal two people confirmed gives `removed` and no `changed`, and the confirm notice says the number is no longer on file. Each earlier version gives the note it was withdrawn with (`closeNote`).
+- The phone on file gives no `since` for a migrated number, because PayOnce knows only when it moved it. A removal two people confirmed gives `removed` and no `changed`, and the confirm notice says the number is no longer on file. Each earlier version gives the note it was withdrawn with (`closeNote`). A replaced version gives none, since its stored note is PayOnce's own, and the page says the next number replaced it when its confirmer confirmed that number.
+- A callback row carries `retired` when it was applied on a phone number no longer on file, so it no longer verifies the account (`verifiedBankChange`).
+- In endings mode, `shared-account` for bank details with no known ending says "Bank details on this record are also on another supplier record".
 
 ### Routes
 - `GET /api/suppliers` (with an optional `q`) and `GET /api/suppliers/:key` answer `SuppliersView` and `SupplierView`. They write nothing, so they skip the Dispatcher.

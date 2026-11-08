@@ -199,7 +199,7 @@ The table lists every route in `src/surfaces/http/routes/`. Views and their buil
 - `usePoll` (`web/src/poll.ts`) is the one scheduler. The first read starts at once, the next one `every(view)` milliseconds after the last answer, and a read still running is never started again.
 - A failed read keeps the last good view on screen and tries again at the same pace. Only the screen on show polls.
 - The payment and run pages poll every 1.5 seconds (`FAST_MS`) while the view says busy or watching, and every 5 (`SLOW_MS`) otherwise. Home and the run list speed up for busy only.
-- The status chip polls `GET /api/status` every 10 seconds on every screen. The cash panel polls at 1.5 seconds while a balance read runs.
+- The status chip polls `GET /api/status` every 10 seconds on every screen, and again after every action's notice (`onActed`), so the inbox badge follows an upload or a delivery. The cash panel polls at 1.5 seconds while a balance read runs.
 - An action's answer goes on screen at once (`replace`), and a read that started before it is dropped when it lands.
 - A poll never wipes what someone is typing: a form keeps its draft in its own state.
 
