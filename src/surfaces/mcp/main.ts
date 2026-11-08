@@ -268,11 +268,13 @@ interface WaitingForAnswer {
 
 const WAITING_FOR = { name: "person", ...under("items[]", QUEUE_ITEM) } as const satisfies Fields<WaitingForAnswer>;
 
-// board's groups, by the names the incident board gave them.
-const BOARD_GROUPS: Record<"person" | "deadline" | "bank" | "open", IncidentScope> = {
+// board's groups, by the names the incident board gave them. payonce is the
+// group's name in the answer's scope, and open is its older name.
+const BOARD_GROUPS: Record<"person" | "deadline" | "bank" | "payonce" | "open", IncidentScope> = {
   person: "needs-you",
   deadline: "bank-late",
   bank: "with-bank",
+  payonce: "payonce",
   open: "payonce",
 };
 
@@ -405,9 +407,9 @@ function createServer(): McpServer {
     {
       title: "Incident board",
       description:
-        "The payments in one group of the incident board, ranked as the PayOnce page ranks them: group order, the most money first, then the oldest. group is person (waiting on a person to approve, call back or close; the default), deadline (the bank is past its deadline), bank (with the bank) or open (PayOnce is handling it). currency is the wallet the money leaves, and origin is payonce, outside or pay-run. Each row carries the payment's situation: its state, why, what happens next and who it waits on. The answer also counts every group, totals each wallet and lists the active rail outages. A pay run waiting for approval is in runs, and waiting_for lists what one approver can sign.",
+        "The payments in one group of the incident board, ranked as the PayOnce page ranks them: group order, the most money first, then the oldest. group is person (waiting on a person to approve, call back or close; the default), deadline (the bank is past its deadline), bank (with the bank) or payonce (PayOnce is handling it; open is the same group by its older name, not every open payment). A closed payment that never had an incident, its first transfer paid with nothing wrong, is left out of the groups and their counts, as on the page, so they can add up to fewer than incidents' total. currency is the wallet the money leaves, and origin is payonce, outside or pay-run. Each row carries the payment's situation: its state, why, what happens next and who it waits on. The answer also counts every group, totals each wallet and lists the active rail outages. A pay run waiting for approval is in runs, and waiting_for lists what one approver can sign.",
       inputSchema: z.strictObject({
-        group: z.enum(["person", "deadline", "bank", "open"]).optional(),
+        group: z.enum(["person", "deadline", "bank", "payonce", "open"]).optional(),
         currency: z
           .string()
           .regex(CURRENCY_PATTERN)
@@ -427,7 +429,7 @@ function createServer(): McpServer {
     "incidents",
     {
       title: "Incident list",
-      description: `Every payment in the ledger, open and closed, ranked as board ranks them, each row with its situation. state keeps only the payments in that ledger state: open (PayOnce is handling it), escalated (waiting on a person), settled (closed as paid) or rejected (closed without paying). limit caps the rows, ${LIST_LIMIT} if left out, and total says how many matched. Use it to find an invoice number for incident.`,
+      description: `Every payment in the ledger, open and closed, including those that never had an incident, which board leaves out, ranked as board ranks them, each row with its situation. state keeps only the payments in that ledger state: open (PayOnce is handling it), escalated (waiting on a person), settled (closed as paid) or rejected (closed without paying). limit caps the rows, ${LIST_LIMIT} if left out, and total says how many matched. Use it to find an invoice number for incident.`,
       inputSchema: z.strictObject({
         state: z.enum(["open", "escalated", "settled", "rejected"]).optional(),
         limit: z.int().min(1).max(500).optional().describe(`How many to list, ${LIST_LIMIT} if left out`),

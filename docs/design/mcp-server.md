@@ -35,7 +35,7 @@ Twelve tools, in this order. Each builds its view on the read-only ledger with n
 
 | Tool | Arguments | Answer |
 |---|---|---|
-| `board` | `group` (person, deadline, bank or open; person when left out), `currency`, `origin` | `IncidentsView` with the group's scope: person is needs-you, deadline bank-late, bank with-bank, open payonce |
+| `board` | `group` (person, deadline, bank, or payonce with open its older name; person when left out), `currency`, `origin` | `IncidentsView` with the group's scope: person is needs-you, deadline bank-late, bank with-bank, payonce and open payonce. Like the page, it leaves out closed payments with no incident, which `incidents` lists |
 | `incidents` | `state` (open, escalated, settled or rejected), `limit` (1 to 500, 100 when left out) | `IncidentsView` with scope all and `clean`, its rows kept by the obligation's ledger state and cut to `limit`, plus `total`, the rows that matched |
 | `incident` | `invoiceId`, `lines` (1 to 1,000, 20 when left out) | `IncidentView`, its timeline cut to the newest `lines` |
 | `cash` | none | `CashView`, plus `source` (server or ledger) and `balance` (`read`, `why`) |
