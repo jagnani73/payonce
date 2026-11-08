@@ -16,8 +16,12 @@ const GLYPHS: Record<Tone, { d: string; filled: boolean }> = {
   done: { d: "M1.8 5.4l2.2 2.3L8.4 2.6", filled: false },
 };
 
-export function ToneBadge(props: { tone: Tone; label: string; size?: "small" | "large" }): JSX.Element {
-  const glyph: { d: string; filled: boolean } = GLYPHS[props.tone];
+// A pay run row skipped at upload keeps its tone's fill with a skip mark in
+// place of the tick, since it never went out.
+const SKIPPED: { d: string; filled: boolean } = { d: "M2 2.2L6 5L2 7.8zM8.2 2.2v5.6", filled: false };
+
+export function ToneBadge(props: { tone: Tone; label: string; size?: "small" | "large"; skipped?: boolean }): JSX.Element {
+  const glyph: { d: string; filled: boolean } = props.skipped === true ? SKIPPED : GLYPHS[props.tone];
   return (
     <span class={`chip chip--${props.tone}${props.size === "large" ? " chip--large" : ""}`}>
       <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" focusable="false">

@@ -127,7 +127,11 @@ function StatusCell(props: { row: RunRowView; domain: boolean; open: boolean; on
       {row.state === "released" && payment !== null ? (
         <ToneBadge tone={payment.situation.tone} label={payment.situation.label} />
       ) : (
-        <ToneBadge tone={row.state === "released" ? "done" : ROW_TONES[row.state]} label={row.state === "second-bill-check" ? "Pays" : row.label} />
+        <ToneBadge
+          tone={row.state === "released" ? "done" : ROW_TONES[row.state]}
+          label={row.state === "second-bill-check" ? "Pays" : row.label}
+          skipped={row.state === "skipped"}
+        />
       )}
       {row.state === "second-bill-check" ? (
         <span class="tag tag--warn">{`Possible second bill of ${row.secondBillOf.join(", ")}`}</span>
