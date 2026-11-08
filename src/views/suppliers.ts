@@ -319,6 +319,9 @@ export interface BankChangeView {
   to: string | null;
   recordedAt: string | null;
   latest: boolean;
+  // Applied, but made on a phone number no longer on file, so it no longer
+  // verifies the account (verifiedBankChange).
+  retired: boolean;
   barred: string[];
 }
 
@@ -1890,6 +1893,7 @@ function bankChangesOf(ledger: Ledger, facts: RecordFacts, accounts: Accounts): 
       to: applied === null ? null : (accounts.labelOf.get(applied.key) ?? null),
       recordedAt: iso(callback.recordedAt),
       latest: callback === accounts.latestApplied,
+      retired: callback.state === "applied" && !callback.onFilePhone,
       barred,
     };
   });

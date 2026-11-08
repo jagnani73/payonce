@@ -212,6 +212,7 @@ export function supplierView(ledger: Ledger, settings: Settings, now: number, ke
         from: change.from,
         to: change.to,
         state: change.state,
+        retired: change.retired,
       })),
       secondBills: detail.duplicates.map((group: DuplicateGroup) => ({
         kind: group.kind,

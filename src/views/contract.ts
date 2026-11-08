@@ -1093,7 +1093,8 @@ export interface PhoneVersionView {
   confirmedAt: Iso | null;
   closedBy: PersonName | null;
   closedAt: Iso | null;
-  // Why it was withdrawn, as typed.
+  // Why it was withdrawn, as typed. Null for a number another one replaced,
+  // whose stored note is PayOnce's own.
   closeNote: Theirs | null;
 }
 
@@ -1158,7 +1159,9 @@ export interface SupplierView {
   contact: SupplierContactView;
   accounts: SupplierAccountView[];
   payments: { open: IncidentRow[]; closed: { paid: number; unpaid: number; listed: IncidentRow[] } };
-  callbacks: { id: number; invoiceId: InvoiceId; calledBy: PersonName; numberEnding: string | null; calledAt: Iso | null; from: string | null; to: string | null; state: string }[];
+  // retired: applied, but made on a phone number no longer on file, so it no
+  // longer verifies the account.
+  callbacks: { id: number; invoiceId: InvoiceId; calledBy: PersonName; numberEnding: string | null; calledAt: Iso | null; from: string | null; to: string | null; state: string; retired: boolean }[];
   secondBills: { kind: "same-bill" | "same-number"; invoices: DuplicateView[] }[];
   runRows: { runId: RunId; line: number; invoiceId: InvoiceId | null; label: string }[];
   inbox: { uploadId: UploadId; invoices: InvoiceId[]; suggested: boolean }[];

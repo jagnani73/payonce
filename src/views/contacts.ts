@@ -97,7 +97,7 @@ function versionView(version: PhoneVersion): PhoneVersionView {
     confirmedAt: version.confirmedAt,
     closedBy: version.closedBy,
     closedAt: version.closedAt,
-    closeNote: version.closeNote,
+    closeNote: version.state === "replaced" ? null : version.closeNote,
   };
 }
 

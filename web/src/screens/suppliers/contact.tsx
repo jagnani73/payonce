@@ -539,6 +539,19 @@ function ClosedVersion(props: { version: PhoneVersionView }): JSX.Element {
       "waiting"
     ) : v.state === "on_file" ? (
       "on file"
+    ) : v.state === "replaced" ? (
+      <>
+        {v.closedBy === null ? (
+          "replaced by the next number"
+        ) : (
+          <>
+            {"replaced when "}
+            <Theirs text={v.closedBy} />
+            {" confirmed the next number"}
+          </>
+        )}{" "}
+        <When at={v.closedAt} />
+      </>
     ) : (
       <>
         {v.state}

@@ -283,6 +283,9 @@ export function Callbacks(props: { view: View }): JSX.Element | null {
                   {`${CALLBACK_STATES[callback.state] ?? callback.state} on `}
                   <InvoiceLink id={callback.invoiceId} />
                 </>,
+                callback.retired ? (
+                  <span class="pay-warn">made on a number no longer on file, so it doesn't verify the account now</span>
+                ) : null,
               ]}
             />
           </li>

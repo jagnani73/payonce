@@ -192,7 +192,7 @@ function printDetail(view: SupplierView): void {
     "Callbacks",
     view.callbacks.map(
       (callback: SupplierView["callbacks"][number]): string =>
-        `Callback ${callback.id} on ${callback.invoiceId} by ${callback.calledBy} to ${callback.numberEnding === null ? "a number not on file" : `the number ending ${callback.numberEnding}`} at ${utc(callback.calledAt)}: ${callback.state}${callback.from === null ? "" : `, from account ${callback.from}`}${callback.to === null ? "" : ` to account ${callback.to}`}`,
+        `Callback ${callback.id} on ${callback.invoiceId} by ${callback.calledBy} to ${callback.numberEnding === null ? "a number not on file" : `the number ending ${callback.numberEnding}`} at ${utc(callback.calledAt)}: ${callback.state}${callback.retired ? ", made on a number no longer on file, so it doesn't verify the account now" : ""}${callback.from === null ? "" : `, from account ${callback.from}`}${callback.to === null ? "" : ` to account ${callback.to}`}`,
     ),
   );
   section(
