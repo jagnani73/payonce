@@ -62,7 +62,7 @@ function Terms(props: { terms: RunTermsView; request: RunRequestView }): JSX.Ele
             </>
           ) : null}
         </li>
-        {terms.newPayees.length === 0 ? null : (
+        {terms.newPayees.length === 0 || (terms.newPayees.length === 1 && request.neededWhy?.code === "run-new-payee") ? null : (
           <li>{`${rowsText(terms.newPayees)} ${terms.newPayees.length === 1 ? "pays a new payee" : "pay new payees"}.`}</li>
         )}
         {terms.callbackRows.length === 0 ? null : (
