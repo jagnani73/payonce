@@ -136,14 +136,21 @@ function Form(props: { form: BankDetailsForm; acts: Acts }): JSX.Element {
           )}
         </Field>
         <TextField label="Who you spoke to" maxLength={80} value={draft.spokeTo} onInput={set("spokeTo")} />
-        <TextField
-          label="What they confirmed"
-          maxLength={200}
-          value={draft.confirmed}
-          onInput={set("confirmed")}
-          placeholder="Account moved to a new bank, read back to them"
-        />
       </div>
+      <Field label="What they confirmed">
+        {(control: ControlProps): JSX.Element => (
+          <textarea
+            {...control}
+            class="textarea pay-confirmed"
+            rows={2}
+            maxLength={200}
+            spellcheck={false}
+            placeholder="Account moved to a new bank, read back to them"
+            value={draft.confirmed}
+            onInput={(event: Event): void => set("confirmed")((event.currentTarget as HTMLTextAreaElement).value)}
+          />
+        )}
+      </Field>
       <div class="pay-bank" role="group" aria-label="New bank details">
         <p class="pay-bank__intro">Type every field as the supplier confirmed it on the call, including any that did not change.</p>
         <div class="pay-bank__head" aria-hidden="true">
@@ -211,7 +218,7 @@ function Form(props: { form: BankDetailsForm; acts: Acts }): JSX.Element {
             numberCalled: draft.numberCalled.trim(),
             calledAt: new Date(calledAt).toISOString(),
             spokeTo: draft.spokeTo.trim(),
-            confirmed: draft.confirmed.trim(),
+            confirmed: draft.confirmed.replace(/\s+/g, " ").trim(),
             details: Object.fromEntries(
               form.fields.map((field: BankDetailsForm["fields"][number]): [string, string] => [field.name, (draft.details[field.name] ?? "").trim()]),
             ),

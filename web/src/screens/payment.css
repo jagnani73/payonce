@@ -237,6 +237,10 @@
   min-height: 84px;
 }
 
+.pay-confirmed {
+  min-height: 64px;
+}
+
 .pay-covers {
   display: flex;
   flex-direction: column;
