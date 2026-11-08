@@ -806,6 +806,13 @@ export function deadlineReason(reason: StoredReason | null): boolean {
   return reason?.code === "deadline-original" || reason?.code === "deadline-replacement";
 }
 
+// Only the approval every payment a person starts waits for before its first
+// transfer, with no clause joined on. That approval is part of the payment, so
+// the views and metrics count no incident for it.
+export function routineApproval(reason: StoredReason | null): boolean {
+  return reason !== null && reason.code === "person-started" && reason.clauses.length === 0;
+}
+
 function sameSlots(a: Slots, b: Slots): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }

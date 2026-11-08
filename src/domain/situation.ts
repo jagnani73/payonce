@@ -33,8 +33,10 @@ import { RAIL_PATTERN, railWords } from "./patterns.js";
 import {
   aboutBankDetailsReason,
   labelOf,
+  parseReason,
   reasonText,
   reasonView,
+  routineApproval,
   type ReasonView,
   type StoredReason,
 } from "./reasons.js";
@@ -1202,12 +1204,25 @@ function earliest(times: (string | null | undefined)[]): string | null {
   return known.length === 0 ? null : new Date(Math.min(...known)).toISOString();
 }
 
+// Whether a request asked for the approval every payment a person starts waits
+// for, and nothing more.
+function routineRequest(request: RequestSnapshot | undefined): boolean {
+  const terms: ApprovalTerms | null | undefined = request?.terms;
+  return terms?.action === "pay" && routineApproval(parseReason(terms.evidence.reason));
+}
+
 // The exception on a payment, or null for one paid by its first transfer with
-// nothing else on file.
+// nothing else on file. The approval every payment a person starts waits for is
+// part of the payment: a reason that is only that is no incident, while the
+// payment waits or once its first transfer pays it. Nor is the time the payment
+// first went to a person for it when an incident opened, or a first transfer
+// sent on it a payment that was held.
 export function incidentOf(snapshot: InvoiceSnapshot): IncidentBrief | null {
   const o: Obligation = snapshot.obligation;
   const attempts: Attempt[] = snapshot.attempts;
   const times: SnapshotTimes = snapshot.times;
+  const reason: StoredReason | null = routineApproval(snapshot.reason) ? null : snapshot.reason;
+  const escalatedAt: string | null = reason === null || routineRequest(snapshot.requests[0]) ? null : times.escalatedAt;
   const pauses: OutageHold[] = times.holds.filter((hold: OutageHold): boolean => hold.what !== "counted");
   const failed: Attempt | undefined = attempts.find((attempt: Attempt): boolean => attempt.state === "failed");
   const any: boolean =
@@ -1216,7 +1231,7 @@ export function incidentOf(snapshot: InvoiceSnapshot): IncidentBrief | null {
       (attempt: Attempt): boolean =>
         attempt.kind === "replacement" || attempt.mismatchedTransferId !== null || attempt.foundLateAt !== null,
     ) ||
-    o.escalationReason !== "" ||
+    reason !== null ||
     o.origin === "outside" ||
     snapshot.payouts.length > 0 ||
     pauses.length > 0 ||
@@ -1226,11 +1241,15 @@ export function incidentOf(snapshot: InvoiceSnapshot): IncidentBrief | null {
     return null;
   }
   const label: string | null =
-    snapshot.reason === null ? null : labelOf(snapshot.reason.code).replace(/^./, (first: string): string => first.toLowerCase());
+    reason === null ? null : labelOf(reason.code).replace(/^./, (first: string): string => first.toLowerCase());
   // Held before its first transfer: nothing sent yet, or the first transfer went
-  // out on a person's approval.
+  // out on a person's approval of more than the routine one.
   const first: Attempt | undefined = attempts[0];
-  const heldFirst: boolean = first === undefined || (first.kind === "original" && first.approvalId !== null);
+  const heldFirst: boolean =
+    first === undefined ||
+    (first.kind === "original" &&
+      first.approvalId !== null &&
+      !routineRequest(snapshot.requests.find((request: RequestSnapshot): boolean => request.approval.id === first.approvalId)));
   // A transfer PayOnce had marked never sent that Airwallex listed later is with
   // the bank, as the Transfers tab says, not failed.
   const late: boolean = failed !== undefined && failed.foundLateAt !== null && liveAtBank(failed);
@@ -1249,8 +1268,8 @@ export function incidentOf(snapshot: InvoiceSnapshot): IncidentBrief | null {
           ? `On hold: ${label}`
           : pauses[0] !== undefined
             ? `Paused by outage ${pauses[0].outageId}`
-            : snapshot.reason !== null
-              ? labelOf(snapshot.reason.code)
+            : reason !== null
+              ? labelOf(reason.code)
               : snapshot.payouts.length > 0
                 ? "A payout sent outside PayOnce names it"
                 : o.state === "rejected"
@@ -1259,10 +1278,9 @@ export function incidentOf(snapshot: InvoiceSnapshot): IncidentBrief | null {
   const failedAt: string | null = failed === undefined ? null : (times.failedAt[attempts.indexOf(failed)] ?? null);
   return {
     cause,
-    openedAt:
-      earliest([failedAt, times.escalatedAt, times.foundAt[0], pauses[0]?.heldAt]) ?? times.firstEventAt,
+    openedAt: earliest([failedAt, escalatedAt, times.foundAt[0], pauses[0]?.heldAt]) ?? times.firstEventAt,
     endedAt: o.state === "settled" || o.state === "rejected" ? times.closedAt : null,
-    neededPerson: o.escalationReason !== "",
+    neededPerson: reason !== null || (snapshot.reason !== null && (o.rejectedBy !== null || o.state === "rejected")),
   };
 }
 

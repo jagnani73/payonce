@@ -1,6 +1,6 @@
 import { summarise } from "../domain/emails.js";
 import { keptFailedLive } from "../domain/live.js";
-import { reasonText } from "../domain/reasons.js";
+import { reasonText, routineApproval } from "../domain/reasons.js";
 import type { InvoiceSnapshot, Situation } from "../domain/situation.js";
 import { timeAt, timed, type Timed, type TimePart } from "../domain/timed.js";
 import type { Attempt, Obligation, OutsidePayout } from "../store/ledger.js";
@@ -83,17 +83,23 @@ function happened(snapshot: InvoiceSnapshot): SummaryBullet | null {
   return null;
 }
 
+// The approval every payment a person starts waits for is part of the payment,
+// so it is what PayOnce did only while nothing since says more.
 function payonceDid(snapshot: InvoiceSnapshot): SummaryBullet | null {
   const o: Obligation = snapshot.obligation;
   const replacement: Attempt | undefined = snapshot.attempts.find(
     (attempt: Attempt): boolean => attempt.kind === "replacement" && attempt.approvalId === null,
   );
-  if (snapshot.reason !== null && o.escalationReason !== "") {
-    return {
-      lead: "PayOnce did",
-      text: [`It sent this to a person: ${reasonText(snapshot.reason)}.`],
-      refs: o.duplicateOf.map((invoiceId: string): { invoiceId: string } => ({ invoiceId })),
-    };
+  const toPerson: SummaryBullet | null =
+    snapshot.reason !== null && o.escalationReason !== ""
+      ? {
+          lead: "PayOnce did",
+          text: [`It sent this to a person: ${reasonText(snapshot.reason)}.`],
+          refs: o.duplicateOf.map((invoiceId: string): { invoiceId: string } => ({ invoiceId })),
+        }
+      : null;
+  if (toPerson !== null && !routineApproval(snapshot.reason)) {
+    return toPerson;
   }
   if (replacement !== undefined) {
     return {
@@ -108,7 +114,7 @@ function payonceDid(snapshot: InvoiceSnapshot): SummaryBullet | null {
   }
   return o.state === "settled" && snapshot.times.closedLine === null
     ? { lead: "PayOnce did", text: ["It closed the payment when the bank paid it."], refs: [] }
-    : null;
+    : toPerson;
 }
 
 export function summaryOf(snapshot: InvoiceSnapshot, situation: Situation, headroom: HeadroomLine | null): SummaryBullet[] {
