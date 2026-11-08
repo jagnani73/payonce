@@ -45,8 +45,8 @@ A guarantee enforced "in SQL" is a condition inside the statement that writes, r
 13. A payout sent outside PayOnce counts as paying an invoice only when it is paid and a look found that it delivered the invoice's amount and currency to the account PayOnce would pay without a person; one PayOnce could not judge counts as not paying.\
     Where: `payoutVerdict` in `src/store/payouts.ts` and `payoutPays` in `src/domain/live.ts`; `judgePayouts` and `payingRoute` in `src/engine/outside.ts`; `CloseStore.paidOutside`. Details: [engine-rules.md](design/engine-rules.md).
 
-14. Every first payment passes `startPayment`'s holds in the transaction that opens its attempt: a missing beneficiary, a likely second bill, an invoice number already on file for the supplier, a live outside payout, an account that changed since the last checked payment or was never confirmed, emails on file, and a payment from another currency's wallet.\
-    Where: `startPayment`, `heldForOthers` and `lastPaidHold` in `src/engine/first-payment.ts`; `likelyDuplicates`, `sameNumberForSupplier` and `sameInvoiceNumber` in `src/domain/duplicates.ts`. Details: [engine-rules.md](design/engine-rules.md).
+14. Every first payment passes `startPayment`'s holds in the transaction that opens its attempt: a missing beneficiary, a likely second bill, an invoice number already on file for the supplier, a live outside payout, an account that changed since the last checked payment or was never confirmed, emails on file, a payment from another currency's wallet, and, for every payment a person started that is not a pay run row, someone else's approval before its first transfer.\
+    Where: `startPayment`, `heldForOthers`, `lastPaidHold` and `heldForApproval` (`FIRST_PAYMENT_HOLDS`) in `src/engine/first-payment.ts`; `likelyDuplicates`, `sameNumberForSupplier` and `sameInvoiceNumber` in `src/domain/duplicates.ts`. A held payment pays only through `continueHeld` and `releaseFor`, under the approval policy. Details: [engine-rules.md](design/engine-rules.md).
 
 15. A pay run row is sent only on a look that has the run's turn.\
     Where: `startFirst` in `src/engine/first-payment.ts` reads `LookOptions.runTurn`, which only `releaseRun` in `src/runs/runs.ts` and the server's `Watcher` set. Details: [pay-runs.md](design/pay-runs.md).
@@ -126,8 +126,8 @@ A guarantee enforced "in SQL" is a condition inside the statement that writes, r
 38. Before an approval is spent, it is checked against the approval policy as it is then.\
     Where: `voidIfStale` and `approvalProblem` in `src/engine/requests.ts`, which call `signoffProblem` from `src/domain/approvers.ts`. Details: [engine-rules.md](design/engine-rules.md).
 
-39. An approval is spent once, on one payment, in the same transaction that opens that payment.\
-    Where: `useApproval` and `releaseFor` in `src/store/approvals.ts` move it from `approved` to `used` only before its expiry, then call `openAttempt`, and roll back if no attempt opens; `RunStore.releaseRun` does the same for a run. Details: [ledger.md](design/ledger.md).
+39. An approval is spent once, on one payment, in the same transaction that opens that payment, and only while its stored terms still hash to its binding.\
+    Where: `useApproval` and `releaseFor` in `src/store/approvals.ts` move it from `approved` to `used` only before its expiry, then call `openAttempt`, and roll back if no attempt opens; `RunStore.releaseRun` does the same for a run. All three read the request's terms again first, in that transaction (`requireBound`, `requireBoundRun`), and `requestTerms` and `runRequestTerms` in `src/store/stored.ts` throw `StoredShapeError` on terms whose `bindingOf` is not the stored binding. Details: [ledger.md](design/ledger.md).
 
 40. Nothing is spent if the invoice's emails, the paid invoice it looks like a second bill for, or a held invoice's matches changed since the look built the terms.\
     Where: the `unchanged` check that `continueEscalated` (`src/engine/escalated.ts`) passes to `useApproval`, and the one `releaseHeld` (`src/engine/held.ts`) passes to `releaseFor`; both run inside the spending transaction. Details: [engine-rules.md](design/engine-rules.md).
@@ -145,7 +145,7 @@ A guarantee enforced "in SQL" is a condition inside the statement that writes, r
     Where: `checkSigner` and `policyFromEnv` in `src/domain/approvers.ts`; `paymentAmount` and `runAmount` in `src/domain/approval.ts`. Details: [engine-rules.md](design/engine-rules.md).
 
 45. Two different approvers are needed above `TWO_APPROVERS_ABOVE`, for an account the original did not go to, and when PayOnce does not know who started the payment, with further cases for a held invoice's first payment and for a pay run.\
-    Where: `signoffsNeeded` in `src/domain/approvers.ts`; `payeeRule` in `src/engine/held.ts`; `runRule` in `src/runs/runs.ts`. Details: [engine-rules.md](design/engine-rules.md), [pay-runs.md](design/pay-runs.md).
+    Where: `signoffsNeeded` in `src/domain/approvers.ts`; `payeeRule` and `heldPaymentRule` in `src/engine/first-payment.ts`; `runRule` in `src/runs/runs.ts`. Details: [engine-rules.md](design/engine-rules.md), [pay-runs.md](design/pay-runs.md).
 
 46. Whoever started the incident, a pay run's uploader, anyone who recorded a callback for the account, and anyone who proposed or confirmed the phone number that callback was made on cannot approve the payment.\
     Where: `barredFrom` in `src/domain/barred.ts` (through `barredOnFile` in `src/store/read/reviews.ts`); `runBarred` in `src/runs/runs.ts`; `checkSigner` refuses a barred name. Details: [engine-rules.md](design/engine-rules.md).

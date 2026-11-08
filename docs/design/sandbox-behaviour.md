@@ -53,9 +53,10 @@ This note records what the Airwallex sandbox and its simulator do, found by runn
 ### The sandbox bank
 
 - `SandboxBank` plays the bank in the sandbox. It sends a new transfer to `SENT`, pays or fails it when the scenario says so, and pays every replacement.
-- The scripted run sends its original inside `scripting`, and the bank leaves that one to the script.
+- A scripted run waiting for an invoice's original (`scriptOriginal`) gets the first original the bank hears of for that invoice. Its script says whether it plays the transfer, and if it does, the bank leaves the transfer to it.
 - Any other original gets the outcome `expectOriginal` recorded in this process, else what `outcomeOf` reads from the ledger (a pay run row's `sandbox_outcome`), else it is paid.
-- `expectOriginal` takes only a simulator name (`[A-Z_]+`). Anything else, such as the CLI's `-` placeholder, is ignored, and the bank pays the original.
+- `expectOriginal` takes only a simulator name (`[A-Z_]+`). Anything else, such as the CLI's `-` placeholder, is ignored, and the bank pays the original. A script settles its original the same way (`bankOutcomeOf`).
+- Scripts and expected outcomes live in memory, so another process, or this one after a restart, pays the original instead.
 - The bank reads each sent transfer first, trying up to four times in all on a server error or a lost connection, as the simulation calls do.
 - A transfer that converts is left alone, and before its deadline (by the bank deadlines `SandboxBank` is given) the bank says so once.
 - `SandboxBankError` is thrown when the simulator refuses or does not answer a move, when a read the bank needs fails with an `AirwallexError` or `AirwallexUnreachableError`, or when `waitForTransfer` gives up on a transfer still `SCHEDULED` (`TransferWaitError`).
@@ -76,11 +77,12 @@ This note records what the Airwallex sandbox and its simulator do, found by runn
 - `openPayment` refuses before any Airwallex read: the invoice number's pattern, a number in the ledger or on a waiting pay run, the amount as positive minor units, a two-decimal currency and wallet, the method, the due date and the starter's name.
 - So `pnpm recover` refuses a malformed invoice number, and one on a waiting pay run, with one line and nothing stored.
 - The scenarios share one beneficiary per currency. Each `usd-local-bank-change` run creates a beneficiary of its own, nicknamed `PayOnce demo supplier (bank change)` plus the invoice number.
-- `runScenario` runs the scripted incident: PayOnce pays the invoice, the bank sends it, the supplier's emails arrive one at a time while it is in flight, then the bank pays or fails it.
-- Once the incident has settled, a paid replacement is followed by Pay again, which the duplicate lock refuses.
-- A held invoice stops the script before anything is sent, and no supplier emails arrive for it. The bank gives its original the scenario's outcome if a person releases it.
-- When the script's first send fails, it records the scenario's outcome with `expectOriginal`, so the bank gives it to the original that the next look sends. An outage on the rail holds the first send (`waitOnOutage`).
-- `runScenario` returns false when the invoice is still not at rest when the wait (`untilAtRest`, 180 seconds) runs out.
+- A scripted incident's first payment waits for an approval, as every payment a person starts does, so `runScenario` sends nothing when it starts one. It registers its script with the bank (`scriptOriginal`) and wakes the invoice, so the request opens.
+- Once a person approves it, the look that sends the original hands it to the script (`playOriginal`): the bank sends it, the supplier's emails arrive one at a time while it is in flight, then the bank pays or fails it. Once the incident has settled, a paid replacement is followed by Pay again, which the duplicate lock refuses.
+- The script plays only the invoice's first original, the one sent on that approval, including after a retry under its request id. One sent after Airwallex refused the first is the bank's, with the scenario's outcome and no emails.
+- An invoice held for something more specific, such as a second bill or an exchange rate, gets no script: the bank gives its original the scenario's outcome if a person releases it, and no supplier emails arrive. So does one whose first payment an outage held (`waitOnOutage`).
+- Run again on a held invoice, as `pnpm recover` does to continue one, `runScenario` registers the script again when the invoice still waits only for its approval, and wakes it. If that look sends the original, it waits for the script and returns what it found. A script nobody waits on reports its failures through the bank's `onError`.
+- `runScenario` returns true when the invoice waits for a person with nothing sent, and false when the invoice is still not at rest when the wait (`untilAtRest`, 180 seconds) runs out.
 
 ### Sandbox routes
 
@@ -88,6 +90,7 @@ This note records what the Airwallex sandbox and its simulator do, found by runn
 - `POST /api/sandbox/scenarios` starts a scripted incident and answers 202 with `PaymentCreated`. It refuses an unknown bank outcome, email thread or scenario (400), a due date `dueDateProblem` refuses (400), and a malformed invoice number (400).
 - It also refuses an invoice number already in the ledger or on the waiting run (409). A `dueDate` of null is no due date.
 - When Airwallex fails before the invoice is stored, it answers 502 with `airwallexAdvice`, and nothing is sent or stored. Otherwise the script runs in the background, and its failures go on the invoice's timeline.
+- Its notice says the first payment waits for approval, and that once someone approves it the simulator plays the bank outcome and the email thread.
 - `POST /api/sandbox/duplicate-lock/:id` runs Pay again in the invoice's turn and answers `DuplicateLockResult`. It never reaches Airwallex.
 
 ### Fixtures

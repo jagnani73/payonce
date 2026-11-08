@@ -142,12 +142,12 @@ The table lists every route in `src/surfaces/http/routes/`. Views and their buil
 
 ### New payment
 
-- `POST /api/payments/check` reads the ledger, the cash panel from the cache as it is and the beneficiary record, and writes nothing. It never calls `refreshIfOld`.
+- `POST /api/payments/check` reads the ledger, the cash panel from the cache as it is and the beneficiary record, and writes nothing. It never calls `refreshIfOld`. Its `approvers` names who could approve the first transfer when it would wait only for that approval ([views.md](views.md)), and the form shows that line under the outcome.
 - The check reads a beneficiary record with one GET per id at a time and keeps it a minute (`recordFor`). A failed read is not kept, so the next check reads again.
 - An empty invoice number is checked as a fresh `newInvoiceId`, which the answer gives back.
 - An amount is read by the pay run file's rule (`amountProblem`, `amountMinorOf`), and one over 20 characters is refused without being repeated.
 - `POST /api/payments` refuses with every problem by field, then opens the payment with `openPayment` and `recordPayee`. Airwallex is read before the invoice is written, so a 502 stores nothing.
-- A start with a sandbox outcome tells the sandbox bank (`expectOriginal`). It then wakes the invoice and answers after the first look (`whenIdle`), with a notice: sending, on hold with the reason, waiting on an outage, or not gone out yet.
+- A start with a sandbox outcome tells the sandbox bank (`expectOriginal`). It then wakes the invoice and answers after the first look (`whenIdle`). When that look held the first payment, it wakes it once more, so the request is open in the answer. The notice says: waiting for someone else's approval, sending, on hold with the reason, waiting on an outage, or not gone out yet. A payment a person starts waits for an approval unless something more specific holds it, so the first notice is the usual one.
 
 ### The sandbox routes
 

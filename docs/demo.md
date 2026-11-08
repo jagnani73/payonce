@@ -48,9 +48,9 @@ The script calls the same routes the page does. It stops with a message if the l
 
 1. Uploads `overnight-run.csv` as Kim, with three rows to the sandbox's "PayOnce demo supplier" (Example Supplier LLC): INV-RUN-1001 for 1,250.00 USD, which the sandbox bank fails with a channel timeout; INV-RUN-1002 for 980.00 USD, which it fails with account closed; and INV-RUN-1002A for 980.00 USD, which PayOnce skips as a likely second bill of 1002.
 2. Approves the run as Alex and Yash. The server releases it and sends the two rows. PayOnce replaces 1001 by itself, and 1002 waits for a person.
-3. Starts the scripted incident "USD, local, supplier changes bank" as Sam. The bank fails the original with account closed.
+3. Starts the scripted incident "USD, local, supplier changes bank" as Sam. Like every payment a person starts, its first payment waits for someone else's approval, so the script approves it as Alex and Yash. It needs both, because PayOnce has never paid this supplier record on a person's approval. Then the bank fails the original with account closed.
 4. Uploads an email to that invoice as Kim, from `accounts@example-supp1ier.test` (a digit one in place of the l), saying the supplier changed banks and giving a new account at First Example Bank, ending 6655. Kim delivers it to the invoice.
-5. Starts "EUR, SWIFT, low cash reserve" as Sam. The bank fails it with a channel timeout, and a replacement would breach the floor.
+5. Starts "EUR, SWIFT, low cash reserve" as Sam and approves its first payment as Alex and Yash. The bank fails it with a channel timeout, and a replacement would breach the floor.
 
 That is 5 sandbox transfers. Against the sandbox the script takes about 2 to 3 minutes: each row and each scripted incident takes 8 to 16 seconds to settle, and the run's rows go out one every 3 seconds. The script prints each invoice as it settles and ends with the three that need you. Write down the two invoice numbers PayOnce generated (INV- and six digits): the first is the bank change, the second the EUR payment.
 
@@ -60,7 +60,8 @@ On a sandbox account that has never run a scripted incident, the demo supplier d
 
 - Home says Needs you 3: the EUR payment, the bank change and INV-RUN-1002.
 - On the bank change, the Emails tab says "Read by:" and a model's name (if you set a key) and shows the warning that `accounts@example-supp1ier.test` does not match `example-supplier.test`. If it says the emails could not be read, wait a minute and press Check now.
-- If Slack is on, the channel has three alerts: INV-RUN-1002, the bank change and the EUR payment, each "needs an approval".
+- If Slack is on, the channel has three alerts: INV-RUN-1002, the bank change and the EUR payment, each "needs an approval". The script approves each scripted incident's first payment within a few seconds, before its alert is due, so neither hold reaches Slack.
+- Each scripted incident's timeline starts with its first payment's hold ("a person started this payment, so someone else approves it before PayOnce pays it") and "Approval by Alex and Yash matches the current terms". Beats 2 and 3 point at the lines after those.
 - Chrome at 1920 by 1080, zoom 125%, one tab on `http://127.0.0.1:4310/#home`. Above 1180 CSS pixels the payment page keeps its side rail beside the main column. Close the simulator drawer.
 - You are: Alex (top bar). Every name field then fills with Alex.
 - A terminal in the repository, for `pnpm run audit`. A new chat in Claude Desktop, or Claude Code in a terminal, with the payonce server connected.
@@ -70,7 +71,7 @@ On a sandbox account that has never run a scripted incident, the demo supplier d
 
 | # | Starts | Beat | Length | Guarantees |
 | --- | --- | --- | --- | --- |
-| 0 | 0:00 | The morning | 0:20 | 62, 44 |
+| 0 | 0:00 | The morning | 0:20 | 62, 44, 14 |
 | 1 | 0:20 | Last night's pay run | 0:45 | 14, 27, 45, 46, 2 |
 | 2 | 1:05 | "We changed banks" | 1:20 | 57, 23, 24, 46, 20 |
 | 3 | 2:25 | The floor | 0:40 | 26, 27, 31, 37 |
@@ -86,6 +87,7 @@ That ends at 4:35 and leaves 25 seconds for the sandbox.
 - Say: "PayOnce runs supplier payments on Airwallex. It pays each invoice once, fixes what its policy says is safe, and hands the rest to a person. Overnight a pay run went out and two payments went wrong. This morning three things need me."
 - Point at the "Why" on the bank-change alert: "supplier asked for payment to different bank details". Say: "The alerts say why in PayOnce's own words. A phishing email is behind this one, and none of its text or its account number reaches Slack." (62)
 - Without Slack, open on Home and point at "Waiting for your approval". Say: "There's no login. I'm Alex, and this is what Alex is allowed to sign." (44)
+- Say: "Every first payment here went out on an approval too." (14)
 
 ### 1. Last night's pay run (0:20, 45 s)
 
@@ -123,6 +125,7 @@ That ends at 4:35 and leaves 25 seconds for the sandbox.
 - Point at the headroom line under the Decision panel, "EUR headroom now 4,006.96 EUR · after this −6.95 EUR", and the Money panel's "EUR headroom: 4,006.96 EUR". Both measure against this invoice's floor, so they agree with the reason: after the replacement the wallet would sit 6.95 EUR below that floor. The figures come from the server's last balance read, which runs again every 30 seconds while a page is open, so by the time you record they include the fee the bank kept.
 - Do: scroll up and press Approve as Alex.
 - Say: "I approve. Before spending it, PayOnce rebuilt the terms and checked the floor again. They match, so it sends one replacement." Point at "Approval by Alex matches the current terms" and the second warning line, then "Replacement ... PAID". (31, 37)
+- PayOnce also checks that the terms on file still hash to the request's binding, inside the transaction that spends the approval (39). Nothing on screen shows that check, so the beat doesn't mention it.
 - Sandbox timing: about 8 seconds from the approval to PAID, as in beat 2.
 
 ### 4. Reconciliation and reports (3:05, 30 s)
@@ -175,12 +178,9 @@ The duplicate lock test, the callback and reconciliation make none. Every take n
 - Show the callback form filled in and cut straight to the approvals (saves 20 s).
 - With fewer transfers: remove INV-RUN-1002 from the script's CSV. That saves one transfer, but beat 5 then finds nothing waiting on Alex, so ask Claude `Is PayOnce's audit trail intact?` instead and use its `audit` answer for beat 6.
 
-## Where two open questions change the script
-
-- If every new payment needs an approval. Today a first payment to a supplier never paid goes out without one. If that changes, the two scripted incidents stop before sending. `demo-morning.mjs` already approves a payment it finds held before anything was sent (as Alex, and Yash if two are needed), and the look-alike email arrives through the inbox, so the morning comes out the same. This path has not run, because the rule is not built. On camera, each incident's timeline starts with an extra "Approved by Alex" line. In beat 0, add: "Every first payment here went out on an approval too." Beats 1 to 6 do not change.
-- A terms-hash check before an approval is spent. It happens inside the spending transaction, so nothing on screen changes either way. The line beats 2 and 3 point at, "Approval by ... matches the current terms", is written today by `voidIfStale`, which rebuilds the terms and compares bindings (37).
-
 ## Checked
+
+On 8 November 2026 `demo-morning.mjs` ran against `feat/approve-new-payments` with Airwallex faked by the replay rig, in real time. Both scripted incidents waited for an approval, the script approved each as Alex and Yash, and the supplier's "payment not received" email arrived while each original was with the bank, as before. The morning ended with Needs you 3, and the test receiver got the same three alerts, none for a held first payment.
 
 On 7 November 2026 the script ran against `feat/page` (8e708cb) with Airwallex faked by the replay rig, in real time, on Chrome at 1566 CSS pixels: the setup script, then every beat as written, the MCP `waiting_for` and `audit` answers, and `pnpm run audit`. No sandbox call was made, so the sandbox times above come from the runs on 6 October and 3 November. Things to know from that run:
 

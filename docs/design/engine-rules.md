@@ -8,9 +8,9 @@ How the agent works an invoice, look by look: sending and retrying payments, hol
 |---|---|
 | `engine/engine.ts` | shared types: `Engine`, `Bank`, `NextLook`, `LookOptions`, `StepResult`, `RETRY_FAILED_LOOK_MS`, `Rate`, `Decided`, `Assessment` |
 | `engine/look.ts` | `resumeIncident`, `look()`, `SENT_STEPS` and its steps, `act`, `waitOnOutage` |
-| `engine/first-payment.ts` | `startPayment`, `FIRST_PAYMENT_HOLDS`, `firstPaymentHold`, `firstPaymentFacts`, `firstPaymentOutage`, `holdRefused`, `startFirst` |
+| `engine/first-payment.ts` | `startPayment`, `FIRST_PAYMENT_HOLDS`, `firstPaymentHold`, `firstPaymentFacts`, `firstPaymentOutage`, `payeeRule`, `heldPaymentRule`, `heldIfRefused`, `holdRefused`, `startFirst` |
 | `engine/new-payment.ts` | `openPayment`, `paymentProblems`, `checkedPayee`, `recordPayee`, `newObligation`, `asOpened`, `PaymentRefusedError` |
-| `engine/held.ts` | `continueHeld` and its sub-steps, `payeeRule`, `duplicateEvidence`, `duplicatesOnFile`, `releaseHeld`, `closeAgain` |
+| `engine/held.ts` | `continueHeld` and its sub-steps, `heldRule`, `duplicateEvidence`, `duplicatesOnFile`, `releaseHeld`, `closeAgain` |
 | `engine/escalated.ts` | `escalate` (`EscalateAs`), `continueEscalated`, `noteFloor`, `noteSecondBill` |
 | `engine/requests.ts` | `ruleFor`, `approvalProblem`, `voidIfStale`, `awaitApproval` and its sub-steps |
 | `engine/replacement.ts` | `replaceUnderLock`, `escalateForOutage` |
@@ -98,7 +98,7 @@ How the agent works an invoice, look by look: sending and retrying payments, hol
 
 - Every first payment goes through `startPayment` under the lease of the wallet it leaves. It reads Airwallex first and the beneficiary record last, then runs every hold and opens the attempt in one transaction.
 - The holds are the list `FIRST_PAYMENT_HOLDS`, asked through `firstPaymentHold` inside that transaction. The first that applies holds the invoice, and a new hold is one more entry in the list.
-- Their order: the account (`heldForAccount`), other invoices (`heldForOthers`), where PayOnce last paid the supplier (`heldForLastPaid`), emails on file (`heldForEmails`), the exchange rate (`heldForExchangeRate`), and a pay run row's floor (`heldForFloor`).
+- Their order: the account (`heldForAccount`), other invoices (`heldForOthers`), where PayOnce last paid the supplier (`heldForLastPaid`), emails on file (`heldForEmails`), the exchange rate (`heldForExchangeRate`), a pay run row's floor (`heldForFloor`), and a payment a person started (`heldForApproval`).
 - `heldForAccount` holds a payment whose record Airwallex no longer has or that has no bank details (`BENEFICIARY_MISSING_REASON`), and a pay run row whose record no longer holds the account the run approved (`RUN_ACCOUNT_CHANGED_REASON`).
 - `heldForOthers` holds when `likelyDuplicates` finds another invoice, not `rejected`, to the same supplier (same beneficiary or same name) for the same amount and currency, with a number `sameInvoiceNumber` matches.
 - It also holds when `sameNumberForSupplier` finds such an invoice for any amount or currency, because PayOnce pays an invoice number once, and when an outside payout for the invoice is live.
@@ -107,12 +107,14 @@ How the agent works an invoice, look by look: sending and retrying payments, hol
 - Once a checked payment to the account on file is paid, later invoices to it go out as usual.
 - `heldForEmails` holds with `EMAILS_BEFORE_PAYMENT_REASON` while any supplier email is on file, a pay run row waiting its turn included.
 - `heldForExchangeRate` holds every cross-currency first payment (`heldForRate`): "it is paid from USD, so a person approves the exchange rate before PayOnce pays it".
+- `heldForApproval` holds every first payment a person started when no other hold applies, with `PERSON_STARTED_REASON` (code `person-started`): "a person started this payment, so someone else approves it before PayOnce pays it". A person started it when `obligations.started_by` is set and it is not a pay run row. That covers the New payment form, the simulator's scripted incidents and `pnpm recover`. A pay run row was approved with its run, and a payout found outside PayOnce has no starter.
+- That hold goes through the held-invoice path like any other: `heldTermsFor`, `continueHeld`, the signer checks and `releaseFor`. The starter is barred, `payeeRule` asks two approvers for a payee PayOnce never paid on a person's approval, `signoffsNeeded` asks two above `TWO_APPROVERS_ABOVE`, and limits apply. The floor and the outage gate stay where they are.
 - A held invoice is `escalated` with no attempt and `obligations.duplicate_of` listing the matches (`holdBeforePaying`). The invoices it matched get a line on their timelines. Nothing is sent.
 - The outage gate comes before the lease (`firstPaymentOutage`), so a first payment on a rail with an active outage waits unsent with no attempt ([rail-outages.md](rail-outages.md)).
 - `startPayment` ties unseen payouts for every first payment. For any but a pay run row's, it then reads the record and keeps its account on the attempt (`account_key`, `route_key`). A pay run row keeps the account the run approved, checked against the record (`accountProblem`).
 - `startPayment` holds the invoice when an outside payout it ties is live, and sends anyway when that payout has already failed.
 - A pay run row is sent only on a look with the run's turn (`startFirst`). Any other look leaves it with a standing waiting line, due at once. `startPayment` refuses a pay run row whose invoice would convert.
-- Airwallex refusing every original (a 4xx on create) escalates the invoice through `holdRefused` (`refusedOriginal`), at once on the first send and otherwise on the next look. It is then held like any other.
+- Airwallex refusing every original (a 4xx on create) escalates the invoice through `holdRefused` (`refusedOriginal`). It happens at once on a send `startPayment` makes or one `releaseHeld` makes on an approval (`heldIfRefused`), and otherwise on the next look. It is then held like any other.
 - `heldBeforePaying` is an escalated invoice that has sent nothing: every attempt, if any, failed without a transfer.
 - The New payment preview asks `firstPaymentOutage` and `firstPaymentHold` on facts read with no lease (`firstPaymentFacts`), so it cannot drift from `startPayment`. It skips `linkUnseenPayouts`, which writes.
 - `openPayment` refuses before any Airwallex read, with a `PaymentRefusedError` and nothing stored: a number outside `INVOICE_ID_PATTERN`, or one in the ledger or on a waiting pay run, an amount not in positive minor units, a currency or wallet that is not a two-decimal code, the method, the due date, or the starter's name.
@@ -129,7 +131,7 @@ How the agent works an invoice, look by look: sending and retrying payments, hol
 - Each look adds to `duplicate_of` any invoice `likelyDuplicates` finds now (`withNewDuplicates`), with a warning, so one started later, or one that came first while this one was held for another reason, is listed too.
 - The terms list each matched invoice with its state, the payment that paid it, and whether that payment, or else one still with the bank, went to the same account (`duplicateEvidence`, `sameAccount`). A change in any of them voids the approval.
 - A match paid to another account than the one on file (`sameAccount` false) needs two approvers, and the timeline warns. A match paid to the same account does not by itself need a second approver.
-- `payeeRule` asks two approvers when PayOnce has never paid the beneficiary, paid it only before it kept which account each payment went to, last paid it another account, or never paid it on a person's approval (`Ledger.paidOnApproval`, `PAID_ONLY_BY_ITSELF`), as a pay run row does.
+- `payeeRule` asks two approvers when PayOnce has never paid the beneficiary, paid it only before it kept which account each payment went to, last paid it another account, or never paid it on a person's approval (`Ledger.paidOnApproval`, `PAID_ONLY_BY_ITSELF`), as a pay run row does. `heldRule` asks it through `heldPaymentRule`, which falls back to `signoffsNeeded`. Both are in `first-payment.ts`, so the New payment preview asks the same rule.
 - Paid on a person's approval is a paid payment opened on an approval that was used (`approval_id`), or the original of a released pay run row. A single incident's original and an automatic replacement count as the account last paid, but not here.
 - A held invoice's reason names the supplier's ask not to pay (`namingNotToPayHeld`, written with `rewordEscalation`). If another process changed the reason since the look read it, the look comes again at once.
 - Until every email on file is read, nothing is offered and any open request is withdrawn. The look comes again a minute later after a reader failure, and at once when an email arrived while the others were read.
@@ -191,6 +193,8 @@ How the agent works an invoice, look by look: sending and retrying payments, hol
 - `approvalProblem` asks `signoffProblem`: every signoff has the request's binding, there are enough of them, and each signer still passes `checkSigner`.
 - In `continueEscalated`, an open request that needs at least as many approvers as the payment needs now keeps the terms it was opened with (`asRequested`). A new one gives the terms as they are now.
 - An approval is spent only by `useApproval` (a replacement) or `releaseFor` (a held invoice), which move an `approved` row that has not expired to `used`, so one another process voided meanwhile, or one that expired during the look, is not spent.
+- An approval is spent only on stored terms that still hash to its binding. `requestTerms` and `runRequestTerms` read terms only while `bindingOf(terms)` equals the stored binding, so every engine read of stored terms checks it, `voidIfStale`'s included. `useApproval`, `releaseFor` and `RunStore.releaseRun` read the row again under the write lock of the spend (`requireBound`, `requireBoundRun`), so terms cannot change between that check and `openAttempt` reading their account and quote.
+- Terms that no longer hash to their binding throw `StoredShapeError`, "PayOnce cannot read the terms of approval request N for INV in the ledger, so it stops here and sends nothing". The spend rolls back, nothing is sent, and the look fails and comes again a minute later, so the payment waits for a person.
 - Each opens the attempt in the same transaction, after the check that the record still holds the approved account, so a failed check leaves the approval unspent.
 - `useApproval` also spends nothing unless the invoice is still escalated, has no `rejected_by`, no live outside payout and no other payment live at the bank, all checked inside its transaction, as `releaseFor` checks.
 - Every attempt opened on an approval keeps its `approval_id`, a same-currency one included, and `openAttempt` copies the quote from that approval's own terms.
@@ -374,7 +378,8 @@ How the agent works an invoice, look by look: sending and retrying payments, hol
 - A first payment's attempt keeps its account so every retry is checked against the account it was decided on.
 - `heldForLastPaid` holds even when a callback verified the record, because a callback recorded on one invoice must never let that person, or anyone alone, pay another invoice to the new account.
 - `heldForEmails` holds because a supplier who wrote before anything was paid may be asking not to pay, or to pay elsewhere.
-- The rate hold comes last: PayOnce never pays at a rate nobody has seen, but that is the least serious reason to hold.
+- The rate hold comes after the others: PayOnce never pays at a rate nobody has seen, but that is a less serious reason to hold than a second bill, a changed account or an email.
+- The hold for a person's payment comes last because every other hold names something more specific that the approver should read. Each of them already waits for an approval, so a payment a person started never goes out without one. A pay run row never meets it, so its place after the floor hold changes nothing.
 - `sameInvoiceNumber` allows letters after the number because a supplier billing again often adds a letter or a short word, such as A, B or REV. Two numbers with different letters could each be a bill of their own.
 - The New payment preview skips `linkUnseenPayouts` because it writes, and a preview writes nothing.
 - `openPayment` checks the number again before writing because `openObligation` leaves an invoice already there as it is.
@@ -408,6 +413,7 @@ How the agent works an invoice, look by look: sending and retrying payments, hol
 - `APPROVED_USE_WITHIN_MS` gives a request completed just before it expired time to be used, so a slow look does not lose it.
 - `useApproval` and `releaseFor` spend and open in one transaction so the money counts as approved or as being sent at every moment.
 - Terms carry the full `accountKey` because `payTo` shows only the last four characters, and the binding has to pin the exact details a person saw.
+- The binding check reads the stored terms because `voidIfStale` compares the binding with terms the look rebuilt, and `openAttempt` takes the account and quote from the stored row. Without it, a row edited outside PayOnce could send to an account or at a quote nobody signed while the rebuilt terms still matched.
 
 ### Exchange rates
 
@@ -475,6 +481,9 @@ How the agent works an invoice, look by look: sending and retrying payments, hol
 - Reading the record last under the lease costs one beneficiary read more for every original.
 - An outside payout with the new invoice's number that the sweep has not tied yet is the one hold the New payment preview can miss.
 - `pnpm recover` refuses a malformed invoice number, and one on a waiting pay run, with one line and nothing stored.
+- A first payment a person started that waits only for its approval has `person-started` as its reason until something else sends it to a person. Released and paid, it closes by itself, and its reason stays on file.
+- Every original a person started goes out on an approval, so once paid it counts as paid on a person's approval (`paidOnApproval`). A later held invoice to the same account then needs one approver below `TWO_APPROVERS_ABOVE`, not the two a payee nobody approved a payment to takes.
+- The server's restart pickup (`pickUpInterrupted`) resumes an original paid on an approval after a hold, so after a restart the sandbox bank plays every such original that is still in flight.
 
 ### Replacements and the floor
 
@@ -491,6 +500,8 @@ How the agent works an invoice, look by look: sending and retrying payments, hol
 - A `started_by` stored before names were checked that `knownName` does not take bars nobody, and the payment needs two approvers.
 - Attempts from before `approval_id` was kept do not count as paid on a person's approval.
 - A short TTL, such as 2 minutes for the demo, still opens a cross-currency request.
+- A person can sign a request only on terms that still hash to its binding too: `pendingApproval` and `pendingRunApproval` read them with `requestTerms` and `runRequestTerms`, so the page refuses the signoff and `pnpm approve` says the terms cannot be read.
+- Views read stored terms soft (`storedObject`), so a payment page still shows a request whose terms no longer match its binding.
 
 ### Exchange rates
 

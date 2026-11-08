@@ -17,13 +17,14 @@ How PayOnce records why an invoice went to a person, as text with codes beside i
 ### Which reasons exist
 
 - The policy's reasons are constants in `src/domain/decide.ts`.
-- The engine's fixed reasons are constants in `reasons.ts`: `EMAILS_BEFORE_PAYMENT_REASON`, `LATE_TRANSFER_REASON`, `MISMATCHED_TRANSFER_REASON`, `MISMATCHED_FAILED_REASON`, `REPLACEMENT_DEADLINE_REASON`, `ACCOUNT_CHANGED_REASON`, `ACCOUNT_UNKNOWN_REASON`, `CASH_HOLD_REASON`, `RUN_ACCOUNT_CHANGED_REASON` and `BENEFICIARY_MISSING_REASON`.
+- The engine's fixed reasons are constants in `reasons.ts`: `EMAILS_BEFORE_PAYMENT_REASON`, `LATE_TRANSFER_REASON`, `MISMATCHED_TRANSFER_REASON`, `MISMATCHED_FAILED_REASON`, `REPLACEMENT_DEADLINE_REASON`, `ACCOUNT_CHANGED_REASON`, `ACCOUNT_UNKNOWN_REASON`, `CASH_HOLD_REASON`, `RUN_ACCOUNT_CHANGED_REASON`, `BENEFICIARY_MISSING_REASON` and `PERSON_STARTED_REASON`.
 - A reason with slots is built by its own function: `heldAsSecondBill`, `heldForSameNumber`, `heldForRate`, `refusedOriginal`, `foundAfterClose`, `accountMismatchOf`, `rateMismatchOf` and `secondBillPaid`. Any other reason is `reasonFor(code)`.
 - The clauses are the three floor clauses (`below-floor`, `cash-unreadable`, `no-floor`; `FLOOR_CLAUSES`), `second-bill-paid` and `asks-not-to-pay` (`NOT_TO_PAY`).
 - `withClause` joins a clause last, unless the lead or a clause already names it. The engine adds clauses in `src/engine/reason-text.ts` ([uploaded-emails.md](uploaded-emails.md) has the ask not to pay).
 - The policy's text reasons become codes as they leave `decide` (`policyReason`, `floorClause`). A text with no code throws, and the look fails closed.
 - Every reason has a family (`familyOf`, a `ReasonFamily` such as `bank-details` or `paid-twice`) and a label for people (`labelOf`). `reasonView` gives a view the code, family, label, text and each clause's label.
 - `aboutBankDetailsReason`, `accountChangedReason` and `deadlineReason` answer what a reason is about, by code.
+- `person-started` (`PERSON_STARTED_REASON`, "a person started this payment, so someone else approves it before PayOnce pays it") is the reason a payment a person started waits for an approval when nothing more specific holds it. Its family is `approval`, its label "New payment to approve", and the metrics label of its family "Started by a person and approved before it went out".
 - `neededWhyOf` reads why a request needs a second approver (`approvals.needed_why`) to a `NeededWhyCode`. No codes are stored for it.
 
 ### How a reason is stored

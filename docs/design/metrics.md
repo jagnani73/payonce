@@ -49,6 +49,7 @@ The ops metrics: eight tables of how a period went, built from the ledger alone 
 - An invoice needed a person when `escalation_reason` is set.
 - The reasons table counts each closed invoice under `familyOf` its reason's lead code, read from `MetricsObligation.reason` as `Ledger.reasonOf` reads it: the stored codes when they render the text exactly, else the text parsed.
 - A reason PayOnce does not write is `unrecognised`, which counts as `other`. Only the family leaves the read: `REASON_LABELS` is keyed by `ReasonFamily`.
+- A payment a person started keeps `person-started` as its reason when nothing else sent it to a person, so once paid it counts as closed with a person, under the family `approval` ("Started by a person and approved before it went out").
 
 ### Only fixed strings
 - Every string in a report is a code from a fixed set, a five-digit failure code, a currency code, an ISO time with a four-digit year, or a fixed label.
