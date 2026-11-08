@@ -5,7 +5,7 @@ import { Icon } from "../../components/Icon";
 import { Tabs } from "../../components/Layout";
 import { Empty, LoadError, Loading } from "../../components/States";
 import { Day, Money, Ref, Said, Theirs, Time } from "../../components/Text";
-import { AuditLine, Timeline } from "../../components/Timeline";
+import { AuditLine, Timeline, type Filter } from "../../components/Timeline";
 import { SituationHeader, Tag, ToneBadge } from "../../components/Tone";
 import { FAST_MS, SLOW_MS, usePoll, type Polled } from "../../poll";
 import { paymentHref, runHref } from "../../router";
@@ -29,6 +29,9 @@ const ROW_TONES: Record<Exclude<RunRowView["state"], "released">, Tone> = {
 };
 
 const METHODS: Record<string, string> = { LOCAL: "Local", SWIFT: "SWIFT" };
+
+// A run's lines are payments, decisions and approvals, never emails or messages.
+const RUN_FILTERS: readonly Filter[] = ["decisions", "bank", "approvals"];
 
 function tabOf(raw: string | undefined): RunTab {
   return RUN_TABS.find((tab: RunTab): boolean => tab === raw) ?? "rows";
@@ -365,7 +368,7 @@ export function RunPage(props: { id: number; tab: string | undefined; asked: str
               ) : tab === "cash" ? (
                 <CashTab view={view} />
               ) : tab === "timeline" ? (
-                <Timeline timeline={view.timeline} />
+                <Timeline timeline={view.timeline} filters={RUN_FILTERS} />
               ) : (
                 <AuditLine audit={view.audit} />
               )}

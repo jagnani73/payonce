@@ -10,7 +10,7 @@ import { Theirs, Time } from "./Text";
 // folded away, even when the system wrote it. New lines get a brief highlight;
 // the page never scrolls by itself.
 
-type Filter = "all" | "decisions" | "bank" | "emails" | "approvals" | "messages";
+export type Filter = "all" | "decisions" | "bank" | "emails" | "approvals" | "messages";
 
 const FILTERS: readonly [Filter, string][] = [
   ["all", "All"],
@@ -90,7 +90,9 @@ function Line(props: { line: TimelineLine; fresh: boolean }): JSX.Element {
   );
 }
 
-export function Timeline(props: { timeline: TimelineView; empty?: string }): JSX.Element {
+// filters: the chips to offer, all of them when left out. A pay run's timeline
+// has no emails or messages.
+export function Timeline(props: { timeline: TimelineView; empty?: string; filters?: readonly Filter[] }): JSX.Element {
   const [filter, setFilter] = useState<Filter>("all");
   const [showSystem, setShowSystem] = useState<boolean>(false);
   const seen = useRef<Set<number> | null>(null);
@@ -129,7 +131,7 @@ export function Timeline(props: { timeline: TimelineView; empty?: string }): JSX
   return (
     <div class="tl">
       <div class="chips" role="group" aria-label="Filter lines">
-        {FILTERS.map(
+        {FILTERS.filter(([key]: [Filter, string]): boolean => key === "all" || props.filters === undefined || props.filters.includes(key)).map(
           ([key, label]: [Filter, string]): JSX.Element => (
             <button key={key} type="button" class="filter-chip" aria-pressed={filter === key} onClick={(): void => setFilter(key)}>
               {label}
