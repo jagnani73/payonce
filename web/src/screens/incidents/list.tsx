@@ -173,7 +173,7 @@ function TableRow(props: { row: IncidentRow }): JSX.Element {
       <td class="itable__soft">
         <Time at={row.waitingSince} />
       </td>
-      <td class="itable__soft">{row.dueDate === null ? "None" : <Day day={row.dueDate} />}</td>
+      <td class="itable__soft">{row.dueDate === null ? <span class="muted">No due date</span> : <Day day={row.dueDate} />}</td>
     </ClickRow>
   );
 }
