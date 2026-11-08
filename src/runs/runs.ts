@@ -32,7 +32,14 @@ import { FAILURE_WORDS } from "../domain/failure-codes.js";
 import { isExpired } from "../domain/live.js";
 import { withCurrencyLocks } from "../engine/currency-lock.js";
 import type { Dispatcher } from "../engine/dispatcher.js";
-import { likelyDuplicates, sameBillAndNumber, sameNumberExactly, sameSupplier, type Bill } from "../domain/duplicates.js";
+import {
+  likelyDuplicates,
+  recordsSharing,
+  sameBillAndNumber,
+  sameNumberExactly,
+  sameSupplier,
+  type Bill,
+} from "../domain/duplicates.js";
 import type { Engine } from "../engine/engine.js";
 import { lineWanted } from "../engine/lines.js";
 import {
@@ -239,6 +246,20 @@ function checkRow(
     row.beneficiaryId === null ? undefined : payees.get(row.beneficiaryId);
   const details: TransferBankDetails | undefined = payee?.details;
   const payeeName: string | null = details?.account_name ?? null;
+  // Other records that pay the row's account count as the same supplier, as the
+  // first-payment hold counts them when the row is sent: those the ledger has
+  // seen paying it, and those earlier rows of this file pay it through.
+  const route: string | null = details === undefined ? null : routeKeyOf(details);
+  const sharing: Set<string> =
+    row.beneficiaryId === null ? new Set<string>() : recordsSharing(ledger, row.beneficiaryId, route);
+  const paysRoute = (id: string | null): id is string => {
+    const theirs: TransferBankDetails | undefined = id === null ? undefined : payees.get(id)?.details;
+    return id !== null && id !== row.beneficiaryId && theirs !== undefined && route !== null && routeKeyOf(theirs) === route;
+  };
+  const inFile: Set<string> = new Set<string>([
+    ...sharing,
+    ...earlier.map((other: RunFileRow): string | null => other.beneficiaryId).filter(paysRoute),
+  ]);
 
   const invoiceId: string | null = row.invoiceId;
   if (invoiceId !== null) {
@@ -250,6 +271,7 @@ function checkRow(
         (other: ScannedObligation): boolean =>
           sameNumberExactly(other.invoiceId, invoiceId) &&
           (other.beneficiaryId === row.beneficiaryId ||
+            sharing.has(other.beneficiaryId) ||
             (payeeName !== null && sameSupplier(other.supplier, payeeName))),
       );
     if (same !== undefined) {
@@ -263,7 +285,9 @@ function checkRow(
       (other: RunFileRow): boolean =>
         other.invoiceId !== null &&
         (other.invoiceId === invoiceId ||
-          (sameNumberExactly(other.invoiceId, invoiceId) && other.beneficiaryId === row.beneficiaryId)),
+          (sameNumberExactly(other.invoiceId, invoiceId) &&
+            (other.beneficiaryId === row.beneficiaryId ||
+              (other.beneficiaryId !== null && inFile.has(other.beneficiaryId))))),
     );
     const bill: (Bill & { invoiceId: string }) | null = billOf(row, payees);
     const near: RunFileRow | undefined =
@@ -271,7 +295,7 @@ function checkRow(
         ? undefined
         : earlier.find((other: RunFileRow): boolean => {
             const theirs: (Bill & { invoiceId: string }) | null = billOf(other, payees);
-            return theirs !== null && sameBillAndNumber(theirs, bill);
+            return theirs !== null && sameBillAndNumber(theirs, bill, inFile);
           });
     if (twin !== undefined) {
       reasons.push(
@@ -370,7 +394,7 @@ function checkRow(
     reasons,
     heldFor:
       pays && method !== null
-        ? likelyDuplicates(ledger, asObligation(row, name, method)).map(
+        ? likelyDuplicates(ledger, asObligation(row, name, method), sharing).map(
             (other: ScannedObligation): string => other.invoiceId,
           )
         : [],

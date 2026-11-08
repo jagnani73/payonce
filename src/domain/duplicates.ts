@@ -106,13 +106,26 @@ function sameBill(obligation: Bill, bill: Bill, sharing: ReadonlySet<string> = N
   );
 }
 
+// The other beneficiary records the ledger has seen paying the account a first
+// payment to this record would go to (route), which the holds count as the same
+// supplier. A first payment's holds and a pay run's check both ask it, so a run
+// row names before approval what would hold it when it is sent. Empty with no
+// route.
+export function recordsSharing(ledger: Ledger, beneficiaryId: string, route: string | null): Set<string> {
+  const records: Set<string> = route === null ? new Set<string>() : ledger.recordsOnRoute(route);
+  records.delete(beneficiaryId);
+  return records;
+}
+
 // The test likelyDuplicates makes, for two bills that are not in the ledger yet,
-// such as two rows of one pay run file.
+// such as two rows of one pay run file. sharing is the records that pay b's
+// account.
 export function sameBillAndNumber(
   a: Bill & { invoiceId: string },
   b: Bill & { invoiceId: string },
+  sharing: ReadonlySet<string> = NO_RECORDS,
 ): boolean {
-  return sameBill(a, b) && sameInvoiceNumber(a.invoiceId, b.invoiceId);
+  return sameBill(a, b, sharing) && sameInvoiceNumber(a.invoiceId, b.invoiceId);
 }
 
 // The other invoices this one may be a second bill for, oldest first: the same

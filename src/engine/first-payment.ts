@@ -4,7 +4,7 @@ import type { Transfer, TransferBankDetails } from "../airwallex/transfers.js";
 import { accountKeyOf, paymentAmount, type HeldPaymentTerms } from "../domain/approval.js";
 import { signoffsNeeded, type ApprovalPolicy, type SignoffRule } from "../domain/approvers.js";
 import { routeKeyOf } from "../domain/assess.js";
-import { likelyDuplicates, sameNumberForSupplier } from "../domain/duplicates.js";
+import { likelyDuplicates, recordsSharing, sameNumberForSupplier } from "../domain/duplicates.js";
 import { formatMoney } from "../domain/money.js";
 import {
   heldAsSecondBill,
@@ -166,15 +166,6 @@ function heldForAccount(_engine: HoldReads, facts: FirstPaymentFacts): FirstPaym
   return facts.account === null ? null : heldFor(facts.account);
 }
 
-// The other beneficiary records the ledger has seen paying the account a first
-// payment would go to. Their invoices count as the same supplier's, so a second
-// bill sent through another record for the same account is held too.
-function recordsSharing(ledger: Ledger, facts: FirstPaymentFacts): Set<string> {
-  const records: Set<string> = facts.route === null ? new Set<string>() : ledger.recordsOnRoute(facts.route);
-  records.delete(facts.obligation.beneficiaryId);
-  return records;
-}
-
 // Why a new invoice is held before paying because of other invoices: it looks
 // like a second bill for one, it has the number of another invoice to the same
 // supplier, for any amount, or a payout for it sent outside PayOnce is live. The
@@ -182,7 +173,9 @@ function recordsSharing(ledger: Ledger, facts: FirstPaymentFacts): Set<string> {
 function heldForOthers(engine: HoldReads, facts: FirstPaymentFacts): FirstPaymentHold | null {
   const { ledger }: HoldReads = engine;
   const obligation: Obligation = facts.obligation;
-  const sharing: Set<string> = recordsSharing(ledger, facts);
+  // Other records the ledger has seen paying the same account count as the same
+  // supplier, so a second bill sent through another record is held too.
+  const sharing: Set<string> = recordsSharing(ledger, obligation.beneficiaryId, facts.route);
   const duplicates: string[] = likelyDuplicates(ledger, obligation, sharing).map(
     (other: ScannedObligation): string => other.invoiceId,
   );
