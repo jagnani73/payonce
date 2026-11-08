@@ -455,13 +455,15 @@ function ProposeForm(props: { supplierKey: string; first: boolean; onActed: Acti
       </p>
       <div class="form-grid">
         <Field label="Phone number" hint="With a + and the country code, such as +1 212 555 0147." error={errors["value"] ?? null}>
-          {(control: ControlProps): JSX.Element => <TextInput control={control} value={value} onInput={setValue} tel />}
+          {(control: ControlProps): JSX.Element => <TextInput control={control} value={value} onInput={changed("value", setValue)} tel />}
         </Field>
         <Field label="Where you found it" error={errors["source"] ?? null}>
-          {(control: ControlProps): JSX.Element => <SourceSelect control={control} value={source} onChange={setSource} />}
+          {(control: ControlProps): JSX.Element => (
+            <SourceSelect control={control} value={source} onChange={(next: ContactSource | ""): void => changed("source", setSource)(next)} />
+          )}
         </Field>
         <Field label="Note" hint={source === "other" ? "Required for another source." : "Optional."} error={errors["note"] ?? null}>
-          {(control: ControlProps): JSX.Element => <TextInput control={control} value={note} onInput={setNote} />}
+          {(control: ControlProps): JSX.Element => <TextInput control={control} value={note} onInput={changed("note", setNote)} />}
         </Field>
         <NameField label="Proposing as" value={name} onInput={setName} />
       </div>
