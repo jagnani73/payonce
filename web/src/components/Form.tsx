@@ -73,21 +73,15 @@ export function NameField(props: {
   );
 }
 
-// The name to start an approver select on: You are when that name is on the
-// list and has not signed yet, so a barred name still shows its reason; else
-// the first who can approve, else the first.
+// The name to start an approver select on: You are, when that name can approve.
+// Otherwise none, so another person is only ever chosen by hand.
 export function firstApprover(choices: readonly ApproverChoice[], me: string | null): string {
-  return (
-    choices.find((choice: ApproverChoice): boolean => me !== null && !choice.signed && sameMe(choice.name, me))?.name ??
-    choices.find((choice: ApproverChoice): boolean => choice.canApprove)?.name ??
-    choices[0]?.name ??
-    ""
-  );
+  return choices.find((choice: ApproverChoice): boolean => me !== null && choice.canApprove && sameMe(choice.name, me))?.name ?? "";
 }
 
-// "Approving as": the approvers of one request. A name that cannot approve it
-// is listed but disabled, and when it is the one chosen (You are, say) its
-// reason shows under the select, so the button can say why it is off.
+// "Approving as": the approvers of one request. A name that cannot approve it is
+// listed but disabled. With no name chosen the select says to choose one, and
+// when You are is on the list but can't approve, why shows under it.
 export function NamePicker(props: {
   label: string;
   choices: readonly ApproverChoice[];
@@ -95,13 +89,13 @@ export function NamePicker(props: {
   onChange: (name: string) => void;
   me: string | null;
 }): JSX.Element {
-  const chosen: ApproverChoice | undefined = props.choices.find((choice: ApproverChoice): boolean => choice.name === props.value);
+  const mine: ApproverChoice | undefined = props.choices.find(
+    (choice: ApproverChoice): boolean => props.me !== null && sameMe(choice.name, props.me),
+  );
+  const hint: string | undefined =
+    props.value !== "" || mine === undefined || mine.canApprove ? undefined : mine.signed ? "You have signed this request." : (mine.why?.text ?? undefined);
   return (
-    <Field
-      label={props.label}
-      class="field--name"
-      hint={chosen === undefined || chosen.canApprove || chosen.why === null ? undefined : chosen.why.text}
-    >
+    <Field label={props.label} class="field--name" hint={hint}>
       {(control: ControlProps): JSX.Element => (
         <select
           {...control}
@@ -109,6 +103,11 @@ export function NamePicker(props: {
           value={props.value}
           onChange={(event: Event): void => props.onChange((event.currentTarget as HTMLSelectElement).value)}
         >
+          {props.value === "" ? (
+            <option value="" disabled>
+              Choose who is approving
+            </option>
+          ) : null}
           {props.choices.map(
             (choice: ApproverChoice): JSX.Element => (
               <option key={choice.name} value={choice.name} disabled={!choice.canApprove}>

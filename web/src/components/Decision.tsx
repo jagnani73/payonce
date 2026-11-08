@@ -1,5 +1,5 @@
 import type { ComponentChildren, JSX } from "preact";
-import { useId, useState } from "preact/hooks";
+import { useEffect, useId, useState } from "preact/hooks";
 import { sameMe, useMe } from "../me";
 import type { ApproverChoice, Barred, Can, RequestView } from "../types";
 import { ActionButton } from "./Action";
@@ -213,9 +213,10 @@ export function OptionCard(props: { option: Choosable; name: string; chosen: boo
   );
 }
 
-// "Approving as", from the request's approvers, and Approve. A name that has
-// signed, here or anywhere else, gives way to the next who can approve. empty:
-// the button's label before a name is chosen.
+// "Approving as", from the request's approvers, and Approve. It starts on You
+// are when that name can approve, and empty otherwise; a person picks anyone
+// else by hand. After a signoff, here or anywhere else, it starts again the same
+// way, never on another name. empty: the button's label before a name is chosen.
 export function ApproveForm(props: {
   approvers: ApproverChoice[];
   can: Can;
@@ -226,8 +227,12 @@ export function ApproveForm(props: {
   const me: string | null = useMe();
   const [picked, setPicked] = useState<string | null>(null);
   const choices: ApproverChoice[] = props.approvers;
+  const signed: number = choices.filter((choice: ApproverChoice): boolean => choice.signed).length;
+  useEffect((): void => {
+    setPicked(null);
+  }, [signed]);
   const name: string =
-    picked !== null && choices.some((choice: ApproverChoice): boolean => choice.name === picked && !choice.signed) ? picked : firstApprover(choices, me);
+    picked !== null && choices.some((choice: ApproverChoice): boolean => choice.name === picked && choice.canApprove) ? picked : firstApprover(choices, me);
   const choice: ApproverChoice | undefined = choices.find((item: ApproverChoice): boolean => item.name === name);
   return (
     <div class="option-form">
@@ -242,7 +247,7 @@ export function ApproveForm(props: {
           label={name === "" ? props.empty : `Approve as ${name}`}
           busyLabel="Approving…"
           disabled={!props.can.allowed || choice?.canApprove !== true}
-          reason={props.can.allowed ? null : (props.can.why?.text ?? null)}
+          reason={!props.can.allowed ? (props.can.why?.text ?? null) : name === "" && choices.length > 0 ? "Choose who is approving." : null}
           onAction={async (): Promise<void> => {
             await props.onApprove(name);
             setPicked(null);

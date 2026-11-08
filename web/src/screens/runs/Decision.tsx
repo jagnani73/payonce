@@ -243,6 +243,7 @@ export function RunDecision(props: {
       </Options>
       {chosen === undefined ? null : chosen.kind === "approve" ? (
         <ApproveForm
+          key={chosen.requestId}
           approvers={chosen.approvers}
           can={chosen.can}
           empty="Approve run"

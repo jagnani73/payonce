@@ -114,6 +114,7 @@ function OptionForm(props: { option: DecisionOption; acts: Acts }): JSX.Element 
     case "approve":
       return (
         <ApproveForm
+          key={o.requestId}
           approvers={o.approvers}
           can={o.can}
           empty="Approve"
