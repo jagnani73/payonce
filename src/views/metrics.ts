@@ -12,7 +12,7 @@ import { BREAK_KINDS, clearsByItself, KIND_LABELS, type BreakKind } from "../rec
 import { attemptLostFee, payoutLostFee } from "../store/read/cash.js";
 import type { BreakTimes } from "../store/recon-store.js";
 import { KNOWN_CODES } from "../explain/why-facts.js";
-import { familyOf, type ReasonFamily } from "../domain/reasons.js";
+import { familyOf, routineApproval, type ReasonFamily } from "../domain/reasons.js";
 import { CURRENCY_PATTERN } from "../domain/patterns.js";
 import { FAILURE_WORDS, RAIL_FAILURE_CODES, RESENDABLE_FAILURE_CODES } from "../domain/failure-codes.js";
 
@@ -48,7 +48,7 @@ export const REASON_LABELS: Record<ReasonFamily, string> = {
   cash: "Reserve floor or cash",
   "two-approvers": "Large enough to need two approvers",
   "exchange-rate": "Exchange rate to approve or check",
-  approval: "Started by a person and approved before it went out",
+  approval: "New payment to approve",
   outage: "Rail outage",
   "paid-twice": "May have been paid twice",
   other: "A reason PayOnce does not recognise",
@@ -740,12 +740,14 @@ function failuresOf(read: MetricsRead, index: Indexed, window: Window): Failures
 // ---------- 3. incidents ----------
 
 // How a closed invoice ended. Sent to a person means a reason is on file, which
-// every path that hands an invoice to a person writes.
+// every path that hands an invoice to a person writes. The approval every
+// payment a person starts waits for is part of the payment, so a reason that is
+// only that counts by what happened after it.
 function closeHow(obligation: MetricsObligation, attempts: MetricsAttempt[]): CloseHow {
   if (obligation.state === "rejected") {
     return "not-paid";
   }
-  if (obligation.escalationReason !== "") {
+  if (obligation.escalationReason !== "" && !routineApproval(obligation.reason)) {
     return "person-paid";
   }
   return attempts.some((attempt: MetricsAttempt): boolean => attempt.kind === "replacement") ? "replaced" : "first-time";
