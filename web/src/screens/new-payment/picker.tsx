@@ -11,7 +11,9 @@ import type { BeneficiaryOption, BeneficiaryPickerView, TransferMethod } from ".
 
 // The New payment form's supplier field: the Airwallex beneficiaries, searched
 // on the server (GET /api/beneficiaries?q=), as radio cards. The one picked
-// stays on screen while another search runs or leaves it out.
+// stays on screen while another search runs or leaves it out. Once one is
+// picked the list folds to it, so the rest of the form follows on a phone,
+// until the person searches again or asks for the whole list.
 
 const SEARCH_MS: number = 250;
 // The list changes only in the Airwallex web app, and the server keeps it a
@@ -107,6 +109,9 @@ export function BeneficiaryPicker(props: {
 }): JSX.Element {
   const [typed, setTyped] = useState<string>("");
   const [q, setQ] = useState<string>("");
+  // The list shows every match while nothing is picked, and after a pick only
+  // once the person searches or opens it again.
+  const [browsing, setBrowsing] = useState<boolean>(false);
   useEffect((): (() => void) => {
     const timer: number = window.setTimeout((): void => setQ(typed.trim()), SEARCH_MS);
     return (): void => window.clearTimeout(timer);
@@ -116,7 +121,12 @@ export function BeneficiaryPicker(props: {
   const view: BeneficiaryPickerView | null = list.data;
   const options: BeneficiaryOption[] = view?.options ?? [];
   const picked: BeneficiaryOption | null = props.picked;
-  const pickedShown: boolean = picked !== null && options.some((option: BeneficiaryOption): boolean => option.key === picked.key);
+  const folded: boolean = picked !== null && !browsing;
+  const pickedShown: boolean = !folded && picked !== null && options.some((option: BeneficiaryOption): boolean => option.key === picked.key);
+  const pick = (option: BeneficiaryOption): void => {
+    setBrowsing(false);
+    props.onPick(option);
+  };
 
   return (
     <div class="np-picker">
@@ -133,10 +143,20 @@ export function BeneficiaryPicker(props: {
           aria-describedby={props.describedBy}
           aria-invalid={props.error === null ? undefined : true}
           value={typed}
-          onInput={(event: Event): void => setTyped((event.currentTarget as HTMLInputElement).value)}
+          onInput={(event: Event): void => {
+            setTyped((event.currentTarget as HTMLInputElement).value);
+            setBrowsing(true);
+          }}
         />
       </div>
-      {view === null ? (
+      {folded && picked !== null ? (
+        <div class="np-options" role="radiogroup" aria-label="Airwallex beneficiaries">
+          <OptionCard option={picked} picked onPick={pick} />
+          <button type="button" class="btn btn--secondary np-picker__more" onClick={(): void => setBrowsing(true)}>
+            Choose another beneficiary
+          </button>
+        </div>
+      ) : view === null ? (
         list.error === null ? (
           <Loading rows={2} label="Loading beneficiaries" />
         ) : (
@@ -176,12 +196,12 @@ export function BeneficiaryPicker(props: {
           ) : null}
         </>
       )}
-      {picked !== null || options.length > 0 ? (
+      {!folded && (picked !== null || options.length > 0) ? (
         <div class="np-options" role="radiogroup" aria-label="Airwallex beneficiaries" aria-busy={view !== null && view.q !== q}>
-          {picked !== null && !pickedShown ? <OptionCard option={picked} picked onPick={props.onPick} /> : null}
+          {picked !== null && !pickedShown ? <OptionCard option={picked} picked onPick={pick} /> : null}
           {options.map(
             (option: BeneficiaryOption): JSX.Element => (
-              <OptionCard key={option.key} option={option} picked={picked?.key === option.key} onPick={props.onPick} />
+              <OptionCard key={option.key} option={option} picked={picked?.key === option.key} onPick={pick} />
             ),
           )}
         </div>
