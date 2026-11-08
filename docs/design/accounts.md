@@ -19,7 +19,7 @@ How PayOnce tells whether two sets of bank details are one account. Two keys nam
 - Those places are `requireAccount` (every replacement, a held invoice's release and every retry, so before `useApproval` and `releaseFor` spend anything), a run row's approved key in `startPayment` and `continueHeld`, `accountMismatch` in `transferChecks` on every transfer, and `sameAccount` in held terms.
 - A bank name changed after an approval therefore voids it, and the next look opens a new request.
 - The route key is for the tests that would otherwise stop a supplier being paid after such a change: `sameBankDetails` (a replacement's new bank details) and its warning, and the first-payment hold (`lastPaidHold`) and `payeeRule` against `lastPaidTransfer`.
-- The callback compares by route too: its nothing-to-verify and read-back checks, `verifiedBankChange`, `bankChangeRecorders`, `callbackPhoneSetters` and `barredFrom`.
+- The callback compares by route too: its nothing-to-verify and read-back checks, `verifiedBankChange`, `bankChangeRecorders`, `callbackPhoneSetters` and `callbackBars`, which `barredFrom` and `runBarred` read.
 - So do the pay run account checks, `payingRoute` and `payoutVerdict` for outside payouts, and the supplier view, which groups accounts by route through `accountRoutes`.
 - Outage payees (`payeeOf`) keep a field list of their own. [rail-outages.md](rail-outages.md) has it.
 
@@ -28,7 +28,7 @@ How PayOnce tells whether two sets of bank details are one account. Two keys nam
 - Route keys sit beside the full keys and never go in terms: `attempts.route_key`, `attempts.sent_route`, `outside_payouts.sent_route`, `run_rows.route_key` and `approvals.route_key`.
 - `openAttempt` writes `attempts.route_key` from the record its caller just checked, and only when the attempt has an `account_key`. `releaseRun` keeps a row's `route_key` only when the run approved the same `account_key` the row holds.
 - `holdsAccount` compares a stored account by its route key when `knownRoute` takes the key, and by its full key otherwise.
-- `barredFrom` bars every recorder of a callback for the beneficiary, and everyone who put its number on file, when it cannot read the account's route or the callback's. `bankChangeRecorders` lists a recorder whose callback details it cannot read.
+- `callbackBars` bars every recorder of a callback for the beneficiary, and everyone who put its number on file, when it cannot read the account's route or the callback's. `bankChangeRecorders` lists a recorder whose callback details it cannot read.
 - `meta.route_scheme` names the scheme the stored keys were built with.
 - When `meta.route_scheme` is not `ROUTE_SCHEME`, the writable open runs `rebuildRoutes` under the write lock that adds columns. It clears every route column, then gives each key equal to the full hash of details a callback kept (`applied_key` or `old_details`, `callbackRoutes`) the route of those details. The rest stay null.
 - `rebuildRoutes` also clears every outside payout's `checked_at` and `pays`, so the next look reads it again and judges it by the new keys.

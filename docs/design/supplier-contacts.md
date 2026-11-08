@@ -33,7 +33,7 @@ A callback is how PayOnce checks new bank details, so the phone number it is mad
 
 ### Who is barred
 - Whoever proposed or confirmed the number on file cannot record a callback on it (`setterCalls`). A number other people put on file lifts that bar.
-- Whoever proposed or confirmed the number a callback was made on cannot approve a payment, a held invoice's payment or a pay run row to the account that callback verified (`Ledger.callbackPhoneSetters`, read by `barredFrom` and `runBarred`). The bar lasts for that account of that record, as a callback recorder's does.
+- Whoever proposed or confirmed the number a callback was made on cannot approve a payment, a held invoice's payment or a pay run row to the account that callback verified (`Ledger.callbackPhoneSetters`, read by `callbackBars` for `barredFrom` and `runBarred`). The bar lasts for that account of that record, as a callback recorder's does.
 - A migrated or scenario number has no person, so it bars nobody.
 
 ### What a confirmed change withdraws

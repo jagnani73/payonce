@@ -128,7 +128,7 @@ An approval covers exact terms: who is paid, how much, to which account, at whic
 - An approval is spent only by `useApproval` or `releaseFor`, which move it from `approved` to `used` in the transaction that opens its attempt, or by `RunStore.releaseRun` for a pay run. So one approval pays at most one attempt.
 - A new request voids any earlier open one for the same invoice or run. Invoice and run requests share one class, `RequestBook`, with a shape for each.
 
-Who may sign is in `src/domain/approvers.ts`: `checkSigner`, `signoffsNeeded` and `eligibleApprovers`, which compare limits with `paymentAmount` (or `runAmount` for a run), what the payment takes from the wallet it leaves. `barredFrom` in `src/domain/barred.ts` lists who may not sign.
+Who may sign is in `src/domain/approvers.ts`: `checkSigner`, `signoffsNeeded` and `eligibleApprovers`, which compare limits with `paymentAmount` (or `runAmount` for a run), what the payment takes from the wallet it leaves. `barredFrom`, and `runBarred` for a run, list who may not sign, both from `callbackBars` in `src/domain/barred.ts`.
 
 ## Three hash-chained timelines
 

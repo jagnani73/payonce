@@ -176,7 +176,7 @@ The SQLite ledger: its tables, columns, indexes and triggers, its transactions, 
 ### Pay runs
 
 - `runs` holds each run: `state` `waiting`, `released` or `cancelled`, the file's name, hash and header, the uploader, and the last check's cash as JSON. The partial unique indexes `one_waiting_run` and `one_live_run_per_file` allow one waiting run and one live run per file.
-- `run_rows` holds each row: the cells as read, what the last check made of them, `action` `pay` or `skip`, `reasons`, `held_for`, `new_payee`, `bank_change_id`, `payee`, `pay_to`, `account_key`, `route_key`, `due_date`, `arrival`, and `state` `waiting`, `released` or `dropped` with a `note`.
+- `run_rows` holds each row: the cells as read, what the last check made of them, `action` `pay` or `skip`, `reasons`, `held_for`, `new_payee`, `bank_change_id`, `verified_by` (the callback that verified the account, whether or not PayOnce paid it since), `account_failure` (a failed transfer on the account, as JSON), `payee`, `pay_to`, `account_key`, `route_key`, `due_date`, `arrival`, and `state` `waiting`, `released` or `dropped` with a `note`.
 - `run_rows.arrival` is the last check's estimate for a pay row as `ArrivalTerms` JSON, null on a skip row.
 - `run_approvals` and `run_signoffs` mirror `approvals` and `signoffs`. `run_events` is the run's timeline, chained like `events`. [pay-runs.md](pay-runs.md) has the rules.
 - `payRunRows` reads, in SQL, the pay rows of a waiting run whose latest request is `approved` and not expired, and the released invoices still `open` with no attempt. A row drops out in the transaction that opens its attempt.
@@ -213,7 +213,7 @@ The SQLite ledger: its tables, columns, indexes and triggers, its transactions, 
 - `openObligation` puts a scenario's phone on file in the transaction that writes the invoice (`seedScenario`), only when the record has none on file and none waiting. Only `openScenario` passes a phone.
 - `Ledger.storedPhones()` gives every phone the ledger keeps, in any state, every `number_called` and every `obligations.supplier_phone`, for the MCP server to mask.
 - `bank_changes` holds each callback: who called, the number, when, who they spoke to, what was confirmed, the old record and the typed fields, `applied_key`, and `state` `pending`, `applied` or `failed`. The row is written before the Airwallex update.
-- `Ledger.callbacksFor(beneficiaryId)` gives each applied callback's details key with its recorders and the people who put its number on file, which `barredFrom` reads.
+- `Ledger.callbacksFor(beneficiaryId)` gives each applied callback's details key with its recorders and the people who put its number on file, which `callbackBars` reads.
 
 ### Meta and indexes
 
@@ -313,7 +313,7 @@ The SQLite ledger: its tables, columns, indexes and triggers, its transactions, 
 - A held invoice whose `duplicate_of` does not parse stays held, and `pendingApproval` throws on it too, so nobody can approve paying it.
 - In a view, unreadable terms or a kept quote give the panel's line amount no quote, the board tells a held request from a replacement by the invoice, and findings that do not parse or fit their shape (such as `{}`) stand as not read.
 - An outage with no readable codes says "a rail-level code", as its alert does, and its card on Treasury's Outages tab (`web/src/screens/treasury/`) shows "none on file".
-- The stored shapes accept every version on file. A replacement's terms may lack `accountKey` (rows before 2026-10-28) and `evidence.emails` (the first terms), and `evidence.bankChange` may be missing or null. Held terms always have `accountKey`. A pay run's rows may lack `supplierDomain` and `arrival`.
+- The stored shapes accept every version on file. A replacement's terms may lack `accountKey` (rows before 2026-10-28) and `evidence.emails` (the first terms), and `evidence.bankChange` may be missing or null. Held terms always have `accountKey`. A pay run's rows may lack `supplierDomain`, `arrival`, `verifiedBy` and `accountFailure`.
 - Stored findings may lack `asksNotToPay`, `emailsRead`, `unread`, `unverifiedSenders` and `readBy`.
 - A line with no hash, written by older code, is reported as written outside the chain, and the next line chains from the last line with a hash.
 - A ledger whose run chain or invoice chain has not started is reported by `pnpm run audit`, never hashed by it. On a file from before pay runs, which has no `runs` table (`hasRunTable`), `pnpm run audit run <RUN>` says the ledger has no pay runs.

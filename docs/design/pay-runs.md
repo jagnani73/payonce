@@ -31,11 +31,13 @@ A pay run is a CSV of payments that people check and approve together, and that 
 - `lastPaidTransfer` is the latest paid attempt on an `origin = 'payonce'` invoice to the beneficiary that kept an `account_key` and is not `misdirected`, with that key.
 - `readPayees` reads that transfer from Airwallex and compares the account it went to with the record. The same read gives the skip message. `payeeRule` and the first-payment hold compare the record with the kept account (`holdsAccount`) and read no transfer.
 - A row to a beneficiary PayOnce has never paid on a person's approval (`paidOnApproval`) is a new payee, whatever PayOnce paid by itself. So is a row with no last paid transfer. The account check still compares with the last payment, automatic or not.
-- A row whose account a callback verified carries `bankChange`. A pay row keeps the record's `routeKey` in `run_rows.route_key`.
+- A pay row keeps the callback `verifiedBankChange` finds for the record's account in `run_rows.verified_by`, whether or not PayOnce paid that account since. When the account is not the one PayOnce last paid, that callback is the row's `bankChange` too. A pay row keeps the record's `routeKey` in `run_rows.route_key`.
+- A pay row to an account where a transfer failed with an account-level code (`ACCOUNT_FAILURE_CODES`: 90101, 90701, 90802), and no payment opened after it was paid there, keeps that transfer's reference and code (`Ledger.accountFailure`, `run_rows.account_failure`). The row still pays. It gets a caution and needs two approvers.
+- `accountFailure` compares accounts by route key or full key, on any supplier record, since the account is where the money goes. A failure counts for the account it was meant for and the one it went to. A later payment lifts it only when the bank paid it to the account it was meant for (not `misdirected`).
 - A row that `likelyDuplicates` matches against the ledger is a pay row with `heldFor` listing the matches. It counts in the totals, is released with the run, and `startPayment` holds it when it comes to send it.
 - The cash check runs per currency over the pay rows: one `getBalances` read, less the money committed elsewhere, less the rows and their fees (`latestFee` by method; 0, marked not known, when none is recorded).
 - Committed money is counted before and after the balance read and taken at the larger per invoice (`committedByInvoice`, `committedAcross`), leaving out the run's own rows.
-- When the cash check leaves less than the floor, every row in the currency is skipped, with the shortfall in the reason. A skipped row goes through `skipRow`, which clears `heldFor`, `newPayee`, `bankChangeId` and `arrival`.
+- When the cash check leaves less than the floor, every row in the currency is skipped, with the shortfall in the reason. A skipped row goes through `skipRow`, which clears `heldFor`, `newPayee`, `bankChangeId`, `verifiedBy`, `accountFailure` and `arrival`.
 - A currency with no floor set does not block, and the terms carry `reserveFloorMinor: null`. An unreadable `RESERVE_FLOORS`, or no balance in the currency, skips that currency's rows.
 
 ### One waiting run
@@ -49,15 +51,21 @@ A pay run is a CSV of payments that people check and approve together, and that 
 
 - `runTermsFor` builds `RunTerms`: the run, the file hash, the uploader, every pay row in file order, and a total per currency with its floor.
 - Each row in the terms has its line, invoice, amount, currency, beneficiary, method, `payTo`, `accountKey`, `heldFor` and `bankChange`, plus `supplierDomain` on a row that gives one and `arrival` on a row with a due date.
+- A row whose account a callback verified, when `bankChange` is null because PayOnce paid that account since, also has `verifiedBy`. A row to a failed account has `accountFailure` (its reference and code). Both go in by conditional spread, so a row without them binds as before.
 - Skipped rows, new-payee flags, sandbox outcomes, fees and how many approvers are needed are not in the terms.
 - Every pay row gets `arrival`, stored in `run_rows.arrival` and shown with the row. A check counts it from the day of the run's latest request while that request is requested or approved and has not expired. Otherwise it counts from today.
 - When `settleRunRequest` opens a new request on rows that count from another day, it counts them from today first and rewrites `run_rows.arrival` with `setRunArrivals`. It then compares the recounted binding again.
-- `runRule` asks for two approvers when a row pays a new payee ("which PayOnce has never paid on a person's approval"), a row pays a callback-verified account, or a row's `supplier_domain` has a caution.
+- `runRule` asks for two approvers when a row pays a new payee ("which PayOnce has never paid on a person's approval"), a row pays a callback-verified account PayOnce did not last pay (`bankChange`), a row pays a failed account, or a row's `supplier_domain` has a caution.
+- For a failed account the reason is "row 2 goes to the account that transfer P261102-0000002 failed on (account closed)" (needed why code `run-account-failed`).
+- The run's page, `pnpm payrun show` and `pnpm payrun approve` give the caution "Row 2 goes to the account that transfer P261102-0000002 failed on (account closed). Check the account with the supplier first." (`accountFailureCaution`, caution code `same-account-failed`). It is worded like the caution on a replacement to the account its original failed on.
+- The check writes the caution on the run's timeline under the row's topic, so a later check that finds no failure writes "now pays".
 - `runRule` also asks for two when any currency's total is above `TWO_APPROVERS_ABOVE`, or when the uploader's stored name does not follow the name rule (`knownName`).
 - `domainChecks` gives a caution when the domain differs from the latest invoice to the beneficiary that has one, when the run gives the same beneficiary another domain, or when it is the first domain for a beneficiary PayOnce has paid once.
 - A first domain for a beneficiary PayOnce has never paid gets a note only. The run's request and `pnpm payrun show` and `approve` show each row's domain with its caution or note (`domainText`).
 - Limits are checked against the largest currency total (`runAmount`, which `largestTotal` shows).
-- `runBarred` bars the uploader, the callback recorders of every `bankChange` row, and whoever proposed or confirmed the phone number such a callback was made on (`callbackPhoneSetters`; see [supplier-contacts.md](supplier-contacts.md)).
+- `runBarred` bars the uploader and, for each row, everyone `callbackBars` bars for the account the row pays. That is every recorder of a callback that verified the account, on any invoice of the record, whether or not PayOnce paid it since, and whoever proposed or confirmed the phone a callback was made on (see [supplier-contacts.md](supplier-contacts.md)).
+- `barredFrom` asks `callbackBars` for an invoice, so a run row and an invoice to one account bar the same people. With no route key on file for a row's `accountKey`, every callback for the record bars.
+- A row's `callbackVerified` is true when it has `verified_by`, or, on a row from before the column, `bank_change_id`. The request's callback rows are those with `bankChange` or `verifiedBy`.
 - Approving (`approveRun`) follows `approvePayment`: the request the approver was shown, `checkSigner`, `signOffRun`, the binding.
 - A run's requests are `run_approvals` rows kept by the same `RequestBook` as an invoice's, with the `RUN_REQUESTS` shape (`src/store/approvals.ts`). One opens only on a waiting run, and a new one voids the open one.
 - A run request expires after `APPROVAL_TTL_MINUTES` and is not renewed by itself.
@@ -106,7 +114,10 @@ A pay run is a CSV of payments that people check and approve together, and that 
 - A changed account's skip message points outside PayOnce because no callback can be recorded outside an incident.
 - `lastPaidTransfer` takes only payments that kept their account and were not misdirected, so a payment that went out unchecked never becomes the account PayOnce last paid.
 - A short currency skips all of its rows, so file order never decides who is paid.
-- `skipRow` clears `heldFor`, `newPayee`, `bankChangeId` and `arrival` because those only matter on a row that pays.
+- `skipRow` clears `heldFor`, `newPayee`, `bankChangeId`, `verifiedBy`, `accountFailure` and `arrival` because those only matter on a row that pays.
+- A run row bars a callback's recorder for good, as an invoice does. Otherwise, once a payment to the new account made it the account PayOnce last paid, the recorder could approve a later run row to it, alone when the run needs one approver.
+- A row to a failed account gets a caution, not a skip, because the supplier may have opened the account again or the bank may have made a mistake. Two people read the warning before it pays.
+- A failure on another record with the same bank details counts, because a closed account is closed whichever record names it.
 - A failed cell reads as empty and is never quoted, so nothing in it reaches a reason, the timeline or a terminal.
 - The supplier cell takes the joiners and selectors because Persian names and emoji sequences need them.
 - The sender check trusts a row's domain. A domain that disagrees with another for the same beneficiary, or a new one for a beneficiary already paid, is where a fraudster's domain would slip in, so it needs two approvers.
@@ -134,3 +145,9 @@ A pay run is a CSV of payments that people check and approve together, and that 
 - A released row keeps its due date on the obligation.
 - `pnpm approve` and `pnpm close` on a pay row of the waiting run name its row and run and point to `pnpm payrun show N` (`notAnInvoiceText`).
 - `pnpm recover` with an invoice number on the waiting run: `openPayment` refuses it with one line and stores nothing.
+- A row whose callback was made on a phone number that has changed since: `verifiedBankChange` no longer counts the callback, so the row has no `verifiedBy` and is not shown as verified, but the callback's recorder and the number's setters stay barred.
+- A confirmed phone change voids a waiting run's request only for rows with `bank_change_id`. A row with only `verified_by` loses it at the next check, which changes the terms, so the release voids any approval given on them.
+- A failure found on the account between approval and release, or a payment paid there meanwhile, changes the terms, so the release voids the approval and the run waits for a person to check it again.
+- The sandbox's demo suppliers share bank details, so one closed-account scenario cautions later rows to every record with that account.
+
+Dated checks: [verification/pay-runs.md](../verification/pay-runs.md).
