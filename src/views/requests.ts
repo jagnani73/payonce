@@ -80,9 +80,28 @@ function signoffsOf(signoffs: Signoff[]): { name: string; at: string }[] {
   return signoffs.map((signoff: Signoff): { name: string; at: string } => ({ name: signoff.approver, at: signoff.at }));
 }
 
-function neededWhy(text: string): Why | null {
+// The stored reason for a second approver, in words that hold however PayOnce
+// has paid the payee since: its rule counts only payments a person approved, so
+// one it paid by itself, an automatic replacement say, still needs two. A run's
+// reason names the payee, and ending names the account the row pays, as two
+// records can share a name.
+const RUN_NEW_PAYEE: RegExp = /^row ([0-9]+) pays (.+), which PayOnce has never paid on a person's approval$/;
+
+export function neededWhyText(code: string, text: string, ending: (line: number) => string | null = (): null => null): string {
+  if (code === "never-paid-on-approval") {
+    return "PayOnce has paid this beneficiary only on its own so far, never on a person's approval (an automatic replacement doesn't count)";
+  }
+  const run: RegExpExecArray | null = code === "run-new-payee" ? RUN_NEW_PAYEE.exec(text) : null;
+  if (run === null) {
+    return text;
+  }
+  const account: string | null = ending(Number(run[1]));
+  return `row ${run[1]} pays ${run[2]}${account === null ? "" : `, account ending ${account}`}, which PayOnce hadn't paid on a person's approval when the run was checked (a payment it sent on its own doesn't count)`;
+}
+
+function neededWhy(text: string, ending?: (line: number) => string | null): Why | null {
   const found: { code: string; text: string } | null = neededWhyOf(text);
-  return found === null ? null : why(found.code, found.text);
+  return found === null ? null : why(found.code, neededWhyText(found.code, found.text, ending));
 }
 
 const ORIGINAL_STATES: Record<OriginalTransferState, string> = {
@@ -233,6 +252,12 @@ export function runTermsView(ledger: Ledger, terms: RunTerms, live: boolean, now
   };
 }
 
+// The last four characters of the account a run's row pays, from its pay-to line.
+function rowEnding(rows: RunRow[], line: number): string | null {
+  const row: RunRow | undefined = rows.find((item: RunRow): boolean => item.line === line);
+  return row === undefined ? null : (accountView(row.payTo)?.ending ?? null);
+}
+
 export function runRequestView(ledger: Ledger, snapshot: RunSnapshot, now: number): RunRequestView | null {
   const latest: RunSnapshot["request"] = snapshot.request;
   if (latest === null || latest.terms === null) {
@@ -256,7 +281,7 @@ export function runRequestView(ledger: Ledger, snapshot: RunSnapshot, now: numbe
     expiresAt: request.expiresAt,
     replacedBy: later?.id ?? null,
     needed: request.needed,
-    neededWhy: neededWhy(request.neededWhy),
+    neededWhy: neededWhy(request.neededWhy, (line: number): string | null => rowEnding(snapshot.rows, line)),
     signoffs: signoffsOf(request.signoffs),
     approvers: approverViews(
       signerChoices(

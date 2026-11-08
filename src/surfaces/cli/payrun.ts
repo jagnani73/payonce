@@ -102,7 +102,7 @@ function arrivalLines(arrival: ArrivalView | null): string[] {
 function rowListed(row: RunRowView): Listed {
   const to: string[] = [
     ...(row.account === null ? [] : [`To ${row.account.label}`]),
-    ...(row.newPayee ? ["a payee PayOnce has never paid on a person's approval"] : []),
+    ...(row.newPayee ? ["a payee PayOnce hadn't paid on a person's approval when the run was checked"] : []),
     ...(row.callbackVerified ? ["account verified by a callback"] : []),
   ];
   return {
