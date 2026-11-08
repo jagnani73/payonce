@@ -19,3 +19,11 @@ Checked on 2026-10-29, after the merge with the inbox: an uploaded email was pos
 ## 2026-10-29: a held invoice and the ask not to pay
 
 Checked on 2026-10-29 on ledger copies, with Airwallex stubbed and the keyword reader: a held invoice's alert gave its reason as "supplier emails arrived before the first payment, so a person reads them before PayOnce pays it". After a "please hold" email, a new request opened and the mock got a second alert ending ", and the supplier asks to hold, cancel or not pay this invoice". Alerts turned on with nothing waiting queued no summary, and a hold after that queued its own alert.
+
+## 2026-11-08: breaks that clear by themselves, and the callback's second alert
+
+Checked on 2026-11-08 on a copy of the 8 November dress rehearsal's ledger, with no Airwallex call:
+
+- The rehearsal posted "1 wallet movement needs a person" for refund missing on P261108-WOU3MC3, 9 minutes after the morning's setup, while the Reconciliation page listed it under Clearing by themselves. On the copy the `recon` condition no longer stands: the only open break clears by itself.
+- The rehearsal also posted "INV-931567 needs an approval" twice. The first was for the replacement to the account on file, needing one approver. The second came after the callback, for the new account, needing two, with the Account field. Their fingerprints differ in `accountKey` and signoffs, as the rules say, so the second alert stays.
+- In the replay rig's `reconciliation` journey every break that opens waits on a person, and its `alerts.json` and stored conditions are unchanged.

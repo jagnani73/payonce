@@ -26,3 +26,11 @@ The note gave no date; it is the day the two screens were built.
 The note gave no date; it is the day the fields were added.
 
 - `rig-runs/payment-1` against `rig-runs/page-12a3bbb`: 348 differences in 58 files (routes.json, mcp.json, transcript.json), every one the two new EmailView fields. `pay/classify.mjs` checks that by stripping them from B: 291 files compared, 0 differ beyond them.
+
+## 2026-11-08: approver pickers, the callback note and a skipped row
+
+Checked on 2026-11-08 in Chrome, on a server against the replay rig's fake bank after `scripts/demo-morning.mjs`:
+
+- You are Alex, on the bank change after the callback: Approving as reads "Choose who is approving", the reason Alex can't approve shows under it, and the button reads Approve and is off. Yash picked by hand gave "Approve as Yash". After Yash signed, the picker read "Choose who is approving" again, with Kim left for a person to pick. With You are Kim, the picker started on Kim.
+- The callback form's "What they confirmed" is a two-row textarea as wide as the form, and the demo's note shows in full.
+- On pay run 1, row 4's "Skipped (1 reason)" badge shows a skip mark, not a tick.

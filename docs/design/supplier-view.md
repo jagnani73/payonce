@@ -50,6 +50,8 @@ The supplier view shows one Airwallex beneficiary record at a time: what PayOnce
 - A caution is `{ code, level, text, invoices, accounts, keys, runs, since }`. Cautions come before infos, each in `CAUTIONS` order, and each code has a must or could tier.
 - `text` is fixed words. It may hold account labels, counts, a rail in its own form, and failure codes' words (`wordsFor`: only a code in `FAILURE_CODE_PATTERN`'s form that is `FAILURE_WORDS`'s own entry, so `constructor` gets none).
 - `callback-verified`'s text also holds the account's ending (1 to 4 letters and digits). When the callback was recorded is its `since`, never in its text.
+- `supplierDetail` takes how the text names an account (`AccountNaming`). The record page, which lists its accounts as A, B and so on, gets the label ("account A"). A payment page, which shows no labels, gets the ending ("the account ending 6789", or "the account on file" with no ending). Only the text changes: `accounts` keeps the labels.
+- A payment page's side rail (`supplierBrief` in `views/incident.ts`) lists every caution of level `caution` on the record, each worded by ending, under "N cautions on the supplier record", with a link to the record, which also shows the invoices each one names.
 - Invoice numbers (25 at most), account labels and other record ids (`keys`) go in the arrays. No caution carries a name, a domain or a reference, and none fills `runs`.
 - `phone-proposed` (first, a caution): a new phone number waits for a second person, and nobody can record a callback until it is confirmed or withdrawn. A lapsed proposal raises none.
 - `phone-changed`: people changed the number on file in the last 7 days. A first number, one that replaced none, or a removal does not count.

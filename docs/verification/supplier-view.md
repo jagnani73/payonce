@@ -25,3 +25,12 @@ Checked again on 2026-11-03 after review, with no Airwallex call and no transfer
 ## 2026-11-03: before merge, a pay run row held for a changed record
 
 Checked before merge on 2026-11-03 by driving the engine with Airwallex stubbed: `account-changed` showed for a pay run row held with `RUN_ACCOUNT_CHANGED_REASON`, which it missed before. In another run, the record was changed to the account a failed payout sent outside PayOnce had gone to, and two approvers sent its replacement there with no callback, while the caution said PayOnce pays nothing to that account before a callback. The first sentence now speaks only of first payments and pay run rows.
+
+## 2026-11-08: the payment page's side rail
+
+Checked on 2026-11-08 by running `scripts/demo-morning.mjs` against a server on the replay rig's fake bank:
+
+- INV-RUN-1001's rail lists 2 cautions: "The account ending 6789 is also on another supplier record..." and "A payment to the account ending 6789 failed in the last 30 days...". The record page still says "Account A".
+- The bank change's rail lists 4 before the callback (shared account, account failed, asks for new bank details, unmatched senders) and 3 after it: the failed account is no longer the one on file or the last paid.
+- On a copy of the 8 November rehearsal's ledger, where the bank change has since been paid and closed, its rail lists 2: shared account and unmatched senders. Asks for new bank details counts open invoices only. That is the 2 the rehearsal saw, and INV-RUN-1001's 2 there are the same two as above.
+- Replay rig: 454 differences in the rail's cautions across the journeys, and in each one the old count equals the number of cautions now listed.

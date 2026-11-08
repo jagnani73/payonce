@@ -44,7 +44,7 @@ Alerts post to a Slack or Discord incoming webhook when something waits on a per
 - `contact:<beneficiary id>` stands while a person's proposed phone number waits for a second person (`waiting`), and for 24 hours after a person's number went on file. Its fingerprint is `waiting:<id>`, `set:<id>` or `changed:<id>`, so each posts once.
 - A contact alert's facts are the record's key (in its own form only, for the `#supplier/<key>` link), the supplier name as outside text, the field, whether it is a first number, a change or a removal, when, open payments and requests withdrawn.
 - A contact alert never holds the number, an email domain or anyone's name. `changed` is urgent. Only rows a person made alert ([supplier-contacts.md](supplier-contacts.md#lines-alerts-and-display)).
-- `recon` stands while any reconciliation break waits on a person (`reconCondition`, [reconciliation.md](reconciliation.md)).
+- `recon` stands while any reconciliation break waits on a person (`reconCondition`, [reconciliation.md](reconciliation.md)). A break of a kind that clears by itself, such as a missing refund, never raises it, however long it stays open, since the Reconciliation page lists it apart from the breaks that need a person.
 
 ### Recording conditions
 
@@ -56,7 +56,7 @@ Alerts post to a Slack or Discord incoming webhook when something waits on a per
 - A condition back within 10 minutes as it was queues nothing new, but an alert skipped while it was gone is queued again.
 - On the first evaluation (both alert tables empty and no `meta.alerts_started_at`), every standing condition is recorded with no alert and `alerts_started_at` is set.
 - That first evaluation queues one summary, only when a condition stands. With nothing standing, each later condition alerts on its own.
-- The summary counts invoices waiting on a person, pay runs waiting for approval, active outages, emails in the inbox, broken audit trails, currencies below 0 and open reconciliation breaks.
+- The summary counts invoices waiting on a person, pay runs waiting for approval, active outages, emails in the inbox, broken audit trails, currencies below 0 and open reconciliation breaks that wait on a person.
 - Before the first balance read, cash conditions are neither found nor cleared. The server's first check waits while that read runs (the cash callback answers `"reading"`).
 - If the first balance read fails, the check goes ahead without cash, and the currency gets an alert of its own once a read works.
 
@@ -125,6 +125,7 @@ Alerts post to a Slack or Discord incoming webhook when something waits on a per
 - `EMAILS_BEFORE_PAYMENT_REASON` is `held`, or `approve-held` once a request is open. `NOT_TO_PAY_REASON` and `PARTLY_UNREAD_REASON` are `check` until a request opens.
 - A live transfer under `MISMATCHED_TRANSFER_REASON` is `unrecognised-transfer`, so `twice`, and `close` once it is paid. `MISMATCHED_FAILED_REASON` is `check`, or `held` when the invoice never sent a payment of its own or a person closed it before.
 - A held invoice that gets the supplier's ask to hold is reworded with the clause, so its fingerprint changes and it alerts again with the same need.
+- A recorded callback withdraws the open request and opens one for the new account, which usually needs two approvers. Its terms name another `accountKey` and another number of signoffs, so the invoice alerts a second time with the same need, "INV needs an approval", and the second alert's Account field says the request pays an account the original did not go to. That is on purpose: the approvers are asked to sign a different payment. A request renewed on the same terms does not alert again, and no request id is in the fingerprint.
 - A summary queued before inbox, outage or reconciliation alerts existed has no count for them, and reads each as 0.
 - Emptying both alert tables starts over with a summary only if `meta.alerts_started_at` is deleted too.
 - After a 401, 403, 404 or 410 the process stops posting. Alerts still queued are sent after a restart if they still apply.

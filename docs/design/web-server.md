@@ -181,6 +181,7 @@ The table lists every route in `src/surfaces/http/routes/`. Views and their buil
 - Text PayOnce did not write goes through `<Theirs>` (in `web/src/components/`): cleaned by `cleanLine` or `cleanBlock`, isolated in `<bdi>`, and only ever a text node.
 - Nothing in the page uses `dangerouslySetInnerHTML`.
 - A refusal shows beside the button that caused it, in the server's words, cleaned. An action's notice shows as a toast.
+- An approver picker (Approving as, on a payment and on a pay run) starts on You are only when that name can sign the request. Otherwise it is empty and reads "Choose who is approving", You are's reason shows under it when You are is on the list, and the button stays off until a person picks a name. After any signoff, and for each new request, it starts again the same way. The page never picks another person, so one more click can't sign as someone else. Ending an outage starts on You are when that name may end it, and on no name otherwise.
 - A time shows in the viewer's time zone on a 24-hour clock, "14:20" today and "6 Nov, 14:20" on another day (`web/src/time.ts`). `parseIso` gives null for anything that is not a non-empty string.
 - A view's `Timed` sentence goes through `<Said>`, which writes each time with `<Time>`, and a deadline with how long is left. The page rewrites no time inside a view's text.
 

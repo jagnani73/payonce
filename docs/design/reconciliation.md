@@ -8,7 +8,7 @@ Reconciliation matches every wallet movement in Airwallex's balance history to t
 
 - Reconciliation reads and records. It moves no money, takes no currency lease, runs in no invoice's turn, and writes no invoice, attempt, approval, binding, timeline line, cash panel figure or board entry.
 - It writes only its own tables, its chain (`recon_events`) and its own keys in `meta`, through `ReconStore`, which works on the ledger's shared `Db` with `Db.transaction` and `Db.readSnapshot`. `ReconStore.ensure` creates the tables on every writable open.
-- Nothing in the engine, the policy, the board or the cash panel reads its tables. The outbox reads refund missing breaks, read-only, to offer `refund-trace` (`refundBreaks`), and the metrics read break times (`breakTimes`).
+- Nothing in the engine, the policy, the board or the cash panel's figures reads its tables. The outbox reads refund missing breaks, read-only, to offer `refund-trace` (`refundBreaks`), the cash view lists them beside its figures (`missingRefunds`), and the metrics read break times (`breakTimes`).
 
 ### Reading Airwallex
 
@@ -92,18 +92,23 @@ Reconciliation matches every wallet movement in Airwallex's balance history to t
 - `RECON_EVERY_MINUTES` defaults to 10, and `0` means never by itself. `loadSettings` reads it into `Settings.recon`, and any other value falls back to 10 with a problem the start-up line (`describeReconSetting`) gives.
 - `POST /api/reconcile/run` (Check now) answers 202, 409 while a check runs in this process, and 429 within a minute of the last start, the timer's included.
 - `reconReport` gives the last committed run, the latest failed or stale run after it, the wallets from that run's summary, and the newest 500 open breaks (`MAX_OPEN_SHOWN`).
-- `reconReport` also gives `openCount`, counts by kind and how many are pending (all three with `COUNT(*)`), the waiting items, the last 50 explained and the audit line. The page and the CLI give the full counts and say how many are not listed.
+- `reconReport` also gives `openCount`, counts by kind, the open breaks in each wallet split into those that wait on a person and those that clear by themselves (`byWallet`), and how many are pending (all with `COUNT(*)`), the waiting items, the last 50 explained and the audit line. The page and the CLI give the full counts and say how many are not listed.
 - `GET /api/reconcile` answers `reconReport` as a `ReconView` (`reconView` in `src/views/treasury.ts`).
 - `GET /api/reconcile/movements?currency=USD` answers `reconMovementsView` (`src/views/treasury.ts`): the 500 newest stored movements (`MOVEMENTS_SHOWN`), each with its amount and balance as `Money` and what explains it now in words (`howText`), from the matcher run again with no balances (`movementsView`).
 - `POST /api/reconcile/explain` takes `{ breaks: [{ id, fingerprint }], explainedBy, note }`. It answers 200 with the `ReconView` and a notice, 400, 404 with `unknown`, or 409 with `changed`. The route table is in [web-server.md](web-server.md).
 - On the page, reconciliation is the Reconciliation tab of Treasury (`web/src/screens/treasury/`). `#recon` redirects to it (`web/src/router.ts`), and the tab reads `/api/reconcile` only while it is on screen.
-- The tab shows the last check with Check now and, after a failed check, when the last good one ran (`lastCheck.lastOkAt`). It shows a card per wallet with its movements on request, the breaks that need a person by kind with a checkbox each and a name and note form, what is waiting, the last explanations and the audit line.
-- The alert condition is `recon`, standing while any break is open. Its fingerprint is the highest `recon_events` id of kind `found`, `changed` or `reopened` in any state.
-- The break the alert names is the open one with the newest such line, so a break found once and opened on a later check is named on the alert its own line raised.
-- The alert's title is "N wallet movements need a person", or "The USD balance does not add up from its movements" when that break is `balance-gap` or `balance-differs`.
+- The tab shows the last check with Check now and, after a failed check, when the last good one ran (`lastCheck.lastOkAt`). It shows a card per wallet with its movements on request, the breaks that need a person by kind with a checkbox each and a name and note form, the breaks that clear by themselves, what is waiting, the last explanations and the audit line.
+- The next check the tab shows (`nextCheckAt`) is when the server's timer runs next (`ReconRunner.nextRunAt`), a minute after start and then every `RECON_EVERY_MINUTES`. Check now does not move the timer. With no timer (`RECON_EVERY_MINUTES=0`) there is none.
+- A wallet card counts every open break in that wallet (`byWallet`) and says how many need a person and how many clear by themselves, so it agrees with the two lists and with the "break N" its movements show.
+- Clearing by themselves lists each break under its kind, with its text (which gives the amount), wallet, the payment it belongs to as a link, the transfer's short reference and when it was found. It has no explain form.
+- The cash view lists each open `refund-missing` break under its wallet as money not back from a failed transfer (`refundsMissing`, from `missingRefunds`), with the payment, the reference and the amount. It is information only. The available balance already leaves that money out, and money that has left the wallet is not promised money, so `committedMinor`, headroom and the floor do not count it. `pnpm cash` prints the same lines.
+- The alert condition is `recon`, standing while a break of a kind that waits on a person is open (`PERSON_KINDS` in `alerts.ts`: every kind but those `clearsByItself` names). A break that clears by itself never alerts, however long it stays open.
+- Its fingerprint is the highest `recon_events` id of kind `found`, `changed` or `reopened` on a break of those kinds, in any state.
+- The break the alert names is the open one of those kinds with the newest such line, so a break found once and opened on a later check is named on the alert its own line raised.
+- The alert's title is "N wallet movements need a person".
 - The alert's facts are the count, kind codes with counts (the message adds `KIND_LABELS`), currencies, and that break's kind, currency, invoice and short reference, each checked against its pattern.
-- Counts and currencies come from `COUNT(*)` and `DISTINCT` over every open break (`alertState`), never from a capped list. The link is `#recon`.
-- The alert is urgent while a `paid-then-returned` is open. The first-enable summary counts open breaks.
+- Counts and currencies come from `COUNT(*)` and `DISTINCT` over every open break of those kinds (`alertState`), never from a capped list. The link is `#recon`.
+- The alert is urgent while a `paid-then-returned` is open. The first-enable summary counts open breaks that wait on a person.
 - `audit:recon` sits beside `audit:invoices` and `audit:runs` in the once-a-minute audit check, in the same shape: `scope` `recon`, `broken` 0 or 1 (one chain), `first` null, `line` the first broken line or null when lines from its start were removed, `runningHash` and `withoutLine`.
 - `audit:recon` posts "PayOnce's reconciliation record no longer verifies", linked to `#recon`.
 
@@ -119,6 +124,8 @@ Reconciliation matches every wallet movement in Airwallex's balance history to t
 - The offline match runs as of the last live check, so a refund or debit window that ran out since cannot open a break from that read. Deleting a pending row it no longer finds can only delay an opening.
 - A stale run writes nothing, so a run that started earlier never undoes a later one.
 - The alert's fingerprint uses only lines that say a break is new or changed, so a new or changed break alerts and one clearing or being explained does not.
+- The alert counts only the kinds that wait on a person so that it says what the page's "Breaks that need a person" says. A refund still missing after a long time stays a break that clears by itself: nothing here hands it to a person after a window. Its action asks a person to chase Airwallex, the outbox offers `refund-trace` for it, and the Cash tab shows the money.
+- The next check comes from the timer, not from the last check plus the interval, because Check now runs a check without moving the timer.
 
 ## Edge cases
 
@@ -127,5 +134,6 @@ Reconciliation matches every wallet movement in Airwallex's balance history to t
 - A file without reconciliation's tables, opened read-only: `pnpm run audit` says "This ledger has no reconciliation", and the metrics leave break times out (`hasTables`).
 - Anyone who can write the file can still rewrite the chain and its running hash, as with every chain in PayOnce.
 - An alert summary queued by a PayOnce without reconciliation has no `recon` count.
+- A ledger whose open breaks all clear by themselves has no `recon` condition. A `recon` alert queued for such a break before the condition left those kinds out is skipped as stale before it posts.
 
 Dated checks: [verification/reconciliation.md](../verification/reconciliation.md).
