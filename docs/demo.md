@@ -52,7 +52,7 @@ The script calls the same routes the page does. It stops with a message if the l
 4. Uploads an email to that invoice as Kim, from `accounts@example-supp1ier.test` (a digit one in place of the l), saying the supplier changed banks and giving a new account at First Example Bank, ending 6655. Kim delivers it to the invoice.
 5. Starts "EUR, SWIFT, low cash reserve" as Sam and approves its first payment as Alex and Yash. The bank fails it with a channel timeout, and a replacement would breach the floor.
 
-That is 5 sandbox transfers. Against the sandbox the script takes about 2 to 3 minutes: each row and each scripted incident takes 8 to 16 seconds to settle, and the run's rows go out one every 3 seconds. The script prints each invoice as it settles and ends with the three that need you. Write down the two invoice numbers PayOnce generated (INV- and six digits): the first is the bank change, the second the EUR payment.
+That is 5 sandbox transfers. Against the sandbox the script takes under a minute (43 seconds on 8 November), and the run's rows go out about one every 2 seconds. The script prints each invoice as it settles and ends with the three that need you. Write down the two invoice numbers PayOnce generated (INV- and six digits): the first is the bank change, the second the EUR payment.
 
 On a sandbox account that has never run a scripted incident, the demo supplier does not exist yet, and the script stops and says so. Start one scripted incident (USD, local transfer, Paid) from the simulator, then `pnpm reset` and run the script again.
 
@@ -60,8 +60,8 @@ On a sandbox account that has never run a scripted incident, the demo supplier d
 
 - Home says Needs you 3: the EUR payment, the bank change and INV-RUN-1002.
 - On the bank change, the Emails tab says "Read by:" and a model's name (if you set a key) and shows the warning that `accounts@example-supp1ier.test` does not match `example-supplier.test`. If it says the emails could not be read, wait a minute and press Check now.
-- If Slack is on, the channel has three alerts: INV-RUN-1002, the bank change and the EUR payment, each "needs an approval". The script approves each scripted incident's first payment within a few seconds, before its alert is due, so neither hold reaches Slack.
-- Each scripted incident's timeline starts with its first payment's hold ("a person started this payment, so someone else approves it before PayOnce pays it") and "Approval by Alex and Yash matches the current terms". Beats 2 and 3 point at the lines after those.
+- If Slack is on, the channel has three alerts: INV-RUN-1002, the bank change and the EUR payment, each "needs an approval". The script approves each scripted incident's first payment within a few seconds, before its alert is due, so neither hold reaches Slack. Take beat 0's Slack shot early: the callback in beat 2 adds a second alert for the bank change, because the new request pays a new account and needs two approvers.
+- Each scripted incident's timeline opens with "Incident opened by Sam", then its first payment's hold ("a person started this payment, so someone else approves it before PayOnce pays it") and "Approval by Alex and Yash matches the current terms". On the bank change, the scenario's line that puts +1 212 555 0147 on file comes before the hold. Beats 2 and 3 point at the lines after those.
 - Chrome at 1920 by 1080, zoom 125%, one tab on `http://127.0.0.1:4310/#home`. Above 1180 CSS pixels the payment page keeps its side rail beside the main column. Close the simulator drawer.
 - You are: Alex (top bar). Every name field then fills with Alex.
 - A terminal in the repository, for `pnpm run audit`. A new chat in Claude Desktop, or Claude Code in a terminal, with the payonce server connected.
@@ -71,7 +71,7 @@ On a sandbox account that has never run a scripted incident, the demo supplier d
 
 | # | Starts | Beat | Length | Guarantees |
 | --- | --- | --- | --- | --- |
-| 0 | 0:00 | The morning | 0:20 | 62, 44, 14 |
+| 0 | 0:00 | The morning | 0:20 | 62, 44 |
 | 1 | 0:20 | Last night's pay run | 0:45 | 14, 27, 45, 46, 2 |
 | 2 | 1:05 | "We changed banks" | 1:20 | 57, 23, 24, 46, 20 |
 | 3 | 2:25 | The floor | 0:40 | 26, 27, 31, 37 |
@@ -84,10 +84,9 @@ That ends at 4:35 and leaves 25 seconds for the sandbox.
 ### 0. The morning (0:00, 20 s)
 
 - Show: the Slack channel with PayOnce's three alerts. Then switch to the browser, on Home.
-- Say: "PayOnce runs supplier payments on Airwallex. It pays each invoice once, fixes what its policy says is safe, and hands the rest to a person. Overnight a pay run went out and two payments went wrong. This morning three things need me."
-- Point at the "Why" on the bank-change alert: "supplier asked for payment to different bank details". Say: "The alerts say why in PayOnce's own words. A phishing email is behind this one, and none of its text or its account number reaches Slack." (62)
-- Without Slack, open on Home and point at "Waiting for your approval". Say: "There's no login. I'm Alex, and this is what Alex is allowed to sign." (44)
-- Say: "Every first payment here went out on an approval too." (14)
+- Say: "PayOnce runs supplier payments on Airwallex. It pays each invoice once, fixes what its policy says is safe, and hands the rest to a person. Overnight two payments went wrong, and three things need me."
+- Point at the "Why" on the bank-change alert: "supplier asked for payment to different bank details". Say: "The alert says why in PayOnce's own words. None of the phishing email reaches Slack." (62)
+- Without Slack, open on Home and point at "Waiting for your approval". Say: "There's no login. I'm Alex, and this is what Alex can sign." (44)
 
 ### 1. Last night's pay run (0:20, 45 s)
 
@@ -95,7 +94,7 @@ That ends at 4:35 and leaves 25 seconds for the sandbox.
 - Say: "Kim uploaded last night's run. Row 4 never went out. Same supplier, same amount, INV-RUN-1002A: PayOnce reads that as a second bill and skips it." (14)
 - Do: the Timeline tab. Point at "Waiting on 2 approvers ... never paid on a person's approval" and "Approved by Alex and Yash".
 - Say: "It needed two approvers because this supplier was new, and Kim uploaded it, so Kim couldn't be one of them." (45, 46)
-- Do: Rows tab, click INV-RUN-1001. Point at "Original ... FAILED, 91402 Channel timeout", then "Resending: original failed, a resend can fix it", then "Replacement ... PAID".
+- Do: Rows tab, click INV-RUN-1001. Point at "Original ... CANCELLED, 91402 Channel timeout", then "Resending: original failed, a resend can fix it", then "Replacement ... PAID".
 - Say: "This row hit a channel timeout. That's the sending side, so PayOnce resent it by itself after checking the wallet stays above its floor. Paid." (27)
 - Do: open the Simulator (top bar). Under Test the duplicate lock, the invoice is already INV-RUN-1001. Press Test the duplicate lock.
 - Say: "Could it pay this twice? I'm asking the ledger for a second payment. Refused. A unique index in SQLite allows one live payment per invoice, whatever the code above it does." (2) Close the drawer.
@@ -109,29 +108,29 @@ That ends at 4:35 and leaves 25 seconds for the sandbox.
 - Say: "What's on offer pays the account on file. No button anywhere pays the account in an email. New bank details get in one way: a callback to the phone number on file." (23)
 - Do: choose Record a callback and fill it in. Number you called `+1 212 555 0147`. Who you spoke to `Dana Lee`. What they confirmed `New account at Bank of America, read back. The email was not from them`. Account name `Example Supplier LLC`, account number `987654321`, routing number `026009593`, bank name `Bank of America`. Recording as stays Alex. Press Record callback.
 - Say, while typing: "I called the number on file. They did change banks, but not to the bank in that email."
-- Do: choose Approve this replacement. Point at "Pay 4,000.00 USD to ... Bank of America, NA, account ending 4321", "It needs two approvers", and the select reading "Alex (you) · can't approve".
+- Do: choose Approve this replacement. Point at "Pay 4,000.00 USD to ... Bank of America, NA, account ending 4321", "It needs two approvers", and Approving as. It reads "Choose who is approving", with "Alex recorded the callback for the new bank details, so someone else approves this payment" under it.
 - Say: "PayOnce updated the record in Airwallex, withdrew the old request and opened one that needs two approvers. I made the call, so I can't be one of them." (24, 46)
-- Do: pick Yash in Approving as, press Approve as Yash. Pick Kim, press Approve as Kim.
+- Do: choose Yash in Approving as and press Approve as Yash. The picker goes back to "Choose who is approving", since the page never picks a name for you. Choose Kim and press Approve as Kim.
 - Say: "Yash, then Kim. PayOnce reads the record again before it sends, and the replacement goes to the account the callback confirmed, ending 4321, and not to the account in the email." (20) Wait for "Replacement ... PAID" and "Incident closed" on the timeline.
-- Sandbox timing: the callback takes 2 to 3 seconds (Airwallex updates the record and PayOnce reads it back). After the second approval the replacement usually reads PAID in about 8 seconds. The longest seen was 65 seconds, when the simulator answered 500 once.
+- Sandbox timing: the callback takes about 2 seconds (Airwallex updates the record and PayOnce reads it back). After the second approval the replacement read PAID in about 5 seconds on 8 November. The longest seen was 65 seconds, when the simulator answered 500 once.
 - Typing the callback takes about 30 seconds. Talk over it, or speed that stretch up in the edit.
 
 ### 3. The floor (2:25, 40 s)
 
 - Do: Home, then Review and approve on the EUR payment (Example Supplier GmbH, 4,000.00 EUR). Scroll to the timeline and read the lines from the bottom up. Warning and decision lines never fold away, so the lines this beat needs are already on screen.
-- Say: "Same failure as the pay run row, a channel timeout. The plan was to wait while the bank had it. Then new information: it failed, and the bank keeps the fee on a failed SWIFT transfer, so a replacement pays 13.91 EUR a second time. With that fee the wallet goes below its floor. So the decision changed: this one goes to a person instead of being resent." (26, 27)
-- Point at the warning line ("A replacement costs 4,013.91 EUR with a second 13.91 EUR transfer fee. Cash after it ..., reserve floor ...") and the decision under it ("Sent to a person: a replacement and its transfer fee would push cash below the reserve floor").
-- Say: "This scripted invoice carries a tight floor of its own, so the demo can run short of cash without draining the sandbox."
-- Point at the headroom line under the Decision panel, "EUR headroom now 4,006.96 EUR · after this −6.95 EUR", and the Money panel's "EUR headroom: 4,006.96 EUR". Both measure against this invoice's floor, so they agree with the reason: after the replacement the wallet would sit 6.95 EUR below that floor. The figures come from the server's last balance read, which runs again every 30 seconds while a page is open, so by the time you record they include the fee the bank kept.
+- Say: "Same failure as the pay run row, a channel timeout. The plan was to wait while the bank had it. Then new information: it failed, and the bank keeps the fee on a failed SWIFT transfer, so a replacement pays the fee a second time. With that fee the wallet goes below its floor. So the decision changed: this one goes to a person instead of being resent." (26, 27)
+- Point at the warning line ("A replacement costs ... with a second ... transfer fee. Cash after it ..., reserve floor ...") and the decision under it ("Sent to a person: a replacement and its transfer fee would push cash below the reserve floor").
+- Point at the headroom line under the Decision panel, "EUR headroom now ... · after this −...", and the Money panel's EUR headroom. Both measure against this invoice's own floor, so they agree with the reason: after the replacement the wallet would sit below that floor. On 8 November, with a 14.03 EUR fee, the line read "now 4,006.84 EUR · after this −7.19 EUR". The figures come from the server's last balance read, which runs again every 30 seconds while a page is open, so by the time you record they include the fee the bank kept. Don't read the cents aloud: the fee varies from day to day.
 - Do: scroll up and press Approve as Alex.
-- Say: "I approve. Before spending it, PayOnce rebuilt the terms and checked the floor again. They match, so it sends one replacement." Point at "Approval by Alex matches the current terms" and the second warning line, then "Replacement ... PAID". (31, 37)
+- Say: "I approve. Before spending it, PayOnce rebuilt the terms and checked the floor again. They match, so it sends one replacement." Point at "Approval by Alex matches the current terms", then "Replacement ... PAID". (31, 37)
 - PayOnce also checks that the terms on file still hash to the request's binding, inside the transaction that spends the approval (39). Nothing on screen shows that check, so the beat doesn't mention it.
-- Sandbox timing: about 8 seconds from the approval to PAID, as in beat 2.
+- Sandbox timing: about 8 seconds from the approval to PAID.
 
 ### 4. Reconciliation and reports (3:05, 30 s)
 
-- Do: Treasury, then Reconciliation. Press Check now once (a second press within the minute is refused). In a few seconds both wallets read "Adds up to Airwallex's available balance". Click Show movements on EUR.
+- Do: Treasury, then Reconciliation. Press Check now once (a second press within the minute is refused). In a few seconds both wallets read "Adds up to Airwallex's available balance". Click Show movements on EUR. Leave USD's movements closed.
 - Say: "Reconciliation reads each wallet's history from Airwallex, with GET requests only. Every movement has to follow from the one before and end at the balance Airwallex reports, and each one is matched to a transfer in the ledger. Both wallets add up. There's the fee the bank kept on the failed transfer." (63)
+- If the sandbox kept a failed transfer's money, as it did on 8 November, the USD card reads "1 break clearing by itself" and Clearing by themselves names the transfer, its payment and the amount. It sends nothing to Slack, and the Cash worksheet lists the same money under "Not back from failed transfers". USD still adds up, so the line above stays true. Don't open it on camera.
 - Do: Reports. Point at Recovered by PayOnce, Needed a person and Fees kept on failed transfers.
 - Say: "One payment PayOnce recovered by itself, two needed a person, and the fees the failures cost."
 - Sandbox timing: the check makes a few balance-history reads and takes seconds. If it is slow, the last timer check (every 10 minutes) is already on screen. Say so and move on.
@@ -180,9 +179,11 @@ The duplicate lock test, the callback and reconciliation make none. Every take n
 
 ## Checked
 
+On 8 November 2026 a dress rehearsal ran the setup and every beat against the real sandbox. The setup took 43 seconds and the whole take made 7 transfers. The EUR SWIFT fee was 14.03 EUR. The sandbox never refunded P261108-WOU3MC3, INV-RUN-1002's failed original: 29 minutes after it failed it still read FAILED, and its 980.00 USD had not come back. The rehearsal found seven page and alert problems, fixed on `fix/rehearsal`: a reconciliation alert for that refund while the page said no break needed a person, a USD card reading "no breaks" beside a movement tagged "break 1", a supplier caution on the payment page that named "Account A" and showed one of two, a callback note field that cut the typed note off, a tick on a skipped run row, a next check time that ignored the timer, and an Approving as that moved to another name after a signoff. The second "needs an approval" alert for the bank change is by design.
+
 On 8 November 2026 `demo-morning.mjs` ran against `feat/approve-new-payments` with Airwallex faked by the replay rig, in real time. Both scripted incidents waited for an approval, the script approved each as Alex and Yash, and the supplier's "payment not received" email arrived while each original was with the bank, as before. The morning ended with Needs you 3, and the test receiver got the same three alerts, none for a held first payment.
 
 On 7 November 2026 the script ran against `feat/page` (8e708cb) with Airwallex faked by the replay rig, in real time, on Chrome at 1566 CSS pixels: the setup script, then every beat as written, the MCP `waiting_for` and `audit` answers, and `pnpm run audit`. No sandbox call was made, so the sandbox times above come from the runs on 6 October and 3 November. Things to know from that run:
 
 - Later commits on `feat/page` fixed five page problems this run found: the Decision panel now moves on after a callback, Approving as moves off a name that has signed, Home lists each payment once with its reason, times have a space before them, and warning lines never fold away.
-- Reports' Second bills closed without paying counts only invoices held as second bills, so it reads 0 although the run skipped one. Paid the first time reads 0%, because every payment this morning failed on purpose. Skip both tiles.
+- Reports' Second bills closed without paying counts only invoices held as second bills, so it reads 0 although the run skipped one. Paid the first time reads 0%, because every payment this morning failed on purpose. Skip both tiles, and Home's "0% the first time" tile too.
