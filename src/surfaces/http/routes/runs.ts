@@ -13,7 +13,7 @@ import {
   type RunApproval,
 } from "../../../store/ledger.js";
 import type { Acted, Notice, RunsView, RunView } from "../../../views/contract.js";
-import { checkedRowViews, runsView, runView } from "../../../views/runs.js";
+import { checkedRowViews, runsView, runView, sameFileText } from "../../../views/runs.js";
 import type { HttpApp } from "../app.js";
 import { HttpError, MAX_FINDING_LENGTH, name, readJson, RUN_ID_PATTERN, sendJson, text, UPLOAD_BODY_MS } from "../http.js";
 import type { Route } from "../router.js";
@@ -133,7 +133,11 @@ export function runRoutes(app: HttpApp): Route[] {
         throw new HttpError(409, error.message, { code: "run-waiting", runId: error.runId });
       }
       if (error instanceof SameFileError) {
-        throw new HttpError(409, error.message, { code: "same-file", runId: error.runId });
+        // The time goes apart, for the page to show in the viewer's own zone.
+        const same: Run | undefined = engine.ledger.run(error.runId);
+        throw same === undefined
+          ? new HttpError(409, error.message, { code: "same-file", runId: error.runId })
+          : new HttpError(409, sameFileText(same, null), { code: "same-file", runId: error.runId, uploadedAt: same.uploadedAt });
       }
       if (error instanceof NothingToPayError) {
         throw new HttpError(422, error.message, { code: "nothing-to-pay", rows: checkedRowViews(engine.ledger, error.rows, Date.now()) });

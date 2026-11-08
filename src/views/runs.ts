@@ -74,6 +74,12 @@ function totalsOf(counts: RunCounts): Money[] {
   return counts.totals.map((total: { currency: string; amountMinor: number }): Money => money(total.amountMinor, total.currency));
 }
 
+// The refusal of a file uploaded already, with its upload time as the caller
+// writes it, or none when the caller shows the time apart.
+export function sameFileText(run: Run, at: string | null): string {
+  return `This file is pay run ${run.id}, uploaded by ${run.uploadedBy}${at === null ? "" : ` at ${at}`}, ${run.state === "released" ? "released" : "waiting for approval"}`;
+}
+
 export function runsView(ledger: Ledger, settings: Settings, now: number, live: Live | null = null): RunsView {
   return readingSoft((): RunsView => ({
     view: "runs",

@@ -4,6 +4,7 @@ import { ApiError, postJson } from "../../api";
 import { ActionButton } from "../../components/Action";
 import { Field, NameField, type ControlProps } from "../../components/Form";
 import { Callout } from "../../components/Notice";
+import { Time } from "../../components/Text";
 import { useNameDraft } from "../../me";
 import { notify } from "../../notices";
 import { navigate, runHref } from "../../router";
@@ -32,7 +33,7 @@ interface SkippedRow {
 type Refusal =
   | { kind: "problems"; problems: Problem[] }
   | { kind: "waiting"; runId: number }
-  | { kind: "same-file"; runId: number }
+  | { kind: "same-file"; runId: number; uploadedAt: string | null }
   | { kind: "skipped"; rows: SkippedRow[] }
   | { kind: "other" };
 
@@ -86,7 +87,8 @@ function refusalOf(error: ApiError): Refusal {
     return { kind: "problems", problems: problemsOf(body?.["problems"]) };
   }
   if (error.status === 409 && runId !== null) {
-    return body?.["code"] === "same-file" ? { kind: "same-file", runId } : { kind: "waiting", runId };
+    const at: unknown = body?.["uploadedAt"];
+    return body?.["code"] === "same-file" ? { kind: "same-file", runId, uploadedAt: typeof at === "string" ? at : null } : { kind: "waiting", runId };
   }
   if (error.status === 422 && Array.isArray(body?.["rows"])) {
     return { kind: "skipped", rows: skippedOf(body?.["rows"]) };
@@ -125,6 +127,13 @@ function RefusalDetail(props: { refusal: Refusal }): JSX.Element | null {
     case "same-file":
       return (
         <p>
+          {refusal.uploadedAt === null ? null : (
+            <>
+              {"Uploaded "}
+              <Time at={refusal.uploadedAt} />
+              {". "}
+            </>
+          )}
           <a href={runHref(refusal.runId)}>{`Open pay run ${refusal.runId}`}</a>
         </p>
       );

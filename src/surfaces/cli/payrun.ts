@@ -37,7 +37,7 @@ import type {
   RunTermsView,
   RunView,
 } from "../../views/contract.js";
-import { runView } from "../../views/runs.js";
+import { runView, sameFileText } from "../../views/runs.js";
 import { readableRunTerms } from "./terms-shape.js";
 import {
   count,
@@ -319,7 +319,10 @@ async function upload(settings: Settings, ledger: Ledger, path: string | undefin
     if (error instanceof NothingToPayError) {
       fail(error.message);
       putRows(skippedRows(error.rows));
-    } else if (error instanceof WaitingRunError || error instanceof SameFileError) {
+    } else if (error instanceof SameFileError) {
+      const same: Run | undefined = ledger.run(error.runId);
+      fail(same === undefined ? error.message : sameFileText(same, utc(same.uploadedAt)));
+    } else if (error instanceof WaitingRunError) {
       fail(error.message);
     } else {
       const down: string | undefined = airwallexDown(error);
