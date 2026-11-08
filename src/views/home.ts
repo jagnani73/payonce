@@ -4,7 +4,7 @@ import { candidatesFor, invoiceIndex, type InvoiceIndex } from "../intake/intake
 import type { Settings } from "../settings.js";
 import type { InboxWaiting, Ledger, Upload } from "../store/ledger.js";
 import { boardReport, type BoardReport } from "./incident-board.js";
-import { metricsReport, type FirstTimeRow, type MetricsReport } from "./metrics.js";
+import { metricsReport, type ClosedRow, type CloseHow, type MetricsReport } from "./metrics.js";
 import type { AirwallexHealth, HomeView, IncidentRow, QueueItem, ReadinessItem, RunRowItem, Tile } from "./contract.js";
 import { readerOf, snapshotOptions, type Live } from "./context.js";
 import { waitingFor } from "./incidents.js";
@@ -78,17 +78,20 @@ function suggestedInvoices(ledger: Ledger): string[] {
   });
 }
 
+// The payments closed as paid, and of those the ones paid the first time, as
+// Reports' closed table counts them, so both figures count the same payments.
 function paidTile(report: MetricsReport): Tile {
-  const ended: number = report.payments.firstTime.reduce((sum: number, row: FirstTimeRow): number => sum + row.ended, 0);
-  const first: number = report.payments.firstTime.reduce((sum: number, row: FirstTimeRow): number => sum + row.paid, 0);
-  const paid: number = report.incidents.closed
-    .filter((row: { how: string }): boolean => row.how !== "not-paid")
-    .reduce((sum: number, row: { count: number }): number => sum + row.count, 0);
+  const count = (keep: (how: CloseHow) => boolean): number =>
+    report.incidents.closed
+      .filter((row: ClosedRow): boolean => keep(row.how))
+      .reduce((sum: number, row: ClosedRow): number => sum + row.count, 0);
+  const paid: number = count((how: CloseHow): boolean => how !== "not-paid");
+  const first: number = count((how: CloseHow): boolean => how === "first-time");
   return {
     key: "paid-week",
     label: "Paid in the last 7 days",
     value: String(paid),
-    sub: ended === 0 ? null : `${Math.round((first / ended) * 100)}% the first time`,
+    sub: paid === 0 ? null : first === paid ? "all the first time" : `${first === 0 ? "none" : first} of them the first time`,
     href: "#reports?period=7d",
   };
 }
