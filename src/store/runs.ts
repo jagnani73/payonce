@@ -1,4 +1,5 @@
 import type { StatementSync } from "node:sqlite";
+import type { AccountFailure } from "../domain/approval.js";
 import type { ArrivalTerms } from "../domain/arrival.js";
 import type { ApprovalStore, RunApprovalRow } from "./approvals.js";
 import { isPrimaryKeyViolation, isUniqueViolation, storedObject, storedStrings, type Db } from "./db.js";
@@ -60,6 +61,9 @@ export interface CheckedRow {
   // The callback that verified the account on file, whether or not it is the one
   // PayOnce last paid (verifiedBankChange). Null on rows from before it.
   verifiedBy: number | null;
+  // The latest transfer that failed on the account with an account-level code,
+  // when nothing to the account was paid after it (accountFailure).
+  accountFailure: AccountFailure | null;
   // The account name on the beneficiary record. The invoice is recorded under it.
   payee: string | null;
   payTo: string | null;
@@ -102,7 +106,8 @@ export interface ReleaseRow {
 }
 
 // A pay row with the fields a skipped row keeps: the reasons, and no hold, new
-// payee, callback or arrival, since those only matter for a row that pays.
+// payee, callback, failed account or arrival, since those only matter for a row
+// that pays.
 export function skipRow(row: CheckedRow, reasons: string[]): CheckedRow {
   return {
     ...row,
@@ -112,6 +117,7 @@ export function skipRow(row: CheckedRow, reasons: string[]): CheckedRow {
     newPayee: false,
     bankChangeId: null,
     verifiedBy: null,
+    accountFailure: null,
     arrival: null,
   };
 }
@@ -167,8 +173,9 @@ interface RunRowRecord {
   note: string | null;
   due_date: string | null;
   arrival: string | null;
-  // Missing on a file opened read-only from before the column.
+  // Missing on a file opened read-only from before the columns.
   verified_by?: number | null;
+  account_failure?: string | null;
 }
 
 interface RunRecord {
@@ -222,6 +229,7 @@ function toRunRow(row: RunRowRecord): RunRow {
     newPayee: row.new_payee === 1,
     bankChangeId: row.bank_change_id,
     verifiedBy: row.verified_by ?? null,
+    accountFailure: typeof row.account_failure === "string" ? storedObject<AccountFailure>(row.account_failure) : null,
     payee: row.payee,
     payTo: row.pay_to,
     accountKey: row.account_key,
@@ -363,8 +371,8 @@ export class RunStore {
            (run_id, line, cells, invoice_id, supplier, beneficiary_id, currency, amount_minor,
             transfer_method, sandbox_outcome, action, reasons, held_for, new_payee,
             bank_change_id, payee, pay_to, account_key, due_date, arrival, route_key,
-            verified_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            verified_by, account_failure)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         runId,
@@ -389,6 +397,7 @@ export class RunStore {
         row.arrival === null ? null : JSON.stringify(row.arrival),
         row.routeKey,
         row.verifiedBy,
+        row.accountFailure === null ? null : JSON.stringify(row.accountFailure),
       );
   }
 
@@ -477,7 +486,7 @@ export class RunStore {
                 amount_minor = ?, transfer_method = ?, sandbox_outcome = ?, action = ?,
                 reasons = ?, held_for = ?, new_payee = ?, bank_change_id = ?, payee = ?,
                 pay_to = ?, account_key = ?, due_date = ?, arrival = ?, route_key = ?,
-                verified_by = ?
+                verified_by = ?, account_failure = ?
           WHERE run_id = ? AND line = ?`,
       );
       for (const row of rows) {
@@ -501,6 +510,7 @@ export class RunStore {
           row.arrival === null ? null : JSON.stringify(row.arrival),
           row.routeKey,
           row.verifiedBy,
+          row.accountFailure === null ? null : JSON.stringify(row.accountFailure),
           runId,
           row.line,
         );

@@ -140,8 +140,9 @@ const FIXED_WHY: readonly string[] = [
   "sent",
   "dismissed",
 ];
-// The second-approver reasons that are whole fixed sentences. The pay run ones
-// name a payee, and an unrecognised one is stored text.
+// The second-approver reasons that are whole fixed sentences, or fixed words
+// around a bank reference in its own pattern. The other pay run ones name a
+// payee, and an unrecognised one is stored text.
 const FIXED_NEEDED_WHY: readonly string[] = [
   "new-account",
   "starter-unknown",
@@ -151,6 +152,7 @@ const FIXED_NEEDED_WHY: readonly string[] = [
   "account-not-paid-before",
   "never-paid-on-approval",
   "other-invoice-account",
+  "run-account-failed",
   "run-above-threshold",
   "uploader-unknown",
 ];

@@ -139,6 +139,17 @@ export interface RunRowTerms {
   // since, so bankChange is null. Only then, so every other row's terms, and a
   // run's binding, are as they were before.
   verifiedBy?: number;
+  // The latest transfer that failed on the account with an account-level code,
+  // when nothing to the account was paid after it. Only then, as verifiedBy.
+  accountFailure?: AccountFailure;
+}
+
+// A transfer that failed on an account with an account-level failure code
+// (FAILURE_CODES' account): the bank's short reference, null when the ledger has
+// none, and the code.
+export interface AccountFailure {
+  reference: string | null;
+  failureCode: string;
 }
 
 // A currency's pay rows. reserveFloorMinor is the floor the cash check used, null
@@ -191,6 +202,9 @@ export function runTermsFor(
           ? {}
           : { arrival: arrivalBlock(row.arrival) }),
         ...(row.verifiedBy === undefined ? {} : { verifiedBy: row.verifiedBy }),
+        ...(row.accountFailure === undefined
+          ? {}
+          : { accountFailure: { reference: row.accountFailure.reference, failureCode: row.accountFailure.failureCode } }),
       }),
     ),
     totals: totals.map(

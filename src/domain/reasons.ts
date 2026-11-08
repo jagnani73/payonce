@@ -28,6 +28,7 @@ import {
   UNREADABLE_CASH_REASON,
   UNVERIFIED_SENDER_REASON,
 } from "./decide.js";
+import { ACCOUNT_FAILURE_CODES, FAILURE_WORDS } from "./failure-codes.js";
 import { formatMoney } from "./money.js";
 import { CURRENCY_SOURCE, REFERENCE_SOURCE } from "./patterns.js";
 
@@ -946,8 +947,16 @@ export type NeededWhyCode =
   | "other-invoice-account"
   | "run-new-payee"
   | "run-callback-account"
+  | "run-account-failed"
   | "run-above-threshold"
   | "uploader-unknown";
+
+// The words of every account-level failure code, as runs.ts names a row's failed
+// account (failedAccountText).
+const ACCOUNT_FAILURE_WORDS: string = [
+  ...[...ACCOUNT_FAILURE_CODES].map((code: string): string => FAILURE_WORDS[code] ?? ""),
+  "an account-level code",
+].join("|");
 
 // The words approvers.ts, the engine and runs.ts give for a second approver,
 // each whole, with the older wordings still on file.
@@ -965,6 +974,10 @@ const NEEDED_WHY: readonly [NeededWhyCode, RegExp][] = [
   ],
   ["run-new-payee", /^row [0-9]+ pays .+, which PayOnce has never paid on a person's approval$/],
   ["run-callback-account", /^row [0-9]+ pays an account a callback verified, not the one PayOnce last paid .+$/],
+  [
+    "run-account-failed",
+    new RegExp(`^row [0-9]+ goes to the account that (?:transfer ${REFERENCE_SOURCE}|a transfer) failed on \\((?:${ACCOUNT_FAILURE_WORDS})\\)$`),
+  ],
   ["run-above-threshold", new RegExp(`^the ${CURRENCY_SOURCE} total is above ${MONEY}$`)],
   ["uploader-unknown", /^PayOnce does not know who uploaded this run$/],
 ];

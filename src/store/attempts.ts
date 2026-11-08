@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { StatementSync } from "node:sqlite";
 import type { TransferBankDetails } from "../airwallex/transfers.js";
-import type { ApprovalTerms, FxTerms } from "../domain/approval.js";
+import type { AccountFailure, ApprovalTerms, FxTerms } from "../domain/approval.js";
 import type { ArrivalTerms } from "../domain/arrival.js";
 import {
   bankDetailsKey,
@@ -12,6 +12,7 @@ import {
   routeKeyOf,
   type Debit,
 } from "../domain/assess.js";
+import { ACCOUNT_FAILURE_CODES } from "../domain/failure-codes.js";
 import type { Reason } from "../domain/reasons.js";
 import { isUniqueViolation, storedObject, type Db } from "./db.js";
 import {
@@ -792,6 +793,33 @@ export class AttemptStore {
         )
         .get(beneficiaryId) !== undefined
     );
+  }
+
+  // The latest transfer that failed on this account with an account-level code
+  // (ACCOUNT_FAILURE_CODES), when no payment opened after it was paid to the
+  // account. Any attempt counts, a found payout's original included, on any
+  // record, because the account is where the money goes. A failure counts for the
+  // account it was meant for or went to, by routeKey or by full accountKey. A
+  // later payment counts only when the bank paid it to the account it was meant
+  // for (not misdirected), so the caution lifts only on money that arrived there.
+  accountFailure(accountKey: string, routeKey: string): AccountFailure | undefined {
+    const codes: string[] = [...ACCOUNT_FAILURE_CODES];
+    const row: { reference: string | null; failure_code: string } | undefined = this.db
+      .prepare(
+        `SELECT failed.reference, failed.failure_code FROM attempts AS failed
+          WHERE failed.state = 'failed'
+            AND failed.failure_code IN (${codes.map((): string => "?").join(", ")})
+            AND (failed.route_key = ? OR failed.sent_route = ? OR failed.account_key = ? OR failed.sent_key = ?)
+            AND NOT EXISTS (
+              SELECT 1 FROM attempts AS paid
+               WHERE paid.rowid > failed.rowid AND paid.state = 'paid' AND paid.misdirected = 0
+                 AND (paid.route_key = ? OR paid.sent_route = ? OR paid.account_key = ? OR paid.sent_key = ?))
+          ORDER BY failed.rowid DESC LIMIT 1`,
+      )
+      .get(...codes, routeKey, routeKey, accountKey, accountKey, routeKey, routeKey, accountKey, accountKey) as unknown as
+      | { reference: string | null; failure_code: string }
+      | undefined;
+    return row === undefined ? undefined : { reference: row.reference, failureCode: row.failure_code };
   }
 
   // The latest payment PayOnce sent this beneficiary that the bank paid and that

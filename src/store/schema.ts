@@ -495,6 +495,10 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     // whether or not it is the one PayOnce last paid. bank_change_id is the same
     // callback only when it is not. Null on rows from before it.
     verified_by: "INTEGER",
+    // The latest transfer that failed on the account with an account-level code,
+    // when nothing to it was paid after, as AccountFailure JSON. Null on rows from
+    // before it.
+    account_failure: "TEXT",
   },
   bank_changes: {
     // The supplier_contacts row of the phone number the callback was made on.

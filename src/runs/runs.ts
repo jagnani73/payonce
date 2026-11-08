@@ -7,6 +7,7 @@ import {
   payTo,
   runAmount,
   runTermsFor,
+  type AccountFailure,
   type PaymentAmount,
   type RunRowTerms,
   type RunTerms,
@@ -27,6 +28,7 @@ import {
 import { arrivalFor, ifSentOn, today } from "../domain/arrival.js";
 import { knownRoute, routeKeyOf } from "../domain/assess.js";
 import { callbackBars, type CallbackBar } from "../domain/barred.js";
+import { FAILURE_WORDS } from "../domain/failure-codes.js";
 import { isExpired } from "../domain/live.js";
 import { withCurrencyLocks } from "../engine/currency-lock.js";
 import type { Dispatcher } from "../engine/dispatcher.js";
@@ -65,7 +67,7 @@ import { runRequestTerms } from "../store/stored.js";
 import { oneLine, printable, say, sayError } from "../text/printable.js";
 import { currencyFloor, type CurrencyFloor, type FloorSource } from "../domain/reserve.js";
 import { rowFromCells, type RunFile, type RunFileRow } from "./run-file.js";
-import { TRANSFER_METHODS } from "../domain/patterns.js";
+import { REFERENCE_PATTERN, TRANSFER_METHODS } from "../domain/patterns.js";
 
 // What the CLI says for an invoice number the ledger has no invoice for: that it
 // is a pay row of the run waiting for approval, which is no invoice until the run
@@ -350,6 +352,10 @@ function checkRow(
 
   const pays: boolean = reasons.length === 0 && details !== undefined && method !== null;
   const name: string = payeeName ?? row.supplier ?? "";
+  // Where a transfer failed with an account-level code and nothing paid since: a
+  // caution and two approvers, never a skip, so a person decides.
+  const accountFailure: AccountFailure | null =
+    pays && details !== undefined ? (ledger.accountFailure(accountKeyOf(details), routeKeyOf(details)) ?? null) : null;
   return {
     line: row.line,
     cells: row.cells,
@@ -371,6 +377,7 @@ function checkRow(
     newPayee: pays && newPayee,
     bankChangeId: pays ? bankChangeId : null,
     verifiedBy: pays ? verifiedBy : null,
+    accountFailure,
     payee: details === undefined ? null : name,
     payTo: details === undefined ? null : payTo(name, details),
     accountKey: details === undefined ? null : accountKeyOf(details),
@@ -414,6 +421,7 @@ export function payRows(rows: CheckedRow[]): PayRow[] {
         // bankChange names the callback already when the account is not the one
         // PayOnce last paid.
         ...(row.verifiedBy === null || row.bankChangeId !== null ? {} : { verifiedBy: row.verifiedBy }),
+        ...(row.accountFailure === null ? {} : { accountFailure: row.accountFailure }),
         payee: row.payee,
         newPayee: row.newPayee,
       });
@@ -623,6 +631,30 @@ export function domainText(check: DomainCheck): string {
   return `${gives}, ${parts.join(", ")}`;
 }
 
+// A pay row's failed account in PayOnce's words: "the account that transfer
+// P261102-0000002 failed on (account closed)". The reference shows only in its
+// own pattern and the code only by its words.
+export function failedAccountText(failure: AccountFailure): string {
+  const transfer: string =
+    failure.reference !== null && REFERENCE_PATTERN.test(failure.reference) ? `transfer ${failure.reference}` : "a transfer";
+  return `the account that ${transfer} failed on (${FAILURE_WORDS[failure.failureCode] ?? "an account-level code"})`;
+}
+
+// What a person does about a row to an account a transfer failed on, as for a
+// replacement to the account its original failed on.
+export const CHECK_ACCOUNT_FIRST: string = "Check the account with the supplier first";
+
+// The caution on a pay row to an account a transfer failed on, as the run's page
+// and pnpm payrun show it.
+export function accountFailureCaution(line: number, failure: AccountFailure): string {
+  return `Row ${line} goes to ${failedAccountText(failure)}. ${CHECK_ACCOUNT_FIRST}.`;
+}
+
+// The same on the run's timeline, after the row's name.
+function accountFailureLine(failure: AccountFailure): string {
+  return `goes to ${failedAccountText(failure)}, so the run needs two approvers. ${CHECK_ACCOUNT_FIRST}`;
+}
+
 // The day the estimates in a run's terms count from, or null when no row has one.
 function termsDay(terms: RunTerms): string | null {
   return terms.rows.find((row: RunRowTerms): boolean => row.arrival !== undefined)?.arrival?.from ?? null;
@@ -658,8 +690,9 @@ export function largestTotal(terms: RunTerms): { amountMinor: number; currency: 
 
 // How many approvers a run needs, and why: two for a payee PayOnce has never
 // paid on a person's approval (newPayee), for an account a callback verified that
-// PayOnce did not last pay (bankChange), for a supplier_domain with a caution
-// (domainChecks), when any currency's total is above
+// PayOnce did not last pay (bankChange), for an account a transfer failed on with
+// an account-level code and nothing paid since (accountFailure), for a
+// supplier_domain with a caution (domainChecks), when any currency's total is above
 // TWO_APPROVERS_ABOVE, and when the uploader's name, stored before names were
 // checked, does not follow the name rule, so the uploader cannot be barred.
 export function runRule(
@@ -680,6 +713,10 @@ export function runRule(
       needed: 2,
       why: `row ${changed.line} pays an account a callback verified, not the one PayOnce last paid ${changed.payee}`,
     };
+  }
+  const failed: PayRow | undefined = pay.find((row: PayRow): boolean => row.accountFailure !== undefined);
+  if (failed?.accountFailure !== undefined) {
+    return { needed: 2, why: `row ${failed.line} goes to ${failedAccountText(failed.accountFailure)}` };
   }
   // The sender check trusts the domain, so one that disagrees with another for
   // the same beneficiary, or is new for a beneficiary already paid, is reviewed
@@ -807,16 +844,21 @@ function noteCheck(ledger: Ledger, runId: number, rows: CheckedRow[], cash: RunC
   for (const row of rows) {
     const topic: string = `row:${row.line}`;
     const named: string = `Row ${row.line}${row.invoiceId === null ? "" : ` (${row.invoiceId})`}`;
+    const secondBill: string = `${named} looks like a second bill for ${listOf(row.heldFor)}, so PayOnce will hold it for a person before paying it`;
     if (row.action === "skip") {
       runNote(ledger, runId, "decision", `${named} skipped: ${row.reasons.join(". ")}`, topic);
-    } else if (row.heldFor.length > 0) {
+    } else if (row.accountFailure !== null) {
       runNote(
         ledger,
         runId,
-        "decision",
-        `${named} looks like a second bill for ${listOf(row.heldFor)}, so PayOnce will hold it for a person before paying it`,
+        "warning",
+        row.heldFor.length > 0
+          ? `${secondBill}. It also ${accountFailureLine(row.accountFailure)}`
+          : `${named} ${accountFailureLine(row.accountFailure)}`,
         topic,
       );
+    } else if (row.heldFor.length > 0) {
+      runNote(ledger, runId, "decision", secondBill, topic);
     } else if (events.some((event: LedgerEvent): boolean => event.topic === topic)) {
       runNote(ledger, runId, "decision", `${named} now pays ${row.payTo ?? ""}`, topic);
     }

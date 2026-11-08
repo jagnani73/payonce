@@ -1,4 +1,5 @@
 import type { TransferBankDetails } from "../airwallex/transfers.js";
+import type { AccountFailure } from "../domain/approval.js";
 import type { ArrivalTerms } from "../domain/arrival.js";
 import type { Debit } from "../domain/assess.js";
 import type { SupplierEmail } from "../domain/emails.js";
@@ -865,6 +866,10 @@ export class Ledger {
 
   paidOnApproval(beneficiaryId: string): boolean {
     return this.repos.attempts.paidOnApproval(beneficiaryId);
+  }
+
+  accountFailure(accountKey: string, routeKey: string): AccountFailure | undefined {
+    return this.repos.attempts.accountFailure(accountKey, routeKey);
   }
 
   lastPaidUnchecked(beneficiaryId: string): { transferId: string; reference: string | null } | undefined {

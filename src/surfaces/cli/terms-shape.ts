@@ -124,9 +124,13 @@ export function readableTerms(terms: unknown): terms is ApprovalTerms {
   );
 }
 
+function readableAccountFailure(failure: unknown): boolean {
+  return isFields(failure) && isTextOrNull(failure["reference"]) && isText(failure["failureCode"]);
+}
+
 // A run row as pnpm payrun prints it and as the barred list and the domain
-// checks read it: its line, invoice, beneficiary, account, callbacks, domain and
-// estimate.
+// checks read it: its line, invoice, beneficiary, account, callbacks, domain,
+// estimate and failed account.
 function readableRunRow(row: unknown): boolean {
   return (
     isFields(row) &&
@@ -138,7 +142,8 @@ function readableRunRow(row: unknown): boolean {
     isMinorOrNull(row["bankChange"]) &&
     (row["supplierDomain"] === undefined || (isText(row["supplierDomain"]) && validDomain(row["supplierDomain"]))) &&
     (row["arrival"] === undefined || readableArrival(row["arrival"])) &&
-    (row["verifiedBy"] === undefined || isMinor(row["verifiedBy"]))
+    (row["verifiedBy"] === undefined || isMinor(row["verifiedBy"])) &&
+    (row["accountFailure"] === undefined || readableAccountFailure(row["accountFailure"]))
   );
 }
 

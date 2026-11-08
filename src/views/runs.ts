@@ -13,7 +13,7 @@ import {
   type Situation,
 } from "../domain/situation.js";
 import { MAX_RUN_FILE_CHARS, MAX_RUN_ROWS, RUN_COLUMNS, type RunColumn } from "../runs/run-file.js";
-import { runCounts, type RunCash, type RunCounts } from "../runs/runs.js";
+import { accountFailureCaution, runCounts, type RunCash, type RunCounts } from "../runs/runs.js";
 import type { Settings } from "../settings.js";
 import { readingSoft, storedList, type CheckedRow, type Ledger, type Outage, type Run, type RunRow } from "../store/ledger.js";
 import type {
@@ -206,6 +206,14 @@ function decisionOf(
       code: "outage",
       text: [`Outage ${outage.id} on ${railWords(outage.currency, outage.method)} is active. The run is released whole, so it waits until someone ends it.`],
     });
+  }
+  // Pay rows to an account a transfer failed on with an account-level code, as
+  // the last check found them.
+  const failed: string[] = snapshot.rows.flatMap((row: RunRow): string[] =>
+    row.action === "pay" && row.accountFailure !== null ? [accountFailureCaution(row.line, row.accountFailure)] : [],
+  );
+  if (failed.length > 0) {
+    cautions.push({ code: "same-account-failed", text: [failed.join(" ")] });
   }
   if (request !== null && request.state === "waiting") {
     options.push({
