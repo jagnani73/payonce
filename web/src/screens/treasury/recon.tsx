@@ -92,6 +92,30 @@ function CheckBar(props: { view: ReconView; polled: Polled<ReconView> }): JSX.El
   );
 }
 
+// Under a break's text: its wallet, the payment it belongs to, the transfer and
+// when it was found.
+function BreakMeta(props: { item: BreakItemView }): JSX.Element {
+  const item: BreakItemView = props.item;
+  return (
+    <Dotted
+      class="break__meta"
+      parts={[
+        item.currency,
+        item.invoiceId === null ? null : (
+          <a class="ref" href={paymentHref(item.invoiceId)}>
+            {item.invoiceId}
+          </a>
+        ),
+        item.reference === null ? null : <Ref>{item.reference}</Ref>,
+        <>
+          {"found "}
+          <Time at={item.openedAt ?? item.foundAt} />
+        </>,
+      ]}
+    />
+  );
+}
+
 function BreakRow(props: { item: BreakItemView; picked: boolean; onPick: (picked: boolean) => void }): JSX.Element {
   const item: BreakItemView = props.item;
   const id: string = useId();
@@ -100,22 +124,7 @@ function BreakRow(props: { item: BreakItemView; picked: boolean; onPick: (picked
       <input id={id} type="checkbox" class="break__box" checked={props.picked} onChange={(event: Event): void => props.onPick((event.currentTarget as HTMLInputElement).checked)} />
       <label for={id} class="break__text">
         <span>{item.text}</span>
-        <Dotted
-          class="break__meta"
-          parts={[
-            item.currency,
-            item.invoiceId === null ? null : (
-              <a class="ref" href={paymentHref(item.invoiceId)}>
-                {item.invoiceId}
-              </a>
-            ),
-            item.reference === null ? null : <Ref>{item.reference}</Ref>,
-            <>
-              {"found "}
-              <Time at={item.openedAt ?? item.foundAt} />
-            </>,
-          ]}
-        />
+        <BreakMeta item={item} />
       </label>
     </li>
   );
@@ -248,13 +257,23 @@ function Clearing(props: { view: ReconView }): JSX.Element | null {
     <section class="card">
       <details class="fold">
         <summary class="fold__summary">{`Clearing by themselves (${total})`}</summary>
-        <ul class="plain-list">
-          {groups.map(
-            (group: ReconView["clearingByThemselves"][number]): JSX.Element => (
-              <li key={group.kind}>{`${group.label} · ${group.count}`}</li>
-            ),
-          )}
-        </ul>
+        {groups.map(
+          (group: ReconView["clearingByThemselves"][number]): JSX.Element => (
+            <section key={group.kind} class="clearing-group" aria-label={group.label}>
+              <h3 class="break-group__title">{`${group.label} (${group.count})`}</h3>
+              <ul class="clearing-list">
+                {group.items.map(
+                  (item: BreakItemView): JSX.Element => (
+                    <li key={item.id} class="clearing-item">
+                      <span>{item.text}</span>
+                      <BreakMeta item={item} />
+                    </li>
+                  ),
+                )}
+              </ul>
+            </section>
+          ),
+        )}
         <p class="muted form-note">These clear once the next check finds what they are waiting for.</p>
       </details>
     </section>

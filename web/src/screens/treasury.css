@@ -281,6 +281,30 @@
   color: var(--text-3);
 }
 
+.clearing-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.clearing-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.clearing-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 13px;
+}
+
 .two-up {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));

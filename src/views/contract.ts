@@ -1238,7 +1238,7 @@ export interface ReconView {
   everyMinutes: number | null;
   running: boolean;
   needsPerson: { kind: BreakKind; label: string; action: string; count: number; items: BreakItemView[] }[];
-  clearingByThemselves: { kind: BreakKind; label: string; count: number }[];
+  clearingByThemselves: { kind: BreakKind; label: string; count: number; items: BreakItemView[] }[];
   waiting: { text: string; currency: string | null; dueAt: Iso | null }[];
   // breaks: the wallet's open breaks, as needsPerson and clearingByThemselves
   // list them, counted in full.

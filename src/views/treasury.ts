@@ -358,7 +358,7 @@ export function reconView(ledger: Ledger, _settings: Settings, now: number, runn
         open.filter((item: BreakItemView): boolean => item.clearsByItself),
         report.byKind,
         actions,
-      ).map((group: ReconView["needsPerson"][number]) => ({ kind: group.kind, label: group.label, count: group.count })),
+      ).map((group: ReconView["needsPerson"][number]) => ({ kind: group.kind, label: group.label, count: group.count, items: group.items })),
       waiting: report.waiting.map((item: WaitingView) => ({ text: item.text, currency: item.currency, dueAt: item.dueAt })),
       wallets: report.wallets.map((wallet: WalletSummary) => {
         const breaks: ReconView["wallets"][number]["breaks"] = breaksIn(wallet.currency);
