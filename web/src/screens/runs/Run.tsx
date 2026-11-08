@@ -33,6 +33,10 @@ const METHODS: Record<string, string> = { LOCAL: "Local", SWIFT: "SWIFT" };
 // A run's lines are payments, decisions and approvals, never emails or messages.
 const RUN_FILTERS: readonly Filter[] = ["decisions", "bank", "approvals"];
 
+// Rows that never went out: skipped at upload, or left behind when the run was
+// cancelled. They take the skip mark, not the done tone's tick.
+const NOT_SENT: ReadonlySet<RunRowView["state"]> = new Set<RunRowView["state"]>(["skipped", "not-released"]);
+
 function tabOf(raw: string | undefined): RunTab {
   return RUN_TABS.find((tab: RunTab): boolean => tab === raw) ?? "rows";
 }
@@ -133,7 +137,7 @@ function StatusCell(props: { row: RunRowView; domain: boolean; open: boolean; on
         <ToneBadge
           tone={row.state === "released" ? "done" : ROW_TONES[row.state]}
           label={row.state === "second-bill-check" ? "Pays" : row.label}
-          skipped={row.state === "skipped"}
+          skipped={NOT_SENT.has(row.state)}
         />
       )}
       {row.state === "second-bill-check" ? (
