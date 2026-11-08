@@ -207,8 +207,10 @@ function RowsTab(props: { view: RunView }): JSX.Element {
             return (
               <tbody key={row.line} class="run-rows__group">
                 <tr>
-                  <td class="muted">{row.line}</td>
-                  <td>
+                  <td class="muted run-rows__line" data-label="Row">
+                    {row.line}
+                  </td>
+                  <td data-label="Invoice">
                     {row.invoiceId === null ? (
                       <span class="muted">None</span>
                     ) : row.state === "released" ? (
@@ -219,12 +221,12 @@ function RowsTab(props: { view: RunView }): JSX.Element {
                       <Ref>{row.invoiceId}</Ref>
                     )}
                   </td>
-                  <td>{row.supplier === null ? <span class="muted">None</span> : <Theirs text={row.supplier} />}</td>
-                  <td class="is-end is-numeric">
+                  <td data-label="Supplier">{row.supplier === null ? <span class="muted">None</span> : <Theirs text={row.supplier} />}</td>
+                  <td class="is-end is-numeric" data-label="Amount">
                     <Money money={row.amount} class="run-rows__amount" />
                   </td>
-                  <td>{row.method === null ? <span class="muted">None</span> : (METHODS[row.method] ?? row.method)}</td>
-                  <td>
+                  <td data-label="Method">{row.method === null ? <span class="muted">None</span> : (METHODS[row.method] ?? row.method)}</td>
+                  <td data-label="Account">
                     {row.account === null ? (
                       <span class="muted">None</span>
                     ) : row.account.ending === null ? (
@@ -233,16 +235,16 @@ function RowsTab(props: { view: RunView }): JSX.Element {
                       <span class="mono">{`···${row.account.ending}`}</span>
                     )}
                   </td>
-                  <td>
+                  <td data-label="Due">
                     <DueCell row={row} />
                   </td>
-                  <td>
+                  <td data-label="Status">
                     <StatusCell row={row} domain={flagged.has(row.line)} open={shown} onToggle={(): void => toggle(row.line)} reasonsId={reasonsId} />
                   </td>
                 </tr>
                 {row.state === "skipped" && shown ? (
                   <tr class="run-rows__reasons" id={reasonsId}>
-                    <td />
+                    <td class="run-rows__spacer" />
                     <td colSpan={7}>
                       <ul class="run-rows__reason-list">
                         {row.skipReasons.map(

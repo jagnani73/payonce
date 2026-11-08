@@ -327,3 +327,79 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* A phone stacks each run and each row into a block of labelled lines, so the
+   state, the amount and the status stay on screen with no sideways scroll. */
+@media (max-width: 599px) {
+  .run-list__table,
+  .run-rows {
+    min-width: 0;
+  }
+
+  .run-list__table thead,
+  .run-rows thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .run-list__table,
+  .run-list__table tbody,
+  .run-list__table tr,
+  .run-list__table td,
+  .run-rows,
+  .run-rows tbody,
+  .run-rows tr,
+  .run-rows td {
+    display: block;
+  }
+
+  .run-list__table tr,
+  .run-rows__group {
+    padding: 8px 14px 10px;
+    border-top: 1px solid var(--line-faint);
+  }
+
+  .run-list__table tr:first-child,
+  .run-rows__group:first-of-type {
+    border-top: 0;
+  }
+
+  .run-list__table td,
+  .run-list__table td.is-end,
+  .run-rows td,
+  .run-rows td.is-end {
+    padding: 3px 0;
+    border-top: 0;
+    text-align: left;
+  }
+
+  .run-list__table td[data-label]::before,
+  .run-rows td[data-label]::before {
+    content: attr(data-label);
+    display: inline-block;
+    min-width: 76px;
+    margin-right: 8px;
+    color: var(--text-3);
+    font-size: 12px;
+  }
+
+  .run-list__totals {
+    align-items: flex-start;
+  }
+
+  .run-rows__line {
+    font-weight: 600;
+  }
+
+  .run-rows__status,
+  .run-rows__due {
+    display: inline-flex;
+  }
+
+  .run-rows__spacer {
+    display: none;
+  }
+}

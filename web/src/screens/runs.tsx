@@ -61,20 +61,20 @@ function RunList(props: { view: RunsView; current: number | null }): JSX.Element
               const on: boolean = row.id === props.current;
               return (
                 <ClickRow key={row.id} class={on ? "is-current" : undefined} onOpen={(): void => navigate(runHref(row.id))}>
-                  <td>
+                  <td class="run-list__run">
                     <a class="run-list__link" href={runHref(row.id)} aria-current={on ? "page" : undefined}>
                       {`Pay run ${row.id}`}
                     </a>
                   </td>
-                  <td>
+                  <td data-label="File">
                     <Theirs text={row.fileName} class="mono run-list__file" />
                   </td>
-                  <td>
+                  <td data-label="Uploaded">
                     <Theirs text={row.uploadedBy} />
                     {" · "}
                     <Time at={row.uploadedAt} />
                   </td>
-                  <td>
+                  <td data-label="State">
                     <span class="run-list__state">
                       <ToneBadge tone={row.situation.tone} label={row.situation.label} />
                       {row.activity.busy ? (
@@ -85,8 +85,8 @@ function RunList(props: { view: RunsView; current: number | null }): JSX.Element
                       ) : null}
                     </span>
                   </td>
-                  <td>{countsText(row)}</td>
-                  <td class="is-end">
+                  <td data-label="Rows">{countsText(row)}</td>
+                  <td class="is-end" data-label="Totals">
                     <span class="run-list__totals">
                       {row.totals.length === 0 ? (
                         <span class="muted">Nothing to pay</span>
