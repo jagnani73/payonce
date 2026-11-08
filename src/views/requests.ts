@@ -216,7 +216,10 @@ export function runTermsView(ledger: Ledger, terms: RunTerms, live: boolean, now
     })),
     largest: money(largest.minor, largest.currency),
     newPayees: [],
-    callbackRows: terms.rows.filter((row: RunRowTerms): boolean => row.bankChange !== null).map((row: RunRowTerms): number => row.line),
+    // Rows whose account a callback verified, whether or not PayOnce paid it since.
+    callbackRows: terms.rows
+      .filter((row: RunRowTerms): boolean => row.bankChange !== null || row.verifiedBy !== undefined)
+      .map((row: RunRowTerms): number => row.line),
     domains: domainChecks(ledger, terms).map((check: DomainCheck) => ({
       line: check.line,
       domain: check.domain,

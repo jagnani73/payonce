@@ -1493,11 +1493,15 @@ export function runSituationOf(snapshot: RunSnapshot, now: number): RunSituation
   );
 }
 
+// callbackVerified is true when a callback verified the account the row pays,
+// whether or not PayOnce paid that account since (verifiedBy), or, on a row from
+// before verifiedBy was kept, when the account is not the one PayOnce last paid
+// (bankChangeId).
 export function runRowStateOf(
-  row: Pick<RunRow, "action" | "state" | "reasons" | "heldFor" | "newPayee" | "bankChangeId">,
+  row: Pick<RunRow, "action" | "state" | "reasons" | "heldFor" | "newPayee" | "bankChangeId" | "verifiedBy">,
   payment: Situation | null,
 ): RunRowStateView {
-  const flags = { newPayee: row.newPayee, callbackVerified: row.bankChangeId !== null };
+  const flags = { newPayee: row.newPayee, callbackVerified: row.bankChangeId !== null || row.verifiedBy !== null };
   if (row.action === "skip") {
     return { state: "skipped", label: `Skipped (${plural(row.reasons.length, "1 reason", "reasons")})`, ...flags };
   }

@@ -57,6 +57,9 @@ export interface CheckedRow {
   // The callback that verified the account on file, when it is not the one
   // PayOnce last paid.
   bankChangeId: number | null;
+  // The callback that verified the account on file, whether or not it is the one
+  // PayOnce last paid (verifiedBankChange). Null on rows from before it.
+  verifiedBy: number | null;
   // The account name on the beneficiary record. The invoice is recorded under it.
   payee: string | null;
   payTo: string | null;
@@ -101,7 +104,16 @@ export interface ReleaseRow {
 // A pay row with the fields a skipped row keeps: the reasons, and no hold, new
 // payee, callback or arrival, since those only matter for a row that pays.
 export function skipRow(row: CheckedRow, reasons: string[]): CheckedRow {
-  return { ...row, action: "skip", reasons, heldFor: [], newPayee: false, bankChangeId: null, arrival: null };
+  return {
+    ...row,
+    action: "skip",
+    reasons,
+    heldFor: [],
+    newPayee: false,
+    bankChangeId: null,
+    verifiedBy: null,
+    arrival: null,
+  };
 }
 
 export interface ReleasedRun {
@@ -155,6 +167,8 @@ interface RunRowRecord {
   note: string | null;
   due_date: string | null;
   arrival: string | null;
+  // Missing on a file opened read-only from before the column.
+  verified_by?: number | null;
 }
 
 interface RunRecord {
@@ -207,6 +221,7 @@ function toRunRow(row: RunRowRecord): RunRow {
     heldFor: storedStrings(row.held_for),
     newPayee: row.new_payee === 1,
     bankChangeId: row.bank_change_id,
+    verifiedBy: row.verified_by ?? null,
     payee: row.payee,
     payTo: row.pay_to,
     accountKey: row.account_key,
@@ -347,8 +362,9 @@ export class RunStore {
         `INSERT INTO run_rows
            (run_id, line, cells, invoice_id, supplier, beneficiary_id, currency, amount_minor,
             transfer_method, sandbox_outcome, action, reasons, held_for, new_payee,
-            bank_change_id, payee, pay_to, account_key, due_date, arrival, route_key)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            bank_change_id, payee, pay_to, account_key, due_date, arrival, route_key,
+            verified_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         runId,
@@ -372,6 +388,7 @@ export class RunStore {
         row.dueDate,
         row.arrival === null ? null : JSON.stringify(row.arrival),
         row.routeKey,
+        row.verifiedBy,
       );
   }
 
@@ -459,7 +476,8 @@ export class RunStore {
         `UPDATE run_rows SET invoice_id = ?, supplier = ?, beneficiary_id = ?, currency = ?,
                 amount_minor = ?, transfer_method = ?, sandbox_outcome = ?, action = ?,
                 reasons = ?, held_for = ?, new_payee = ?, bank_change_id = ?, payee = ?,
-                pay_to = ?, account_key = ?, due_date = ?, arrival = ?, route_key = ?
+                pay_to = ?, account_key = ?, due_date = ?, arrival = ?, route_key = ?,
+                verified_by = ?
           WHERE run_id = ? AND line = ?`,
       );
       for (const row of rows) {
@@ -482,6 +500,7 @@ export class RunStore {
           row.dueDate,
           row.arrival === null ? null : JSON.stringify(row.arrival),
           row.routeKey,
+          row.verifiedBy,
           runId,
           row.line,
         );

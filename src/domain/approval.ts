@@ -135,6 +135,10 @@ export interface RunRowTerms {
   // gives a due date, so every other row's terms, and a run's binding, are as they
   // were before.
   arrival?: ArrivalTerms;
+  // The callback that verified the account, when PayOnce has paid that account
+  // since, so bankChange is null. Only then, so every other row's terms, and a
+  // run's binding, are as they were before.
+  verifiedBy?: number;
 }
 
 // A currency's pay rows. reserveFloorMinor is the floor the cash check used, null
@@ -186,6 +190,7 @@ export function runTermsFor(
         ...(row.arrival === undefined || row.arrival.dueDate === null
           ? {}
           : { arrival: arrivalBlock(row.arrival) }),
+        ...(row.verifiedBy === undefined ? {} : { verifiedBy: row.verifiedBy }),
       }),
     ),
     totals: totals.map(

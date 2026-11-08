@@ -2011,7 +2011,7 @@ function runsOf(facts: RecordFacts, labelOf: Map<string, string>): RunRowView[] 
       currency: row.currency,
       account: row.action === "pay" && row.accountKey !== null ? (labelOf.get(row.accountKey) ?? null) : null,
       newPayee: row.action === "pay" && row.newPayee,
-      callbackVerified: row.action === "pay" && row.bankChangeId !== null,
+      callbackVerified: row.action === "pay" && (row.bankChangeId !== null || row.verifiedBy !== null),
       skipReasons: row.action === "skip" ? row.skipReasons : 0,
     }),
   );

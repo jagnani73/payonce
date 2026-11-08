@@ -491,6 +491,10 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     // from before it, and on a released row whose last check read another
     // account than the run approved.
     route_key: "TEXT",
+    // The callback that verified the account, as verifiedBankChange found it,
+    // whether or not it is the one PayOnce last paid. bank_change_id is the same
+    // callback only when it is not. Null on rows from before it.
+    verified_by: "INTEGER",
   },
   bank_changes: {
     // The supplier_contacts row of the phone number the callback was made on.

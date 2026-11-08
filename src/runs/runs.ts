@@ -25,7 +25,8 @@ import {
   type SignoffRule,
 } from "../domain/approvers.js";
 import { arrivalFor, ifSentOn, today } from "../domain/arrival.js";
-import { routeKeyOf } from "../domain/assess.js";
+import { knownRoute, routeKeyOf } from "../domain/assess.js";
+import { callbackBars, type CallbackBar } from "../domain/barred.js";
 import { isExpired } from "../domain/live.js";
 import { withCurrencyLocks } from "../engine/currency-lock.js";
 import type { Dispatcher } from "../engine/dispatcher.js";
@@ -286,6 +287,7 @@ function checkRow(
   let method: TransferMethod | null = row.method;
   let newPayee: boolean = false;
   let bankChangeId: number | null = null;
+  let verifiedBy: number | null = null;
   if (row.beneficiaryId !== null && payee !== undefined) {
     const short: string = row.beneficiaryId.slice(0, 8);
     if (payee.record === undefined) {
@@ -328,10 +330,13 @@ function checkRow(
       // paid it by itself (paidOnApproval). The account check below still compares
       // with the last payment, automatic or not.
       newPayee = !ledger.paidOnApproval(row.beneficiaryId);
+      // The callback that verified the account, if one did, is kept whether or
+      // not PayOnce paid that account since, so the row says what verified it.
+      const verified: BankChange | undefined = ledger.verifiedBankChange(row.beneficiaryId, details);
+      verifiedBy = verified?.id ?? null;
       if (payee.lastPaid === undefined) {
         newPayee = true;
       } else if (payee.lastPaid.routeKey !== routeKeyOf(details)) {
-        const verified: BankChange | undefined = ledger.verifiedBankChange(row.beneficiaryId, details);
         if (verified !== undefined) {
           bankChangeId = verified.id;
         } else {
@@ -365,6 +370,7 @@ function checkRow(
         : [],
     newPayee: pays && newPayee,
     bankChangeId: pays ? bankChangeId : null,
+    verifiedBy: pays ? verifiedBy : null,
     payee: details === undefined ? null : name,
     payTo: details === undefined ? null : payTo(name, details),
     accountKey: details === undefined ? null : accountKeyOf(details),
@@ -405,6 +411,9 @@ export function payRows(rows: CheckedRow[]): PayRow[] {
         heldFor: row.heldFor,
         bankChange: row.bankChangeId,
         arrival: row.arrival,
+        // bankChange names the callback already when the account is not the one
+        // PayOnce last paid.
+        ...(row.verifiedBy === null || row.bankChangeId !== null ? {} : { verifiedBy: row.verifiedBy }),
         payee: row.payee,
         newPayee: row.newPayee,
       });
@@ -648,8 +657,9 @@ export function largestTotal(terms: RunTerms): { amountMinor: number; currency: 
 }
 
 // How many approvers a run needs, and why: two for a payee PayOnce has never
-// paid on a person's approval (newPayee), for an account a callback verified, for a supplier_domain with a
-// caution (domainChecks), when any currency's total is above
+// paid on a person's approval (newPayee), for an account a callback verified that
+// PayOnce did not last pay (bankChange), for a supplier_domain with a caution
+// (domainChecks), when any currency's total is above
 // TWO_APPROVERS_ABOVE, and when the uploader's name, stored before names were
 // checked, does not follow the name rule, so the uploader cannot be barred.
 export function runRule(
@@ -698,35 +708,36 @@ export function runRule(
   return { needed: 1, why: "" };
 }
 
-// Who may not approve the run: whoever uploaded it, everyone who recorded the
-// callback for an account a row pays, and whoever proposed or confirmed the phone
-// number such a callback was made on. A name stored before names were checked
-// that does not follow the name rule bars nobody (knownName): runRule asks for
-// two approvers for such an uploader, and a row to a callback-verified account
-// needs two already.
+// Who may not approve the run: whoever uploaded it, and for each row everyone
+// callbackBars bars for the account it pays, as barredFrom bars them for an
+// invoice to that account: whoever recorded a callback that verified it, from
+// any invoice of the record, whether or not PayOnce paid that account since, and
+// whoever proposed or confirmed the phone number such a callback was made on.
+// The row's account is known by the routeKey the ledger keeps for its
+// accountKey, and with none every callback for the record bars. A name stored
+// before names were checked that does not follow the name rule bars nobody
+// (knownName): runRule asks for two approvers for such an uploader.
 export function runBarred(ledger: Ledger, terms: RunTerms): Barred[] {
   const barred: Barred[] = [];
   const uploader: string | null = knownName(terms.uploadedBy);
   if (uploader !== null) {
     barred.push({ name: uploader, why: "uploaded this run" });
   }
+  const routes: Map<string, string> = ledger.accountRoutes();
   for (const row of terms.rows) {
-    const change: BankChange | undefined =
-      row.bankChange === null ? undefined : ledger.bankChange(row.bankChange);
-    if (change?.appliedKey === null || change === undefined) {
-      continue;
-    }
-    for (const stored of ledger.bankChangeRecorders(row.beneficiaryId, change.appliedKey)) {
-      const name: string | null = knownName(stored);
-      if (name !== null) {
-        barred.push({ name, why: `recorded the callback for the bank details row ${row.line} pays` });
-      }
-    }
-    for (const setter of ledger.callbackPhoneSetters(row.beneficiaryId, change.appliedKey)) {
-      const name: string | null = knownName(setter.name);
-      if (name !== null) {
-        barred.push({ name, why: `${setter.role} the phone number the callback for row ${row.line} was made on` });
-      }
+    const bars: CallbackBar[] = callbackBars(
+      ledger.callbacksFor(row.beneficiaryId),
+      row.accountKey,
+      knownRoute(routes.get(row.accountKey)),
+    );
+    for (const bar of bars) {
+      barred.push({
+        name: bar.name,
+        why:
+          bar.role === "recorded"
+            ? `recorded the callback for the bank details row ${row.line} pays`
+            : `${bar.role} the phone number the callback for row ${row.line} was made on`,
+      });
     }
   }
   return barred;

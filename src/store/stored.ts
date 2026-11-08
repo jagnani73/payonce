@@ -141,7 +141,8 @@ export function isApprovalTerms(terms: unknown): terms is ApprovalTerms {
 }
 
 // One pay row of a run's terms. Rows from before PayOnce kept a row's supplier
-// domain or its arrival estimate have neither.
+// domain, its arrival estimate or the callback that verified an account it paid
+// since have none of them.
 function isRunRow(row: unknown): boolean {
   return (
     isFields(row) &&
@@ -156,7 +157,8 @@ function isRunRow(row: unknown): boolean {
     isTextList(row["heldFor"]) &&
     (row["bankChange"] === null || isCount(row["bankChange"])) &&
     isOptionalText(row["supplierDomain"]) &&
-    (row["arrival"] === undefined || isArrival(row["arrival"]))
+    (row["arrival"] === undefined || isArrival(row["arrival"])) &&
+    (row["verifiedBy"] === undefined || isCount(row["verifiedBy"]))
   );
 }
 

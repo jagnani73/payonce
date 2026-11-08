@@ -203,6 +203,7 @@ interface SupplierRunRowRecord {
   state: RunRowState;
   new_payee: number;
   bank_change_id: number | null;
+  verified_by: number | null;
   account_key: string | null;
   skip_reasons: number | null;
 }
@@ -372,6 +373,8 @@ export interface SupplierRunRow {
   state: RunRowState;
   newPayee: boolean;
   bankChangeId: number | null;
+  // The callback that verified the account, whether or not PayOnce paid it since.
+  verifiedBy: number | null;
   accountKey: string | null;
   skipReasons: number;
 }
@@ -642,7 +645,7 @@ export class SupplierReads {
       `SELECT run_rows.id, run_rows.run_id, runs.state AS run_state, runs.checked_at, run_rows.line,
               run_rows.invoice_id, run_rows.beneficiary_id, run_rows.supplier, run_rows.payee,
               run_rows.currency, run_rows.amount_minor, run_rows.action, run_rows.state,
-              run_rows.new_payee, run_rows.bank_change_id, run_rows.account_key,
+              run_rows.new_payee, run_rows.bank_change_id, run_rows.verified_by, run_rows.account_key,
               CASE WHEN json_valid(run_rows.reasons) THEN json_array_length(run_rows.reasons) END AS skip_reasons
          FROM run_rows JOIN runs ON runs.id = run_rows.run_id
          ${one ? "WHERE run_rows.beneficiary_id = ?" : "WHERE run_rows.beneficiary_id IS NOT NULL"}
@@ -663,6 +666,7 @@ export class SupplierReads {
         state: row.state,
         newPayee: row.new_payee === 1,
         bankChangeId: row.bank_change_id,
+        verifiedBy: row.verified_by,
         accountKey: row.account_key,
         skipReasons: row.skip_reasons ?? 0,
       }),
