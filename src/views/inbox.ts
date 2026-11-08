@@ -15,6 +15,8 @@ import { readInvoiceSnapshots } from "./snapshot.js";
 // Uploads that are not waiting, shown after the waiting ones.
 const OTHERS_SHOWN: number = 50;
 
+const NO_MATCH: Match = { candidates: [], suggested: null };
+
 const TABS: { state: UploadState; label: string }[] = [
   { state: "waiting", label: "Waiting" },
   { state: "delivered", label: "Delivered" },
@@ -22,10 +24,42 @@ const TABS: { state: UploadState; label: string }[] = [
 ];
 
 
-function labelOf(upload: Upload, suggested: string | null): string {
+function closedState(state: Candidate["state"]): boolean {
+  return state === "settled" || state === "rejected";
+}
+
+// A waiting upload's label in the list: the payment it suggests, else what it names.
+function waitingLabel(match: Match): string {
+  const only: Candidate | undefined = match.candidates.length === 1 ? match.candidates[0] : undefined;
+  if (match.suggested !== null) {
+    return `Suggests ${match.suggested}`;
+  }
+  if (only !== undefined) {
+    return closedState(only.state) ? `Names ${only.invoiceId}, closed` : `May name ${only.invoiceId}`;
+  }
+  return match.candidates.length === 0 ? "No match" : `Names ${match.candidates.length} payments`;
+}
+
+// Why a waiting upload suggests no payment, or null when it suggests one.
+function unsuggestedText(match: Match): string | null {
+  const only: Candidate | undefined = match.candidates.length === 1 ? match.candidates[0] : undefined;
+  if (match.suggested !== null) {
+    return null;
+  }
+  if (only === undefined) {
+    return match.candidates.length === 0
+      ? "PayOnce found no invoice number or bank reference in this email."
+      : "This email names more than one payment. Choose the one it is about.";
+  }
+  return closedState(only.state)
+    ? `This email names ${only.invoiceId}, which is closed, so PayOnce doesn't suggest it. If you deliver it there, it stays on file and changes nothing.`
+    : `This email names ${only.invoiceId} only next to other digits, as in a phone number, so PayOnce doesn't suggest it. Deliver it there if it is about that payment.`;
+}
+
+function labelOf(upload: Upload, match: Match): string {
   switch (upload.state) {
     case "waiting":
-      return suggested === null ? "No match" : `Suggests ${suggested}`;
+      return waitingLabel(match);
     case "delivered":
       return `Delivered to ${upload.invoiceId ?? "a payment"}`;
     case "dismissed":
@@ -33,7 +67,7 @@ function labelOf(upload: Upload, suggested: string | null): string {
   }
 }
 
-function rowOf(upload: Upload, suggested: string | null): UploadRow {
+function rowOf(upload: Upload, match: Match): UploadRow {
   return {
     id: upload.id,
     from: upload.sender,
@@ -42,9 +76,9 @@ function rowOf(upload: Upload, suggested: string | null): UploadRow {
     uploadedBy: upload.uploadedBy,
     uploadedAt: upload.uploadedAt,
     state: upload.state,
-    label: labelOf(upload, suggested),
+    label: labelOf(upload, match),
     partial: upload.partial,
-    suggested,
+    suggested: match.suggested,
     invoiceId: upload.invoiceId,
   };
 }
@@ -64,7 +98,7 @@ export function inboxView(ledger: Ledger, settings: Settings, _now: number, tab:
       rows: uploads
         .filter((upload: Upload): boolean => tab === null || upload.state === tab)
         .map((upload: Upload): UploadRow =>
-          rowOf(upload, upload.state === "waiting" ? candidatesFor(ledger, upload, (index ??= invoiceIndex(ledger))).suggested : null),
+          rowOf(upload, upload.state === "waiting" ? candidatesFor(ledger, upload, (index ??= invoiceIndex(ledger))) : NO_MATCH),
         ),
       limits: { maxEmailBytes: MAX_EMAIL_BYTES, readerIsModel: reader.isModel, readerNotice: reader.notice },
     };
@@ -116,7 +150,7 @@ export function inboxItemView(ledger: Ledger, settings: Settings, now: number, u
     if (upload === undefined) {
       return null;
     }
-    const match: Match = upload.state === "waiting" ? candidatesFor(ledger, upload) : { candidates: [], suggested: null };
+    const match: Match = upload.state === "waiting" ? candidatesFor(ledger, upload) : NO_MATCH;
     const ids: string[] = [...match.candidates.map((candidate: Candidate): string => candidate.invoiceId), ...(upload.invoiceId === null ? [] : [upload.invoiceId])];
     const snapshots: InvoiceSnapshot[] = readInvoiceSnapshots(ledger, snapshotOptions(settings, null), now, ids);
     const situations: Map<string, Situation> = new Map(
@@ -131,7 +165,7 @@ export function inboxItemView(ledger: Ledger, settings: Settings, now: number, u
     return {
       view: "inbox-item",
       upload: {
-        ...rowOf(upload, match.suggested),
+        ...rowOf(upload, match),
         replyTo: upload.replyTo,
         dateAsWritten: upload.dateAsWritten,
         body: upload.body,
@@ -147,6 +181,7 @@ export function inboxItemView(ledger: Ledger, settings: Settings, now: number, u
       },
       candidates: match.candidates.map((candidate: Candidate): CandidateView => candidateView(candidate, match, situations.get(candidate.invoiceId))),
       suggested: match.suggested,
+      unsuggested: waiting ? unsuggestedText(match) : null,
       sameMessageId: ledger.sameMessageId(upload),
       afterDelivery:
         upload.state !== "delivered" || target === undefined

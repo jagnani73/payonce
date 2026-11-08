@@ -877,6 +877,9 @@ export interface InboxItemView {
   };
   candidates: CandidateView[];
   suggested: InvoiceId | null;
+  // While it waits with no payment suggested: why, in PayOnce's words ("This
+  // email names INV-1, which is closed…"). Null otherwise.
+  unsuggested: string | null;
   sameMessageId: UploadId[];
   // After delivery: what happens next.
   afterDelivery: string | null;

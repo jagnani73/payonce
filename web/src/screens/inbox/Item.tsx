@@ -179,10 +179,8 @@ function Match(props: { view: InboxItemView; preferred: string | null; onActed: 
             />
           </div>
         </div>
-      ) : view.candidates.length === 0 ? (
-        <p class="muted">PayOnce found no invoice number or bank reference in this email.</p>
-      ) : (
-        <p>This email names more than one payment. Choose the one it is about.</p>
+      ) : view.unsuggested === null ? null : (
+        <p class={view.candidates.length === 0 ? "muted" : undefined}>{view.unsuggested}</p>
       )}
       {others.length === 0 ? null : (
         <ul class="candidates">
