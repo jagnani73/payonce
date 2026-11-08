@@ -532,6 +532,7 @@ export class ReconRunner {
   readonly everyMs: number | null;
   private busy: boolean = false;
   private lastStart: number = Number.NEGATIVE_INFINITY;
+  private nextTick: number | null = null;
 
   constructor(client: AirwallexClient, ledger: Ledger, deadlines: BankDeadlineMinutes, everyMs: number | null) {
     this.client = client;
@@ -544,14 +545,22 @@ export class ReconRunner {
     return this.busy;
   }
 
+  // When the timer next starts a check. Check now does not move it.
+  nextRunAt(): number | null {
+    return this.nextTick;
+  }
+
   start(): void {
     const every: number | null = this.everyMs;
     if (every === null) {
       return;
     }
+    this.nextTick = Date.now() + FIRST_RUN_AFTER_MS;
     setTimeout((): void => {
+      this.nextTick = Date.now() + every;
       void this.tick();
       setInterval((): void => {
+        this.nextTick = Date.now() + every;
         void this.tick();
       }, every);
     }, FIRST_RUN_AFTER_MS);

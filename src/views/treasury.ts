@@ -334,7 +334,6 @@ export function reconView(ledger: Ledger, _settings: Settings, now: number, runn
     const timeOf = (run: ReconReport["lastRun"]): string | null => run?.finishedAt ?? run?.startedAt ?? null;
     const okAt: string | null = timeOf(report.lastRun);
     const lastAt: string | null = report.lastProblem === null ? okAt : timeOf(report.lastProblem);
-    const lastMs: number = lastAt === null ? Number.NaN : Date.parse(lastAt);
     const needsPerson: ReconView["needsPerson"] = grouped(
       open.filter((item: BreakItemView): boolean => !item.clearsByItself),
       report.byKind,
@@ -350,7 +349,7 @@ export function reconView(ledger: Ledger, _settings: Settings, now: number, runn
         lastAt === null
           ? null
           : { at: lastAt, ok: report.lastProblem === null, problem: report.lastProblem?.error ?? null, lastOkAt: okAt },
-      nextCheckAt: report.everyMinutes === null || !Number.isFinite(lastMs) ? null : iso(lastMs + report.everyMinutes * 60_000),
+      nextCheckAt: iso(runner?.nextRunAt() ?? null),
       everyMinutes: report.everyMinutes,
       running: report.running,
       needsPerson,
