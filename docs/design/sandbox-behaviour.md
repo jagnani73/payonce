@@ -25,7 +25,7 @@ This note records what the Airwallex sandbox and its simulator do, found by runn
 - A new transfer starts `SCHEDULED` and moves to `PROCESSING` on its own within seconds. The simulator returns `500 operation_failed` for a transition requested while it is still `SCHEDULED`, so `SandboxBank.send` waits first (`waitForTransfer`).
 - The simulator sometimes returns `500 operation_failed` after it has applied the transition. `simulateTransfer` reads the transfer after a server error or a lost connection, and retries only if the target status was not reached, up to four tries 1.5 seconds apart.
 - `PROCESSING` to `SENT`, `SENT` to `PAID` and `SENT` to `FAILED` (with `failure_type`) all work.
-- A failed transfer reads `FAILED`, then `CANCELLED` a few seconds later. The `failure` object survives the change.
+- A failed transfer usually reads `FAILED`, then `CANCELLED` a few seconds later. The `failure` object survives the change. One can stay `FAILED`, with no `PAYOUT_REVERSAL`, for half an hour or more (see Money).
 - `failure.details.type` is `INCORRECT_ROUTING` for every simulated failure, so PayOnce reads `failure.code` instead (`FAILURE_CODES` in `src/domain/failure-codes.ts`).
 - The codes: 91401 system error, 91402 channel timeout, 90701 account closed, 90101 invalid account name or number, 90802 beneficiary bank returned, 91001 recall requested, 91301 duplication return, 99901 unable to apply, 99902 other.
 - The simulator returns `500 operation_failed` for every transition of a transfer that converts (`SENT`, `PAID`, `FAILED`, `CANCELLED`). Such a transfer stays in `PROCESSING`.
@@ -33,10 +33,11 @@ This note records what the Airwallex sandbox and its simulator do, found by runn
 
 ### Money
 
-- Creating a transfer takes the amount out of `available_amount` immediately. A failed transfer is refunded a few seconds later.
+- Creating a transfer takes the amount out of `available_amount` immediately. A failed transfer is usually refunded a few seconds later, as a `PAYOUT_REVERSAL` in the balance history.
+- On 8 November one was not. P261108-WOU3MC3, 980.00 USD by LOCAL, failed with 90701 at 06:35:22 UTC and was still `FAILED`, never `CANCELLED`, with no reversal, at a reconciliation check 29 minutes later. The other failures that morning went `FAILED` to `CANCELLED` and were reversed 1 to 7 seconds after they failed. Reconciliation opens a `refund-missing` break for such a transfer once its window has passed.
 - `reserved_amount` and `pending_amount` in `GET /api/v1/balances/current` read 0 in USD while a 4,000 USD transfer is in `SENT`. Money in flight cannot be read from the balance, so the cash panel takes it from the ledger.
 - LOCAL USD transfers carry no fee in the sandbox.
-- A EUR SWIFT transfer of 4,000 carried a fee of 13.91 or 13.92 EUR. When it failed, the 4,000 came back and the fee did not.
+- A EUR SWIFT transfer of 4,000 carried a fee of 13.91 or 13.92 EUR, and 14.03 EUR on 8 November. When it failed, the 4,000 came back and the fee did not.
 
 ### Exchange rates
 
