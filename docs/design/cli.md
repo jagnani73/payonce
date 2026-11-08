@@ -51,7 +51,7 @@ The terminal commands, one file per command in `src/surfaces/cli/`: how each loa
 - `pnpm approve`'s signing lists each approver's limit and whether they can sign now, and who is barred and why (`signingFields`). The gate is `pendingApproval` (`store/read/reviews.ts`).
 - `pnpm close <INVOICE>` prints `incidentView`: the payment's header, its emails, the cautions and the close option with its consequence. The option is `close-paid` or `close-unpaid`, picked by `pendingClose`'s kind.
 - `pnpm close` also lists the payouts that only name the invoice and the unrecognised transfers the close covers. `--covers` is checked against `pendingClose().covered`, so a list that changed since the person looked is refused.
-- `pnpm payrun show` prints `runView`: the situation, rows, skip summary, cash at the run's check, the request, cautions, options and the newest 8 timeline lines that are not system lines.
+- `pnpm payrun show` prints `runView`: the situation, rows, skip summary, cash at the run's check, the request, cautions, options and the newest 8 timeline lines the page shows unfolded.
 - `pnpm payrun approve` prints the request and the approve option. `upload` and `check` print the same as `show`. A file with nothing to pay is not stored, so it prints its rows and skip reasons through `putRows`.
 - `pnpm payrun` prints no sandbox outcome on a row.
 - `pnpm supplier [RECORD|INVOICE]` prints `suppliersView` or `supplierView`. `resolveSupplier` turns an invoice number into its record ([supplier-view.md](supplier-view.md)).
@@ -64,7 +64,7 @@ The terminal commands, one file per command in `src/surfaces/cli/`: how each loa
 - `view-text.ts` holds the pieces the view commands print with. Every line goes through `printable`, keeping the spaces it starts with (`put`, `putAll`, `heading`).
 - `utc` writes a time as "2 Nov 2026, 09:00 UTC" (through `utcText`), and "a time not on file" for none. `said` prints a view's `Timed` sentence with each of its times through `utc`.
 - `money` marks an estimated figure "(estimated)". `table` lines up columns, with the columns it names right-aligned, such as amounts. `putFields` prints labelled values with the labels in one column.
-- `putTimeline` prints a timeline's newest lines that are not system lines, oldest first. `signingFields` prints a request's signoffs, approvers and barred names. `putConsequence` and `putOption` print what a decision option does and why it cannot be chosen now.
+- `putTimeline` prints a timeline's newest lines that the page shows unfolded, oldest first: every line but a system line, and a system line too when it is a warning, a decision or an approval. `signingFields` prints a request's signoffs, approvers and barred names. `putConsequence` and `putOption` print what a decision option does and why it cannot be chosen now.
 - `paymentRow`, `runRow` and `putRows` print list rows. Each row ends with the command that does its primary action, where one does ("Next step: pnpm approve INV").
 - `walletLine` prints a wallet's money in play, `putPayment` a payment's header, and `putCautions` the cautions the header did not print already.
 

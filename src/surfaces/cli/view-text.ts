@@ -169,9 +169,14 @@ function timelineLine(line: TimelineLine): string[] {
   return [utc(line.at), line.kindLabel, `${line.lead === null ? "" : `${line.lead}: `}${line.text}${repeat}`];
 }
 
-// The newest lines of a timeline that are not system lines, oldest first.
+// Lines never left out, as the page never folds them: a warning, a decision, and
+// an approval or a signoff.
+const NEVER_HIDDEN: ReadonlySet<TimelineLine["kind"]> = new Set<TimelineLine["kind"]>(["warning", "decision", "approval"]);
+
+// The newest lines of a timeline the page shows unfolded, oldest first.
 export function putTimeline(lines: TimelineLine[], shown: number, indent: number = 1): void {
-  putAll(table(lines.filter((line: TimelineLine): boolean => !line.system).slice(0, shown).reverse().map(timelineLine)), indent);
+  const kept: TimelineLine[] = lines.filter((line: TimelineLine): boolean => !line.system || NEVER_HIDDEN.has(line.kind));
+  putAll(table(kept.slice(0, shown).reverse().map(timelineLine)), indent);
 }
 
 // ---------- requests ----------

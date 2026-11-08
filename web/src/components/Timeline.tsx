@@ -6,9 +6,9 @@ import { Theirs, Time } from "./Text";
 
 // A payment's or a pay run's timeline as the view shapes it: newest first, runs
 // of system lines folded into one "Show N system lines" row, repeated errors
-// already grouped by the server. A warning or a decision is never folded away,
-// even when the system wrote it. New lines get a brief highlight; the page
-// never scrolls by itself.
+// already grouped by the server. A warning, a decision or an approval is never
+// folded away, even when the system wrote it. New lines get a brief highlight;
+// the page never scrolls by itself.
 
 type Filter = "all" | "decisions" | "bank" | "emails" | "approvals" | "messages";
 
@@ -51,7 +51,7 @@ const ICONS: Record<EventKind, IconName> = {
 
 type Item = { line: TimelineLine } | { folded: number; key: string };
 
-const NEVER_FOLDED: ReadonlySet<EventKind> = new Set<EventKind>(["warning", "decision"]);
+const NEVER_FOLDED: ReadonlySet<EventKind> = new Set<EventKind>(["warning", "decision", "approval"]);
 
 function foldable(line: TimelineLine): boolean {
   return line.system && !NEVER_FOLDED.has(line.kind);

@@ -214,6 +214,10 @@ function arrivalLine(message: string): boolean {
   return message.endsWith(HOLIDAYS_NOTE) || / has no arrival estimate, because /.test(message);
 }
 
+// Lines a person's act wrote, which never count as system lines, so a signoff
+// the final approval came after stays in view.
+const NEVER_SYSTEM: ReadonlySet<EventKind> = new Set<EventKind>(["approval"]);
+
 // Newest first. Repeated identical error lines fold into the newest of them.
 export function timelineView(events: LedgerEvent[]): TimelineView {
   const latestOnTopic: Map<string, number> = new Map<string, number>();
@@ -251,10 +255,11 @@ export function timelineView(events: LedgerEvent[]): TimelineView {
       text: lead === undefined ? event.message : event.message.slice(lead[0].length),
       topic: event.topic,
       system:
-        event.kind === "error" ||
+        !NEVER_SYSTEM.has(event.kind) &&
+        (event.kind === "error" ||
         event.topic === "cost" ||
         (event.topic !== null && latestOnTopic.get(event.topic) !== event.id) ||
-        arrivalLine(event.message),
+        arrivalLine(event.message)),
       repeat: null,
     });
   }
