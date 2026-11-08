@@ -20,7 +20,7 @@ import { waitOnOutage } from "./look.js";
 import { openPayment, type Payee } from "./new-payment.js";
 import { payAgain, type PayAgainResult } from "./person.js";
 import { RailOutageError, type Attempt, type Ledger, type Obligation, type TransferMethod } from "../store/ledger.js";
-import type { SandboxBank } from "./sandbox-bank.js";
+import { bankOutcomeOf, type SandboxBank } from "./sandbox-bank.js";
 
 const SUPPLIER_DOMAIN: string = "example-supplier.test";
 const REST_CHECK_MS: number = 500;
@@ -225,65 +225,30 @@ export async function untilAtRest(
   return true;
 }
 
-// The scripted sandbox incident. PayOnce pays the invoice, the bank sends it, the
-// supplier writes in while it is in flight, and then the bank pays or fails it.
-// Nobody tells the agent what the bank did: it hears from Airwallex by webhook or
-// finds out on a status check. Once the incident has settled down, a paid
-// replacement is followed by a second payment the lock refuses.
-// An invoice PayOnce holds before paying stops there and waits for a person. If
-// they release it, the bank gives its original the scenario's outcome, and no
-// supplier emails arrive. Run again on a held invoice, it has the agent look, so
-// an approval given meanwhile is used. False when the invoice is still not at
-// rest when the time runs out.
-export async function runScenario(
+// The scripted part of an incident once a look has sent its original: the bank
+// sends it, the supplier writes in while it is in flight, and then the bank pays
+// or fails it. Nobody tells the agent what the bank did: it hears from Airwallex
+// by webhook or finds out on a status check. Once the incident has settled down,
+// a paid replacement is followed by a second payment the lock refuses. False when
+// the invoice is still not at rest when the time runs out.
+async function playOriginal(
   engine: Engine,
   agent: Dispatcher,
   bank: SandboxBank,
   obligation: Obligation,
   scenario: Scenario,
+  original: { transferId: string; reference: string | null },
 ): Promise<boolean> {
   const invoiceId: string = obligation.invoiceId;
   const thread: SupplierEmail[] = loadEmails(scenario.emailsName, invoiceId);
-
-  if (heldBeforePaying(engine.ledger, obligation)) {
-    bank.expectOriginal(invoiceId, scenario.bankOutcome);
-    agent.wake(invoiceId);
-    await agent.whenIdle(invoiceId);
-    return untilAtRest(engine.ledger, agent, bank, invoiceId);
-  }
-  let original: Transfer | null;
-  try {
-    original = await agent.run(
-      invoiceId,
-      (): Promise<Transfer | null> =>
-        bank.scripting(invoiceId, (): Promise<Transfer | null> => startPayment(engine, obligation)),
-    );
-  } catch (error: unknown) {
-    // startPayment planned a look to try again, and the bank gives the original
-    // that look sends the scenario's outcome.
-    bank.expectOriginal(invoiceId, scenario.bankOutcome);
-    // An outage on its rail holds the first payment until a person ends it. No
-    // supplier emails arrive for it.
-    if (error instanceof RailOutageError) {
-      waitOnOutage(engine, invoiceId, error);
-      return true;
-    }
-    throw error;
-  }
-  if (original === null) {
-    bank.expectOriginal(invoiceId, scenario.bankOutcome);
-    agent.wake(invoiceId);
-    await agent.whenIdle(invoiceId);
-    return true;
-  }
-  await bank.run(invoiceId, (): Promise<void> => bank.send(original.id, original.short_reference_id));
+  await bank.run(invoiceId, (): Promise<void> => bank.send(original.transferId, original.reference));
   for (const email of thread) {
     deliver(engine.ledger, obligation, [email]);
     agent.wake(invoiceId);
     await agent.whenIdle(invoiceId);
   }
   await bank.run(invoiceId, (): Promise<void> =>
-    bank.settle(original.id, scenario.bankOutcome, original.short_reference_id),
+    bank.settle(original.transferId, bankOutcomeOf(scenario.bankOutcome), original.reference),
   );
 
   if (!(await untilAtRest(engine.ledger, agent, bank, invoiceId))) {
@@ -296,4 +261,84 @@ export async function runScenario(
     await agent.run(invoiceId, (): PayAgainResult => payAgain(engine.ledger, invoiceId));
   }
   return true;
+}
+
+// Held for the approval every payment a person starts waits for, and for nothing
+// more specific, with nothing tried yet.
+function waitsForApprovalAlone(ledger: Ledger, invoiceId: string): boolean {
+  const held: Obligation | undefined = ledger.obligation(invoiceId);
+  return (
+    held?.state === "escalated" &&
+    ledger.attempts(invoiceId).length === 0 &&
+    ledger.reasonOf(held)?.code === "person-started"
+  );
+}
+
+// The scripted sandbox incident. Its first payment waits for an approval, as
+// every payment a person starts does, so starting it sends nothing. Once a person
+// approves it, the look that sends the original hands it to the script
+// (playOriginal), in this process. An invoice held for something more specific,
+// such as a second bill or an exchange rate, or whose first send Airwallex
+// refused, is played as before: the bank gives its original the scenario's
+// outcome, and no supplier emails arrive. Run again on a held invoice, it has the
+// agent look, so an approval given meanwhile is used, and then waits for the
+// script to play. True when the invoice waits for a person with nothing sent;
+// false when it is still not at rest when the time runs out.
+export async function runScenario(
+  engine: Engine,
+  agent: Dispatcher,
+  bank: SandboxBank,
+  obligation: Obligation,
+  scenario: Scenario,
+): Promise<boolean> {
+  const invoiceId: string = obligation.invoiceId;
+  const continuing: boolean = heldBeforePaying(engine.ledger, obligation);
+  // While this run waits on its own looks, it waits for the script too, and a
+  // failure reaches its caller. Later, the bank reports it.
+  let watching: boolean = true;
+  let played: Promise<boolean> | null = null;
+  const play = (transferId: string, reference: string | null, onError: (error: unknown) => void): boolean => {
+    // Only the original sent on that first approval. One sent after Airwallex
+    // refused the first is the bank's.
+    const first: Attempt | undefined = engine.ledger
+      .attempts(invoiceId)
+      .find((attempt: Attempt): boolean => attempt.kind === "original");
+    if (first?.transferId !== transferId) {
+      return false;
+    }
+    const run: Promise<boolean> = playOriginal(engine, agent, bank, obligation, scenario, { transferId, reference });
+    if (watching) {
+      played = run;
+    } else {
+      run.catch(onError);
+    }
+    return true;
+  };
+  bank.expectOriginal(invoiceId, scenario.bankOutcome);
+  try {
+    if (!continuing) {
+      // startPayment holds it, so the next look asks a person.
+      await agent.run(invoiceId, (): Promise<Transfer | null> => startPayment(engine, obligation));
+    }
+    if (waitsForApprovalAlone(engine.ledger, invoiceId)) {
+      bank.scriptOriginal(invoiceId, play);
+    }
+    agent.wake(invoiceId);
+    await agent.whenIdle(invoiceId);
+  } catch (error: unknown) {
+    // An outage on its rail holds the first payment until a person ends it, and
+    // the bank gives the original sent then the scenario's outcome. No supplier
+    // emails arrive for it.
+    if (error instanceof RailOutageError) {
+      waitOnOutage(engine, invoiceId, error);
+      return true;
+    }
+    throw error;
+  } finally {
+    watching = false;
+  }
+  if (played !== null) {
+    return played;
+  }
+  return continuing && engine.ledger.attempts(invoiceId).length > 0 ? untilAtRest(engine.ledger, agent, bank, invoiceId) : true;
 }

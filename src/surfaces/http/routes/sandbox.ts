@@ -96,7 +96,7 @@ export function sandboxRoutes(app: HttpApp): Route[] {
       view: incident(invoiceId),
       notice: {
         tone: "success",
-        text: `${invoiceId} started. The simulator plays ${bankOutcome} and the "${threadLabel(emailsName)}" emails.`,
+        text: `${invoiceId} started. Its first payment waits for approval. Once someone approves it, the simulator plays ${bankOutcome} and the "${threadLabel(emailsName)}" emails.`,
       },
     };
   }

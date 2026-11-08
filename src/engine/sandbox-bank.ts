@@ -18,6 +18,20 @@ const SETTLED_STATUSES: ReadonlySet<string> = new Set<string>([
 const READ_TRIES: number = 4;
 const READ_RETRY_MS: number = 1_500;
 
+// A bank outcome as the simulator names it. Anything else, such as the CLI's -
+// placeholder, is not one, and the bank pays.
+const SIMULATOR_NAME: RegExp = /^[A-Z_]+$/;
+
+// The outcome the bank gives a transfer it was told to give this one.
+export function bankOutcomeOf(given: string): string {
+  return SIMULATOR_NAME.test(given) ? given : PAID_OUTCOME;
+}
+
+// A scripted run's part in an invoice's original. Given the transfer once a look
+// has sent it, it plays it and returns true, or returns false and leaves it to
+// the bank. A run nobody waits on reports how it failed through onError.
+export type OriginalScript = (transferId: string, reference: string | null, onError: (error: unknown) => void) => boolean;
+
 // What the sandbox bank was doing: reading the transfer, waiting for Airwallex to
 // move it past SCHEDULED, asking the simulator to move it to a status, or leaving
 // alone a transfer that converts, which the simulator never moves.
@@ -90,8 +104,9 @@ export class SandboxBank implements Bank {
   // another process pays the original instead, and so does this one when the
   // server picks the original up again after a restart.
   private readonly held: Map<string, string> = new Map<string, string>();
-  // Invoices whose original the scripted run is sending and settles itself.
-  private readonly scripted: Set<string> = new Set<string>();
+  // The scripted runs waiting for an invoice's original to go out. They live in
+  // memory, as held does.
+  private readonly scripts: Map<string, OriginalScript> = new Map<string, OriginalScript>();
   // The outcome the ledger keeps for an invoice's original, such as a pay run
   // row's sandbox_outcome, or null. It survives a restart and works in any process.
   private readonly outcomeOf: (invoiceId: string) => string | null;
@@ -197,31 +212,32 @@ export class SandboxBank implements Bank {
   // original if a person releases it. Anything that is not a simulator name,
   // such as the CLI's - placeholder, is ignored, and the bank pays it.
   expectOriginal(invoiceId: string, outcome: string): void {
-    if (/^[A-Z_]+$/.test(outcome)) {
+    if (SIMULATOR_NAME.test(outcome)) {
       this.held.set(invoiceId, outcome);
     }
   }
 
-  // While the scripted run sends an invoice's original, so the bank leaves it to
-  // the script.
-  async scripting<T>(invoiceId: string, step: () => Promise<T>): Promise<T> {
-    this.scripted.add(invoiceId);
-    try {
-      return await step();
-    } finally {
-      this.scripted.delete(invoiceId);
-    }
+  // The scripted run that plays an invoice's original once a look sends it, as
+  // after the approval a scripted incident's first payment waits for. Only the
+  // first original the bank hears of for the invoice goes to it.
+  scriptOriginal(invoiceId: string, play: OriginalScript): void {
+    this.scripts.set(invoiceId, play);
   }
 
-  // PayOnce sent a payment. The scripted run decides what happens to the original
-  // it sends. The bank pays a replacement. It gives any other original the outcome
+  // PayOnce sent a payment. A scripted run waiting for the invoice's original may
+  // play it. The bank pays a replacement. It gives any other original the outcome
   // expectOriginal recorded, else the one the ledger keeps for it, such as a pay
   // run row's, else pays it. The simulator refuses every transition of a transfer
   // that converts, so the bank says so once and leaves it in PROCESSING, where the
   // agent's deadline for it runs out.
   sent(invoiceId: string, kind: AttemptKind, transferId: string, reference: string | null = null): void {
-    if (kind === "original" && this.scripted.has(invoiceId)) {
-      return;
+    if (kind === "original") {
+      const play: OriginalScript | undefined = this.scripts.get(invoiceId);
+      this.scripts.delete(invoiceId);
+      if (play?.(transferId, reference, (error: unknown): void => this.onError(invoiceId, error)) === true) {
+        this.held.delete(invoiceId);
+        return;
+      }
     }
     const outcome: string =
       kind === "replacement"

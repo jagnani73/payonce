@@ -9,6 +9,7 @@ import { PaymentRefusedError } from "../../engine/new-payment.js";
 import { loadEnvIfPresent } from "../../env-file.js";
 import { describeQuotes } from "../../domain/fx.js";
 import type { Ledger, Obligation, RunRow } from "../../store/ledger.js";
+import { heldBeforePaying } from "../../store/read/facts.js";
 import { LineError } from "../../text/line-error.js";
 import { describeOutageRule } from "../../outages/outages.js";
 import { printableJson, say } from "../../text/printable.js";
@@ -116,6 +117,8 @@ async function main(): Promise<void> {
         `${invoiceId} was still not at rest when the wait ran out, so PayOnce stopped. ${invoiceId} is in the ledger, and pnpm recover ${bankOutcome} ${invoiceId} or pnpm ui looks at it again.`,
       );
       process.exitCode = 1;
+    } else {
+      sayWaiting(ledger, invoiceId, `pnpm recover ${bankOutcome} ${invoiceId} ${emailsName}`);
     }
   } catch (error: unknown) {
     if (error instanceof AirwallexError || error instanceof AirwallexUnreachableError) {
@@ -136,6 +139,21 @@ async function main(): Promise<void> {
   if (state !== undefined) {
     say(`  state: ${state}`);
   }
+}
+
+// A first payment that waits only for the approval every payment a person starts
+// waits for: how to approve it, and the command that then sends it and plays the
+// scenario.
+function sayWaiting(ledger: Ledger, invoiceId: string, again: string): void {
+  const held: Obligation | undefined = ledger.obligation(invoiceId);
+  if (held === undefined || !heldBeforePaying(ledger, held) || ledger.reasonOf(held)?.code !== "person-started") {
+    return;
+  }
+  say(
+    ledger.latestApproval(invoiceId)?.state === "requested"
+      ? `${invoiceId} waits for approval before its first transfer. pnpm approve ${invoiceId} shows the request and who can sign it. Once it is approved, ${again} sends it and plays the scenario.`
+      : `${invoiceId} waits for approval before its first transfer, but PayOnce opened no request: approvals are refused, or too few people on the approver list could approve it. Fix APPROVERS, then run ${again} again.`,
+  );
 }
 
 // Airwallex could not be reached or answered with an error, in PayOnce's words

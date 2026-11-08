@@ -146,7 +146,12 @@ function ScriptedIncident(props: { view: SandboxView }): JSX.Element {
           )}
         </Field>
       </div>
-      <NameField label="Started by" value={name} onInput={setName} hint="You won't be able to approve this payment's transfers." />
+      <NameField
+        label="Started by"
+        value={name}
+        onInput={setName}
+        hint="Its first payment waits for someone else's approval, like any payment a person starts. The simulator plays the bank and the emails once it is approved. You won't be able to approve its transfers."
+      />
       <div>
         <ActionButton
           label="Start scripted incident"
