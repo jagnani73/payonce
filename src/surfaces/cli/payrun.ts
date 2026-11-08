@@ -104,6 +104,7 @@ function rowListed(row: RunRowView): Listed {
     ...(row.account === null ? [] : [`To ${row.account.label}`]),
     ...(row.newPayee ? ["a payee PayOnce hadn't paid on a person's approval when the run was checked"] : []),
     ...(row.callbackVerified ? ["account verified by a callback"] : []),
+    ...(row.accountFailed ? ["an account a transfer failed on with an account-level code"] : []),
   ];
   return {
     head: [`Row ${row.line}`, row.invoiceId ?? "no invoice number", row.payee ?? row.supplier ?? "", row.amount === null ? "" : row.amount.text, row.label],

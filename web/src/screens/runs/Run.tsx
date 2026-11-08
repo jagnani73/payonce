@@ -145,6 +145,7 @@ function StatusCell(props: { row: RunRowView; domain: boolean; open: boolean; on
       ) : null}
       {row.newPayee ? <Tag>New payee</Tag> : null}
       {row.callbackVerified ? <Tag>Verified by callback</Tag> : null}
+      {row.accountFailed ? <span class="tag tag--warn">Account failed</span> : null}
       {props.domain ? <span class="tag tag--warn">Domain caution</span> : null}
       {payment?.activity.busy === true ? (
         <span class="working">

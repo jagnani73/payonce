@@ -159,6 +159,7 @@ function rowView(
     label: state.label,
     newPayee: state.newPayee,
     callbackVerified: state.callbackVerified,
+    accountFailed: row.action === "pay" && row.accountFailure !== null,
     secondBillOf: row.heldFor,
     skipReasons: row.reasons.map((text: string) => ({ code: skipCode(text).code, text })),
     payment:

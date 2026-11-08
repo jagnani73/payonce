@@ -928,6 +928,9 @@ export interface RunRowView {
   label: string;
   newPayee: boolean;
   callbackVerified: boolean;
+  // A pay row to an account a transfer failed on with an account-level code, as
+  // the last check found it.
+  accountFailed: boolean;
   secondBillOf: InvoiceId[];
   skipReasons: { code: string; text: Theirs }[];
   // A released row's payment.
