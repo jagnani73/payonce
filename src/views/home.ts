@@ -162,6 +162,7 @@ export function homeView(
   const inbox: InboxWaiting = ledger.inboxWaiting();
   const suggested: string[] = suggestedInvoices(ledger);
   const closedAt: number[] = inGroup("closed")
+    .filter((row: IncidentRow): boolean => row.incident !== null)
     .map((row: IncidentRow): number => (row.situation.since === null ? Number.NaN : Date.parse(row.situation.since)))
     .filter((at: number): boolean => Number.isFinite(at));
   const urgent: number = needsYou.filter((row: IncidentRow): boolean => row.situation.urgent).length;
