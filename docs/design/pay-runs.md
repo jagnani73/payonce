@@ -24,7 +24,8 @@ A pay run is a CSV of payments that people check and approve together, and that 
 
 - `checkRows` uses Airwallex GETs only: each beneficiary once, the transfer PayOnce last paid each one (`readPayees`), and one balance read. A row with any problem is skipped, with every reason found.
 - A row is skipped for a cell problem, or for an invoice number in the ledger exactly (`alreadyInLedger`) or by `sameNumberExactly` for the same supplier, whatever the amount.
-- A row is skipped for a number on an earlier row (exactly, or by `sameNumberExactly` for the same beneficiary), or for an earlier row that `sameBillAndNumber` matches.
+- The same supplier is the same record, the same name, or another record the ledger has seen paying the row's account (`recordsSharing`, `Ledger.recordsOnRoute`), as `heldForOthers` counts it when the row is sent.
+- A row is skipped for a number on an earlier row (exactly, or by `sameNumberExactly` for the same beneficiary), or for an earlier row that `sameBillAndNumber` matches. In both, an earlier row to another record counts when that record pays the row's account, by the routes `readPayees` read, or is one `recordsSharing` names.
 - A row is skipped for a beneficiary Airwallex does not have or that has no bank details, or a supplier cell that is not the record's `account_name` once case, spacing and punctuation are dropped.
 - A row is skipped for a currency other than the record's `account_currency`, or a method the record does not take (or no method when it takes both).
 - A row is skipped when its bank details do not go where the last paid transfer went (`routeKeyOf` of both) and no `verifiedBankChange` exists for the record. The skip says to check with the supplier, pay outside PayOnce, or restore the old details.
@@ -34,7 +35,7 @@ A pay run is a CSV of payments that people check and approve together, and that 
 - A pay row keeps the callback `verifiedBankChange` finds for the record's account in `run_rows.verified_by`, whether or not PayOnce paid that account since. When the account is not the one PayOnce last paid, that callback is the row's `bankChange` too. A pay row keeps the record's `routeKey` in `run_rows.route_key`.
 - A pay row to an account where a transfer failed with an account-level code (`ACCOUNT_FAILURE_CODES`: 90101, 90701, 90802), and no payment opened after it was paid there, keeps that transfer's reference and code (`Ledger.accountFailure`, `run_rows.account_failure`). The row still pays. It gets a caution and needs two approvers.
 - `accountFailure` compares accounts by route key or full key, on any supplier record, since the account is where the money goes. A failure counts for the account it was meant for and the one it went to. A later payment lifts it only when the bank paid it to the account it was meant for (not `misdirected`).
-- A row that `likelyDuplicates` matches against the ledger is a pay row with `heldFor` listing the matches. It counts in the totals, is released with the run, and `startPayment` holds it when it comes to send it.
+- A row that `likelyDuplicates` matches against the ledger, counting the records `recordsSharing` names, is a pay row with `heldFor` listing the matches. It counts in the totals, is released with the run, and `startPayment` holds it when it comes to send it.
 - The cash check runs per currency over the pay rows: one `getBalances` read, less the money committed elsewhere, less the rows and their fees (`latestFee` by method; 0, marked not known, when none is recorded).
 - Committed money is counted before and after the balance read and taken at the larger per invoice (`committedByInvoice`, `committedAcross`), leaving out the run's own rows.
 - When the cash check leaves less than the floor, every row in the currency is skipped, with the shortfall in the reason. A skipped row goes through `skipRow`, which clears `heldFor`, `newPayee`, `bankChangeId`, `verifiedBy`, `accountFailure` and `arrival`.
@@ -116,6 +117,7 @@ A pay run is a CSV of payments that people check and approve together, and that 
 - A short currency skips all of its rows, so file order never decides who is paid.
 - `skipRow` clears `heldFor`, `newPayee`, `bankChangeId`, `verifiedBy`, `accountFailure` and `arrival` because those only matter on a row that pays.
 - A run row bars a callback's recorder for good, as an invoice does. Otherwise, once a payment to the new account made it the account PayOnce last paid, the recorder could approve a later run row to it, alone when the run needs one approver.
+- The check counts other records that pay the row's account because the hold at send does. Otherwise a row could be held at send for a second bill or a number on file that its card never named.
 - A row to a failed account gets a caution, not a skip, because the supplier may have opened the account again or the bank may have made a mistake. Two people read the warning before it pays.
 - A failure on another record with the same bank details counts, because a closed account is closed whichever record names it.
 - A failed cell reads as empty and is never quoted, so nothing in it reaches a reason, the timeline or a terminal.
