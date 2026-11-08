@@ -117,6 +117,23 @@ function payonceDid(snapshot: InvoiceSnapshot): SummaryBullet | null {
     : toPerson;
 }
 
+// What the emails on file said. An email not read yet says nothing, and PayOnce
+// reads no email on a closed payment.
+function emailsText(snapshot: InvoiceSnapshot, situation: Situation): string {
+  const count: string = plural(snapshot.emails.count, "email", "emails");
+  const found: string = summarise(snapshot.emails.claimsNonReceipt, snapshot.emails.asksForNewBankDetails, snapshot.emails.asksNotToPay);
+  if (!snapshot.emails.unread) {
+    return `${count}: ${found}.`;
+  }
+  const closed: boolean = situation.group === "closed";
+  if (snapshot.emails.claimsNonReceipt || snapshot.emails.asksForNewBankDetails || snapshot.emails.asksNotToPay) {
+    return closed
+      ? `${count}: ${found}. Some weren't read, as PayOnce doesn't read emails on a closed payment.`
+      : `${count}: ${found}. Some aren't read yet.`;
+  }
+  return closed ? `${count}, not read: PayOnce doesn't read emails on a closed payment.` : `${count}, not read yet.`;
+}
+
 export function summaryOf(snapshot: InvoiceSnapshot, situation: Situation, headroom: HeadroomLine | null): SummaryBullet[] {
   const bullets: (SummaryBullet | null)[] = [
     happened(snapshot),
@@ -126,13 +143,7 @@ export function summaryOf(snapshot: InvoiceSnapshot, situation: Situation, headr
       ? null
       : {
           lead: "Supplier",
-          text: [
-            `${plural(snapshot.emails.count, "email", "emails")}: ${summarise(
-              snapshot.emails.claimsNonReceipt,
-              snapshot.emails.asksForNewBankDetails,
-              snapshot.emails.asksNotToPay,
-            )}.`,
-          ],
+          text: [emailsText(snapshot, situation)],
           refs: [],
         },
     headroom?.after === null || headroom === null || situation.state !== "needs-approval"

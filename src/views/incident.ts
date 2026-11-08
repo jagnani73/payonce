@@ -268,7 +268,9 @@ function storedFindingsOf(ledger: Ledger, invoiceId: string): StoredFindings | n
   return stored === undefined ? null : storedObject<StoredFindings>(stored);
 }
 
-function emailsTab(ledger: Ledger, snapshot: InvoiceSnapshot): EmailsTab {
+// closed: PayOnce reads no email on a closed payment, so one delivered after the
+// close stays unread.
+function emailsTab(ledger: Ledger, snapshot: InvoiceSnapshot, closed: boolean): EmailsTab {
   const o: Obligation = snapshot.obligation;
   const emails: SupplierEmail[] = ledger.emails(o.invoiceId);
   const flagged: string[] = o.supplierDomain === "" ? [] : unverifiedSenders(emails, o.supplierDomain);
@@ -288,7 +290,12 @@ function emailsTab(ledger: Ledger, snapshot: InvoiceSnapshot): EmailsTab {
           },
     unread:
       snapshot.emails.count > 0 && snapshot.emails.unread
-        ? { count: unreadCount, text: `${plural(unreadCount, "email has", "emails have")} not been read yet. PayOnce reads ${unreadCount === 1 ? "it" : "them"} at its next check.` }
+        ? {
+            count: unreadCount,
+            text: closed
+              ? `${plural(unreadCount, "email has", "emails have")} not been read. PayOnce doesn't read emails on a closed payment.`
+              : `${plural(unreadCount, "email has", "emails have")} not been read yet. PayOnce reads ${unreadCount === 1 ? "it" : "them"} at its next check.`,
+          }
         : null,
     senderWarnings: flagged.map((sender: string): string => `${sender} does not match ${o.supplierDomain}, the email domain on file`),
     emails: [...emails].reverse().map((email: SupplierEmail): EmailView => {
@@ -457,7 +464,7 @@ export function incidentView(
       summary: summaryOf(snapshot, situation, headroom),
       decision: decisionPanel({ snapshot, situation, request, cautions, outbox, sends, headroom }),
       transfers: transfersOf(snapshot, detail, now),
-      emails: emailsTab(ledger, snapshot),
+      emails: emailsTab(ledger, snapshot, situation.group === "closed"),
       messages: messagesTab(outbox),
       timeline: timelineView(ledger.events(o.invoiceId)),
       audit: invoiceAuditLine(ledger, o.invoiceId, now),
