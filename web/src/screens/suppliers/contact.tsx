@@ -225,7 +225,7 @@ function ConfirmForm(props: { supplierKey: string; proposal: PhoneProposalView; 
           <div class="form-grid">
             {removal ? null : (
               <Field label="The number from your source" error={errors["value"] ?? null}>
-                {(control: ControlProps): JSX.Element => <TextInput control={control} value={value} onInput={setValue} tel placeholder="+1 212 555 …" />}
+                {(control: ControlProps): JSX.Element => <TextInput control={control} value={value} onInput={setValue} tel placeholder="+ country code and number" />}
               </Field>
             )}
             <Field label="Your source" error={errors["source"] ?? null}>
@@ -431,6 +431,16 @@ function ProposeForm(props: { supplierKey: string; first: boolean; onActed: Acti
   const [name, setName] = useNameDraft();
   const [errors, setErrors] = useState<Record<string, string>>({});
   const id: string = useId();
+  // A field's error answers what was typed, so a change to the field clears it.
+  const changed =
+    <T,>(field: string, set: (value: T) => void) =>
+    (value: T): void => {
+      set(value);
+      if (errors[field] !== undefined) {
+        const { [field]: _gone, ...rest } = errors;
+        setErrors(rest);
+      }
+    };
 
   async function propose(): Promise<void> {
     const problems: Record<string, string> = {
@@ -454,7 +464,7 @@ function ProposeForm(props: { supplierKey: string; first: boolean; onActed: Acti
         Type the number from a source you trust. It goes on file only when someone else finds the same number in their own source and confirms it.
       </p>
       <div class="form-grid">
-        <Field label="Phone number" hint="With a + and the country code, such as +1 212 555 0147." error={errors["value"] ?? null}>
+        <Field label="Phone number" hint="With a + and the country code, such as +44 20 7946 0958." error={errors["value"] ?? null}>
           {(control: ControlProps): JSX.Element => <TextInput control={control} value={value} onInput={changed("value", setValue)} tel />}
         </Field>
         <Field label="Where you found it" error={errors["source"] ?? null}>

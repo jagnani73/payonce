@@ -117,7 +117,7 @@ export function typedPhone(typed: string): { value: string; digits: string } {
   if (!/^\+\s*[1-9][0-9 ().-]*$/.test(text) || digits.length < MIN_DIGITS || digits.length > MAX_DIGITS) {
     throw new ContactError(
       "input",
-      "Enter the phone number in international form: a + and the country code, then the number, 8 to 15 digits in all, such as +1 212 555 0147",
+      "Enter the phone number in international form: a + and the country code, then the number, 8 to 15 digits in all, such as +44 20 7946 0958",
     );
   }
   return { value: `+${text.slice(1).replace(/[\s().-]+/g, " ").trim()}`, digits };
