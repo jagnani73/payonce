@@ -21,7 +21,8 @@ A person asks a model why PayOnce did what it did on one invoice. The facts are 
 - The invoice explained is "this invoice". Other invoices in the ledger are `[invoice N]`. People are `[person N]` when the name is in `APPROVERS`, signed one of this invoice's approvals, started it, closed it without paying or recorded a callback on it. Any other name is "a person".
 - `Aliases` numbers people and invoices in order of first appearance, the invoices it looks like a second bill for first. The legend swaps aliases back only in the answer shown.
 - The invoice: state, origin, run and row, amount, wallet, method, due date, who started it, whether a supplier domain and a phone are on file, and whether it was held before paying.
-- Also on the invoice: the escalation reason, who closed it without paying, the latest decision and waiting lines, and the invoices it looks like a second bill for.
+- Also on the invoice: the escalation reason, who closed it without paying, the latest decision line, what it waits on now, and the invoices it looks like a second bill for.
+- What it waits on now (`waitingOn`) is the newest waiting line of an open or escalated invoice. A settled or rejected invoice waits on nothing, so a paid payment does not say it waits for the bank.
 - Each payment: kind, reference, state, status, created time, deadline and whether it passed, failure, whether a resend could fix it, what it took from the wallet, and fee.
 - Also on each payment: the approval it was opened on, the approved rate, whether the rate mismatched, found late, a transfer that does not match the invoice, and when it usually arrives.
 - The emails: `emailEvidence` when its text is in the closed form, counts, the three findings, whether the reader failed, and `readBy` only when it is one of the reader names (`readerNamesFromEnv`), "the email reader" otherwise.
@@ -44,6 +45,7 @@ A person asks a model why PayOnce did what it did on one invoice. The facts are 
 - The last 60 lines go in. Each passes only through `FIXED_LINES` and `LINE_RULES`, checked in order.
 - A rule keeps a line whose slots are all closed patterns, or rewrites it in fixed words with only the safe slots: sender checks, payouts with their payee or reference, the email delivery line, bank lines with Airwallex's message, and waiting lines with `payTo` or the phone.
 - Rules also rewrite signoffs, callbacks, close notes, outage ends, drafts, a run's first line, the refusals of `send`, and the email reader's failure, which names a model only when it is one of the reader names, "a model" otherwise.
+- A payment's first line passes with the person as an alias: "Payment started by [person N]", and on older timelines "Incident opened by [person N]". The close of a payment its first transfer paid, `PAID_FIRST_TIME_LINE`, is a fixed line, beside the two older "Incident closed:" lines.
 - The sandbox bank's lines are `bank` lines, rebuilt from their reference, the status asked for, the HTTP status and a code from `KNOWN_CODES`. The same lines written as `error` lines, and the raw simulator errors older code wrote, are rebuilt the same way.
 - Each rule and fixed line names the sources it may come from, a kind and a topic such as `decision/decision`, `approval/waiting` or `error`, and passes no line from any other source.
 - An error line passes only as the fixed words of a rule for one of PayOnce's own errors (a lock wait, a refused or unfinished send, the reader failing, a refused bank change), or as the stand-in. No rule keeps an error line as written.
@@ -104,6 +106,7 @@ A person asks a model why PayOnce did what it did on one invoice. The facts are 
 ## Why
 
 - The question is fixed so that nothing a person types reaches the model.
+- `waitingOn` goes by the invoice's state, not by whether its waiting line still stands. Another invoice's look can write a warning on this one's timeline, such as a second bill it held, and nothing rewrites this invoice's waiting line after it. So a test for a standing line would drop a wait that has not ended.
 - The facts hold only PayOnce's words, closed patterns and aliases because they leave the machine, possibly to Google's free tier. A supplier name, an email, a typed note or an error text could carry an instruction to the model or a person's details.
 - Each line rule names its sources because an error line holds whatever message the error had and a callback line starts with a typed name. Without the source, either could pass as a decision, a bank line or a closing line.
 - `SAFE_LINE` runs last so that a rule written too loosely fails there, and a template added later with outside text in it fails closed until it gets a rule.

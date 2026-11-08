@@ -238,7 +238,7 @@ The SQLite ledger: its tables, columns, indexes and triggers, its transactions, 
 - `Timelines.appendEvent` and `addRunEventRow` run inside a transaction the caller holds.
 - The store methods that write a line with their change call them: `openObligation`, `adoptPayout`, `releaseRun`, `createDraft`, `markDraft`, `recordRailFailure`, `holdForOutage`, `endOutage`, `proposeContact`, `confirmContact` and `withdrawContact`.
 - Every other line is written after the commit. Apart from hashing the lines already there when a chain starts, no code updates or deletes a line.
-- Every invoice gets its first line in the transaction that writes it: "Incident opened by NAME" from `openObligation`, the found payout's line from `adoptPayout`, each released row's line from `releaseRun`. A run's upload line follows `createRun` with nothing awaited between them.
+- Every invoice gets its first line in the transaction that writes it: "Payment started by NAME" from `openObligation` ("Incident opened by NAME" on lines written before it), the found payout's line from `adoptPayout`, each released row's line from `releaseRun`. A run's upload line follows `createRun` with nothing awaited between them.
 
 ### Hash chains
 

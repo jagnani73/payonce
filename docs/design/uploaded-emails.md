@@ -98,6 +98,7 @@ A person uploads a raw supplier email on the page. PayOnce parses it, matches it
 - When `rewordEscalation` changes nothing, another process changed the invoice since the look read it, so the look opens no request on the old reason and comes again at once.
 - The approval request, the alert and the approve option then name the ask, and a person can still approve paying. Without the finding nothing is added.
 - An invoice with no supplier domain on file (a pay run row without `supplier_domain`, a found payout) flags every sender (`unverifiedSenders`).
+- A payment a person starts on the New payment form takes the record's email domain on file: the domain of the newest invoice to that record that has one (`domainOnFile`). A look-alike sender is then flagged as not matching that domain, and the supplier's own domain is not flagged. A record with no domain on file gives none, so every sender is flagged.
 - An invoice with any email on file before its first payment is held for a person (`EMAILS_BEFORE_PAYMENT_REASON`), pay run rows waiting their turn included.
 - A held invoice reads its emails in `continueHeld` and opens no request until they are read. It looks again a minute later after a reader failure, or at once when another process delivered an email while the others were being read.
 - A held invoice's `HeldPaymentTerms.evidence.emails` carries the evidence, added only when it has emails.
@@ -123,6 +124,7 @@ A person uploads a raw supplier email on the page. PayOnce parses it, matches it
 - Held terms carry email evidence only when the invoice has emails, so other held invoices keep their binding.
 - The evidence counts the emails so that every new email voids an open approval and the approvers look again.
 - With no supplier domain on file every sender is flagged, because there is nothing to check a sender against.
+- A new payment takes the record's domain on file because when every sender is flagged alike, a look-alike domain reads the same as the supplier's own.
 
 ## Edge cases
 
