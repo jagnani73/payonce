@@ -142,9 +142,12 @@ function rankMinor(row: IncidentRow): number {
 }
 
 // By group, urgent first, then the most money, then the oldest, then the number.
+// Closed payments go newest close first; the others by urgency, money and age.
 export function byRank(a: IncidentRow, b: IncidentRow): number {
+  const closed: boolean = a.situation.group === "closed" && b.situation.group === "closed";
   return (
     GROUP_ORDER[a.situation.group] - GROUP_ORDER[b.situation.group] ||
+    (closed ? sinceMs(b.situation.since) - sinceMs(a.situation.since) : 0) ||
     Number(b.situation.urgent) - Number(a.situation.urgent) ||
     rankMinor(b) - rankMinor(a) ||
     sinceMs(a.waitingSince) - sinceMs(b.waitingSince) ||
