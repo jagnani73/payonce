@@ -12,6 +12,7 @@ import {
   type NewObligation,
   type Obligation,
   type RunRow,
+  type ScannedObligation,
   type TransferMethod,
 } from "../store/ledger.js";
 import { capitalise } from "../domain/sentences.js";
@@ -139,9 +140,10 @@ function filled(text: unknown): string | undefined {
 // pay it: Airwallex has no record with bank details, the record's account is in
 // another currency, or it takes other transfer methods. The supplier is named as
 // the record names it: its account name, else the company's, else its nickname.
-// PayOnce keeps no email domain or phone for it yet, so every sender of an email
-// about it is flagged and a callback needs a phone first. It has no floor of its
-// own. Only values in their own patterns go into a problem's words.
+// The record carries no email domain or phone, so the payee has none: recordPayee
+// gives it the domain on file for the record, and a callback needs a phone on
+// file first. It has no floor of its own. Only values in their own patterns go
+// into a problem's words.
 export type PayeeCheck = { ok: true; payee: Payee } | { ok: false; problem: PaymentProblem };
 
 export function checkedPayee(
@@ -179,8 +181,23 @@ export function checkedPayee(
   };
 }
 
+// The email domain on file for a beneficiary record: the newest of its invoices
+// that has one gives it, as a pay run's domain check reads it. Empty when none
+// has, so the sender check flags every sender.
+export function domainOnFile(ledger: Ledger, beneficiaryId: string): string {
+  return (
+    ledger
+      .scannedObligations()
+      .find(
+        (obligation: ScannedObligation): boolean =>
+          obligation.beneficiaryId === beneficiaryId && obligation.supplierDomain !== "",
+      )?.supplierDomain ?? ""
+  );
+}
+
 // Reads the record a person's payment pays, with a GET, and refuses the payment
-// when PayOnce could not pay that record.
+// when PayOnce could not pay that record. The payee takes the record's email
+// domain on file, so the sender check compares senders with it.
 export async function recordPayee(engine: Engine, beneficiaryId: string, payment: NewPayment): Promise<Payee> {
   if (!BENEFICIARY_ID_PATTERN.test(beneficiaryId)) {
     throw new PaymentRefusedError([problem("supplierKey", "Pick a beneficiary from the list")]);
@@ -189,7 +206,7 @@ export async function recordPayee(engine: Engine, beneficiaryId: string, payment
   if (!checked.ok) {
     throw new PaymentRefusedError([checked.problem]);
   }
-  return checked.payee;
+  return { ...checked.payee, supplierDomain: domainOnFile(engine.ledger, beneficiaryId) };
 }
 
 // The invoice openPayment writes for this payment to this payee.
