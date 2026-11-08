@@ -62,7 +62,7 @@ This note records what the Airwallex sandbox and its simulator do, found by runn
 - A transfer that converts is left alone, and before its deadline (by the bank deadlines `SandboxBank` is given) the bank says so once.
 - `SandboxBankError` is thrown when the simulator refuses or does not answer a move, when a read the bank needs fails with an `AirwallexError` or `AirwallexUnreachableError`, or when `waitForTransfer` gives up on a transfer still `SCHEDULED` (`TransferWaitError`).
 - Any other error, such as a `TypeError`, is thrown unchanged, with its own message and stack trace.
-- A `SandboxBankError` is a `LineError` of kind `bank`. Its `what` is PayOnce's words: the simulator did not move transfer REF to a status this time, the bank could not read the transfer, the transfer stayed `SCHEDULED`, or the simulator does not move a transfer that converts.
+- A `SandboxBankError` is a `LineError` of kind `sandbox`, so its line never reads as one from the bank. Lines it wrote before that kind existed are kind `bank` and stay that way. Its `what` is PayOnce's words: the simulator did not move transfer REF to a status this time, the bank could not read the transfer, the transfer stayed `SCHEDULED`, or the simulator does not move a transfer that converts.
 - The `what` gives the answer's HTTP status, and an error code only in the form `FAILURE_CODE_PATTERN` allows (`^[A-Za-z0-9_]{1,40}$`). A reference is named only when it matches `REFERENCE_PATTERN`.
 - The error's message adds `SANDBOX_BANK_AFTER` (PayOnce keeps reading the transfer, and a person hears about it if the bank has neither paid nor failed it by its deadline). Its `detail` is the error it came from.
 - `pnpm recover`, which stops when its scripted run's bank fails, writes `what` with `SANDBOX_BANK_STOPPED` instead and prints its stopped guidance. Its `SandboxBank` writes a failure it hears through the bank hook with `SANDBOX_BANK_RECOVER`.
@@ -113,6 +113,7 @@ This note records what the Airwallex sandbox and its simulator do, found by runn
 - Transfer notifications are off so Airwallex does not email the account owner for every transfer.
 - `expectOriginal` lives in memory, while a pay run row's outcome is in the ledger, so a run row's outcome survives a restart and works in any process.
 - A `SandboxBankError` is not PayOnce failing: in the sandbox the simulator stands in for the bank, so the payment is followed as any other.
+- Its lines have a kind of their own because, as `bank` lines, a simulator refusal such as "did not move transfer REF to PAID this time: it answered 500 operation_failed" sat among the real bank lines of a payment that was then paid, and read like a bank error. The page could only tell them apart by their text.
 
 ## Edge cases
 

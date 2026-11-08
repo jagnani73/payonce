@@ -660,6 +660,7 @@ const PAYMENT: Source = "payment";
 const PAYMENT_WAITING: Source = "payment/waiting";
 const WARNING: Source = "warning";
 const BANK: Source = "bank";
+const SANDBOX: Source = "sandbox";
 // An error line passes only through a rule that gives PayOnce's own words for
 // one of PayOnce's own errors. None of those rules keeps the line as written.
 const ERROR: Source = "error";
@@ -1167,30 +1168,30 @@ const LINE_RULES: readonly LineRule[] = [
     },
   ),
 
-  // The sandbox bank's lines, which are bank lines, and the same lines as error
-  // lines, as older code wrote them, with Airwallex's raw simulator errors. Each is
-  // rebuilt from its bank reference, the status asked for, the answer's HTTP
-  // status and a code PayOnce passes on, and its fixed ending.
+  // The sandbox bank's lines, which are sandbox lines, and the same lines as bank
+  // and error lines, as older code wrote them, with Airwallex's raw simulator
+  // errors. Each is rebuilt from its bank reference, the status asked for, the
+  // answer's HTTP status and a code PayOnce passes on, and its fixed ending.
   rule(
-    [BANK, ERROR],
+    [SANDBOX, BANK, ERROR],
     `The sandbox's simulator, which stands in for the bank, did not move (${SANDBOX_TRANSFER}) to (${SIMULATED}) this time(${SANDBOX_ANSWER})?\\. ${SANDBOX_END}`,
     (match: RegExpExecArray): string =>
       `The sandbox's simulator, which stands in for the bank, did not move ${sandboxTransfer(match[1])} to ${match[2] ?? ""} this time${sandboxAnswer(match[3], match[4], match[5])}. ${sandboxEnd(match[6])}`,
   ),
   rule(
-    [BANK, ERROR],
+    [SANDBOX, BANK, ERROR],
     `The sandbox bank could not read (${SANDBOX_TRANSFER}) from Airwallex this time(${SANDBOX_ANSWER})?, so the simulator, which stands in for the bank, did not move it\\. ${SANDBOX_END}`,
     (match: RegExpExecArray): string =>
       `The sandbox bank could not read ${sandboxTransfer(match[1])} from Airwallex this time${sandboxAnswer(match[2], match[3], match[4])}, so the simulator, which stands in for the bank, did not move it. ${sandboxEnd(match[5])}`,
   ),
   rule(
-    [BANK, ERROR],
+    [SANDBOX, BANK, ERROR],
     `(?:Transfer (${REF})|The transfer) stayed SCHEDULED in Airwallex for longer than the sandbox bank waits, so the simulator, which stands in for the bank, did not move it this time\\. ${SANDBOX_END}`,
     (match: RegExpExecArray): string =>
       `${match[1] === undefined ? "The transfer" : `Transfer ${match[1]}`} stayed SCHEDULED in Airwallex for longer than the sandbox bank waits, so the simulator, which stands in for the bank, did not move it this time. ${sandboxEnd(match[2])}`,
   ),
   rule(
-    [BANK, ERROR],
+    [SANDBOX, BANK, ERROR],
     `The sandbox's simulator, which stands in for the bank, does not move a transfer that converts currency, so nothing here pays or fails (${REF}|it), and it stays in PROCESSING\\. (?:${SANDBOX_END}|(${escapeRegExp(OLD_CONVERTS_END)}))`,
     (match: RegExpExecArray): string =>
       `The sandbox's simulator, which stands in for the bank, does not move a transfer that converts currency, so nothing here pays or fails ${match[1] ?? "it"}, and it stays in PROCESSING. ${match[3] === undefined ? sandboxEnd(match[2]) : OLD_CONVERTS_END}`,

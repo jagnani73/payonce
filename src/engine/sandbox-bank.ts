@@ -41,8 +41,9 @@ type BankStep = "read" | "wait" | "converts" | SimulatedStatus;
 // simulator stands in for the bank, so a refusal of its own is not PayOnce
 // failing, and the payment is followed as any other. what is PayOnce's words for
 // it, with the answer's status and code only in the forms they take, and the
-// message adds how the server follows the transfer. It is a bank line on the
-// timeline, and detail is the error as it came, for the console.
+// message adds how the server follows the transfer. It is a sandbox line on the
+// timeline, kept apart from the bank's own lines, and detail is the error as it
+// came, for the console.
 export class SandboxBankError extends LineError {
   readonly what: string;
 
@@ -62,7 +63,7 @@ export class SandboxBankError extends LineError {
           : step === "converts"
             ? `The sandbox's simulator, which stands in for the bank, does not move a transfer that converts currency, so nothing here pays or fails ${reference !== null && REFERENCE_PATTERN.test(reference) ? reference : "it"}, and it stays in PROCESSING`
             : `The sandbox's simulator, which stands in for the bank, did not move ${named} to ${step} this time${answered}`;
-    super(`${what}. ${SANDBOX_BANK_AFTER}`, "bank", error === null ? what : error.message);
+    super(`${what}. ${SANDBOX_BANK_AFTER}`, "sandbox", error === null ? what : error.message);
     this.name = "SandboxBankError";
     this.what = what;
   }

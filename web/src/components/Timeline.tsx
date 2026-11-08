@@ -26,6 +26,7 @@ const FILTER_OF: Partial<Record<EventKind, Filter>> = {
   bank: "bank",
   payment: "bank",
   outage: "bank",
+  sandbox: "bank",
   email: "emails",
   approval: "approvals",
   callback: "approvals",
@@ -47,6 +48,7 @@ const ICONS: Record<EventKind, IconName> = {
   error: "error",
   outbox: "message",
   outage: "outage",
+  sandbox: "flask",
 };
 
 type Item = { line: TimelineLine } | { folded: number; key: string };

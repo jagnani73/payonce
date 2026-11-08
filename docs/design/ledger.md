@@ -230,6 +230,7 @@ The SQLite ledger: its tables, columns, indexes and triggers, its transactions, 
 ### Timelines
 
 - `events` holds invoice timelines and `run_events` run timelines. A line with a `topic` says how things stand. A line with none records an event.
+- A line's `kind` is an `EventKind` (`store/timeline.ts`, and the same list in `views/contract.ts`). The column has no CHECK, so a new kind needs no upgrade. A line keeps the kind it was written with, because the kind is part of its hash.
 - Invoice topics are the decision, what the invoice waits on, an approval, the cost of a replacement, a bank-details mismatch, a `last-paid`, `floor` or `second-bill` warning, a held `retry`, and a draft (`outbox:<id>`). Run topics include `row:<line>` and `release`.
 - `note` and `runNote` skip a line that repeats the line before it, and a standing line when the timeline's last line on its topic says the same and nothing has happened since (`lineWanted`, `stillSays`).
 - On an escalated invoice the decision line says when the policy would now replace or close and why it does not.

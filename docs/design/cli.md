@@ -39,7 +39,7 @@ The terminal commands, one file per command in `src/surfaces/cli/`: how each loa
 - `pnpm recover` refuses an invoice from a pay run that has not sent its original: the server sends it, in the run's turn.
 - A new incident's first payment waits for an approval, so `pnpm recover` sends nothing at first. It says the payment waits for approval, that `pnpm approve INVOICE` shows the request and who can sign it, and that `pnpm recover OUTCOME INVOICE EMAILS` sends it and plays the scenario once it is approved. With no request open, it says approvals are refused or too few approvers could sign, and to fix `APPROVERS`.
 - Run on an invoice that waits only for that approval, `pnpm recover` has the agent look. Once approved, that look sends the original, and the command plays the scenario and waits for it to settle.
-- When `pnpm recover`'s scripted run's sandbox bank fails with a `SandboxBankError`, it prints the bank's words, says PayOnce stopped and how to look at the invoice again, and writes a `bank` line ending with `SANDBOX_BANK_STOPPED`.
+- When `pnpm recover`'s scripted run's sandbox bank fails with a `SandboxBankError`, it prints the bank's words, says PayOnce stopped and how to look at the invoice again, and writes a `sandbox` line ending with `SANDBOX_BANK_STOPPED`.
 - When `untilAtRest` gives up in `pnpm recover`, as when the bank could not move a replacement, it prints the same guidance and exits 1.
 - When Airwallex cannot be reached or answers with an error, `pnpm recover` says nothing was sent or stored, with `airwallexAdvice`, before the invoice is stored. After that, it says PayOnce stopped and writes an `error` line.
 
@@ -95,7 +95,7 @@ The terminal commands, one file per command in `src/surfaces/cli/`: how each loa
 
 ### Errors as timeline lines
 - `LineError` (`line-error.ts`) is an error whose message is a timeline line in PayOnce's words, with a kind of its own, and whose `detail` is the error it came from.
-- `noteError` (`src/engine/lines.ts`) writes a `LineError` as a line of its kind and prints only its `detail` to the console. The sandbox bank's `SandboxBankError` is a `LineError` of kind `bank`.
+- `noteError` (`src/engine/lines.ts`) writes a `LineError` as a line of its kind and prints only its `detail` to the console. The sandbox bank's `SandboxBankError` is a `LineError` of kind `sandbox`.
 
 ## Why
 

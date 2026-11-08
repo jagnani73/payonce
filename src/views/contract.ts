@@ -537,7 +537,8 @@ export type EventKind =
   | "error"
   | "outbox"
   | "outage"
-  | "contact";
+  | "contact"
+  | "sandbox";
 
 export interface TimelineLine {
   id: number;
@@ -551,7 +552,8 @@ export interface TimelineLine {
   // and notes people typed, so the page treats it as Theirs.
   text: Theirs;
   topic: string | null;
-  // Collapsed by default: errors, superseded standing lines, arrival and cost lines.
+  // Collapsed by default: errors, the sandbox bank's lines, superseded standing
+  // lines, arrival and cost lines.
   system: boolean;
   // Identical consecutive error lines folded into this one.
   repeat: { count: number; firstAt: Iso; lastAt: Iso } | null;

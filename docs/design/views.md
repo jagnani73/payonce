@@ -109,6 +109,7 @@ A view is a typed, read-only answer built from the ledger for the page, the MCP 
 - PayOnce reads no email on a closed payment, so an email on file there that was never read says so on the Emails tab and in "What happened", and is never "nothing relevant found".
 - The summary's "PayOnce did" for a payment that waited only for the routine approval says the first transfer went out once its signers approved it, naming them.
 - Home's "Paid in the last 7 days" counts payments closed as paid in the period, and its line under it counts those of them paid the first time, both from the metrics' closed table, so the two count the same payments. Reports' "Paid the first time" tile counts first transfers instead.
+- A timeline line of kind `sandbox`, the sandbox bank's own words about the simulator, is a system line labelled "Sandbox", so the page folds it and the CLI's `putTimeline` leaves it out. The sandbox bank's lines written as `bank` before that kind existed stay bank lines.
 - A timeline line of kind `approval` is never a system line, so a signoff the final approval came after stays in view. The page never folds a warning, a decision or an approval line, and `pnpm payrun show` prints the same lines.
 - The closed group of `IncidentsView` lists the newest close first.
 - A transfer the bank paid carries `paidAt`, the time the ledger recorded it paid.
