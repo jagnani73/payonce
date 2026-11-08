@@ -522,6 +522,23 @@
   font-size: 13px;
 }
 
+.pay-box__cautions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.pay-box__caution-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: inherit;
+  font-weight: 500;
+  text-decoration: underline;
+}
+
 .pay-box__link {
   display: inline-flex;
   align-items: center;

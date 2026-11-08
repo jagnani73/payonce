@@ -366,7 +366,7 @@ export const INCIDENT_FIELDS = {
   ...under("supplier.phone.onFile", PHONE_ON_FILE),
   "supplier.phone.pending.proposedBy": "person",
   "supplier.emailDomain": "supplier",
-  "supplier.cautions.top": "plain",
+  "supplier.cautions[].text": "plain",
   ...under("related.secondBills[]", DUPLICATE),
   "related.outage.rail": RAIL,
 } as const satisfies Fields<IncidentView>;

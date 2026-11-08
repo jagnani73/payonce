@@ -197,7 +197,9 @@ export interface SupplierBrief {
   phoneEnding: string | null;
   phone: IncidentPhoneView;
   emailDomain: Theirs | null;
-  cautions: { count: number; top: string | null };
+  // The supplier record's cautions, the infos left out, each naming an account
+  // by its ending.
+  cautions: { code: string; text: string }[];
 }
 
 // The phone on file as the callback and approval cards show it: where it came

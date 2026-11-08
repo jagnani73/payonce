@@ -387,7 +387,7 @@ function supplierBrief(
     phoneEnding: lastFour(o.supplierPhone),
     phone: incidentPhone(ledger, detail, requestCallback(snapshot), now),
     emailDomain: o.supplierDomain === "" ? null : o.supplierDomain,
-    cautions: { count: cautions.length, top: cautions[0]?.text ?? null },
+    cautions: cautions.map((caution: SupplierCaution): { code: string; text: string } => ({ code: caution.code, text: caution.text })),
   };
 }
 
@@ -447,7 +447,7 @@ export function incidentView(
     );
     const wallet: BoardMoney | undefined = entry?.atRisk.find((item: BoardMoney): boolean => item.currency === debitCurrency(o));
     const key: string | null = supplierKeyOf(o.beneficiaryId);
-    const detail: SupplierDetail | null = key === null ? null : supplierDetail(ledger, key, deadlines, now);
+    const detail: SupplierDetail | null = key === null ? null : supplierDetail(ledger, key, deadlines, now, "ending");
     return {
       view: "incident",
       generatedAt: new Date(now).toISOString(),

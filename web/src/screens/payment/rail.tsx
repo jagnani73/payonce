@@ -48,10 +48,21 @@ function Supplier(props: { supplier: SupplierBrief }): JSX.Element {
           <Theirs text={s.emailDomain} />
         </p>
       )}
-      {s.cautions.count === 0 ? null : (
+      {s.cautions.length === 0 ? null : (
         <div class="pay-box__caution">
-          <strong>{`${count(s.cautions.count, "caution")}.`}</strong>
-          {s.cautions.top === null ? null : ` ${s.cautions.top}`}
+          <strong>{`${count(s.cautions.length, "caution")} on the supplier record`}</strong>
+          <ul class="pay-box__cautions">
+            {s.cautions.map(
+              (caution: SupplierBrief["cautions"][number]): JSX.Element => (
+                <li key={caution.code}>{caution.text}</li>
+              ),
+            )}
+          </ul>
+          {s.key === null ? null : (
+            <a class="pay-box__caution-link" href={supplierHref(s.key)}>
+              Open the supplier record
+            </a>
+          )}
         </div>
       )}
       {s.key === null ? null : (

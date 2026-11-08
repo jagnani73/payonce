@@ -151,9 +151,14 @@ const CAUTIONS: Record<CautionCode, CautionKind> = {
 };
 const CAUTION_ORDER: CautionCode[] = Object.keys(CAUTIONS) as CautionCode[];
 
-// A caution's text is PayOnce's fixed words, with at most an account label, a
-// code word from FAILURE_WORDS, a count, or a rail in its own form. Names,
-// domains, endings, references and invoice numbers go in the arrays.
+// How a caution's text names an account: by its label (A, B), which only the
+// record page shows beside its accounts, or by its ending, as a payment page does.
+export type AccountNaming = "label" | "ending";
+
+// A caution's text is PayOnce's fixed words, with at most an account label (or,
+// off the record page, the account's ending), a code word from FAILURE_WORDS, a
+// count, or a rail in its own form. Names, domains, references and invoice
+// numbers go in the arrays.
 export interface Caution {
   code: CautionCode;
   level: CautionLevel;
@@ -1268,6 +1273,7 @@ function cautionsOf(
   owners: Owners,
   situations: Map<string, Situation>,
   now: number,
+  naming: AccountNaming,
 ): Caution[] {
   const found: CautionDraft[] = [];
   const openOnes: SupplierObligation[] = facts.obligations.filter(open);
@@ -1293,6 +1299,14 @@ function cautionsOf(
   const label = (key: string | undefined | null): string[] => {
     const value: string | undefined = key === undefined || key === null ? undefined : accounts.labelOf.get(key);
     return value === undefined ? [] : [value];
+  };
+  // "account A" on the record page, "the account ending 6789" elsewhere.
+  const accountWords = (key: string | undefined | null): string => {
+    if (naming === "label") {
+      return `account ${label(key)[0] ?? "on file"}`;
+    }
+    const ending: string | null = accounts.views.find((view: AccountView): boolean => view.accountKey === key)?.ending ?? null;
+    return ending === null ? "the account on file" : `the account ending ${ending}`;
   };
   const { lastPaid, unchecked, stored, latestApplied, appliedKey } = accounts;
 
@@ -1333,7 +1347,7 @@ function cautionsOf(
     // When it was recorded is since, which the page shows in the viewer's zone.
     found.push({
       code: "callback-verified",
-      text: `A callback verified account ${shown[0] ?? "on file"}${view?.ending === null || view === undefined ? "" : `, ending ${view.ending}`}. Paying a held invoice or a pay run row to that account needs two approvers, and nobody who recorded a callback for it may approve the payment.`,
+      text: `A callback verified ${accountWords(appliedKey)}${naming === "ending" || view?.ending === null || view === undefined ? "" : `, ending ${view.ending}`}. Paying a held invoice or a pay run row to that account needs two approvers, and nobody who recorded a callback for it may approve the payment.`,
       invoices: latestApplied === undefined ? [] : [latestApplied.invoiceId],
       accounts: shown,
       since: iso(latestApplied?.recordedAt ?? null),
@@ -1376,12 +1390,18 @@ function cautionsOf(
   ].filter((id: string): boolean => SUPPLIER_KEY_PATTERN.test(id));
   if (sharedKeys.length > 0) {
     const labels: string[] = shared.map((view: AccountView): string => view.label);
+    const endings: string[] = shared.flatMap((view: AccountView): string[] => (view.ending === null ? [] : [view.ending]));
+    const names: string[] = naming === "label" ? labels : endings;
+    const subject: string =
+      naming === "label"
+        ? `${names.length === 1 ? "Account" : "Accounts"} ${joined(names)}`
+        : `The ${names.length === 1 ? "account" : "accounts"} ending ${joined(names)}`;
     found.push({
       code: "shared-account",
       text:
-        labels.length === 0
+        names.length === 0
           ? "An account this record paid is also on another supplier record. PayOnce treats the two as separate suppliers: a callback or a payment on one does not count for the other."
-          : `${labels.length === 1 ? "Account" : "Accounts"} ${joined(labels)} ${labels.length === 1 ? "is" : "are"} also on another supplier record. PayOnce treats the two as separate suppliers: a callback or a payment on one does not count for the other.`,
+          : `${subject} ${names.length === 1 ? "is" : "are"} also on another supplier record. PayOnce treats the two as separate suppliers: a callback or a payment on one does not count for the other.`,
       accounts: labels,
       keys: sharedKeys.sort(),
     });
@@ -1401,7 +1421,7 @@ function cautionsOf(
     if (latest !== undefined) {
       found.push({
         code: "account-failure",
-        text: `A payment to account ${label(key)[0] ?? "on file"} failed in the last 30 days with an account-level code (${wordsFor(FAILURE_WORDS, latest.failureCode) ?? "another code"}). The account may be closed or wrong.`,
+        text: `A payment to ${accountWords(key)} failed in the last 30 days with an account-level code (${wordsFor(FAILURE_WORDS, latest.failureCode) ?? "another code"}). The account may be closed or wrong.`,
         invoices: [...new Set<string>(failed.map((attempt: SupplierAttempt): string => attempt.invoiceId))],
         accounts: label(key),
         since: earliest(failed.map(sentAtOf)),
@@ -2160,7 +2180,7 @@ function summaryOf(
   now: number,
 ): Ranked {
   const accounts: Accounts = accountsOf(ledger, facts, owners);
-  const cautions: Caution[] = cautionsOf(ledger, facts, accounts, owners, situations, now);
+  const cautions: Caution[] = cautionsOf(ledger, facts, accounts, owners, situations, now, "label");
   const groups: Record<BoardGroup, number> = { person: 0, deadline: 0, bank: 0, open: 0 };
   for (const entry of entries) {
     groups[entry.group] += 1;
@@ -2279,19 +2299,22 @@ function listOfRecords(ledger: Ledger, deadlines: BankDeadlineMinutes, now: numb
 // One supplier record, or null when the key breaks the pattern or nothing in the
 // ledger names it. The board's entries are built for its own invoices and pay
 // rows only. A view, so it reads stored JSON soft.
+// naming: how the cautions' text names an account, by its label on the record
+// page and by its ending on a payment page.
 export function supplierDetail(
   ledger: Ledger,
   key: string,
   deadlines: BankDeadlineMinutes,
   now: number = Date.now(),
+  naming: AccountNaming = "label",
 ): SupplierDetail | null {
   if (!SUPPLIER_KEY_PATTERN.test(key)) {
     return null;
   }
-  return readingSoft((): SupplierDetail | null => detailOf(ledger, key, deadlines, now));
+  return readingSoft((): SupplierDetail | null => detailOf(ledger, key, deadlines, now, naming));
 }
 
-function detailOf(ledger: Ledger, key: string, deadlines: BankDeadlineMinutes, now: number): SupplierDetail | null {
+function detailOf(ledger: Ledger, key: string, deadlines: BankDeadlineMinutes, now: number, naming: AccountNaming): SupplierDetail | null {
   return ledger.readSnapshot((): SupplierDetail | null => {
     const read: SupplierRead = ledger.supplierRead(key);
     const facts: RecordFacts | undefined = recordsOf(read).get(key);
@@ -2384,6 +2407,7 @@ function detailOf(ledger: Ledger, key: string, deadlines: BankDeadlineMinutes, n
           now,
         ),
         now,
+        naming,
       ),
       money: board?.totals ?? [],
       accounts: accounts.views,
