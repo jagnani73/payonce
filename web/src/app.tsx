@@ -1,6 +1,7 @@
 import type { JSX } from "preact";
-import { useLayoutEffect, useRef } from "preact/hooks";
+import { useEffect, useLayoutEffect, useRef } from "preact/hooks";
 import { Toasts } from "./components/Notice";
+import { onActed } from "./notices";
 import { usePoll, type Polled } from "./poll";
 import { useRoute, type Route, type Screen, type ScreenProps } from "./router";
 import { Home } from "./screens/home";
@@ -49,6 +50,8 @@ function screenKey(route: Route): string {
 export function App(): JSX.Element {
   const route: Route = useRoute();
   const status: Polled<StatusView> = usePoll<StatusView>("/api/status", (): number => STATUS_MS);
+  // An action can change what the top bar counts, such as the inbox badge.
+  useEffect((): (() => void) => onActed((): void => status.refresh()), [status.refresh]);
   const under = useRef<Route>(HOME);
   if (route.screen !== "sandbox") {
     under.current = route;

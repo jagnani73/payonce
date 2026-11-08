@@ -15,6 +15,15 @@ const MAX_SHOWN: number = 3;
 let toasts: Toast[] = [];
 let nextId: number = 1;
 const listeners: Set<(toasts: Toast[]) => void> = new Set();
+const acted: Set<() => void> = new Set();
+
+// Told after every action's notice, as the shell's status reads again then.
+export function onActed(listener: () => void): () => void {
+  acted.add(listener);
+  return (): void => {
+    acted.delete(listener);
+  };
+}
 
 function publish(next: Toast[]): void {
   toasts = next;
@@ -32,6 +41,9 @@ export function notify(notice: Notice): void {
   const toast: Toast = { id: nextId, tone: notice.tone, text: cleanLine(notice.text) };
   nextId += 1;
   publish([...toasts, toast].slice(-MAX_SHOWN));
+  for (const listener of acted) {
+    listener();
+  }
   if (notice.tone !== "warning") {
     window.setTimeout((): void => dismiss(toast.id), SHOWN_MS);
   }
