@@ -1,4 +1,4 @@
-import type { ApprovalTerms, FxTerms, LastQuote, RunTerms } from "../domain/approval.js";
+import { bindingOf, type ApprovalTerms, type FxTerms, type LastQuote, type RunTerms } from "../domain/approval.js";
 import type { ArrivalTerms } from "../domain/arrival.js";
 import type { EmailAttachment, EmailFindings, SupplierEmail } from "../domain/emails.js";
 import type { Approval, RunApproval } from "./approvals.js";
@@ -241,14 +241,25 @@ export function emailsOnFile(invoiceId: string): string {
   return `the emails on file for ${invoiceId}`;
 }
 
-// The terms a request was opened on, read strict wherever it is read.
-export function requestTerms(approval: Pick<Approval, "id" | "invoiceId" | "terms">): ApprovalTerms {
-  return checkedObject(approval.terms, isApprovalTerms, termsOnFile(approval));
+// Terms in their shape that still hash to the binding the approvers signed.
+// Terms that no longer do were changed outside PayOnce after the request opened,
+// so they read as terms PayOnce cannot read, and nothing is spent on them.
+function boundTo<T extends ApprovalTerms | RunTerms>(
+  binding: string,
+  shape: (terms: unknown) => terms is T,
+): (terms: unknown) => terms is T {
+  return (terms: unknown): terms is T => shape(terms) && bindingOf(terms) === binding;
+}
+
+// The terms a request was opened on, read strict wherever it is read, and only
+// while they hash to the request's binding.
+export function requestTerms(approval: Pick<Approval, "id" | "invoiceId" | "terms" | "binding">): ApprovalTerms {
+  return checkedObject(approval.terms, boundTo(approval.binding, isApprovalTerms), termsOnFile(approval));
 }
 
 // The terms a pay run's request was opened on, read the same way.
-export function runRequestTerms(approval: Pick<RunApproval, "id" | "runId" | "terms">): RunTerms {
-  return checkedObject(approval.terms, isRunTerms, runTermsOnFile(approval));
+export function runRequestTerms(approval: Pick<RunApproval, "id" | "runId" | "terms" | "binding">): RunTerms {
+  return checkedObject(approval.terms, boundTo(approval.binding, isRunTerms), runTermsOnFile(approval));
 }
 
 // The stored findings, or what stands for them before anything was read. They are

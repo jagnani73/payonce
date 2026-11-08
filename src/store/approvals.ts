@@ -2,6 +2,7 @@ import { LIVE_ATTEMPT, SENT_ATTEMPT, type Attempt, type AttemptStore } from "./a
 import { isUniqueViolation, type Db } from "./db.js";
 import type { Lease } from "./locks.js";
 import { LIVE_OUTSIDE_PAYOUT } from "./payouts.js";
+import { requestTerms, runRequestTerms } from "./stored.js";
 
 export type ApprovalState = "requested" | "approved" | "used" | "void";
 
@@ -335,14 +336,35 @@ export class ApprovalStore {
     this.runRequests = new RequestBook<number, RunApprovalRow, RunApproval>(db, RUN_REQUESTS);
   }
 
+  // An approval is spent only on stored terms that still hash to its binding.
+  // Read under the write lock of the transaction that spends it, so they cannot
+  // change before openAttempt reads their account and quote. Terms that do not
+  // throw StoredShapeError, and the spend rolls back with nothing changed.
+  private requireBound(approvalId: number): void {
+    const approval: Approval | undefined = this.invoiceRequests.byId(approvalId);
+    if (approval !== undefined) {
+      requestTerms(approval);
+    }
+  }
+
+  // The same for a pay run's request, which RunStore.releaseRun spends.
+  requireBoundRun(approvalId: number): void {
+    const approval: RunApproval | undefined = this.runRequests.byId(approvalId);
+    if (approval !== undefined) {
+      runRequestTerms(approval);
+    }
+  }
+
   // Spends the approval to pay a held invoice, hands the invoice back to the
   // agent and opens its original's attempt, in one transaction, so a crash or a
   // failed write cannot leave it open with nothing sent. Undefined, with nothing
   // changed, when the approval is no longer approved or has expired, or the
   // invoice is no longer held: a person closed it, it has sent something, or a
   // payout for it sent outside PayOnce is live. Also when unchanged, run under
-  // the write lock, returns false. The attempt keeps the approval, and the quote
-  // in its terms for a payment from another currency's wallet.
+  // the write lock, returns false. Throws StoredShapeError, with nothing
+  // changed, when its stored terms no longer hash to its binding. The attempt
+  // keeps the approval, and the quote in its terms for a payment from another
+  // currency's wallet.
   releaseFor(
     invoiceId: string,
     approvalId: number,
@@ -354,6 +376,7 @@ export class ApprovalStore {
       if (!unchanged()) {
         return undefined;
       }
+      this.requireBound(approvalId);
       const used: { changes: number | bigint } = this.db
         .prepare(
           `UPDATE approvals SET state = 'used'
@@ -428,9 +451,10 @@ export class ApprovalStore {
   // invoice is no longer escalated, as when a person closed it, a person once
   // closed it without paying, a payout for it sent outside PayOnce is live, or
   // another payment for it is live at the bank.
-  // Also when unchanged, run under the write lock, returns false. The attempt
-  // keeps the approval, and the quote in its terms for a payment from another
-  // currency's wallet.
+  // Also when unchanged, run under the write lock, returns false. Throws
+  // StoredShapeError, with nothing changed, when its stored terms no longer hash
+  // to its binding. The attempt keeps the approval, and the quote in its terms
+  // for a payment from another currency's wallet.
   useApproval(
     invoiceId: string,
     approvalId: number,
@@ -442,6 +466,7 @@ export class ApprovalStore {
       if (!unchanged()) {
         return undefined;
       }
+      this.requireBound(approvalId);
       const result: { changes: number | bigint } = this.db
         .prepare(
           `UPDATE approvals SET state = 'used'

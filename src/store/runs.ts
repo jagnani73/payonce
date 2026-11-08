@@ -538,7 +538,9 @@ export class RunStore {
   // approved or has expired, or the run is no longer waiting. Throws
   // LeaseLostError unless leases still hold the lock of every currency the rows
   // pay, and RailOutageError, with nothing changed, when any row pays on a rail
-  // with an active outage, so the whole run waits with its approval.
+  // with an active outage, so the whole run waits with its approval. Throws
+  // StoredShapeError, with nothing changed, when the request's stored terms no
+  // longer hash to its binding.
   releaseRun(
     runId: number,
     approvalId: number,
@@ -561,6 +563,7 @@ export class RunStore {
           throw new RailOutageError(outage, "run");
         }
       }
+      this.approvals.requireBoundRun(approvalId);
       const now: string = new Date().toISOString();
       // Read under the write lock, so nothing can change between this and the
       // updates.
