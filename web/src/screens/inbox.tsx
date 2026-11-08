@@ -164,6 +164,7 @@ export function Inbox(props: ScreenProps): JSX.Element {
       </div>
       {uploading ? (
         <UploadDialog
+          forInvoice={preferred}
           limits={list?.limits ?? null}
           onClose={(): void => setUploading(false)}
           onUploaded={(id: number): void => {

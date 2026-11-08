@@ -49,7 +49,9 @@ function failureOf(error: ApiError): Failure {
   return { message: error.message, uploadId: error.status === 409 && typeof id === "number" ? id : null };
 }
 
+// forInvoice: the payment the inbox was opened for (#inbox?for=ID).
 export function UploadDialog(props: {
+  forInvoice: string | null;
   limits: InboxListView["limits"] | null;
   onClose: () => void;
   onUploaded: (id: number) => void;
@@ -110,7 +112,10 @@ export function UploadDialog(props: {
   }
 
   return (
-    <Modal title="Upload email" busy={busy} onClose={props.onClose}>
+    <Modal title={props.forInvoice === null ? "Upload email" : `Upload an email for ${props.forInvoice}`} busy={busy} onClose={props.onClose}>
+      {props.forInvoice === null ? null : (
+        <p class="muted">{`It lands in the inbox first. Deliver it to ${props.forInvoice} from there.`}</p>
+      )}
       <Tabs
         label="Upload as"
         tabs={[
