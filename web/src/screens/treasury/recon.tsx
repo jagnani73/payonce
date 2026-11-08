@@ -342,12 +342,24 @@ function MovementList(props: { currency: string; moves: Moves }): JSX.Element {
   );
 }
 
-function WalletCard(props: { wallet: Wallet; breaks: number; moves: Moves | null; onToggle: () => void }): JSX.Element {
+// "no breaks", "1 break needing a person", "2 breaks clearing by themselves" or
+// "3 breaks: 1 needing a person, 2 clearing by themselves", as the breaks above
+// list them.
+function breaksText(breaks: Wallet["breaks"]): string {
+  const total: string = count(breaks.needsPerson + breaks.clearing, "break");
+  const clearing: string = `clearing by ${breaks.clearing === 1 ? "itself" : "themselves"}`;
+  if (breaks.clearing === 0) {
+    return breaks.needsPerson === 0 ? "no breaks" : `${total} needing a person`;
+  }
+  return breaks.needsPerson === 0 ? `${total} ${clearing}` : `${total}: ${breaks.needsPerson} needing a person, ${breaks.clearing} ${clearing}`;
+}
+
+function WalletCard(props: { wallet: Wallet; moves: Moves | null; onToggle: () => void }): JSX.Element {
   const w: Wallet = props.wallet;
   return (
     <article class="recon-wallet">
       <h3 class="recon-wallet__title">{w.currency}</h3>
-      <p>{`${count(w.movements, "movement")} · ${props.breaks === 0 ? "no breaks" : count(props.breaks, "break")}`}</p>
+      <p>{`${count(w.movements, "movement")} · ${breaksText(w.breaks)}`}</p>
       <p class={w.addsUp ? "recon-wallet__status" : "recon-wallet__status recon-wallet__status--check"}>{w.text}</p>
       {w.reserved === null ? null : (
         <p class="muted">
@@ -373,11 +385,6 @@ function Wallets(props: { view: ReconView }): JSX.Element | null {
   }
   const busy: Wallet[] = view.wallets.filter((wallet: Wallet): boolean => !wallet.idle);
   const idle: Wallet[] = view.wallets.filter((wallet: Wallet): boolean => wallet.idle);
-  const breaksIn = (currency: string): number =>
-    view.needsPerson.reduce(
-      (sum: number, group: Group): number => sum + group.items.filter((item: BreakItemView): boolean => item.currency === currency).length,
-      0,
-    );
 
   async function toggle(currency: string): Promise<void> {
     if (moves[currency] !== undefined) {
@@ -405,7 +412,6 @@ function Wallets(props: { view: ReconView }): JSX.Element | null {
               <WalletCard
                 key={wallet.currency}
                 wallet={wallet}
-                breaks={breaksIn(wallet.currency)}
                 moves={moves[wallet.currency] ?? null}
                 onToggle={(): void => void toggle(wallet.currency)}
               />

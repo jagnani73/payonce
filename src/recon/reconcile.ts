@@ -47,6 +47,7 @@ import type {
   ReconStore,
   ReconWrite,
   RefusedLookup,
+  WalletTotal,
   WindowRead,
 } from "../store/recon-store.js";
 import { CURRENCY_PATTERN, REFERENCE_PATTERN, STATUS_PATTERN } from "../domain/patterns.js";
@@ -635,6 +636,28 @@ export interface KindCount {
   count: number;
 }
 
+export interface WalletBreaks {
+  currency: string;
+  needsPerson: number;
+  clearing: number;
+}
+
+// The open breaks in each wallet, those that wait on a person apart from those
+// that clear by themselves, as the page lists them.
+function walletBreaks(totals: WalletTotal[]): WalletBreaks[] {
+  const byCurrency: Map<string, WalletBreaks> = new Map();
+  for (const total of totals) {
+    const entry: WalletBreaks = byCurrency.get(total.currency) ?? { currency: total.currency, needsPerson: 0, clearing: 0 };
+    if (clearsByItself(total.kind)) {
+      entry.clearing += total.count;
+    } else {
+      entry.needsPerson += total.count;
+    }
+    byCurrency.set(total.currency, entry);
+  }
+  return [...byCurrency.values()];
+}
+
 export interface ReconReport {
   built: true;
   startedAt: string;
@@ -649,6 +672,8 @@ export interface ReconReport {
   open: BreakView[];
   openCount: number;
   byKind: KindCount[];
+  // Every open break by wallet, counted in full.
+  byWallet: WalletBreaks[];
   pending: number;
   waiting: WaitingView[];
   explained: BreakView[];
@@ -775,6 +800,7 @@ export function reconReport(ledger: Ledger, runner: ReconRunner | null = null): 
     open: open.map(breakView),
     openCount: totals.reduce((total: number, entry: KindTotal): number => total + entry.count, 0),
     byKind: kindCounts(totals),
+    byWallet: walletBreaks(store.walletTotals(["open"])),
     pending: store.countBreaks(["pending"]),
     waiting: (summary?.waiting ?? []).map(
       (item: WaitingItem): WaitingView => ({ text: waitingText(item), currency: shownCurrency(item.currency), dueAt: item.dueAt }),

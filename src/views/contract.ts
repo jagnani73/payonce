@@ -1240,7 +1240,18 @@ export interface ReconView {
   needsPerson: { kind: BreakKind; label: string; action: string; count: number; items: BreakItemView[] }[];
   clearingByThemselves: { kind: BreakKind; label: string; count: number }[];
   waiting: { text: string; currency: string | null; dueAt: Iso | null }[];
-  wallets: { currency: string; movements: number; addsUp: boolean; endsAtBalance: boolean; reserved: Money | null; idle: boolean; text: string }[];
+  // breaks: the wallet's open breaks, as needsPerson and clearingByThemselves
+  // list them, counted in full.
+  wallets: {
+    currency: string;
+    movements: number;
+    breaks: { needsPerson: number; clearing: number };
+    addsUp: boolean;
+    endsAtBalance: boolean;
+    reserved: Money | null;
+    idle: boolean;
+    text: string;
+  }[];
   explained: BreakItemView[];
   audit: AuditLineView;
   can: { checkNow: Can; explain: Can };

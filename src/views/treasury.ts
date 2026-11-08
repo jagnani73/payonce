@@ -21,6 +21,7 @@ import {
   type ReconReport,
   type ReconRunner,
   type WaitingView,
+  type WalletBreaks,
 } from "../recon/reconcile.js";
 import { WALLET_STATUS_TEXT, type BreakKind, type MovementHow, type WalletSummary } from "../recon/recon-match.js";
 import {
@@ -339,7 +340,10 @@ export function reconView(ledger: Ledger, _settings: Settings, now: number, runn
       report.byKind,
       actions,
     );
-    const breaksIn: Set<string> = new Set(open.map((item: BreakItemView): string => item.currency ?? ""));
+    const breaksIn = (currency: string): ReconView["wallets"][number]["breaks"] => {
+      const found: WalletBreaks | undefined = report.byWallet.find((entry: WalletBreaks): boolean => entry.currency === currency);
+      return { needsPerson: found?.needsPerson ?? 0, clearing: found?.clearing ?? 0 };
+    };
     return {
       view: "reconciliation",
       lastCheck:
@@ -356,15 +360,19 @@ export function reconView(ledger: Ledger, _settings: Settings, now: number, runn
         actions,
       ).map((group: ReconView["needsPerson"][number]) => ({ kind: group.kind, label: group.label, count: group.count })),
       waiting: report.waiting.map((item: WaitingView) => ({ text: item.text, currency: item.currency, dueAt: item.dueAt })),
-      wallets: report.wallets.map((wallet: WalletSummary) => ({
-        currency: wallet.currency,
-        movements: wallet.movements,
-        addsUp: ADDS_UP.has(wallet.status),
-        endsAtBalance: wallet.status === "adds-up",
-        reserved: wallet.holdsMinor === 0 ? null : money(wallet.holdsMinor, wallet.currency),
-        idle: wallet.movements === 0 && !breaksIn.has(wallet.currency),
-        text: `${capitalise(WALLET_STATUS_TEXT[wallet.status] ?? "not checked")}.`,
-      })),
+      wallets: report.wallets.map((wallet: WalletSummary) => {
+        const breaks: ReconView["wallets"][number]["breaks"] = breaksIn(wallet.currency);
+        return {
+          currency: wallet.currency,
+          movements: wallet.movements,
+          breaks,
+          addsUp: ADDS_UP.has(wallet.status),
+          endsAtBalance: wallet.status === "adds-up",
+          reserved: wallet.holdsMinor === 0 ? null : money(wallet.holdsMinor, wallet.currency),
+          idle: wallet.movements === 0 && breaks.needsPerson + breaks.clearing === 0,
+          text: `${capitalise(WALLET_STATUS_TEXT[wallet.status] ?? "not checked")}.`,
+        };
+      }),
       explained: report.explained.map(breakItem),
       audit: {
         lines: report.audit.lines,

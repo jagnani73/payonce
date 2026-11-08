@@ -296,6 +296,10 @@ export interface ReconAlertState {
   newest: number;
 }
 
+export interface WalletTotal extends KindTotal {
+  currency: string;
+}
+
 interface MovementRow {
   id: string;
   currency: string;
@@ -1050,6 +1054,18 @@ export class ReconStore {
         )
         .all(...states) as unknown as KindTotal[]
     ).map((row: KindTotal): KindTotal => ({ kind: row.kind, count: Number(row.count) }));
+  }
+
+  // Breaks in these states by wallet and kind, counted in full.
+  walletTotals(states: BreakState[]): WalletTotal[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT currency, kind, COUNT(*) AS count FROM recon_breaks WHERE state IN (${states.map((): string => "?").join(", ")})
+            GROUP BY currency, kind ORDER BY currency, kind`,
+        )
+        .all(...states) as unknown as WalletTotal[]
+    ).map((row: WalletTotal): WalletTotal => ({ currency: row.currency, kind: row.kind, count: Number(row.count) }));
   }
 
   countBreaks(states: BreakState[]): number {
