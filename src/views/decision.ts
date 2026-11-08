@@ -132,6 +132,9 @@ function options(input: DecisionInput): DecisionOption[] {
   const kind: CloseKind | undefined = closeKindOf(snapshot);
   const found: DecisionOption[] = [];
   const state: string = situation.state;
+  // A replacement to the account the original failed on for an account-level
+  // reason is never the suggested way out: a callback is, where one is offered.
+  const accountFailed: boolean = input.cautions.some((caution: Caution): boolean => caution.code === "same-account-failed");
   if (request !== null && request.state === "waiting") {
     const signed: number = request.signoffs.length;
     const floorClause: boolean = request.terms.reason.clauses.some((clause: { code: string }): boolean => clause.code === "below-floor");
@@ -144,7 +147,7 @@ function options(input: DecisionInput): DecisionOption[] {
         ...(snapshot.outage === null ? [] : [`Outage ${snapshot.outage.outage.id} is active, so the payment waits until someone ends it.`]),
       ],
       can: situation.can.approve,
-      suggested: state === "needs-approval",
+      suggested: state === "needs-approval" && !accountFailed,
       requestId: request.id,
       approvers: request.approvers,
     });
@@ -158,7 +161,7 @@ function options(input: DecisionInput): DecisionOption[] {
         `PayOnce updates the supplier record in Airwallex to the details you confirm${open && request !== null ? `, withdraws request #${request.id}` : ""}, and opens a new request that needs two approvers. You cannot approve it.`,
       ],
       can: situation.can.recordCallback,
-      suggested: state === "needs-callback",
+      suggested: state === "needs-callback" || (accountFailed && state === "needs-approval"),
       phoneEnding: (o.supplierPhone ?? "").replace(/[^0-9]/g, "").slice(-4) || null,
       formPath: `/api/incidents/${encodeURIComponent(o.invoiceId)}/bank-details`,
     });
