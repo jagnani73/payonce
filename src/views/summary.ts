@@ -1,12 +1,12 @@
 import { summarise } from "../domain/emails.js";
 import { keptFailedLive } from "../domain/live.js";
 import { reasonText, routineApproval } from "../domain/reasons.js";
-import type { InvoiceSnapshot, Situation } from "../domain/situation.js";
+import type { InvoiceSnapshot, RequestSnapshot, Situation } from "../domain/situation.js";
 import { timeAt, timed, type Timed, type TimePart } from "../domain/timed.js";
 import type { Attempt, Obligation, OutsidePayout } from "../store/ledger.js";
 import { shownReference } from "../text/printable.js";
 import type { FailureView, HeadroomLine, SummaryBullet } from "./contract.js";
-import { failureView, plural } from "./parts.js";
+import { failureView, listOf, plural } from "./parts.js";
 
 // "What happened", in at most five bullets from ledger fields and the
 // situation, by fixed templates. No model writes any of it.
@@ -83,6 +83,30 @@ function happened(snapshot: InvoiceSnapshot): SummaryBullet | null {
   return null;
 }
 
+// The first transfer PayOnce sent on an approval that was used, with who signed
+// it, for a payment that waited only for the approval every payment a person
+// starts waits for.
+function sentOnApproval(snapshot: InvoiceSnapshot): SummaryBullet | null {
+  if (!routineApproval(snapshot.reason)) {
+    return null;
+  }
+  const sent: Attempt | undefined = snapshot.attempts.find(
+    (attempt: Attempt): boolean => attempt.approvalId !== null && attempt.transferId !== null,
+  );
+  const request: RequestSnapshot | undefined = snapshot.requests.find(
+    (item: RequestSnapshot): boolean => sent !== undefined && item.approval.id === sent.approvalId,
+  );
+  if (sent === undefined || request === undefined) {
+    return null;
+  }
+  const names: string[] = request.approval.signoffs.map((signoff: { approver: string }): string => signoff.approver);
+  return {
+    lead: "PayOnce did",
+    text: [names.length === 0 ? `It sent the ${sent.kind} once a person approved it.` : `It sent the ${sent.kind} once ${listOf(names)} approved it.`],
+    refs: refsOf(sent.reference),
+  };
+}
+
 // The approval every payment a person starts waits for is part of the payment,
 // so it is what PayOnce did only while nothing since says more.
 function payonceDid(snapshot: InvoiceSnapshot): SummaryBullet | null {
@@ -100,6 +124,10 @@ function payonceDid(snapshot: InvoiceSnapshot): SummaryBullet | null {
       : null;
   if (toPerson !== null && !routineApproval(snapshot.reason)) {
     return toPerson;
+  }
+  const approved: SummaryBullet | null = sentOnApproval(snapshot);
+  if (replacement === undefined && approved !== null) {
+    return approved;
   }
   if (replacement !== undefined) {
     return {
