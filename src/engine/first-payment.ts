@@ -1,7 +1,8 @@
 import { getAvailableMinor } from "../airwallex/balances.js";
 import { findBeneficiary, type BeneficiaryRecord } from "../airwallex/beneficiaries.js";
 import type { Transfer, TransferBankDetails } from "../airwallex/transfers.js";
-import { accountKeyOf } from "../domain/approval.js";
+import { accountKeyOf, paymentAmount, type HeldPaymentTerms } from "../domain/approval.js";
+import { signoffsNeeded, type ApprovalPolicy, type SignoffRule } from "../domain/approvers.js";
 import { routeKeyOf } from "../domain/assess.js";
 import { likelyDuplicates, sameNumberForSupplier } from "../domain/duplicates.js";
 import { formatMoney } from "../domain/money.js";
@@ -35,6 +36,7 @@ import { withCurrencyLock } from "./currency-lock.js";
 import { RETRY_FAILED_LOOK_MS, type Engine, type LookOptions, type NextLook } from "./engine.js";
 import { messageOf, note } from "./lines.js";
 import { linkUnseenPayouts } from "./outside.js";
+import { PAID_ONLY_BY_ITSELF } from "./reason-text.js";
 import { deadlineLook, send, waitForBank } from "./send.js";
 
 function waitingForFirst(ledger: Ledger, invoiceId: string): Obligation | undefined {
@@ -218,6 +220,15 @@ function heldForFloor(engine: HoldReads, facts: FirstPaymentFacts): FirstPayment
   return short === null ? null : heldFor(reasonFor("run-row-below-floor"), short);
 }
 
+// A payment a person started waits for someone else's approval before its first
+// transfer. Every other hold is about something more specific, so this one comes
+// last and applies only when none of them does. A pay run row was approved with
+// its run, and a payout found outside PayOnce has no starter.
+function heldForApproval(_engine: HoldReads, facts: FirstPaymentFacts): FirstPaymentHold | null {
+  const obligation: Obligation = facts.obligation;
+  return obligation.startedBy !== null && obligation.runRowId === null ? heldFor(reasonFor("person-started")) : null;
+}
+
 // The holds a first payment meets, in the order they are checked. The first that
 // applies holds it.
 const FIRST_PAYMENT_HOLDS: readonly HoldCheck[] = [
@@ -227,6 +238,7 @@ const FIRST_PAYMENT_HOLDS: readonly HoldCheck[] = [
   heldForEmails,
   heldForExchangeRate,
   heldForFloor,
+  heldForApproval,
 ];
 
 // The hold a first payment meets on these facts, or null when it goes out.
@@ -242,13 +254,51 @@ export function firstPaymentHold(engine: HoldReads, facts: FirstPaymentFacts): F
   return null;
 }
 
+// Two approvers for a payment to a beneficiary PayOnce has never paid, to one it
+// paid only before it kept which account each payment went to, to an account it
+// has not paid this supplier before, by the account its last checked payment
+// kept, or to one PayOnce has paid only by itself, with no person approving any
+// payment to it (paidOnApproval). Null when PayOnce last paid this very account
+// and a person has approved a payment to the beneficiary.
+export function payeeRule(ledger: Ledger, obligation: Obligation, bankDetails: TransferBankDetails): SignoffRule | null {
+  const last: LastPaid | undefined = ledger.lastPaidTransfer(obligation.beneficiaryId);
+  if (last === undefined) {
+    return ledger.lastPaidUnchecked(obligation.beneficiaryId) === undefined
+      ? { needed: 2, why: "PayOnce has never paid this beneficiary" }
+      : { needed: 2, why: "PayOnce paid this supplier before it kept which account each payment went to" };
+  }
+  if (!holdsAccount(last, bankDetails)) {
+    return { needed: 2, why: "it pays an account PayOnce has not paid this supplier before" };
+  }
+  return ledger.paidOnApproval(obligation.beneficiaryId) ? null : { needed: 2, why: PAID_ONLY_BY_ITSELF };
+}
+
+// How many approvers paying a held invoice on these terms needs when none of the
+// invoices it matches was paid to another account: the payee's rule, else the
+// policy's. continueHeld asks it, and the New payment preview asks it on the
+// terms a hold for approval alone would open its request on.
+export function heldPaymentRule(
+  approvals: ApprovalPolicy,
+  ledger: Ledger,
+  obligation: Obligation,
+  bankDetails: TransferBankDetails,
+  terms: HeldPaymentTerms,
+): SignoffRule {
+  return (
+    payeeRule(ledger, obligation, bankDetails) ??
+    signoffsNeeded(approvals, paymentAmount(terms), false, obligation.startedBy)
+  );
+}
+
 // Sends a new invoice's original, unless it looks like a second bill for an
 // invoice the ledger already has, has the number of another invoice to the same
 // supplier, a payout for it sent outside PayOnce may already pay it, or it is
-// paid from another currency's wallet, so a person approves the rate. Then it
-// holds the invoice for a person, sends nothing and returns null. accountKey is
-// the account a pay run approved, and a pay run's row is held too when the
-// record no longer holds it, or when paying it would take cash below the floor.
+// paid from another currency's wallet, so a person approves the rate. A payment
+// a person started, other than a pay run row, waits for someone else's approval
+// even when nothing else holds it. Then it holds the invoice for a person, sends
+// nothing and returns null. accountKey is the account a pay run approved, and a
+// pay run's row is held too when the record no longer holds it, or when paying it
+// would take cash below the floor.
 // Any other first payment is decided on the record as it is read here, and is
 // held when PayOnce last paid this supplier another account, even one a callback
 // verified, or paid it only before it kept which account each payment went to
@@ -339,12 +389,9 @@ export async function startPayment(
         engine.ledger.lookAt(invoiceId, deadlineLook(original, engine.bankDeadlineMinutes));
         return original;
       } catch (error: unknown) {
-        const refused: Attempt | undefined = engine.ledger.attempts(invoiceId).at(-1);
-        if (refused?.state !== "failed" || refused.transferId !== null) {
+        if (!heldIfRefused(engine, first.obligation, error)) {
           throw error;
         }
-        note(engine.ledger, invoiceId, "error", messageOf(error));
-        holdRefused(engine, first.obligation, refused);
         return null;
       }
     });
@@ -389,6 +436,20 @@ function floorBreach(
   return afterMinor >= floorMinor
     ? null
     : `Paying it now would leave ${formatMoney(afterMinor, wallet)}, ${formatMoney(floorMinor - afterMinor, wallet)} below the reserve floor of ${formatMoney(floorMinor, wallet)}`;
+}
+
+// When Airwallex refused the original just sent, so its attempt failed with no
+// transfer, says why and holds the invoice for a person at once (holdRefused),
+// and returns true. Any other failure is the caller's to throw. startPayment asks
+// it of an original sent at once, and releaseHeld of one sent on an approval.
+export function heldIfRefused(engine: Engine, obligation: Obligation, error: unknown): boolean {
+  const refused: Attempt | undefined = engine.ledger.attempts(obligation.invoiceId).at(-1);
+  if (refused?.state !== "failed" || refused.transferId !== null) {
+    return false;
+  }
+  note(engine.ledger, obligation.invoiceId, "error", messageOf(error));
+  holdRefused(engine, obligation, refused);
+  return true;
 }
 
 // Airwallex refused every original the invoice was sent with, so nothing was

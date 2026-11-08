@@ -50,6 +50,7 @@ export type ReasonFamily =
   | "cash"
   | "two-approvers"
   | "exchange-rate"
+  | "approval"
   | "outage"
   | "paid-twice"
   | "other";
@@ -89,6 +90,7 @@ export type ReasonCode =
   | "run-row-below-floor"
   | "run-account-changed"
   | "beneficiary-missing"
+  | "person-started"
   | "second-bill-paid"
   | "second-bill"
   | "same-invoice-number"
@@ -196,6 +198,11 @@ export const RUN_ACCOUNT_CHANGED_REASON: string =
 
 // Why a first payment is held when its beneficiary record is gone from Airwallex.
 export const BENEFICIARY_MISSING_REASON: string = "the beneficiary is no longer in Airwallex";
+
+// Why a payment a person started waits before its first transfer when nothing
+// more specific holds it. Approval terms carry it, so it stays as it is.
+export const PERSON_STARTED_REASON: string =
+  "a person started this payment, so someone else approves it before PayOnce pays it";
 
 const AND: string = ", and ";
 const INVOICE: string = "[A-Za-z0-9-]{1,40}";
@@ -380,6 +387,7 @@ function leadParts(): Part<ReasonCode>[] {
     fixed("run-row-below-floor", CASH_HOLD_REASON),
     fixed("run-account-changed", RUN_ACCOUNT_CHANGED_REASON),
     fixed("beneficiary-missing", BENEFICIARY_MISSING_REASON),
+    fixed("person-started", PERSON_STARTED_REASON),
     secondBillPaidPart("second-bill-paid"),
     {
       code: "second-bill",
@@ -846,6 +854,7 @@ const FAMILIES: Record<ReasonCode, ReasonFamily> = {
   "run-row-below-floor": "cash",
   "run-account-changed": "bank-details",
   "beneficiary-missing": "bank-details",
+  "person-started": "approval",
   "second-bill-paid": "second-bill",
   "second-bill": "second-bill",
   "same-invoice-number": "second-bill",
@@ -896,6 +905,7 @@ const LABELS: Record<ReasonCode | "unrecognised", string> = {
   "run-row-below-floor": "Pay run row below the floor",
   "run-account-changed": "Bank details changed after the run was approved",
   "beneficiary-missing": "Supplier record gone from Airwallex",
+  "person-started": "New payment to approve",
   "second-bill-paid": "Looks like a second bill",
   "second-bill": "Looks like a second bill",
   "same-invoice-number": "Same invoice number as another",

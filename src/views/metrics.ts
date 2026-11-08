@@ -48,6 +48,7 @@ export const REASON_LABELS: Record<ReasonFamily, string> = {
   cash: "Reserve floor or cash",
   "two-approvers": "Large enough to need two approvers",
   "exchange-rate": "Exchange rate to approve or check",
+  approval: "Started by a person and approved before it went out",
   outage: "Rail outage",
   "paid-twice": "May have been paid twice",
   other: "A reason PayOnce does not recognise",

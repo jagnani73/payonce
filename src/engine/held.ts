@@ -1,13 +1,7 @@
 import { findBeneficiary, type BeneficiaryRecord } from "../airwallex/beneficiaries.js";
 import { getTransfer, type Transfer, type TransferBankDetails } from "../airwallex/transfers.js";
-import {
-  accountKeyOf,
-  heldTermsFor,
-  paymentAmount,
-  type DuplicateEvidence,
-  type HeldPaymentTerms,
-} from "../domain/approval.js";
-import { signoffsNeeded, type SignoffRule } from "../domain/approvers.js";
+import { accountKeyOf, heldTermsFor, type DuplicateEvidence, type HeldPaymentTerms } from "../domain/approval.js";
+import type { SignoffRule } from "../domain/approvers.js";
 import { routeKeyOf } from "../domain/assess.js";
 import { namingNotToPay as namingNotToPayText } from "../domain/decide.js";
 import { likelyDuplicates } from "../domain/duplicates.js";
@@ -35,10 +29,11 @@ import { listOf } from "../text/printable.js";
 import { withCurrencyLock } from "./currency-lock.js";
 import { emailsNotRead, readNewEmails } from "./emails.js";
 import { RETRY_FAILED_LOOK_MS, type Engine, type NextLook, type Rate } from "./engine.js";
+import { heldIfRefused, heldPaymentRule } from "./first-payment.js";
 import { note } from "./lines.js";
 import { holdForOutsidePayout, linkUnseenPayouts, syncOutsidePayouts } from "./outside.js";
 import { rateFor } from "./rates.js";
-import { namingNotToPay, PAID_ONLY_BY_ITSELF } from "./reason-text.js";
+import { namingNotToPay } from "./reason-text.js";
 import { awaitApproval, voidIfStale } from "./requests.js";
 import { requireAccount, send, waitForBank } from "./send.js";
 import { arrivalOf } from "./terms.js";
@@ -385,10 +380,9 @@ function heldRule(
       "bank-details",
     );
   }
-  const payee: SignoffRule | null = payeeRule(engine, obligation, bankDetails);
   return elsewhere !== undefined
     ? { needed: 2, why: `it pays a different account from the one ${elsewhere.invoiceId} was sent to` }
-    : (payee ?? signoffsNeeded(engine.approvals, paymentAmount(terms), false, obligation.startedBy));
+    : heldPaymentRule(engine.approvals, engine.ledger, obligation, bankDetails, terms);
 }
 
 // The approval a held invoice is paid on, and what the look read when it matched
@@ -436,30 +430,18 @@ function releaseHeld(engine: Engine, obligation: Obligation, held: Obligation, r
       "approval",
       `Approval by ${approval.approver} matches the current terms, so PayOnce pays the invoice`,
     );
-    const original: Transfer = await send(engine, { ...held, state: "open" }, attempt);
+    let original: Transfer;
+    try {
+      original = await send(engine, { ...held, state: "open" }, attempt);
+    } catch (error: unknown) {
+      // Refused, it goes back to a person, and the next look, at once, asks one.
+      if (!heldIfRefused(engine, obligation, error)) {
+        throw error;
+      }
+      return Date.now();
+    }
     return waitForBank(engine, invoiceId, "original", original);
   });
-}
-
-// Two approvers for a payment to a beneficiary PayOnce has never paid, to one it
-// paid only before it kept which account each payment went to, to an account it
-// has not paid this supplier before, by the account its last checked payment
-// kept, or to one PayOnce has paid only by itself, with no person approving any
-// payment to it (paidOnApproval). Null when PayOnce last paid this very account
-// and a person has approved a payment to the beneficiary.
-function payeeRule(engine: Engine, obligation: Obligation, bankDetails: TransferBankDetails): SignoffRule | null {
-  const last: LastPaid | undefined = engine.ledger.lastPaidTransfer(obligation.beneficiaryId);
-  if (last === undefined) {
-    return engine.ledger.lastPaidUnchecked(obligation.beneficiaryId) === undefined
-      ? { needed: 2, why: "PayOnce has never paid this beneficiary" }
-      : { needed: 2, why: "PayOnce paid this supplier before it kept which account each payment went to" };
-  }
-  if (!holdsAccount(last, bankDetails)) {
-    return { needed: 2, why: "it pays an account PayOnce has not paid this supplier before" };
-  }
-  return engine.ledger.paidOnApproval(obligation.beneficiaryId)
-    ? null
-    : { needed: 2, why: PAID_ONLY_BY_ITSELF };
 }
 
 // A held invoice with nothing a person could approve paying: any open request is
