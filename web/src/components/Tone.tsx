@@ -75,7 +75,7 @@ export function SituationHeader(props: {
         )}
       </div>
       <p class="situation__next">
-        {props.compact === true ? null : <strong>Next: </strong>}
+        {props.compact === true || situation.group === "closed" ? null : <strong>Next: </strong>}
         <Said text={situation.next} />
       </p>
       {blockers.map(
