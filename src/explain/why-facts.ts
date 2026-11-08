@@ -1713,6 +1713,9 @@ export function whyFacts(
       const event: LedgerEvent | undefined = [...events].reverse().find((entry: LedgerEvent): boolean => entry.topic === topic);
       return event === undefined ? null : (builder.line(event) ?? standIn(event.kind));
     };
+    // A closed invoice waits on nothing, whatever its last waiting line said
+    // before the bank paid it or a person closed it.
+    const closed: boolean = obligation.state === "settled" || obligation.state === "rejected";
     const invoice: InvoiceFacts = {
       ref: "this invoice",
       state: obligation.state,
@@ -1734,7 +1737,7 @@ export function whyFacts(
       escalationReason: reason === null ? null : builder.reasonOf(reason),
       closedWithoutPayingBy: obligation.rejectedBy === null ? null : aliases.person(obligation.rejectedBy),
       decisionNow: latestOn("decision"),
-      waitingOn: latestOn("waiting"),
+      waitingOn: closed ? null : latestOn("waiting"),
       looksLike,
     };
 
