@@ -97,9 +97,12 @@ export function keyHash(detailsKey: string): string {
 // adds later included. bank_name is here because Airwallex rewrites it from the
 // routing number when a record is updated (seen on 2026-10-28: "Bank of America"
 // became "Bank of America, NA"), and the routing number, not the name, says
-// where the money goes. A field joins this list only with evidence that it
-// cannot route money, said here.
-export const NOT_ROUTING_FIELDS: ReadonlySet<string> = new Set<string>(["bank_name"]);
+// where the money goes. account_name is here because banks credit the number,
+// not the name: UCC 4A-207(b)(1) lets the beneficiary's bank rely on the number
+// when the two disagree, and PSD2 (Directive 2015/2366) Art. 88(1) deems a
+// payment made to the unique identifier correctly executed. A field joins this
+// list only with evidence that it cannot route money, said here.
+export const NOT_ROUTING_FIELDS: ReadonlySet<string> = new Set<string>(["bank_name", "account_name"]);
 
 // A field as the route compares it: Airwallex may change case or spacing when it
 // stores a value.
@@ -112,7 +115,7 @@ export function routeValue(raw: unknown): string {
 // (knownRoute): no test ever matches it as a route. Change it whenever routeKeyOf
 // or NOT_ROUTING_FIELDS change, and the next open rebuilds the stored keys from
 // the bank details the ledger keeps and clears the rest (Ledger.rebuildRoutes).
-export const ROUTE_SCHEME: string = "r2";
+export const ROUTE_SCHEME: string = "r3";
 
 // A stored routeKey when this scheme built it, or null when it is not known.
 export function knownRoute(key: string | null | undefined): string | null {
@@ -122,9 +125,9 @@ export function knownRoute(key: string | null | undefined): string | null {
 // The key of where money sent to these bank details goes: a hash of every field
 // but NOT_ROUTING_FIELDS, deny by default, in name order, each string read as
 // routeValue reads it. The tests that would otherwise stop a supplier being paid
-// after a bank name changed compare it (see sameBankDetails, Ledger.holdsAccount
-// and verifiedBankChange). An account an approval or a decision pinned is still
-// compared by its full accountKey.
+// after a bank name or an account name changed compare it (see sameBankDetails,
+// Ledger.holdsAccount and verifiedBankChange). An account an approval or a
+// decision pinned is still compared by its full accountKey.
 export function routeKeyOf(details: TransferBankDetails | undefined): string {
   return `${ROUTE_SCHEME}:` + keyHash(
     JSON.stringify(
@@ -157,9 +160,9 @@ export function routeOfDetailsKey(detailsKey: string): string | null {
 }
 
 // True when a new transfer would go to the account the original went to. Every
-// field but NOT_ROUTING_FIELDS counts, so a bank name Airwallex rewrote is not new
-// bank details, and a change to any other field is. The replacement's terms
-// still pin the record's full accountKey.
+// field but NOT_ROUTING_FIELDS counts, so a bank name Airwallex rewrote or a new
+// account name is not new bank details, and a change to any other field is. The
+// replacement's terms still pin the record's full accountKey.
 export function sameBankDetails(
   original: TransferBankDetails | undefined,
   current: TransferBankDetails,
