@@ -1,12 +1,12 @@
 # Sandbox runs: dated checks
 
-These are the runs of PayOnce against the real Airwallex sandbox: real API calls, the sandbox's own simulator playing the bank, and real sandbox transfers. Most other notes in this folder checked one topic's rules on a copy of the ledger with Airwallex stubbed or faked. Nothing below was faked. Each `P261108-...` reference is Airwallex's short reference for a transfer.
+These are the runs of PayOnce against the real Airwallex sandbox. They made real API calls and real sandbox transfers, and the sandbox's own simulator played the bank. Most other notes in this folder checked one topic's rules on a copy of the ledger with Airwallex stubbed or faked, and these runs faked nothing. Each `P261108-...` reference is Airwallex's short reference for a transfer.
 
 ## 8 November 2026: three runs, 17 transfers
 
 All times are UTC. Each run started `pnpm ui` from a clean checkout of main, on an empty ledger, with the approvers and floors [demo.md](../demo.md) gives (`APPROVERS=Yash:50000,Alex:10000,Kim:10000,Sam:4200`, `RESERVE_FLOORS=USD:1000000,EUR:1000000`) and the other approval settings at their defaults. The start-up log of each server read "Webhooks are off. Payments in flight are checked every 3 seconds". Alerts went to a test receiver on 127.0.0.1 (`ALERT_TEST_RECEIVER_URL`), not to Slack. Runs 1 and 2 shared one server and one ledger. Run 3 started again from an empty ledger at a later commit.
 
-Every transfer below was read back from Airwallex by reconciliation, with GETs only, in the status the ledger had for it. Every movement in the USD and EUR wallet history was tied to one of these payments, and each wallet added up to Airwallex's available balance.
+Every transfer in these three runs was read back from Airwallex by reconciliation, with GETs only, in the status the ledger had for it. Every movement in the USD and EUR wallet history was tied to one of these payments, and each wallet added up to Airwallex's available balance.
 
 ### Run 1: dress rehearsal, 06:35 to 06:55 UTC, main at cf7b5c1
 
@@ -22,13 +22,13 @@ What ran: `node scripts/demo-morning.mjs`, then every beat of [demo.md](../demo.
 | INV-843590, 4,000.00 EUR, SWIFT | P261108-IEOTB3D | Failed, 91402 channel timeout. Airwallex kept the 14.03 EUR fee |
 | INV-843590 | P261108-FTR2Q55 | Sent to a person by the floor check, approved, paid |
 
-The sandbox did something new: P261108-WOU3MC3 failed at 06:35 and was never reversed. It stayed `FAILED`, never `CANCELLED`, and its 980.00 USD had still not come back at the last reconciliation check on that ledger, at 07:24. Reconciliation opened a refund-missing break for it. The other failures went from `FAILED` to `CANCELLED` and were reversed within seconds. [design/sandbox-behaviour.md](../design/sandbox-behaviour.md) records this.
+One failed transfer was never reversed. P261108-WOU3MC3 failed at 06:35 and stayed `FAILED`, never `CANCELLED`, and its 980.00 USD had still not come back at the last reconciliation check on that ledger, at 07:24. Reconciliation opened a refund-missing break for it. The other failures went from `FAILED` to `CANCELLED` and were reversed within seconds. [design/sandbox-behaviour.md](../design/sandbox-behaviour.md) records this.
 
 What broke: seven page and alert problems. A reconciliation alert reported that refund as needing a person while the page listed it as clearing by itself. The USD card read "no breaks" beside a movement tagged as a break. A supplier caution named "Account A" and showed one of two accounts. The callback's note field cut off the typed note, a skipped run row showed a tick, and the next check time ignored the timer. After a signoff, Approving as moved to another person's name. All seven were fixed on `fix/rehearsal`, merged at a9fd3a9, with the script matched to what the run showed.
 
 ### Run 2: the rest of the product, 07:00 to 07:25 UTC, same server
 
-What ran: the screens and tools the demo does not show. New payment, with supplier emails uploaded through the Inbox from the supplier's own domain and from a look-alike one, Ask why, Incidents, Settings, Reports and the page at phone width. A second pay run, a change to a supplier's phone on file, Treasury, every MCP tool, and the CLI commands on a copy of the ledger.
+What ran: the screens and tools the demo does not show. On the page, New payment (with supplier emails uploaded through the Inbox from the supplier's own domain and from a look-alike one), Ask why, Incidents, Settings, Reports, and the page at phone width. Then a second pay run, a change to a supplier's phone on file, Treasury, every MCP tool, and the CLI commands on a copy of the ledger.
 
 | Invoice | Transfer | What happened |
 | --- | --- | --- |
@@ -38,7 +38,9 @@ What ran: the screens and tools the demo does not show. New payment, with suppli
 
 A second new payment, INV-486112 for 75.00 EUR, was closed without paying and sent nothing.
 
-What matched: the check at 07:24 found all 10 transfers from runs 1 and 2 in Airwallex with the ledger's statuses, and tied all 16 wallet movements to PayOnce's payments. `pnpm run audit` found 8 invoices, 2 pay runs and reconciliation's chain intact. The receiver got 14 alerts across runs 1 and 2, and none named an approver, an account or a phone number. The two pay run 2 rows went from `SCHEDULED` to `PAID` about a minute after they were sent, and the ledger never saw them in `SENT`.
+What matched: the check at 07:24 found all 10 transfers from runs 1 and 2 in Airwallex with the ledger's statuses, and tied all 16 wallet movements to PayOnce's payments. `pnpm run audit` found 8 invoices, 2 pay runs and reconciliation's chain intact. The receiver got 14 alerts across runs 1 and 2, and none named an approver, an account or a phone number.
+
+The sandbox moved the two pay run 2 rows from `SCHEDULED` to `PAID` about a minute after they were sent, and the ledger never saw them in `SENT`.
 
 What broke, and the fixes:
 

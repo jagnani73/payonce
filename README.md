@@ -1,6 +1,6 @@
 # PayOnce
 
-PayOnce is a payment incident agent for supplier invoices paid through Airwallex. It sends each invoice's transfer and follows it to the bank. When something goes wrong (a failed or stuck payment, a supplier email asking for new bank details, a payout someone sent from the Airwallex web app, a rail outage), it fixes what a fixed policy says is safe and hands the rest to a person, with exact terms to approve or close. It is an entry for the Airwallex Agentic Banking Hackathon 2026, built from starter kit 3 (Payment Ops Incident Commander), and it runs against the Airwallex sandbox only, with no real money.
+PayOnce is a payment incident agent for supplier invoices paid through Airwallex: it sends each invoice's transfer and follows it to the bank. When something goes wrong (a failed or stuck payment, a supplier email asking for new bank details, a payout someone sent from the Airwallex web app, a rail outage), it fixes what a fixed policy says is safe and hands the rest to a person, with exact terms to approve or close. It is an entry for the Airwallex Agentic Banking Hackathon 2026, built from starter kit 3 (Payment Ops Incident Commander), and it runs against the Airwallex sandbox only, with no real money.
 
 Demo video: VIDEO_LINK
 
@@ -334,12 +334,12 @@ pnpm close inv-05002 Yash supplier sent it twice
 - Each topic's rules were checked as they were built, mostly on copies of the ledger with Airwallex stubbed or faked. [docs/verification/](docs/verification/) keeps the dated notes on what was checked and how, as written at the time.
 - During the rebuild of 6 to 8 November, a replay rig kept outside this repository ran about 40 scripted journeys against a fake Airwallex. It recorded everything a person or another program could see: the API's answers, timelines, alerts, CLI output and MCP answers. Each change was compared with the run before it, and merged only when nothing differed or each difference was explained.
 - On 8 November three runs against the real Airwallex sandbox made 17 transfers, and reconciliation found every one in Airwallex with the status the ledger had. [docs/verification/sandbox-runs.md](docs/verification/sandbox-runs.md) lists each transfer, what broke and the commits that fixed it.
-- Two things were never seen working in the sandbox. Airwallex queued every webhook event and delivered none, and the simulator will not move a transfer that converts, so a failed payment from another currency's wallet and its replacement were never run.
+- Two paths were never run end to end in the sandbox: webhook delivery, because Airwallex queued every event and delivered none, and a failed payment from another currency's wallet with its replacement, because the simulator will not move a transfer that converts.
 
 ## Not built yet
 
 - A login. Names are typed, so the approval rules stop mistakes and approving your own incident under your own name, but not someone typing a colleague's name.
-- Real money. PayOnce runs on the sandbox and its simulator. The webhook receiver is built, but in the sandbox Airwallex queued every event and delivered none, so it has never handled a real one.
+- Real money. PayOnce runs on the sandbox and its simulator. The webhook receiver is built, but it has never handled a real event, because Airwallex delivered none in the sandbox.
 - Fetching mail. Emails arrive as uploads only. PayOnce does not open attachments, follow links or check DKIM, SPF or DMARC, which is why bank details change only through a callback.
 - Sending messages. PayOnce drafts messages to the supplier and trace requests to Airwallex, and a person sends them.
 - A floor check on a single incident's first payment. Pay run rows have one.
