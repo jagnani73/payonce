@@ -57,7 +57,7 @@ How PayOnce reads a supplier email into three findings, with a model or with the
 
 ## Why
 
-- The key is `CLAUDE_API_KEY`, not `ANTHROPIC_API_KEY`, because Claude Code reads `ANTHROPIC_API_KEY`, and a key under that name in Yash's shell would switch Claude Code to it.
+- The key is `CLAUDE_API_KEY`, not `ANTHROPIC_API_KEY`, because Claude Code reads `ANTHROPIC_API_KEY`, and a key under that name in your shell would switch Claude Code to it.
 - Claude gets low effort and no `thinking` setting because at low effort the models skipped thinking, and one body then works on both Haiku 5.5 and Sonnet 5.5. Sonnet 5.5 refuses `disabled` and Haiku 5.5 refuses `between_tools`.
 - Neither Claude list should name a model that rejects `effort`, such as Haiku 4.5 or Sonnet 4.5. It answers 400, which counts as a refused request, and the next model is asked.
 - Claude's text blocks are read by type because a thinking block can come first.

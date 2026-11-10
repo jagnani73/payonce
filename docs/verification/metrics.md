@@ -4,7 +4,7 @@ How the rules in [design/metrics.md](../design/metrics.md) were checked, as writ
 
 ## 2026-11-03: the figures, the triggers and the page on ledger copies
 
-Checked on 2026-11-03 on ledger copies in the session scratchpad, with no Airwallex call:
+Checked on 2026-11-03 on ledger copies outside the repository, with no Airwallex call:
 
 - A copy of the real-run ledger seeded with 22 cases (an automatic replacement, a replacement approved after a deadline, duplicates stopped and paid, a request renewed three times, two approvers, an approval voided after signing, paid twice, SWIFT fees kept and not read, a refused create, a never-created attempt, six outages, explained, cleared, pending and unknown breaks, a reopened close, payments exactly at the 7-day edge and a millisecond before it, missing times, a pay run, a payment from another wallet, an unreadable currency, an old reason, a kept transfer and a paid mismatched one): hand-written SQL gave the same figures as `metricsOf` in all three periods at a fixed now.
 - On copies of the main ledger and the 5,000-invoice seed, fees lost since the start equalled the cash panel's `fee-lost` lines, started invoices added up to the invoice count, closed ones to settled plus rejected, and every escalation reason had a code (10 and 19 reasons, none `other`).
@@ -16,7 +16,7 @@ Checked on 2026-11-03 on ledger copies in the session scratchpad, with no Airwal
 
 ## 2026-11-03: after a cold review and a verifier
 
-Checked again on 2026-11-03 after a cold review and a verifier, on ledger copies in the session scratchpad, with no Airwallex call:
+Checked again on 2026-11-03 after a cold review and a verifier, on ledger copies outside the repository, with no Airwallex call:
 
 - A `duplicate_of` that is not JSON made every period throw "malformed JSON" before. All three answer now.
 - Paid more than once on a seeded copy with a paid late transfer, outside payouts with and without an amount (EUR and GBP), a paid mismatched EUR transfer on a USD invoice, and two EUR invoices paid from USD, one whose approval names the extra payment's quote and one whose does not. Before: 1,400,000 EUR over 3 invoices and 160,000 USD over 2. Now: 4 invoices, extra 1,500.00 GBP in 1 payment and 5,377.00 USD in 2, 2 not known, and the mismatched 640.00 EUR on its own line. Hand-written SQL gave the same.

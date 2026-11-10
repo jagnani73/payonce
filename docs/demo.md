@@ -2,7 +2,7 @@
 
 This is the script for the video, which runs about 4 minutes 35 seconds. It tells one morning in an AP team: a pay run went out overnight, four payments failed, PayOnce fixed one, and three things are waiting for a person. Each beat shows guarantees from [invariants.md](invariants.md) at work, with their numbers in brackets. Everything runs against the Airwallex sandbox. A full take makes 7 sandbox transfers.
 
-The voice is Yash's, acting as Alex, one of four names in `APPROVERS`. PayOnce has no login, so the page asks who you are and records that name.
+The narrator acts as Alex, one of four names in `APPROVERS`. PayOnce has no login, so the page asks who you are and records that name.
 
 ## Before recording
 
@@ -189,7 +189,7 @@ On 8 November 2026 a dress rehearsal ran the setup and every beat against the re
 
 On 8 November 2026 `demo-morning.mjs` ran against `feat/approve-new-payments` with Airwallex faked by the replay rig, in real time. Both scripted incidents waited for an approval, the script approved each as Alex and Yash, and the supplier's "payment not received" email arrived while each original was with the bank, as before. The morning ended with Needs you 3, and the test receiver got the same three alerts, none for a held first payment.
 
-On 7 November 2026 the script ran against `feat/page` (8e708cb) with Airwallex faked by the replay rig, in real time, on Chrome at 1566 CSS pixels: the setup script, then every beat as written, the MCP `waiting_for` and `audit` answers, and `pnpm run audit`. No sandbox call was made, so the sandbox times above come from the runs on 6 October and 3 November. Things to know from that run:
+On 7 November 2026 the script ran against `feat/page` (8e708cb) with Airwallex faked by the replay rig, in real time, on Chrome at 1566 CSS pixels: the setup script, then every beat as written, the MCP `waiting_for` and `audit` answers, and `pnpm run audit`. No sandbox call was made in that run. Things to know from it:
 
 - Later commits on `feat/page` fixed five page problems this run found: the Decision panel now moves on after a callback, Approving as moves off a name that has signed, Home lists each payment once with its reason, times have a space before them, and warning lines never fold away.
 - Reports' Second bills closed without paying counts only invoices held as second bills, so it reads 0 although the run skipped one. Paid the first time reads 0%, because every payment this morning failed on purpose. Skip both tiles, and Home's "0% the first time" tile too.

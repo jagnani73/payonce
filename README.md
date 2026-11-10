@@ -237,13 +237,13 @@ Run `pnpm install`, then `pnpm board` or `pnpm ui` once so the ledger exists.
 
 ### Claude Code
 
-Run this from the repository root, with `D:/Work/hackathons/payonce` changed to your clone's path in both places:
+Run this from the repository root, with `C:/code/payonce` changed to your clone's path in both places:
 
 ```bash
-claude mcp add --transport stdio --scope local payonce -- node --disable-warning=ExperimentalWarning --import file:///D:/Work/hackathons/payonce/node_modules/tsx/dist/loader.mjs D:/Work/hackathons/payonce/src/surfaces/mcp/main.ts
+claude mcp add --transport stdio --scope local payonce -- node --disable-warning=ExperimentalWarning --import file:///C:/code/payonce/node_modules/tsx/dist/loader.mjs C:/code/payonce/src/surfaces/mcp/main.ts
 ```
 
-`--import` needs a `file:///` address, not a `D:\` path. `claude mcp list` should show `payonce` as connected. To read another ledger file, add `-e PAYONCE_LEDGER=D:/path/copy.db` before `--transport`. A relative path is read from the repository root.
+`--import` needs a `file:///` address, not a `C:\` path. `claude mcp list` should show `payonce` as connected. To read another ledger file, add `-e PAYONCE_LEDGER=D:/path/copy.db` before `--transport`. A relative path is read from the repository root.
 
 ### Claude Desktop
 
@@ -257,8 +257,8 @@ Open Settings, then Developer, then Edit Config, and add this block to `claude_d
       "args": [
         "--disable-warning=ExperimentalWarning",
         "--import",
-        "file:///D:/Work/hackathons/payonce/node_modules/tsx/dist/loader.mjs",
-        "D:\\Work\\hackathons\\payonce\\src\\surfaces\\mcp\\main.ts"
+        "file:///C:/code/payonce/node_modules/tsx/dist/loader.mjs",
+        "C:\\code\\payonce\\src\\surfaces\\mcp\\main.ts"
       ]
     }
   }
