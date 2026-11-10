@@ -491,7 +491,7 @@ How the agent works an invoice, look by look: sending and retrying payments, hol
 
 - Reading the record last under the lease costs one beneficiary read more for every original.
 - An outside payout with the new invoice's number that the sweep has not tied yet is the one hold the New payment preview can miss.
-- The route key counts the account name ([accounts.md](accounts.md)). Two records with the same IBAN under different account names are two routes, so a same-number bill to the other one is not held for sharing an account. Neither is one to a record the ledger has never seen paid, approved or released, since the ledger knows no route for it.
+- The route key leaves out the account name ([accounts.md](accounts.md)), so another record with the same bank details under another name shares the route. A bill to a record the ledger has never seen paid, approved or released is still not held for sharing an account, since the ledger knows no route for it.
 - With a domain on file, an email from the supplier's own domain is not flagged on a new payment. So a paid new payment with only such an email, and findings that ask for nothing, closes by itself instead of waiting for a person to check the sender. That is how scripted and pay run invoices with a domain already work.
 - The domain on file is the newest one the record's invoices give. When they give more than one, the supplier view's `domain-changed` caution says so, and the new payment trusts the newest.
 - `pnpm recover` refuses a malformed invoice number, and one on a waiting pay run, with one line and nothing stored.

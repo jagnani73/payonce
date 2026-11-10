@@ -130,7 +130,7 @@ The first part defines the words PayOnce shows people. The second defines the wo
 
 **Spend.** Moving an approval from `approved` to `used` in the transaction that opens its payment: `useApproval`, `releaseFor` or `RunStore.releaseRun`.
 
-**Account key, route key.** Two hashes of bank details. The account key (`accountKeyOf`) covers every field and is what terms pin. The route key (`routeKeyOf`) leaves out fields that cannot route money, such as `bank_name`, and answers whether two sets of details go to the same account. It never goes in terms.
+**Account key, route key.** Two hashes of bank details. The account key (`accountKeyOf`) covers every field and is what terms pin. The route key (`routeKeyOf`) leaves out fields that cannot route money, `bank_name` and `account_name`, and answers whether two sets of details go to the same account. It never goes in terms.
 
 **Committed money**, `committedMinor`. Money promised to payments from a wallet that has not left its available balance yet. Every floor check takes it off.
 
