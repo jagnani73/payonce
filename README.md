@@ -276,7 +276,8 @@ Quit Claude Desktop fully and start it again. Its log for the server is `%APPDAT
 | Command | What it does |
 | --- | --- |
 | `pnpm install` | Install the dependencies |
-| `pnpm typecheck` | Type-check the server and the page; writes nothing |
+| `pnpm typecheck` | Type-check the server, the page and the tests; writes nothing |
+| `pnpm test` | Replay the money journeys against a fake Airwallex in a second or two, without reading `.env` or making a network call ([docs/design/tests.md](docs/design/tests.md)) |
 | `pnpm check:layers` | Fail when an import in `src/` reaches the wrong way between layers ([docs/architecture.md](docs/architecture.md#layers)) |
 | `pnpm dev` | The policy on seven sample incidents, with no credentials |
 | `pnpm ui` | Build the page, then serve it and the JSON API on 4310, with the webhook receiver on 4311 |
@@ -330,7 +331,7 @@ pnpm close inv-05002 Yash supplier sent it twice
 
 ## How it was checked
 
-- `pnpm test` replays the key journeys offline, against a fake Airwallex.
+- `pnpm test` replays twelve journeys offline against a fake Airwallex. They check what happened, not what PayOnce printed: a timed-out payment is resent once and the invoice is paid once; a payout sent from the web app is tied to its invoice and nothing more goes out; an approval pays only its exact terms; a supplier email never changes the account paid; a second bill is held, even under another account name; and a resend never takes a wallet below its reserve floor. [docs/design/tests.md](docs/design/tests.md) says what each journey checks and what the suite leaves out.
 - Each topic's rules were checked as they were built, mostly on copies of the ledger with Airwallex stubbed or faked. [docs/verification/](docs/verification/) keeps the dated notes on what was checked and how, as written at the time.
 - During the rebuild of 6 to 8 November, a replay rig kept outside this repository ran about 40 scripted journeys against a fake Airwallex. It recorded everything a person or another program could see: the API's answers, timelines, alerts, CLI output and MCP answers. Each change was compared with the run before it, and merged only when nothing differed or each difference was explained.
 - On 8 November three runs against the real Airwallex sandbox made 17 transfers, and reconciliation found every one in Airwallex with the status the ledger had. [docs/verification/sandbox-runs.md](docs/verification/sandbox-runs.md) lists each transfer, what broke and the commits that fixed it.
