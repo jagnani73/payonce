@@ -125,4 +125,4 @@ This note records what the Airwallex sandbox and its simulator do, found by runn
 - `pnpm recover` on an invoice from a pay run that has not sent its original is refused: the server sends it, in the run's order.
 - `pnpm recover` on an invoice already in the ledger with a payment, or one a person closed, looks at it again instead of starting it.
 
-Dated checks: [verification/sandbox-behaviour.md](../verification/sandbox-behaviour.md).
+Dated checks: [verification/sandbox-behaviour.md](../verification/sandbox-behaviour.md). The full runs against the sandbox, with every transfer they made: [verification/sandbox-runs.md](../verification/sandbox-runs.md).

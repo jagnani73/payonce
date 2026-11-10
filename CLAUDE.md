@@ -52,7 +52,7 @@ This file holds the commands, the file map and the rules that hold everywhere. T
 - `docs/invariants.md`: every money guarantee, one sentence each, with where it is enforced.
 - `docs/glossary.md`: the words a person reads, and the names in the code for each idea.
 - `docs/design/<topic>.md`: one note per topic, as Rules, Why and Edge cases. Read the topic note before changing the code it covers. Where this file and a topic note differ, the topic note is right.
-- `docs/verification/<topic>.md`: the dated notes on how each topic's rules were checked, kept as written.
+- `docs/verification/<topic>.md`: the dated notes on how each topic's rules were checked, kept as written. `docs/verification/sandbox-runs.md` lists the full runs against the real sandbox and every transfer they made.
 - `docs/demo.md`: the recording script for the demo.
 
 | Topic note | Read it before changing |

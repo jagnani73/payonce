@@ -181,6 +181,8 @@ The duplicate lock test, the callback and reconciliation make none. Every take n
 
 ## Checked
 
+[verification/sandbox-runs.md](verification/sandbox-runs.md) lists every sandbox run of this script, with each transfer it made and what reconciliation found.
+
 On 8 November 2026 the final dress rehearsal ran on main at 5c58281 against the real sandbox: the setup, then every beat as written. The setup took 41 seconds and the take made 7 transfers. This time the sandbox reversed all four failed transfers, so beat 4 showed no break. The EUR SWIFT fee was 14.03 EUR.
 
 On 8 November 2026 a dress rehearsal ran the setup and every beat against the real sandbox. The setup took 43 seconds and the whole take made 7 transfers. The EUR SWIFT fee was 14.03 EUR. The sandbox never refunded P261108-WOU3MC3, INV-RUN-1002's failed original: 29 minutes after it failed it still read FAILED, and its 980.00 USD had not come back. The rehearsal found seven page and alert problems, fixed on `fix/rehearsal`: a reconciliation alert for that refund while the page said no break needed a person, a USD card reading "no breaks" beside a movement tagged "break 1", a supplier caution on the payment page that named "Account A" and showed one of two, a callback note field that cut the typed note off, a tick on a skipped run row, a next check time that ignored the timer, and an Approving as that moved to another name after a signoff. The second "needs an approval" alert for the bank change is by design.
