@@ -26,7 +26,8 @@
     "preui": "node scripts/build-web.mjs",
     "ui": "tsx src/surfaces/http/main.ts",
     "mcp": "tsx src/surfaces/mcp/main.ts",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p web",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p web && tsc --noEmit -p test",
+    "test": "tsx --test --test-timeout=60000 test/*.test.ts",
     "build:web": "node scripts/build-web.mjs",
     "check:layers": "node scripts/check-layers.mjs"
   },
