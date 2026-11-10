@@ -80,7 +80,21 @@ export function payee(letter: "A" | "B" | "C" | "D"): string {
   return `b0000001-0000-4000-8000-00000000001${"ABCD".indexOf(letter)}`;
 }
 
-function usSupplier(id: string, nickname: string, name: string, accountNumber: string): BeneficiaryRecord {
+function usBankDetails(name: string, accountNumber: string): BankDetails {
+  return {
+    account_currency: "USD",
+    bank_country_code: "US",
+    account_name: name,
+    account_number: accountNumber,
+    account_routing_type1: "aba",
+    account_routing_value1: "021000021",
+    bank_name: "JPMorgan Chase Bank",
+    bank_account_category: "Checking",
+    local_clearing_system: "ACH",
+  };
+}
+
+function usSupplier(id: string, nickname: string, name: string, bankDetails: BankDetails): BeneficiaryRecord {
   return {
     id,
     nickname,
@@ -90,28 +104,18 @@ function usSupplier(id: string, nickname: string, name: string, accountNumber: s
       entity_type: "COMPANY",
       company_name: name,
       address: { street_address: "1 Main St", city: "New York", state: "NY", postcode: "10001", country_code: "US" },
-      bank_details: fingerprinted({
-        account_currency: "USD",
-        bank_country_code: "US",
-        account_name: name,
-        account_number: accountNumber,
-        account_routing_type1: "aba",
-        account_routing_value1: "021000021",
-        bank_name: "JPMorgan Chase Bank",
-        bank_account_category: "Checking",
-        local_clearing_system: "ACH",
-      }),
+      bank_details: bankDetails,
     },
   };
 }
 
 function seedRecords(): BeneficiaryRecord[] {
   return [
-    usSupplier(DEMO_SUPPLIER, "PayOnce demo supplier", "Example Supplier LLC", "123456789"),
-    ...(["A", "B", "C", "D"] as const).map(
-      (letter: "A" | "B" | "C" | "D", index: number): BeneficiaryRecord =>
-        usSupplier(payee(letter), `Journey payee ${letter}`, `Payee ${letter} Inc`, `55500000${index}`),
-    ),
+    usSupplier(DEMO_SUPPLIER, "PayOnce demo supplier", "Example Supplier LLC", fingerprinted(usBankDetails("Example Supplier LLC", "123456789"))),
+    ...(["A", "B", "C", "D"] as const).map((letter: "A" | "B" | "C" | "D", index: number): BeneficiaryRecord => {
+      const name: string = `Payee ${letter} Inc`;
+      return usSupplier(payee(letter), `Journey payee ${letter}`, name, fingerprinted(usBankDetails(name, `55500000${index}`)));
+    }),
   ];
 }
 
@@ -414,6 +418,15 @@ export class FakeAirwallex {
       record,
       byPayOnce: false,
     });
+  }
+
+  // A person adds a US supplier's record in the Airwallex web app, under this
+  // account name. Its bank details carry no fingerprint, so two records with the
+  // same account number differ only in the name. Returns its id.
+  addSupplier(name: string, accountNumber: string): string {
+    const id: string = `b0000001-0000-4000-8000-${String(this.records.length + 200).padStart(12, "0")}`;
+    this.records.push(usSupplier(id, name, name, usBankDetails(name, accountNumber)));
+    return id;
   }
 
   // A person changes a supplier's bank details on its record in the Airwallex
