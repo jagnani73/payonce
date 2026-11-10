@@ -68,6 +68,24 @@ What matched: the last reconciliation check, at 11:02, found all 7 transfers in 
 
 The verdict was to record the script as written, with a few edits, merged at 15f32d8. Beat 6 no longer says each invoice was paid once, since INV-RUN-1002 was not paid. The preparation now says to turn off Grammarly and other writing extensions, which drew icons in the callback's note field. The other edits reword the opening and beats 0, 1 and 2. One view changed too: the floor's cost warning on the EUR payment had been folded away as a system line, and now shows at full weight (54386fd).
 
+## 10 November 2026: the account-name check, 5 transfers
+
+Main was at e3b290e, after the account name stopped counting toward whether two sets of bank details are one account ([design/accounts.md](../design/accounts.md)). The server ran with the settings above, on an empty ledger. `node scripts/demo-morning.mjs` took 31 seconds and left the same three payments waiting for a person.
+
+| Invoice | Transfer | What happened |
+| --- | --- | --- |
+| INV-RUN-1001, 1,250.00 USD, pay run | P261110-STOHSK4 | Failed, channel timeout |
+| INV-RUN-1001 | P261110-884S84J | PayOnce's own replacement, paid |
+| INV-RUN-1002, 980.00 USD, pay run | P261110-CDDW3ZC | Failed. Waits for a person |
+| INV-794692, 4,000.00 USD | P261110-X0GLD03 | Failed, account closed. Waits for a callback |
+| INV-663119, 4,000.00 EUR, SWIFT | P261110-G35JBRT | Failed, channel timeout. Sent to a person by the floor check |
+
+Then a second Airwallex beneficiary was created with the demo supplier's exact bank details (account ending 6789) under another account and company name, "Northwind Trading Ltd". It had no `fingerprint`. A New payment to it, INV-RUN-1001A for the same 1,250.00 USD, was held as a likely second bill of INV-RUN-1001 (`second-bill`), both in the preview and once started, and its request carried the same route key as INV-RUN-1001's transfers. It made no transfer. Before the change, it would have waited only for the routine approval of a payment a person starts. The Suppliers screens showed the two records as sharing one account.
+
+What matched: reconciliation found both wallets added up to Airwallex's available balance, with no break. The server log had no errors, and none of the 4 alerts named an approver, an account or a phone number.
+
+What did not read well: the held payment's page says in three places that it pays "a different account" from INV-RUN-1001's, while its side panel says the account is shared. The held-payment check compares the full account key, which still includes the name, and that comparison is part of the approval's terms, so it was left as it is ([design/accounts.md](../design/accounts.md)). The payment still needs two approvers.
+
 ## Earlier runs
 
 PayOnce also ran against the sandbox while its features were built, before the rebuild of 6 to 8 November:
