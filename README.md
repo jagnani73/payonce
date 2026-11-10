@@ -195,7 +195,7 @@ The page has no login. The server listens on this machine only, accepts changes 
 ### Webhooks
 
 - `pnpm ui` listens for Airwallex payout webhooks on `WEBHOOK_PORT` (4311). It opens a Cloudflare quick tunnel to it, which needs no account, and points the Airwallex webhook subscription at the tunnel.
-- The sandbox records webhook events but never delivers them, so set `WEBHOOKS=off` there. A status check then finds every change, every 3 seconds (every 15 while webhooks are on).
+- When this was tried in the sandbox on 28 October, Airwallex queued an event for every status change and delivered none ([docs/verification/webhooks.md](docs/verification/webhooks.md)), so set `WEBHOOKS=off` there. A status check then finds every change, every 3 seconds (every 15 while webhooks are on).
 - Set `WEBHOOK_URL` to use a public address you already have, and `CLOUDFLARED` to the path of `cloudflared` if it is not on your `PATH`. On Windows, `winget install --id Cloudflare.cloudflared` installs it.
 - An event counts only if its signature checks out, and only once. It wakes a look, and PayOnce reads the transfer itself.
 
@@ -328,10 +328,18 @@ pnpm recover PAID inv-05002                      # the same bill again: held, no
 pnpm close inv-05002 Yash supplier sent it twice
 ```
 
+## How it was checked
+
+- `pnpm test` replays the key journeys offline, against a fake Airwallex.
+- Each topic's rules were checked as they were built, mostly on copies of the ledger with Airwallex stubbed or faked. [docs/verification/](docs/verification/) keeps the dated notes on what was checked and how, as written at the time.
+- During the rebuild of 6 to 8 November, a replay rig kept outside this repository ran about 40 scripted journeys against a fake Airwallex. It recorded everything a person or another program could see: the API's answers, timelines, alerts, CLI output and MCP answers. Each change was compared with the run before it, and merged only when nothing differed or each difference was explained.
+- On 8 November three runs against the real Airwallex sandbox made 17 transfers, and reconciliation found every one in Airwallex with the status the ledger had. [docs/verification/sandbox-runs.md](docs/verification/sandbox-runs.md) lists each transfer, what broke and the commits that fixed it.
+- Two things were never seen working in the sandbox. Airwallex queued every webhook event and delivered none, and the simulator will not move a transfer that converts, so a failed payment from another currency's wallet and its replacement were never run.
+
 ## Not built yet
 
 - A login. Names are typed, so the approval rules stop mistakes and approving your own incident under your own name, but not someone typing a colleague's name.
-- Real money. PayOnce runs on the sandbox and its simulator. The webhook receiver works, but the sandbox has never delivered an event.
+- Real money. PayOnce runs on the sandbox and its simulator. The webhook receiver is built, but in the sandbox Airwallex queued every event and delivered none, so it has never handled a real one.
 - Fetching mail. Emails arrive as uploads only. PayOnce does not open attachments, follow links or check DKIM, SPF or DMARC, which is why bank details change only through a callback.
 - Sending messages. PayOnce drafts messages to the supplier and trace requests to Airwallex, and a person sends them.
 - A floor check on a single incident's first payment. Pay run rows have one.

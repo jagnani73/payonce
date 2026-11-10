@@ -22,7 +22,7 @@ READER_API_KEY=your-gemini-key
 
 - `APPROVERS` must hold these four names. The setup script uses all of them: Kim uploads the pay run and the email, Alex and Yash approve the run, and Sam starts the two incidents, so Sam can approve neither.
 - `RESERVE_FLOORS` needs more than about 1,004,000 in the USD and EUR wallets. `pnpm cash` prints the headroom.
-- `WEBHOOKS=off`, because the sandbox never delivers webhooks. PayOnce then checks transfers every 3 seconds.
+- `WEBHOOKS=off`, because when webhooks were tried in the sandbox, Airwallex queued every event and delivered none. PayOnce then checks transfers every 3 seconds.
 - `ALERT_WEBHOOK_URL` is optional. With it, beat 0 opens on three Slack alerts. Without it, beat 0 opens on Home.
 - `READER_API_KEY` (or `CLAUDE_API_KEY`) is optional. With it, a model reads the supplier's email and the Emails tab says which one. Without it, the keyword reader reads it and the story is the same.
 - Leave `TWO_APPROVERS_ABOVE`, `APPROVAL_TTL_MINUTES` and `RECON_EVERY_MINUTES` at their defaults (5000, 60, 10).
