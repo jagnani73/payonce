@@ -1,12 +1,60 @@
 # PayOnce
 
-PayOnce is a payment incident agent for supplier invoices paid through Airwallex. It sends each invoice's transfer, follows it to the bank, and when something goes wrong (a failed or stuck payment, a supplier email asking for new bank details, a payout someone sent from the Airwallex web app, a rail outage) it fixes what a fixed policy says is safe and hands the rest to a person with exact terms to approve or close. It never pays an invoice twice and never takes bank details from an email, and every step it takes goes on a hash-chained timeline.
+PayOnce is a payment incident agent for supplier invoices paid through Airwallex. It sends each invoice's transfer and follows it to the bank. When something goes wrong (a failed or stuck payment, a supplier email asking for new bank details, a payout someone sent from the Airwallex web app, a rail outage), it fixes what a fixed policy says is safe and hands the rest to a person, with exact terms to approve or close. It is an entry for the Airwallex Agentic Banking Hackathon 2026, built from starter kit 3 (Payment Ops Incident Commander), and it runs against the Airwallex sandbox only, with no real money.
 
-PayOnce is my entry for the Airwallex Agentic Banking Hackathon 2026, built from starter kit 3, Payment Ops Incident Commander. It runs against the Airwallex sandbox only, with no real money.
+Demo video: VIDEO_LINK
+
+![PayOnce's Home screen: three payments wait for an approval, each with its reason, its amount and who can sign it](docs/images/home.jpg)
+
+## Run it
+
+You need Node 24, for its built-in `node:sqlite`, and pnpm 12. It was built with pnpm 12.5.1 (`npm install -g pnpm@12.5.1`).
+
+```bash
+pnpm install
+pnpm dev
+```
+
+`pnpm dev` needs no credentials and makes no network calls. It reads the sample supplier emails in `fixtures/emails/` and prints the findings and the policy's decision for seven sample incidents.
+
+To run it against the Airwallex sandbox, make a `.env` file in the project folder with your sandbox Client ID and API key, the approvers and the reserve floors:
+
+```bash
+AWX_CLIENT_ID=your-client-id
+AWX_API_KEY=your-api-key
+APPROVERS=Yash:50000,Alex:10000,Kim:10000,Sam:4200
+RESERVE_FLOORS=USD:1000000,EUR:1000000
+WEBHOOKS=off
+```
+
+Then start the server, and set up the demo's morning from a second terminal:
+
+```bash
+pnpm ui                          # builds the page, then serves it at http://127.0.0.1:4310
+node scripts/demo-morning.mjs    # a pay run and two incidents; makes 5 sandbox transfers
+```
+
+Open http://127.0.0.1:4310. The setup script needs an empty ledger (`pnpm reset` moves the old one aside) and the four names in `APPROVERS` above. It leaves three payments waiting for a person, and [docs/demo.md](docs/demo.md) walks through them. On a sandbox account that has never run a scripted incident, the demo supplier does not exist yet and the script stops and says so: start one scripted incident (USD, local transfer, Paid) from the Sandbox simulator, then `pnpm reset` and run the script again. Without the script, start a scripted incident from the simulator, or pay a beneficiary of your own from New payment.
+
+`.env.example` lists every setting. `NAME!` is required, `NAME=value` shows the default, and `a|b|c` lists the accepted values, so write one of them. Put only the lines you change in `.env`, not a copy of the whole file. To run with no Airwallex at all, set `AWX_BASE_URL=https://sandbox.invalid` and give the two credential lines any value: every call then fails as unreachable, and nothing can be paid. `pnpm ui` stops at start-up while either credential is missing.
+
+## Contents
+
+- [What it guarantees](#what-it-guarantees), and [the policy](#the-policy) that decides
+- [A tour of the page](#a-tour-of-the-page)
+- [Setting it up](#setting-it-up): approvers, reserve floors, alerts, the email reader, webhooks
+- [Read PayOnce from Claude](#read-payonce-from-claude), a read-only MCP server
+- [Layout](#layout) and [Commands](#commands)
+- [How it was checked](#how-it-was-checked)
+- [Not built yet](#not-built-yet)
+- [docs/architecture.md](docs/architecture.md): one look at an invoice from wake to next look, the layers, the payment gate and the hash chains
+- [docs/invariants.md](docs/invariants.md): every money guarantee in one sentence, with the code that enforces it
+- [docs/demo.md](docs/demo.md): the demo's recording script
+- [docs/verification/sandbox-runs.md](docs/verification/sandbox-runs.md): the runs against the real Airwallex sandbox, with every transfer they made
 
 ## What it guarantees
 
-The guarantees are about money: what may be sent, when, to whom and on whose word. [docs/invariants.md](docs/invariants.md) numbers each one in a sentence and names the code that enforces it.
+PayOnce never pays an invoice twice, never takes bank details from an email, and writes every step it takes on a hash-chained timeline. The guarantees are about money: what may be sent, when, to whom and on whose word. [docs/invariants.md](docs/invariants.md) numbers each one in a sentence and names the code that enforces it.
 
 - An invoice has at most one live payment. Every attempt is written to the SQLite ledger before the transfer is created, inside a transaction, and a partial unique index refuses a second live attempt. Each attempt has its own request id, which Airwallex uses as an idempotency key, so a retry can create at most one transfer.
 - PayOnce learns what the bank did only from Airwallex. A webhook or a status check wakes it up, and it then reads the transfer and decides on what it read, never on a webhook's body.
@@ -55,6 +103,8 @@ A person uploads a supplier's raw email on the Inbox screen. PayOnce parses it i
 ### Changed bank details
 
 PayOnce reads the supplier's Airwallex record before every payment and sends nothing if any bank detail changed since the payment was decided or approved. To pay new details, a person calls the supplier on the phone number on file and records who called, the number dialled, who they spoke to and what was confirmed. PayOnce then updates the record in Airwallex, and a new request needs two approvers, neither of them the caller. The phone number itself goes on file only when one person proposes it and a second types it again from their own source. A change of that number retires every callback made on the old one and withdraws the requests that relied on them. [docs/design/supplier-contacts.md](docs/design/supplier-contacts.md) has the rules.
+
+![The Decision panel after a callback: the request pays the account the callback verified, needs two signoffs, and says that the starter and the caller cannot approve it](docs/images/callback-decision.jpg)
 
 ### Duplicate invoices
 
@@ -107,37 +157,6 @@ When an invoice has a due date, PayOnce says when its route usually arrives and 
 | Sandbox simulator | `#sandbox` | A drawer that plays the bank and the supplier: scripted incidents, the next payment's bank outcome, sample email threads and a duplicate lock test. |
 
 The page has no login. The server listens on this machine only, accepts changes only from its own page, and the page makes no outside requests. A link an alert posted in the old form, `#INV-5001`, still opens that payment.
-
-## Quick start
-
-You need Node 24, for its built-in `node:sqlite`, and pnpm 12 (`npm install -g pnpm@12`).
-
-```bash
-pnpm install
-pnpm dev
-```
-
-`pnpm dev` needs no credentials. It reads the sample supplier emails in `fixtures/emails/` and prints the findings and the decision for seven sample incidents.
-
-To run the agent against the sandbox, make a `.env` file in the project folder with your sandbox Client ID and API key, a list of approvers and the reserve floors:
-
-```bash
-AWX_CLIENT_ID=your-client-id
-AWX_API_KEY=your-api-key
-APPROVERS=Yash:50000,Alex:10000,Kim:10000,Sam:4200
-RESERVE_FLOORS=USD:1000000,EUR:1000000
-WEBHOOKS=off
-```
-
-Then start the server:
-
-```bash
-pnpm ui
-```
-
-`pnpm ui` builds the page first (`pnpm build:web`, esbuild, into `web/dist/`), then serves it and the JSON API at `http://127.0.0.1:4310`. Open the Sandbox simulator to start a scripted incident, or New payment to pay a beneficiary of your own. [docs/demo.md](docs/demo.md) walks through one morning: `node scripts/demo-morning.mjs` sets up a pay run and two incidents, and the recording follows them in seven beats.
-
-`.env.example` lists every setting. `NAME!` is required, `NAME=value` shows the default, and `a|b|c` lists the accepted values, so write one of them. Put only the lines you change in `.env`. To run with no Airwallex at all, set `AWX_BASE_URL=https://sandbox.invalid` and give the two credential lines any value: every call then fails as unreachable, and nothing can be paid. `pnpm ui` stops at start-up while either credential is missing.
 
 ## Setting it up
 
