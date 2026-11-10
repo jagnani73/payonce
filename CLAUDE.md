@@ -6,7 +6,8 @@ Payment incident agent for the Airwallex Agentic Banking Hackathon 2026, built o
 
 ```bash
 pnpm install
-pnpm typecheck                                      # tsc --noEmit for src/, then for web/ (tsc --noEmit -p web)
+pnpm typecheck                                      # tsc --noEmit for src/, then for web/ (tsc --noEmit -p web) and test/ (tsc --noEmit -p test)
+pnpm test                                           # replay the journeys in test/ against a fake Airwallex, without .env or a network, in about a second
 pnpm check:layers                                   # fail when an import in src/ reaches the wrong way between layers (scripts/check-layers.mjs)
 pnpm dev                                            # policy on seven sample incidents, no credentials
 pnpm build:web                                      # bundle web/src/ into web/dist/ with esbuild; --watch rebuilds on save
@@ -40,7 +41,7 @@ pnpm metrics [7d|30d|all] [json]                    # the ops metrics for the la
 pnpm reset                                          # move payonce.db aside so the next run starts an empty ledger
 ```
 
-Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-local`, NAME the OS login name (who started the incident). OUTCOME is a simulator failure type, `PAID`, or `STAYS_IN_FLIGHT`, which leaves the original in `SENT`. `pnpm audit` is pnpm's own dependency audit, so the audit command needs `run`. Asking an invoice why is `pnpm ask` because pnpm runs its own `why` command in place of a script named `why`. `pnpm reconcile` and `pnpm metrics` run the scripts: pnpm 12.5.1 has no built-in commands by those names. There is no lint script and there are no tests.
+Defaults: OUTCOME `CHANNEL_TIMEOUT`, EMAILS `nothing-arrived`, SCENARIO `usd-local`, NAME the OS login name (who started the incident). OUTCOME is a simulator failure type, `PAID`, or `STAYS_IN_FLIGHT`, which leaves the original in `SENT`. `pnpm audit` is pnpm's own dependency audit, so the audit command needs `run`. Asking an invoice why is `pnpm ask` because pnpm runs its own `why` command in place of a script named `why`. `pnpm reconcile` and `pnpm metrics` run the scripts: pnpm 12.5.1 has no built-in commands by those names. There is no lint script. `pnpm test` replays journeys for the headline money guarantees (`docs/design/tests.md` lists them), and does not cover every rule.
 
 `web/dist/` is build output and is gitignored. `pnpm ui` serves only what `pnpm build:web` put there, and answers 503 on every page path while it is empty.
 
@@ -82,6 +83,7 @@ This file holds the commands, the file map and the rules that hold everywhere. T
 | `cli.md` | any file in `src/surfaces/cli/` (`view-text.ts` and `terms-shape.ts` included), `text/printable.ts`, `text/words.ts`, `text/line-error.ts` and `env-file.ts`: what each command loads, opens and prints |
 | `airwallex-client.md` | `src/airwallex/` (frozen: the host allowlist, error shapes, secret redaction), `text/redact.ts`, `Settings.airwallex.client()`, `airwallexAdvice` and `withAdvice` |
 | `sandbox-behaviour.md` | `engine/sandbox-bank.ts`, `engine/scenario.ts`, `airwallex/simulation.ts`, `routes/sandbox.ts`, `fixtures/`, and anything that relies on what Airwallex or its simulator does. Read it before any run against the sandbox |
+| `tests.md` | anything in `test/`: a journey, the fake Airwallex (`test/harness/fake-airwallex.ts`), `World` (`test/harness/world.ts`) and the guard that keeps the suite away from `.env` and Airwallex (`test/harness/guard.ts`), and the `test` script |
 
 ## Files
 
@@ -132,6 +134,7 @@ This file holds the commands, the file map and the rules that hold everywhere. T
   - `components/` (shared parts: actions, forms, rows, states, text with `<Theirs>`, the timeline, the Decision panel's parts, ending an outage, the phone on file and modal dialogs), `shell/` (top bar, banners, search, status chip, the name picker), `screens/` (one file and folder per screen: home, incidents, payment, new-payment, inbox, runs, suppliers, treasury, reports, settings, simulator, search).
 - `scripts/`: `build-web.mjs` (`pnpm build:web`: bundles `web/src/` into `web/dist/` with esbuild), `check-layers.mjs` (`pnpm check:layers`: fails when an import in `src/` reaches the wrong way between layers) and `demo-morning.mjs` (sets up the demo's morning on an empty ledger through the HTTP routes: a pay run uploaded and approved by two people, two scripted incidents, and a look-alike `.eml` uploaded and delivered. It makes 5 sandbox transfers, and `docs/demo.md` runs it).
 - `fixtures/emails/`, `fixtures/pay-run-example.csv`: sample supplier threads and a sample pay run file.
+- `test/`: `pnpm test`. One `*.test.ts` per guarantee (`pays-once`, `approvals`, `bank-details`, `second-bill`, `reserve-floor`, `isolation`), and `harness/`: `guard.ts` (imported first: it blocks `.env`, strips credentials from the environment, refuses every network call but the fake's and moves the process to a temporary folder), `fake-airwallex.ts` (the bank, in memory) and `world.ts` (`World`: one journey's ledger, settings and engine). `tsconfig.json` extends the root one.
 
 ## Rules that hold everywhere
 
@@ -209,6 +212,7 @@ These are short forms of rules the topic notes give in full, with their exceptio
 ### Checking
 
 - Most changes can be checked on a copy of the ledger with Airwallex stubbed, or with `AWX_BASE_URL` at `sandbox.invalid`, as the notes in `docs/verification/` were. Use the real sandbox only when the check needs it, and read `sandbox-behaviour.md` first, because the simulator refuses some transitions.
+- Run `pnpm test` after any change under `src/`. A journey that fails names the guarantee the change broke.
 
 ## Keeping this file small
 
