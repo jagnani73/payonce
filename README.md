@@ -319,3 +319,7 @@ pnpm close inv-05002 Yash supplier sent it twice
 - The supplier's email domain on file, set by two people the way the phone is, and recording a callback outside an incident.
 - Currencies with no decimals or three, such as JPY or KWD, and totals across currencies.
 - A keyed hash chain. Anyone who can write `payonce.db` can rewrite a timeline and recompute every hash, so keep an export somewhere else if you need to prove a timeline later.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
