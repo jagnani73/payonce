@@ -27,7 +27,7 @@ export function whyRoutes(app: HttpApp): Route[] {
     if (explainer === null) {
       throw new HttpError(
         503,
-        "The model reader is off, so PayOnce cannot ask a model. Set CLAUDE_API_KEY or READER_API_KEY in .env and restart",
+        "Ask why is off here: no model key is set, so PayOnce cannot ask a model. It turns on when CLAUDE_API_KEY or READER_API_KEY is set",
       );
     }
     requireObligation(invoiceId);
