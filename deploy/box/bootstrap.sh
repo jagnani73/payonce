@@ -25,7 +25,7 @@ for _ in $(seq 1 60); do
 done
 
 apt-get update -q
-apt-get install -y -q nginx unzip xz-utils unattended-upgrades ca-certificates curl
+apt-get install -y -q nginx nftables unzip xz-utils unattended-upgrades ca-certificates curl
 printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' >/etc/apt/apt.conf.d/20auto-upgrades
 systemctl restart systemd-journald
 
@@ -61,6 +61,9 @@ rm -rf "$work"
 id payonce >/dev/null 2>&1 || useradd --system --home-dir /var/lib/payonce --shell /usr/sbin/nologin payonce
 install -d -m 0750 -o payonce -g payonce /var/lib/payonce
 install -d -m 0755 /opt/payonce /opt/payonce/releases
+# From now on, and at every boot before PayOnce starts, payonce cannot reach IMDS.
+systemctl daemon-reload
+systemctl enable --now payonce-imds.service
 
 # nginx answers only with the origin header. Until payonce-env writes the real
 # one, it requires a value nobody has.
@@ -72,7 +75,6 @@ nginx -t
 systemctl enable nginx
 systemctl restart nginx
 
-systemctl daemon-reload
 systemctl enable payonce.service
 /usr/local/lib/payonce/payonce-env || echo "payonce-env could not run yet. It runs again before PayOnce starts"
 echo "PayOnce base installed. Deploy a release from CI, then enable payonce-morning.timer"

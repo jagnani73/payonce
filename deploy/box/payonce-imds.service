@@ -1,0 +1,11 @@
+[Unit]
+Description=Keep the payonce user away from the instance metadata service
+Before=payonce.service payonce-morning.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/payonce/imds-block.nft
+
+[Install]
+WantedBy=multi-user.target

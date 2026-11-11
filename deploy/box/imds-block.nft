@@ -1,0 +1,12 @@
+# The payonce user never reaches the instance metadata service, so nothing it runs
+# can take the instance role's credentials. Root keeps it for the SSM agent,
+# payonce-env and payonce-deploy.
+table inet payonce_imds
+delete table inet payonce_imds
+table inet payonce_imds {
+    chain output {
+        type filter hook output priority 0; policy accept;
+        meta skuid "payonce" ip daddr 169.254.169.254 drop
+        meta skuid "payonce" ip6 daddr fd00:ec2::254 drop
+    }
+}

@@ -13,6 +13,8 @@ interface BoxFile {
 const FILES: readonly BoxFile[] = [
   { name: "payonce.service", path: "/etc/systemd/system/payonce.service", mode: "0644" },
   { name: "payonce-env.service", path: "/etc/systemd/system/payonce-env.service", mode: "0644" },
+  { name: "payonce-imds.service", path: "/etc/systemd/system/payonce-imds.service", mode: "0644" },
+  { name: "imds-block.nft", path: "/etc/payonce/imds-block.nft", mode: "0644" },
   { name: "payonce-morning.service", path: "/etc/systemd/system/payonce-morning.service", mode: "0644" },
   { name: "payonce-morning.timer", path: "/etc/systemd/system/payonce-morning.timer", mode: "0644" },
   { name: "payonce-env", path: "/usr/local/lib/payonce/payonce-env", mode: "0755" },
@@ -22,11 +24,19 @@ const FILES: readonly BoxFile[] = [
   { name: "journald.conf", path: "/etc/systemd/journald.conf.d/payonce.conf", mode: "0644" },
 ];
 
+// A file as the instance gets it: without its full-line comments, which the
+// files in deploy/box keep, because EC2 takes at most 16 KB of user data. A
+// shebang stays. None of these files has a heredoc or a multi-line string whose
+// lines start with #.
 function box(name: string): string {
-  const text: string = readFileSync(new URL(name, BOX), "utf8").replace(/\r\n/g, "\n");
-  if (text.split("\n").includes(END)) {
+  const lines: string[] = readFileSync(new URL(name, BOX), "utf8")
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .filter((line: string): boolean => !/^\s*#(?!!)/.test(line));
+  if (lines.includes(END)) {
     throw new Error(`deploy/box/${name} has a line ${END}, which ends the heredoc that writes it`);
   }
+  const text: string = lines.join("\n");
   return text.endsWith("\n") ? text : `${text}\n`;
 }
 

@@ -1,8 +1,8 @@
 [Unit]
 Description=PayOnce (pnpm ui, page prebuilt)
 Wants=network-online.target
-After=network-online.target payonce-env.service
-Requires=payonce-env.service
+After=network-online.target payonce-env.service payonce-imds.service
+Requires=payonce-env.service payonce-imds.service
 # Nothing to run until the first release is deployed.
 ConditionPathExists=/opt/payonce/current/package.json
 

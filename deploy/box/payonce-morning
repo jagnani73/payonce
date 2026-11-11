@@ -24,13 +24,26 @@ healthy() {
   return 1
 }
 
-cd /var/lib/payonce
+# Runs a command as payonce in a transient unit with payonce.service's sandbox:
+# it writes only the ledger's folder and cannot reach the instance metadata service.
+as_payonce() {
+  systemd-run --wait --pipe --collect --quiet \
+    -p User=payonce -p Group=payonce -p WorkingDirectory=/var/lib/payonce \
+    -p Requires=payonce-imds.service -p After=payonce-imds.service \
+    -p NoNewPrivileges=yes -p ProtectSystem=strict -p ReadWritePaths=/var/lib/payonce \
+    -p ProtectHome=yes -p PrivateTmp=yes -p PrivateDevices=yes -p ProtectKernelTunables=yes \
+    -p ProtectKernelModules=yes -p ProtectControlGroups=yes -p RestrictSUIDSGID=yes \
+    -p LockPersonality=yes -p UMask=0077 -p MemoryMax=1200M \
+    -p "IPAddressDeny=169.254.169.254/32 fd00:ec2::254/128" \
+    "$@"
+}
+
 systemctl stop payonce
-runuser -u payonce -- "$app/node_modules/.bin/tsx" --tsconfig "$app/tsconfig.json" "$app/src/surfaces/cli/reset.ts"
+as_payonce "$app/node_modules/.bin/tsx" --tsconfig "$app/tsconfig.json" "$app/src/surfaces/cli/reset.ts"
 find /var/lib/payonce -maxdepth 1 -type f -name 'payonce.*.db' -mmin +4320 -print -delete
 systemctl start payonce
 if ! healthy; then
   echo "payonce-morning: PayOnce did not answer within 60 s after the reset" >&2
   exit 1
 fi
-runuser -u payonce -- node "$app/scripts/demo-morning.mjs" http://127.0.0.1:4310
+as_payonce /usr/local/bin/node "$app/scripts/demo-morning.mjs" http://127.0.0.1:4310

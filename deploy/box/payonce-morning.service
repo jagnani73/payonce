@@ -1,7 +1,8 @@
 [Unit]
 Description=PayOnce fresh morning: reset the ledger and run scripts/demo-morning.mjs
 Wants=network-online.target
-After=network-online.target
+After=network-online.target payonce-imds.service
+Requires=payonce-imds.service
 
 [Service]
 Type=oneshot
