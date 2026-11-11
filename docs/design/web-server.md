@@ -13,7 +13,7 @@
 - The `Watcher` checks every 3 seconds (`CHECK_EVERY_MS`) and sweeps every 30 (`SWEEP_EVERY_MS`). The `ReconRunner` reads Airwallex on its own timer, in no invoice's turn and under no currency lease.
 - `httpApp` bundles the parts with the helpers more than one route file uses. The route table is each `routes/*.ts` file's routes, concatenated in `main`'s order, and `startUp` prepares the restart pickup and the webhooks.
 - The server listens on `HOST` (127.0.0.1) and `PORT`, then prints its start-up lines. The first is the page's address, and the second is `describeAirwallex`, which on `OFFLINE_HOST` says no call reaches Airwallex and nothing can be paid.
-- The rest of the start-up lines are the email reader's name, `describePolicy`, `describeFloors`, `describeQuotes`, `describeOutageRule`, `describeAlerts` and `describeReconSetting`.
+- The rest of the start-up lines are the email reader's name, `describePolicy`, `describeFloors`, `describeQuotes`, `describeOutageRule`, `describeAlerts` and `describeReconSetting`, then `describePublicOrigin` and `describeDailyCap` only when their setting is set, so a server without them prints what it always did.
 - Once listening, it starts one balance read, wakes interrupted payments (`pickUpInterrupted`), starts the watcher, the alerts and the reconciliation timer, and connects webhooks without waiting for them (`connectWebhooks`).
 - The server prints an unhandled rejection and keeps running. On exit it stops the tunnel, and SIGINT and SIGTERM exit 0.
 - `main` calls `stampLines` before anything prints, so every console line about one invoice or pay run starts with the time (UTC, `HH:mm:ss`) and the invoice number or `run N`: timeline lines from `note` and `runNote`, `noteError`'s and `runNoteError`'s errors with their stack traces, a look's transfer status, the reader's console line, a found payout's line and the outbox lines (`lineAbout`, `errorAbout`, `stampOf`). Several invoices' looks run at once, and the stamp keeps their lines apart in `server.log`.
@@ -27,9 +27,10 @@
 
 ### The guard
 
-- The server binds to loopback and has no login. `guard` refuses with 403 any Host but `127.0.0.1:<port>` and `localhost:<port>`.
-- A request that is not a GET needs `Origin: http://<host>` and a JSON content type, or it gets 403.
-- A GET under /api/ gets 403 when `sec-fetch-site` is present and is neither `same-origin` nor `none`, or when an `Origin` header names another origin (`crossSite`). Page files are not checked this way.
+- The server binds to loopback and has no login. `guard` refuses with 403 any Host but `127.0.0.1:<port>` and `localhost:<port>`, and the host of `PUBLIC_ORIGIN` when it is set.
+- Each Host has one Origin: `http://<host>` for the loopback ones, and `PUBLIC_ORIGIN` itself for its host. A request that is not a GET needs that Origin and a JSON content type, or it gets 403.
+- A GET under /api/ gets 403 when `sec-fetch-site` is present and is neither `same-origin` nor `none`, or when an `Origin` header names another origin than its Host's (`crossSite`). Page files are not checked this way.
+- `PUBLIC_ORIGIN` takes an https origin alone, such as `https://d1234.cloudfront.net`: no path, query or credentials, and a lower-case host. Any other value is not used, and its start-up line says the page answers only on loopback. Unset, the guard is as above for loopback alone. The server still binds to 127.0.0.1, and a proxy in front of it passes the public Host through ([deployment.md](deployment.md)).
 - `X-Content-Type-Options: nosniff` is set before routing, so every answer has it, CSV downloads and errors included.
 
 ### Routing and errors
@@ -86,11 +87,11 @@ The table lists every route in `src/surfaces/http/routes/`. Views and their buil
 | POST | `/api/incidents/:id/outbox` | 201 `Acted<IncidentView>` and `draftId`, given `template` and `createdBy` | 400, 409 with `draftId` while a draft of that template is open, 422 when it does not fit now |
 | POST | `/api/incidents/:id/outbox/:draft/copied`, `/sent`, `/dismiss` | `Acted<IncidentView>`, given `copiedBy` (optional), `sentBy`, or `dismissedBy` and an optional `note` | 404 for another invoice's draft, 409 once sent or dismissed, 400 for a note over 200 characters |
 | GET | `/api/runs` | `RunsView` | |
-| POST | `/api/runs` | 201 `Acted<RunView>`, given `fileName`, `csv` and `uploadedBy` | 400 with `problems`, 409 `run-waiting` or `same-file` with `runId`, 422 `nothing-to-pay` with `rows`, 408, 413, 502 |
+| POST | `/api/runs` | 201 `Acted<RunView>`, given `fileName`, `csv` and `uploadedBy` | 400 with `problems`, 409 `run-waiting` or `same-file` with `runId`, 422 `nothing-to-pay` with `rows`, 408, 413, 429 `daily-cap`, 502 |
 | GET | /api/runs/example.csv | `fixtures/pay-run-example.csv` as an attachment | |
 | GET | `/api/runs/:id` | `RunView` | |
 | GET | `/api/runs/:id/audit?format=` | `runAuditExport` as JSON or CSV | 400 for another format |
-| POST | `/api/runs/:id/approve` | `Acted<RunView>`, given `approver` and `approvalId` | 400, 409 |
+| POST | `/api/runs/:id/approve` | `Acted<RunView>`, given `approver` and `approvalId` | 400, 409, 429 `daily-cap` |
 | POST | `/api/runs/:id/check` | `Acted<RunView>` | 409, 502 |
 | POST | `/api/runs/:id/cancel` | `Acted<RunView>`, given `cancelledBy` and `note` | 400, 409 |
 | GET | `/api/inbox?tab=` | `InboxListView` | 400 for a tab other than waiting, delivered or dismissed |
@@ -113,19 +114,27 @@ The table lists every route in `src/surfaces/http/routes/`. Views and their buil
 | POST | `/api/reconcile/explain` | `Acted<ReconView>`, given `breaks`, `explainedBy` and `note` | 400, 404 with `unknown`, 409 with `changed` |
 | GET | `/api/alerts` | the alert status and the last 50 alerts | |
 | GET | `/api/sandbox` | `SandboxView` | |
-| POST | `/api/sandbox/scenarios` | 202 `PaymentCreated` | 400, 409, 502 |
+| POST | `/api/sandbox/scenarios` | 202 `PaymentCreated` | 400, 409, 429 `daily-cap`, 502 |
 | POST | `/api/sandbox/duplicate-lock/:id` | `DuplicateLockResult` | |
 | POST | `/api/payments/check` | `PaymentCheckView` | |
-| POST | `/api/payments` | 201 `PaymentCreated` | 400 `fields`, 409 `duplicate-invoice`, 502 `airwallex-unreachable` |
+| POST | `/api/payments` | 201 `PaymentCreated` | 400 `fields`, 409 `duplicate-invoice`, 429 `daily-cap`, 502 `airwallex-unreachable` |
 
 - Every action answers `Acted<View>`: the view built after the step's turn ends, from reads only, and a `notice` with a `tone` and a `text`. A start answers `PaymentCreated` and an upload `UploadEmailResult`, each with a view and a notice. An outage end answers `EndOutageResult`.
-- A refusal carries `code` only for `close-kind-changed`, `fields`, `duplicate-invoice`, `airwallex-unreachable` and the pay run upload's `run-waiting`, `same-file` and `nothing-to-pay`. Every other refusal is told by its status and its words.
+- A refusal carries `code` only for `close-kind-changed`, `fields`, `duplicate-invoice`, `airwallex-unreachable`, `daily-cap` and the pay run upload's `run-waiting`, `same-file` and `nothing-to-pay`. Every other refusal is told by its status and its words.
 - `GET /api/board` maps `group` to the incident list's scope (person to needs-you, deadline to bank-late, bank to with-bank, open to payonce) and passes `currency` and `origin` on.
 - `GET /api/incidents/:id` builds the payment page with the server's `Live` and the headroom lines from the balance cache as it is, read soft (`HttpApp.incident`).
 - `GET /api/audit` hashes every line, so it is kept by the ledger's `changeStamp` and built again at most once a minute.
 - `GET /api/beneficiaries` reads Airwallex's beneficiary list with one GET at a time, and not again while the last good read is under a minute old. A failed read is answered once and not kept, so Try again reads again.
 - `GET /api/alerts` gives each alert's key, kind, title, state, tries and last error, and never the address it posts to.
 - `GET /api/sandbox` lists the email threads with `DEFAULT_EMAILS` first, so the form opens on the incident that is replaced without a person (`emailThreads`).
+
+### The daily cap
+
+- `DAILY_PAYMENT_CAP` is the most payments the page starts in a UTC day, pay run rows included, from 0 to 10000. Unset, there is no cap. A value PayOnce cannot read counts as 0, and its start-up line says so.
+- `DailyCap` (`src/surfaces/http/daily-cap.ts`) counts the day's payments from the ledger (`paymentsStartedSince`: every invoice whose first timeline line is from today, UTC, except payouts found outside PayOnce), so a payment `pnpm recover` started counts too.
+- Four routes ask it: New payment and a scripted incident for one payment, a pay run upload for every row in the file, and each pay run signoff for the run's rows to pay. Past the cap each answers 429 `daily-cap` with `cap`, `left` and `Retry-After` until midnight UTC, before any Airwallex read.
+- It checks and holds the places in one synchronous call, so two requests at once cannot both take the last ones. A start lets go when it ends. An upload holds its rows while it is checked, and starts nothing. A completed run approval holds the rows until the release has written their invoices, or 15 minutes at most.
+- It is route level only. Approvals, retries and replacements on a payment already started, the watcher and the release never ask it, and `openAttempt` knows nothing of it.
 
 ### Closing and approving
 
@@ -215,6 +224,7 @@ The table lists every route in `src/surfaces/http/routes/`. Views and their buil
 
 - The Host check stops DNS rebinding, since the server has no login.
 - A write needs an Origin and JSON so that another site open in the same browser cannot start or approve a payment.
+- The daily cap keeps a public page from making unbounded sandbox transfers. It counts at the routes because the public reaches only those, and the money path stays as it is.
 - Cross-site GETs are refused because a page on another site that cannot read the answer could still make the server build one, or read Airwallex, on every load. The page's own requests are same-origin, and a typed address or a bookmark is `none`.
 - With files inside JSON, the guard's checks cover uploads, and PayOnce needs no multipart parser.
 - An email upload holds its parse place while its body is read, so with the 30-second upload limit a slow one gives the place back after 30 seconds, not after Node's five-minute request timeout.
@@ -239,7 +249,9 @@ The table lists every route in `src/surfaces/http/routes/`. Views and their buil
 
 - When the page is not built, page paths answer 503 and the API still answers. `pnpm ui` builds it first, so this is a server started some other way.
 - A file added to `web/dist/` after start answers 404 until the server restarts, because `pageFiles` walked the folder once.
-- A Host such as `[::1]:4310` gets 403, because the guard takes only `127.0.0.1` and `localhost` on the port.
+- A Host such as `[::1]:4310` gets 403, because the guard takes only `127.0.0.1` and `localhost` on the port, and the host of `PUBLIC_ORIGIN`.
+- With `PUBLIC_ORIGIN` set, a request with the public Host and a loopback Origin gets 403, and so does a loopback Host with the public Origin: each Host takes only its own Origin.
+- The cap's held places live in the server's memory. Payments started outside it, such as by `pnpm recover`, are counted once they are in the ledger and can push the day past the cap, and then the next start through the page is refused.
 - The CLI and curl send neither `sec-fetch-site` nor `Origin`, so their GETs pass. A POST must send `Origin` and a JSON content type.
 - Every POST through a proxy or harness that drops `Origin` answers 403. Test actions on the server's own port.
 - For an older page's routes, `GET /api/board` answers 307 to the incident list. Any route not in the table, such as `GET /api/options`, answers 404.

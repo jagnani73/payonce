@@ -44,6 +44,7 @@ Open http://127.0.0.1:4310. The setup script needs an empty ledger (`pnpm reset`
 - [A tour of the page](#a-tour-of-the-page)
 - [Setting it up](#setting-it-up): approvers, reserve floors, alerts, the email reader, webhooks
 - [Read PayOnce from Claude](#read-payonce-from-claude), a read-only MCP server
+- [Deploying](#deploying) the live copy on AWS
 - [Layout](#layout) and [Commands](#commands)
 - [How it was checked](#how-it-was-checked)
 - [Not built yet](#not-built-yet)
@@ -208,6 +209,8 @@ The page has no login. The server listens on this machine only, accepts changes 
 | `OUTAGE_FAILURES`, `OUTAGE_WINDOW_MINUTES` | 3, 30 | How many payees failing on one rail within the window declare an outage |
 | `RECON_EVERY_MINUTES` | 10 | How often the server reconciles the wallets; 0 turns it off |
 | `PORT` | 4310 | The page and the API |
+| `PUBLIC_ORIGIN` | unset | The https origin of a proxy in front of the server, such as `https://d1234.cloudfront.net`. The page then answers there too. The server still binds to 127.0.0.1 |
+| `DAILY_PAYMENT_CAP` | unset | The most payments the page starts in a UTC day, pay run rows included. Past it, New payment, scripted incidents and pay runs answer 429 |
 
 ## Read PayOnce from Claude
 
@@ -266,6 +269,55 @@ Open Settings, then Developer, then Edit Config, and add this block to `claude_d
 ```
 
 Quit Claude Desktop fully and start it again. Its log for the server is `%APPDATA%\Claude\logs\mcp-server-payonce.log`. To read another ledger file, add `"env": { "PAYONCE_LEDGER": "D:/path/copy.db" }` beside `args`.
+
+## Deploying
+
+The live copy runs on one EC2 instance in ap-southeast-1 behind CloudFront, with no login. [docs/design/deployment.md](docs/design/deployment.md) has the rules. The stack is in `infra/`, and nothing in this repository creates or changes anything in AWS by itself: you run these commands with your own `aws login` session.
+
+```bash
+aws login --profile payonce
+pnpm --dir infra install
+pnpm --dir infra cdk synth --profile payonce -c alertEmail=you@example.com    # review it
+pnpm --dir infra cdk deploy --profile payonce -c alertEmail=you@example.com
+```
+
+The deploy prints `Url`, `InstanceId`, `ReleaseBucket` and `DeployRoleArn`. Then:
+
+1. Put the Airwallex keys in Parameter Store as SecureString parameters with the default key, under `/payonce/AWX_CLIENT_ID` and `/payonce/AWX_API_KEY` in ap-southeast-1. The console keeps them out of your shell history.
+2. Set the repository variables for the deploy job:
+
+   ```bash
+   gh variable set PAYONCE_DEPLOY_ROLE_ARN --body <DeployRoleArn>
+   gh variable set PAYONCE_INSTANCE_ID --body <InstanceId>
+   gh variable set PAYONCE_RELEASE_BUCKET --body <ReleaseBucket>
+   gh variable set PAYONCE_AWS_REGION --body ap-southeast-1
+   ```
+
+3. Deploy the first release, and open `Url` once it passes:
+
+   ```bash
+   gh workflow run ci.yml --ref main
+   gh run watch
+   ```
+
+   From then on every push to main deploys itself.
+4. Turn on the nightly fresh morning (03:00 Singapore time, 5 sandbox transfers a night), and run it once now:
+
+   ```bash
+   aws ssm send-command --profile payonce --region ap-southeast-1 --instance-ids <InstanceId> \
+     --document-name AWS-RunShellScript \
+     --parameters 'commands=["systemctl enable --now payonce-morning.timer","systemctl start --no-block payonce-morning"]'
+   ```
+
+5. In the Billing console, activate `project` as a cost allocation tag.
+
+The server and your local PayOnce share one Airwallex sandbox account, so each sees the other's transfers as payouts sent outside PayOnce. The credits end on 31 December 2026. Once the results are out, take it all down:
+
+```bash
+aws s3 rm s3://<ReleaseBucket> --recursive --profile payonce
+pnpm --dir infra cdk destroy --profile payonce -c alertEmail=you@example.com
+aws ssm delete-parameters --profile payonce --region ap-southeast-1 --names /payonce/AWX_CLIENT_ID /payonce/AWX_API_KEY
+```
 
 ## Layout
 
