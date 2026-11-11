@@ -30,7 +30,7 @@
 - The server binds to loopback and has no login. `guard` refuses with 403 any Host but `127.0.0.1:<port>` and `localhost:<port>`, and the host of `PUBLIC_ORIGIN` when it is set.
 - Each Host has one Origin: `http://<host>` for the loopback ones, and `PUBLIC_ORIGIN` itself for its host. A request that is not a GET needs that Origin and a JSON content type, or it gets 403.
 - A GET under /api/ gets 403 when `sec-fetch-site` is present and is neither `same-origin` nor `none`, or when an `Origin` header names another origin than its Host's (`crossSite`). Page files are not checked this way.
-- `PUBLIC_ORIGIN` takes an https origin alone, such as `https://d1234.cloudfront.net`: no path, query or credentials, and a lower-case host. Any other value is not used, and its start-up line says the page answers only on loopback. Unset, the guard is as above for loopback alone. The server still binds to 127.0.0.1, and a proxy in front of it passes the public Host through ([deployment.md](deployment.md)).
+- `PUBLIC_ORIGIN` takes an https origin alone, such as `https://d1234.cloudfront.net`: no path, query or credentials, and a lower-case host. PayOnce ignores any other value, and the start-up line says the page answers only on loopback. Unset, the guard takes the loopback hosts alone. The server still binds to 127.0.0.1, and a proxy in front of it passes the public Host through ([deployment.md](deployment.md)).
 - `X-Content-Type-Options: nosniff` is set before routing, so every answer has it, CSV downloads and errors included.
 
 ### Routing and errors
@@ -133,7 +133,7 @@ The table lists every route in `src/surfaces/http/routes/`. Views and their buil
 - `DAILY_PAYMENT_CAP` is the most payments the page starts in a UTC day, pay run rows included, from 0 to 10000. Unset, there is no cap. A value PayOnce cannot read counts as 0, and its start-up line says so.
 - `DailyCap` (`src/surfaces/http/daily-cap.ts`) counts the day's payments from the ledger (`paymentsStartedSince`: every invoice whose first timeline line is from today, UTC, except payouts found outside PayOnce), so a payment `pnpm recover` started counts too.
 - Four routes ask it: New payment and a scripted incident for one payment, a pay run upload for every row in the file, and each pay run signoff for the run's rows to pay. Past the cap each answers 429 `daily-cap` with `cap`, `left` and `Retry-After` until midnight UTC, before any Airwallex read.
-- It checks and holds the places in one synchronous call, so two requests at once cannot both take the last ones. A start lets go when it ends. An upload holds its rows while it is checked, and starts nothing. A completed run approval holds the rows until the release has written their invoices, or 15 minutes at most.
+- It checks and holds the places in one synchronous call, so two requests at once cannot both take the last ones. A start lets go when it ends. An upload holds its rows while PayOnce checks it, and starts nothing. A completed run approval holds the rows until the release has written their invoices, or 15 minutes at most.
 - It is route level only. Approvals, retries and replacements on a payment already started, the watcher and the release never ask it, and `openAttempt` knows nothing of it.
 
 ### Closing and approving
@@ -251,7 +251,7 @@ The table lists every route in `src/surfaces/http/routes/`. Views and their buil
 - A file added to `web/dist/` after start answers 404 until the server restarts, because `pageFiles` walked the folder once.
 - A Host such as `[::1]:4310` gets 403, because the guard takes only `127.0.0.1` and `localhost` on the port, and the host of `PUBLIC_ORIGIN`.
 - With `PUBLIC_ORIGIN` set, a request with the public Host and a loopback Origin gets 403, and so does a loopback Host with the public Origin: each Host takes only its own Origin.
-- The cap's held places live in the server's memory. Payments started outside it, such as by `pnpm recover`, are counted once they are in the ledger and can push the day past the cap, and then the next start through the page is refused.
+- The cap's held places live in the server's memory. Payments started outside it, such as by `pnpm recover`, are counted once they are in the ledger and can push the day past the cap, and the page then refuses the next start.
 - The CLI and curl send neither `sec-fetch-site` nor `Origin`, so their GETs pass. A POST must send `Origin` and a JSON content type.
 - Every POST through a proxy or harness that drops `Origin` answers 403. Test actions on the server's own port.
 - For an older page's routes, `GET /api/board` answers 307 to the incident list. Any route not in the table, such as `GET /api/options`, answers 404.

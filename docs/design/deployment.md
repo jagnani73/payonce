@@ -7,8 +7,8 @@ PayOnce runs live on one EC2 instance in ap-southeast-1, behind CloudFront, with
 ### One stack, nothing else
 
 - Everything is in the stack `PayOnce` (`infra/lib/payonce-stack.ts`), and `cdk destroy` removes all of it once the release bucket is empty.
-- The stack uses `LegacyStackSynthesizer`, has no file or Docker asset, and its template stays under the 50 KiB the CLI sends inline (about 40 KiB now). No CDK bootstrap stack is ever made.
-- The template has no `AWS::Lambda::*`, `Custom::*`, `AWS::Logs::*` or `AWS::CloudWatch::*` resource. So no construct that makes a custom resource is used: the OIDC provider is `OidcProviderNative`, the VPC sets `restrictDefaultSecurityGroup: false`, the bucket has no `autoDeleteObjects`, and nothing uses `AwsCustomResource`, `BucketDeployment` or `logRetention`.
+- The stack uses `LegacyStackSynthesizer`, has no file or Docker asset, and its template stays under the 50 KiB the CLI sends inline (about 40 KiB now). It never needs a CDK bootstrap stack.
+- The template has no `AWS::Lambda::*`, `Custom::*`, `AWS::Logs::*` or `AWS::CloudWatch::*` resource. So the stack uses no construct that makes a custom resource: the OIDC provider is `OidcProviderNative`, the VPC sets `restrictDefaultSecurityGroup: false`, the bucket has no `autoDeleteObjects`, and nothing uses `AwsCustomResource`, `BucketDeployment` or `logRetention`.
 - Nothing uses CloudWatch: there is no log group, alarm, dashboard, agent, metric stream, detailed monitoring or CloudFront logging. Logs stay in the instance's journal, capped at 200 MB.
 - The stack has no NAT gateway, load balancer, WAF, Secrets Manager secret, KMS customer key, autoscaling, key pair or open port 22. SSM Session Manager is the only shell.
 - `Tags.of(app)` tags everything taggable `project=payonce`. The launch template tags itself and the instance's root volume and network interface, and both budgets and their actions carry it in `ResourceTags`. Route, route table association, gateway attachment, security group ingress, bucket policy, instance profile and EIP association have no tags in CloudFormation.
@@ -20,7 +20,7 @@ PayOnce runs live on one EC2 instance in ap-southeast-1, behind CloudFront, with
 - The security group lets in TCP 80 only from `com.amazonaws.global.cloudfront.origin-facing` and lets everything out.
 - The instance is a t4g.small with standard CPU credits, on Canonical's Ubuntu 24.04 arm64 AMI, IMDSv2 only with a hop limit of 1, and a 10 GB gp3 root volume encrypted with the AWS-managed key and deleted with the instance.
 - The instance role has `AmazonSSMManagedInstanceCore`, `s3:GetObject` on `releases/*` in the release bucket, and a deny on reading any parameter outside `/payonce/*`.
-- User data installs the base only (`deploy/box/bootstrap.sh`): Node 24 from nodejs.org checked against its SHASUMS256, pnpm 12.5.1 through corepack, nginx, nftables, the AWS CLI, the `payonce` user, the units, journald's cap and unattended upgrades. No app code. It writes every file in `deploy/box` without its full-line comments, to stay under EC2's 16 KB.
+- User data installs the base only (`deploy/box/bootstrap.sh`): Node 24 from nodejs.org checked against its SHASUMS256, pnpm 12.5.1 through corepack, nginx, nftables, the AWS CLI, the `payonce` user, the units, journald's cap and unattended upgrades, but no app code. It writes every file in `deploy/box` without its full-line comments, to stay under EC2's 16 KB.
 
 ### The front door
 
@@ -37,14 +37,14 @@ PayOnce runs live on one EC2 instance in ap-southeast-1, behind CloudFront, with
 - The Airwallex keys are SecureString parameters under the AWS-managed `aws/ssm` key. The owner puts them there by hand. The stack never makes them.
 - The unit runs with `NoNewPrivileges`, `ProtectSystem=strict`, `ReadWritePaths=/var/lib/payonce`, `ProtectHome`, `PrivateTmp`, no capabilities, `MemoryMax=1200M`, `Restart=on-failure` and `IPAddressDeny` on the metadata service.
 - The `payonce` user cannot reach the instance metadata service at all: `payonce-imds.service` loads an nftables table at boot that drops its packets to 169.254.169.254 and fd00:ec2::254, and `payonce.service` and the morning require it. Root keeps IMDS for the SSM agent, `payonce-env` and `payonce-deploy`.
-- The settings: the four demo approvers, two approvers above 5,000, floors of 1,000,000 USD and EUR, webhooks off, reconciliation every 10 minutes, a request TTL of 1,500 minutes, a cap of 20 payments a day, no model key and no alerts.
+- `deploy/payonce.env` sets the four demo approvers, two approvers above 5,000, floors of 1,000,000 USD and EUR, webhooks off, reconciliation every 10 minutes, a request TTL of 1,500 minutes, a cap of 20 payments a day, no model key and no alerts.
 
 ### Releases and deploys
 
 - CI builds a release on main: `git archive` of `src`, `scripts`, `fixtures`, `deploy` and the package files, plus the built `web/dist`. It uploads it as `releases/<sha>.tar.gz` and sends the `PayOnce-Deploy` command with the commit.
 - `PayOnce-Deploy` takes one parameter, `sha`, which must match `^[0-9a-f]{40}$`, and runs `/usr/local/sbin/payonce-deploy` with it as root.
 - `payonce-deploy` downloads and unpacks the release into `/opt/payonce/releases/<sha>` as root. `pnpm install --frozen-lockfile` runs as `payonce` in a transient unit with the service's sandbox, which may write only the release, the pnpm store and pnpm's own folder, and copies packages instead of linking them to the store. Then the release belongs to root, so PayOnce runs code it cannot change. The script points `/opt/payonce/current` at it and restarts the service. It waits up to 60 seconds for `GET /api/status` on 127.0.0.1:4310. If that fails it points back at the release before, restarts it and exits 1, and CI fails.
-- It keeps the newest 3 releases and never removes the current one. It and the morning take the same lock, so they never run at once.
+- It keeps the newest 3 releases and never removes the current one. The deploy and the morning take the same lock, so they never run at once.
 - `infra/` is a separate pnpm workspace with its own lockfile. CI never installs it, and the release does not include it.
 - The bucket blocks public access, encrypts with SSE-S3, refuses plain HTTP and expires releases after 7 days.
 
@@ -52,7 +52,7 @@ PayOnce runs live on one EC2 instance in ap-southeast-1, behind CloudFront, with
 
 - `ci.yml` has `permissions: contents: read` at the top, and every action is pinned by commit.
 - The checks run on every push and pull request: `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm check:layers`, `pnpm test` and `pnpm build:web`.
-- The deploy job runs only on main (a push or a manual run), after the checks, one at a time, and only when the repository variable `PAYONCE_DEPLOY_ROLE_ARN` is set. Otherwise it is skipped and the workflow passes.
+- The deploy job runs only on main (a push or a manual run), after the checks, one at a time, and only when the repository variable `PAYONCE_DEPLOY_ROLE_ARN` is set. Otherwise GitHub skips it and the workflow passes.
 - It assumes the deploy role over GitHub's OIDC provider. The role trusts only `aud=sts.amazonaws.com` and `sub=repo:jagnani73/payonce:ref:refs/heads/main`, lasts at most an hour, and may only put objects under `releases/`, send `PayOnce-Deploy` to the one instance, and read command results.
 - The job uses no GitHub environment, because one would change the token's `sub`. Its settings are repository variables: `PAYONCE_DEPLOY_ROLE_ARN`, `PAYONCE_INSTANCE_ID`, `PAYONCE_RELEASE_BUCKET` and `PAYONCE_AWS_REGION`.
 
@@ -66,7 +66,7 @@ PayOnce runs live on one EC2 instance in ap-southeast-1, behind CloudFront, with
 
 - There are two budgets, each with an action that stops the instance through SSM's `AWS-StopEC2Instance`: `payonce-gross-usage`, usage before credits, $30 a month, email when the forecast passes $25 and when actual passes $30, stopping at $30; and `payonce-real-money`, after credits, $1 a month, email and stop when actual passes $1.
 - Their email address comes from `-c alertEmail=` at synth and deploy, and is never committed. The budget role may only stop this instance through SSM and start that one automation.
-- The account's "My Zero-Spend Budget" is not part of the stack and is never touched.
+- The account's "My Zero-Spend Budget" is not part of the stack, and nothing here changes it.
 - `DAILY_PAYMENT_CAP` limits the payments the page starts in a UTC day ([web-server.md](web-server.md)), and the nginx limits slow down anyone hammering the API.
 
 ## Why
