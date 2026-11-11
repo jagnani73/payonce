@@ -53,7 +53,7 @@ PayOnce runs live on one EC2 instance in ap-southeast-1, behind CloudFront, with
 - `ci.yml` has `permissions: contents: read` at the top, and every action is pinned by commit.
 - The checks run on every push and pull request: `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm check:layers`, `pnpm test` and `pnpm build:web`.
 - The deploy job runs only on main (a push or a manual run), after the checks, one at a time, and only when the repository variable `PAYONCE_DEPLOY_ROLE_ARN` is set. Otherwise GitHub skips it and the workflow passes.
-- It assumes the deploy role over GitHub's OIDC provider. The role trusts only `aud=sts.amazonaws.com` and `sub=repo:jagnani73/payonce:ref:refs/heads/main`, lasts at most an hour, and may only put objects under `releases/`, send `PayOnce-Deploy` to the one instance, and read command results.
+- It assumes the deploy role over GitHub's OIDC provider. The role trusts only `aud=sts.amazonaws.com` and `sub=repo:jagnani73@60016972/payonce@1406848989:ref:refs/heads/main`, lasts at most an hour, and may only put objects under `releases/`, send `PayOnce-Deploy` to the one instance, and read command results.
 - The job uses no GitHub environment, because one would change the token's `sub`. Its settings are repository variables: `PAYONCE_DEPLOY_ROLE_ARN`, `PAYONCE_INSTANCE_ID`, `PAYONCE_RELEASE_BUCKET` and `PAYONCE_AWS_REGION`.
 
 ### The nightly morning
@@ -99,6 +99,7 @@ PayOnce runs live on one EC2 instance in ap-southeast-1, behind CloudFront, with
 - pnpm 12 fetches its native binary into the corepack home the first time it runs. The first boot runs it as root, so `payonce` only ever reads that folder. If the folder is ever cleared, installs fail until root runs `pnpm --version` with `COREPACK_HOME=/var/cache/payonce/corepack`.
 - The AMI stays the one in `cdk.context.json`. To take a newer one, clear it with `cdk context --reset` and deploy, which replaces the instance.
 - The GitHub OIDC provider can exist once per account. If one exists already, the deploy fails on it.
+- GitHub signs this repo's tokens with immutable subject claims, which name the owner and the repo by name and numeric id. The role's `sub` must match that form exactly. If GitHub's subject settings for the repo change, the deploy job fails at "Could not assume role with OIDC" until the stack's `GITHUB_SUBJECT` matches `repos/jagnani73/payonce/actions/oidc/customization/sub` again.
 - If the morning script fails, as when Airwallex is down, the ledger is empty until the next morning or a manual run of `payonce-morning`.
 
 Dated checks: [verification/deployment.md](../verification/deployment.md).

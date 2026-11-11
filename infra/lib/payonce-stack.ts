@@ -10,7 +10,10 @@ import type { Construct } from "constructs";
 import { userDataText } from "./user-data.js";
 
 export const REGION: string = "ap-southeast-1";
-const GITHUB_REPO: string = "jagnani73/payonce";
+// GitHub signs this repo's OIDC tokens with immutable subject claims: the owner and
+// the repo by name and numeric id (repos/jagnani73/payonce/actions/oidc/customization/sub).
+// A repo deleted and created again under the same name gets a new id, so it cannot deploy.
+const GITHUB_SUBJECT: string = "repo:jagnani73@60016972/payonce@1406848989";
 const DEPLOY_DOCUMENT: string = "PayOnce-Deploy";
 const UBUNTU_AMI: string = "/aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id";
 const CLOUDFRONT_ORIGIN_FACING: string = "com.amazonaws.global.cloudfront.origin-facing";
@@ -198,7 +201,7 @@ export class PayOnceStack extends Stack {
       assumedBy: new iam.WebIdentityPrincipal(github.oidcProviderArn, {
         StringEquals: {
           "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-          "token.actions.githubusercontent.com:sub": `repo:${GITHUB_REPO}:ref:refs/heads/main`,
+          "token.actions.githubusercontent.com:sub": `${GITHUB_SUBJECT}:ref:refs/heads/main`,
         },
       }),
       description: "GitHub Actions on main: upload a release and run PayOnce-Deploy",
