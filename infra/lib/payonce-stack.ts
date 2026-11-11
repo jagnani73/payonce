@@ -1,5 +1,6 @@
 import { Aws, CfnOutput, Duration, Fn, RemovalPolicy, Stack, Tags, type StackProps } from "aws-cdk-lib";
 import * as budgets from "aws-cdk-lib/aws-budgets";
+import * as acm from "aws-cdk-lib/aws-certificatemanager";
 import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
 import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
@@ -27,6 +28,10 @@ const TAGS: { key: string; value: string }[] = [
 export interface PayOnceStackProps extends StackProps {
   // Where both budgets send their emails. Given at deploy time, never committed.
   alertEmail: string;
+  // The public domain and its validated us-east-1 certificate (CertStack). Without
+  // both, the site answers on CloudFront's own *.cloudfront.net name.
+  domain?: string;
+  certificateArn?: string;
 }
 
 // PayOnce on one EC2 instance behind CloudFront, its release bucket, the deploy
@@ -35,6 +40,7 @@ export interface PayOnceStackProps extends StackProps {
 export class PayOnceStack extends Stack {
   constructor(scope: Construct, id: string, props: PayOnceStackProps) {
     super(scope, id, props);
+    const custom: boolean = props.domain !== undefined && props.certificateArn !== undefined;
 
     const vpc: ec2.Vpc = new ec2.Vpc(this, "Vpc", {
       ipAddresses: ec2.IpAddresses.cidr("10.73.0.0/24"),
@@ -160,13 +166,22 @@ export class PayOnceStack extends Stack {
       },
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
       priceClass: cloudfront.PriceClass.PRICE_CLASS_200,
+      ...(custom
+        ? {
+            domainNames: [props.domain!],
+            certificate: acm.Certificate.fromCertificateArn(this, "Certificate", props.certificateArn!),
+            minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
+          }
+        : {}),
     });
+    const publicHost: string = custom ? props.domain! : cdn.distributionDomainName;
 
     // Read by payonce-env on the instance. Parameters, not user data, so the
-    // instance does not wait on the distribution.
+    // instance does not wait on the distribution. The name predates the custom
+    // domain: it holds whichever host the page is public at (PUBLIC_ORIGIN).
     new ssm.StringParameter(this, "PublicDomain", {
       parameterName: "/payonce/cloudfront-domain",
-      stringValue: cdn.distributionDomainName,
+      stringValue: publicHost,
     });
     new ssm.StringParameter(this, "OriginHeader", {
       parameterName: "/payonce/origin-header",
@@ -283,7 +298,7 @@ export class PayOnceStack extends Stack {
       });
     }
 
-    new CfnOutput(this, "Url", { value: `https://${cdn.distributionDomainName}` });
+    new CfnOutput(this, "Url", { value: `https://${publicHost}` });
     new CfnOutput(this, "InstanceId", { value: server.ref });
     new CfnOutput(this, "ReleaseBucket", { value: releases.bucketName });
     new CfnOutput(this, "DeployRoleArn", { value: deployRole.roleArn });
