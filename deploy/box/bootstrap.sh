@@ -25,6 +25,8 @@ for _ in $(seq 1 60); do
 done
 
 apt-get update -q
+# No SSH on this box: Session Manager is the only shell, so sshd goes entirely.
+apt-get purge -y -q openssh-server
 apt-get install -y -q nginx nftables unzip xz-utils unattended-upgrades ca-certificates curl
 printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' >/etc/apt/apt.conf.d/20auto-upgrades
 systemctl restart systemd-journald
