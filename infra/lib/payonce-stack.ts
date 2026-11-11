@@ -250,8 +250,9 @@ export class PayOnceStack extends Stack {
       subscribers: emails,
     });
     const limits: { id: string; name: string; usd: number; includeCredit: boolean; notify: budgets.CfnBudget.NotificationWithSubscribersProperty[] }[] = [
-      // What the account uses before credits.
-      { id: "GrossBudget", name: "payonce-gross-usage", usd: 30, includeCredit: false, notify: [over("FORECASTED", 20), over("ACTUAL", 30)] },
+      // What the account uses before credits. A normal month is about $20, so the
+      // forecast email is set above it.
+      { id: "GrossBudget", name: "payonce-gross-usage", usd: 30, includeCredit: false, notify: [over("FORECASTED", 25), over("ACTUAL", 30)] },
       // What is left after credits: real money.
       { id: "NetBudget", name: "payonce-real-money", usd: 1, includeCredit: true, notify: [over("ACTUAL", 1)] },
     ];

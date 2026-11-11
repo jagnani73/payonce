@@ -64,7 +64,7 @@ PayOnce runs live on one EC2 instance in ap-southeast-1, behind CloudFront, with
 
 ### Money guards
 
-- There are two budgets, each with an action that stops the instance through SSM's `AWS-StopEC2Instance`: `payonce-gross-usage`, usage before credits, $30 a month, email when the forecast passes $20 and when actual passes $30, stopping at $30; and `payonce-real-money`, after credits, $1 a month, email and stop when actual passes $1.
+- There are two budgets, each with an action that stops the instance through SSM's `AWS-StopEC2Instance`: `payonce-gross-usage`, usage before credits, $30 a month, email when the forecast passes $25 and when actual passes $30, stopping at $30; and `payonce-real-money`, after credits, $1 a month, email and stop when actual passes $1.
 - Their email address comes from `-c alertEmail=` at synth and deploy, and is never committed. The budget role may only stop this instance through SSM and start that one automation.
 - The account's "My Zero-Spend Budget" is not part of the stack and is never touched.
 - `DAILY_PAYMENT_CAP` limits the payments the page starts in a UTC day ([web-server.md](web-server.md)), and the nginx limits slow down anyone hammering the API.
@@ -93,7 +93,7 @@ PayOnce runs live on one EC2 instance in ap-southeast-1, behind CloudFront, with
 - Visitors can record callbacks, and each makes a beneficiary record in the sandbox. Nothing caps that but nginx's write limit.
 - Ask why is off with no model key. The page says so on the card, and the route answers 503.
 - The origin header cannot be rotated without replacing the Elastic IP or the stack. Anyone with read access to the account can read it, which is fine: the security group already admits only CloudFront.
-- The budgets' forecast needs some weeks of data, so the $20 forecast email may come late or not at all in the first month. A full month of this stack is about $20 before credits, so December may send it.
+- A full month of this stack is about $20 before credits, so the forecast email, at $25, means something runs above normal. The forecast needs some weeks of data, so it may come late or not at all in the first month.
 - A stopped instance still pays for its Elastic IP and disk.
 - `pnpm install` runs esbuild's install script, the only one `pnpm-workspace.yaml` allows, as `payonce` in the sandbox.
 - pnpm 12 fetches its native binary into the corepack home the first time it runs. The first boot runs it as root, so `payonce` only ever reads that folder. If the folder is ever cleared, installs fail until root runs `pnpm --version` with `COREPACK_HOME=/var/cache/payonce/corepack`.
