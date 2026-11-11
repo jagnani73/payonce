@@ -26,7 +26,11 @@ done
 
 apt-get update -q
 # No SSH on this box: Session Manager is the only shell, so sshd goes entirely.
+systemctl disable --now ssh.socket ssh.service 2>/dev/null || true
 apt-get purge -y -q openssh-server
+systemctl daemon-reload
+# Start from every pending update, not only the security ones unattended-upgrades takes.
+apt-get upgrade -y -q -o Dpkg::Options::=--force-confold
 apt-get install -y -q nginx nftables unzip xz-utils unattended-upgrades ca-certificates curl
 printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' >/etc/apt/apt.conf.d/20auto-upgrades
 systemctl restart systemd-journald
@@ -82,4 +86,4 @@ systemctl restart nginx
 
 systemctl enable payonce.service
 /usr/local/lib/payonce/payonce-env || echo "payonce-env could not run yet. It runs again before PayOnce starts"
-echo "PayOnce base installed. Deploy a release from CI, then enable payonce-morning.timer"
+echo "PayOnce base installed. It starts once CI deploys a release. The nightly morning timer stays off until the owner turns it on."
