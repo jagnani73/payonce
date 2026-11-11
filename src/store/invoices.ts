@@ -262,6 +262,20 @@ export class InvoiceStore {
     ).map(toObligation);
   }
 
+  // How many payments started at or after since, an ISO time: every invoice whose
+  // first timeline line is that late, except the ones PayOnce found paid outside
+  // it. Only the server's daily cap reads it, and nothing that moves money.
+  paymentsStartedSince(since: string): number {
+    const row: { started: number } = this.db
+      .prepare(
+        `SELECT COUNT(*) AS started FROM obligations o
+          WHERE o.origin <> 'outside'
+            AND (SELECT e.at FROM events e WHERE e.invoice_id = o.invoice_id ORDER BY e.id LIMIT 1) >= ?`,
+      )
+      .get(since) as unknown as { started: number };
+    return Number(row.started);
+  }
+
   // Every invoice as the scans that compare one with all the others read it:
   // likelyDuplicates, sameNumberForSupplier, a pay run's checks and the callback's
   // check for another payment starting. Only the columns they test, so a stored

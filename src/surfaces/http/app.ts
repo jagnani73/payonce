@@ -21,6 +21,7 @@ import type { CashReport } from "../../store/read/cash.js";
 import { liveFrom, type Live } from "../../views/context.js";
 import type { IncidentView } from "../../views/contract.js";
 import { incidentView } from "../../views/incident.js";
+import { DailyCap } from "./daily-cap.js";
 import { HttpError } from "./http.js";
 
 const EMAILS_DIR: URL = new URL("../../../fixtures/emails/", import.meta.url);
@@ -57,6 +58,8 @@ export interface HttpApp extends HttpParts {
   inTurn: <T>(invoiceId: string, step: () => T) => Promise<T>;
   emailThreads: () => string[];
   alertsStatus: () => AlertsStatus;
+  // DAILY_PAYMENT_CAP, asked by every route that starts a payment.
+  dailyCap: DailyCap;
 }
 
 export function httpApp(parts: HttpParts): HttpApp {
@@ -146,5 +149,7 @@ export function httpApp(parts: HttpParts): HttpApp {
     );
   }
 
-  return { ...parts, live, isWatching, requireObligation, incident, inTurn, emailThreads, alertsStatus };
+  const dailyCap: DailyCap = new DailyCap(engine.ledger, settings.server.dailyPaymentCap);
+
+  return { ...parts, live, isWatching, requireObligation, incident, inTurn, emailThreads, alertsStatus, dailyCap };
 }

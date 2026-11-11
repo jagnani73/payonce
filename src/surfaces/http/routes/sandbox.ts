@@ -26,7 +26,7 @@ const SCRIPTED: SandboxScenarios = { scenarios: SCENARIOS, defaultScenario: DEFA
 // supplier's emails, and the duplicate lock test. PayOnce only ever runs against
 // the sandbox, so pnpm ui always serves them.
 export function sandboxRoutes(app: HttpApp): Route[] {
-  const { engine, agent, bank, requireObligation, incident, inTurn, emailThreads } = app;
+  const { engine, agent, bank, requireObligation, incident, inTurn, emailThreads, dailyCap } = app;
 
   async function startScenario(request: IncomingMessage): Promise<PaymentCreated> {
     const body: Record<string, unknown> = await readJson(request);
@@ -76,7 +76,9 @@ export function sandboxRoutes(app: HttpApp): Route[] {
     const invoiceId: string = given === "" ? newInvoiceId(engine.ledger) : given;
     let obligation: Obligation;
     try {
-      obligation = await openScenario(engine, invoiceId, scenarioId, startedBy, dueDate === "" ? null : dueDate);
+      obligation = await dailyCap.starting(
+        (): Promise<Obligation> => openScenario(engine, invoiceId, scenarioId, startedBy, dueDate === "" ? null : dueDate),
+      );
     } catch (error: unknown) {
       // Airwallex is read before the invoice is written, so nothing is stored. The
       // person reads PayOnce's words first and Airwallex's after them.

@@ -26,6 +26,7 @@ import { cashReport, payRunLines, type CashReport } from "../../store/read/cash.
 import { printableError, say, sayError, stampLines } from "../../text/printable.js";
 import { readInvoiceSnapshots } from "../../views/snapshot.js";
 import { httpApp, type HttpApp } from "./app.js";
+import { describeDailyCap } from "./daily-cap.js";
 import { describePublicOrigin, HOST, requestListener, type Route } from "./router.js";
 import { alertRoutes } from "./routes/alerts.js";
 import { cashRoutes } from "./routes/cash.js";
@@ -230,7 +231,7 @@ function main(): void {
     say(describeAlerts(alertSetting));
     say(describeReconSetting(reconSetting));
     // Only when set, so a server without them prints what it always did.
-    for (const line of [describePublicOrigin(settings.server.publicOrigin)]) {
+    for (const line of [describePublicOrigin(settings.server.publicOrigin), describeDailyCap(settings.server.dailyPaymentCap)]) {
       if (line !== null) {
         say(line);
       }

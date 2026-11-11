@@ -11,6 +11,7 @@ import {
   WaitingRunError,
   type Run,
   type RunApproval,
+  type RunRow,
 } from "../../../store/ledger.js";
 import type { Acted, Notice, RunsView, RunView } from "../../../views/contract.js";
 import { checkedRowViews, runsView, runView, sameFileText } from "../../../views/runs.js";
@@ -29,7 +30,7 @@ const EXAMPLE_FILE: URL = new URL("../../../../fixtures/pay-run-example.csv", im
 // approving, checking or cancelling one. Every action answers the run as it is
 // after it.
 export function runRoutes(app: HttpApp): Route[] {
-  const { engine, settings, agent, live, startRelease } = app;
+  const { engine, settings, agent, live, startRelease, dailyCap } = app;
 
   function requireRun(raw: string): Run {
     const run: Run | undefined = RUN_ID_PATTERN.test(raw) ? engine.ledger.run(Number(raw)) : undefined;
@@ -125,6 +126,10 @@ export function runRoutes(app: HttpApp): Route[] {
         problems: parsed.problems.map((problem: FileProblem) => ({ line: problem.line, text: problem.message })),
       });
     }
+    // Every row may turn out to pay, so a file is checked against the cap by its
+    // rows before any Airwallex read. The approval checks the rows to pay again.
+    const rows: number = parsed.file.rows.length;
+    dailyCap.check(rows, `This file has ${rows} ${rows === 1 ? "row" : "rows"}`);
     let runId: number;
     try {
       runId = await uploadRun(engine, parsed.file, uploadedBy);
@@ -164,6 +169,14 @@ export function runRoutes(app: HttpApp): Route[] {
     const approvalId: unknown = body["approvalId"];
     if (typeof approvalId !== "number" || !Number.isInteger(approvalId)) {
       throw new HttpError(400, "Say which approval request is being approved");
+    }
+    // The release starts a payment for each row to pay, so every signoff is
+    // refused while they would pass today's cap.
+    if (run.state === "waiting") {
+      const toPay: number = engine.ledger
+        .runRows(run.id)
+        .filter((row: RunRow): boolean => row.action === "pay" && row.state === "waiting").length;
+      dailyCap.check(toPay, `Pay run ${run.id} pays ${toPay} ${toPay === 1 ? "row" : "rows"}`);
     }
     const after: RunApproval = await inRunTurn(run.id, (): RunApproval =>
       approveRun(engine.ledger, engine.approvals, run.id, approver, approvalId),

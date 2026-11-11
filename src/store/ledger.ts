@@ -386,6 +386,10 @@ export class Ledger {
     return this.repos.invoices.obligationsFor(beneficiaryId);
   }
 
+  paymentsStartedSince(since: string): number {
+    return this.repos.invoices.paymentsStartedSince(since);
+  }
+
   addEvent(
     invoiceId: string,
     kind: EventKind,

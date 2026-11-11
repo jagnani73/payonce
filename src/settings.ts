@@ -47,6 +47,14 @@ export interface PublicOriginSetting {
   problem: string | null;
 }
 
+// DAILY_PAYMENT_CAP: the most payments the page and its API start in a UTC day,
+// pay run rows included. Null is no cap. A value PayOnce cannot read is 0, so
+// nothing starts, and problem says why.
+export interface DailyPaymentCap {
+  cap: number | null;
+  problem: string | null;
+}
+
 export interface ServerSettings {
   port: number;
   webhookPort: number;
@@ -57,6 +65,7 @@ export interface ServerSettings {
   webhookUrl: string | undefined;
   cloudflared: string;
   publicOrigin: PublicOriginSetting;
+  dailyPaymentCap: DailyPaymentCap;
 }
 
 export interface McpSettings {
@@ -89,6 +98,7 @@ const DEFAULT_OUTAGE_FAILURES: number = 3;
 const DEFAULT_OUTAGE_WINDOW_MINUTES: number = 30;
 const DEFAULT_RECON_EVERY_MINUTES: number = 10;
 const MAX_RECON_EVERY_MINUTES: number = 1440;
+const MAX_DAILY_PAYMENT_CAP: number = 10_000;
 const MS_PER_MINUTE: number = 60_000;
 const SLACK_HOSTS: readonly string[] = ["hooks.slack.com"];
 const DISCORD_HOSTS: readonly string[] = ["discord.com", "discordapp.com"];
@@ -124,6 +134,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
       webhookUrl: env["WEBHOOK_URL"],
       cloudflared: env["CLOUDFLARED"] ?? "cloudflared",
       publicOrigin: publicOrigin(env),
+      dailyPaymentCap: dailyPaymentCap(env),
     },
     mcp: {
       ledger: env["PAYONCE_LEDGER"] ?? "",
@@ -301,6 +312,22 @@ function publicOrigin(env: NodeJS.ProcessEnv): PublicOriginSetting {
     };
   }
   return { origin: url.origin, host: url.host, problem: null };
+}
+
+// DAILY_PAYMENT_CAP, a whole number from 0 to 10000, where 0 starts nothing.
+function dailyPaymentCap(env: NodeJS.ProcessEnv): DailyPaymentCap {
+  const raw: string = (env["DAILY_PAYMENT_CAP"] ?? "").trim();
+  if (raw === "") {
+    return { cap: null, problem: null };
+  }
+  const value: number = /^[0-9]{1,5}$/.test(raw) ? Number(raw) : Number.NaN;
+  if (value >= 0 && value <= MAX_DAILY_PAYMENT_CAP) {
+    return { cap: value, problem: null };
+  }
+  return {
+    cap: 0,
+    problem: `DAILY_PAYMENT_CAP is not a whole number from 0 to ${MAX_DAILY_PAYMENT_CAP}, so the page starts no payment`,
+  };
 }
 
 // The MCP server checks PORT is a port before it asks the server for balances.

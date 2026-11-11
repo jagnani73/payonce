@@ -49,7 +49,7 @@ interface PaymentForm {
 }
 
 export function paymentRoutes(app: HttpApp): Route[] {
-  const { engine, agent, bank, settings, live, cash } = app;
+  const { engine, agent, bank, settings, live, cash, dailyCap } = app;
   const records: Map<string, { at: number; read: Promise<RecordRead> }> = new Map();
 
   function readForm(body: Record<string, unknown>): PaymentForm {
@@ -225,7 +225,9 @@ export function paymentRoutes(app: HttpApp): Route[] {
     const { payment, beneficiaryId }: PaymentForm = form;
     let obligation: Obligation;
     try {
-      obligation = await openPayment(engine, payment, (): Promise<Payee> => recordPayee(engine, beneficiaryId, payment));
+      obligation = await dailyCap.starting(
+        (): Promise<Obligation> => openPayment(engine, payment, (): Promise<Payee> => recordPayee(engine, beneficiaryId, payment)),
+      );
     } catch (error: unknown) {
       throw notOpened(error);
     }
