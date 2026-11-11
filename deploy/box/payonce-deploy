@@ -1,0 +1,83 @@
+#!/bin/bash
+# payonce-deploy <commit sha>: the PayOnce-Deploy SSM document runs it as root.
+# Downloads releases/<sha>.tar.gz from the release bucket, installs it in
+# /opt/payonce/releases/<sha>, points /opt/payonce/current at it and restarts
+# PayOnce. If the server does not answer within 60 s, it switches back to the
+# release before, restarts that, and exits 1. Keeps the newest 3 releases.
+set -euo pipefail
+umask 022
+sha="${1:-}"
+if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "usage: payonce-deploy <40 lower-case hex characters>" >&2
+  exit 2
+fi
+. /etc/payonce/stack.env
+export HOME=/root COREPACK_HOME=/var/cache/payonce/corepack COREPACK_ENABLE_DOWNLOAD_PROMPT=0 COREPACK_ENABLE_AUTO_PIN=0
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+exec 9>/run/payonce-ops.lock
+flock -w 600 9
+
+releases=/opt/payonce/releases
+target="$releases/$sha"
+previous=$(readlink -e /opt/payonce/current 2>/dev/null || true)
+
+healthy() {
+  for _ in $(seq 1 30); do
+    if curl -fsS -o /dev/null --max-time 3 http://127.0.0.1:4310/api/status && systemctl is-active --quiet payonce; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+point_at() {
+  ln -sfn "$1" /opt/payonce/current.next
+  mv -Tf /opt/payonce/current.next /opt/payonce/current
+}
+
+if [[ "$previous" != "$target" ]]; then
+  echo "Downloading release $sha"
+  rm -rf "$target"
+  mkdir -p "$target"
+  aws s3 cp "s3://$RELEASE_BUCKET/releases/$sha.tar.gz" "$target.tar.gz" --region "$AWS_REGION" --only-show-errors
+  tar -xzf "$target.tar.gz" -C "$target" --no-same-owner
+  rm -f "$target.tar.gz"
+  echo "Installing dependencies"
+  (cd "$target" && pnpm install --frozen-lockfile --store-dir /var/cache/payonce/pnpm-store --reporter append-only)
+  touch "$target"
+fi
+
+point_at "$target"
+echo "Restarting PayOnce on $sha"
+systemctl restart payonce || true
+if healthy; then
+  echo "PayOnce answers on $sha"
+else
+  echo "PayOnce did not answer within 60 s on $sha. Last lines:" >&2
+  journalctl -u payonce-env -u payonce -n 30 --no-pager -o cat >&2 || true
+  if [[ -n "$previous" && -d "$previous" && "$previous" != "$target" ]]; then
+    echo "Switching back to $(basename "$previous")" >&2
+    point_at "$previous"
+    systemctl restart payonce || true
+    if healthy; then
+      echo "The release before answers again" >&2
+    else
+      echo "The release before does not answer either" >&2
+    fi
+    rm -rf "$target"
+  else
+    systemctl stop payonce || true
+  fi
+  exit 1
+fi
+
+current=$(readlink -e /opt/payonce/current)
+find "$releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -rn | tail -n +4 | cut -d' ' -f2- |
+  while read -r old; do
+    if [[ "$old" != "$current" ]]; then
+      echo "Removing old release $(basename "$old")"
+      rm -rf "$old"
+    fi
+  done

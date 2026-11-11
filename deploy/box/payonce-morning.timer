@@ -1,0 +1,9 @@
+[Unit]
+Description=PayOnce fresh morning at 03:00 Singapore time
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 Asia/Singapore
+Persistent=false
+
+[Install]
+WantedBy=timers.target

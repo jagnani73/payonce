@@ -1,0 +1,45 @@
+[Unit]
+Description=PayOnce (pnpm ui, page prebuilt)
+Wants=network-online.target
+After=network-online.target payonce-env.service
+Requires=payonce-env.service
+# Nothing to run until the first release is deployed.
+ConditionPathExists=/opt/payonce/current/package.json
+
+[Service]
+Type=simple
+User=payonce
+Group=payonce
+# The ledger is payonce.db in the working directory, outside every release.
+WorkingDirectory=/var/lib/payonce
+EnvironmentFile=/opt/payonce/current/deploy/payonce.env
+EnvironmentFile=/run/payonce/runtime.env
+ExecStart=/opt/payonce/current/node_modules/.bin/tsx --tsconfig /opt/payonce/current/tsconfig.json /opt/payonce/current/src/surfaces/http/main.ts
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+MemoryMax=1200M
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/payonce
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+# The app needs no instance role: only the root steps around it read AWS.
+IPAddressDeny=169.254.169.254/32 fd00:ec2::254/128
+
+[Install]
+WantedBy=multi-user.target

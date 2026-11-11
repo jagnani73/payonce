@@ -1,0 +1,8 @@
+[Unit]
+Description=PayOnce settings from Parameter Store
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/payonce/payonce-env

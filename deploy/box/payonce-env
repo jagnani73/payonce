@@ -1,0 +1,42 @@
+#!/bin/bash
+# Runs as root before every start of payonce.service. Reads Parameter Store and
+# writes the Airwallex keys and PUBLIC_ORIGIN to /run/payonce/runtime.env (0600,
+# read by systemd), and the CloudFront origin header nginx requires to
+# /etc/nginx/payonce-origin.conf. It never prints a value.
+set -euo pipefail
+umask 077
+. /etc/payonce/stack.env
+
+param() {
+  local value
+  if ! value=$(aws ssm get-parameter --region "$AWS_REGION" --name "$1" --with-decryption --query Parameter.Value --output text 2>/dev/null); then
+    echo "payonce-env: cannot read $1 from Parameter Store" >&2
+    return 1
+  fi
+  if [[ ! "$value" =~ $2 ]]; then
+    echo "payonce-env: $1 holds characters PayOnce does not take" >&2
+    return 1
+  fi
+  printf '%s' "$value"
+}
+
+# The header first: it needs only what the stack wrote, so nginx is right even
+# before the Airwallex keys are in Parameter Store.
+domain=$(param /payonce/cloudfront-domain '^[a-z0-9.-]+$')
+header=$(param /payonce/origin-header '^[A-Za-z0-9-]+$')
+rule=$(printf 'if ($http_x_origin_verify != "%s") { return 403; }' "$header")
+if [[ "$(cat /etc/nginx/payonce-origin.conf 2>/dev/null)" != "$rule" ]]; then
+  tmp=$(mktemp /etc/nginx/payonce-origin.conf.XXXXXX)
+  printf '%s\n' "$rule" >"$tmp"
+  mv -f "$tmp" /etc/nginx/payonce-origin.conf
+  nginx -t -q && systemctl try-reload-or-restart nginx
+  echo "payonce-env: nginx now requires the current origin header"
+fi
+
+client_id=$(param /payonce/AWX_CLIENT_ID '^[A-Za-z0-9._~+/=-]+$')
+api_key=$(param /payonce/AWX_API_KEY '^[A-Za-z0-9._~+/=-]+$')
+install -d -m 0700 /run/payonce
+tmp=$(mktemp /run/payonce/runtime.env.XXXXXX)
+printf 'AWX_CLIENT_ID=%s\nAWX_API_KEY=%s\nPUBLIC_ORIGIN=https://%s\n' "$client_id" "$api_key" "$domain" >"$tmp"
+mv -f "$tmp" /run/payonce/runtime.env
+echo "payonce-env: settings written"

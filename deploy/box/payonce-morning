@@ -1,0 +1,36 @@
+#!/bin/bash
+# payonce-morning: the nightly fresh morning, run as root by payonce-morning.timer.
+# Stops PayOnce, moves the ledger aside with pnpm reset's script, deletes ledgers
+# moved aside more than 3 days ago, starts PayOnce again and sets up the demo's
+# morning with scripts/demo-morning.mjs, which makes 5 sandbox transfers.
+set -euo pipefail
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+app=/opt/payonce/current
+if [[ ! -f "$app/package.json" ]]; then
+  echo "payonce-morning: no release is deployed yet" >&2
+  exit 1
+fi
+
+exec 9>/run/payonce-ops.lock
+flock -w 600 9
+
+healthy() {
+  for _ in $(seq 1 30); do
+    if curl -fsS -o /dev/null --max-time 3 http://127.0.0.1:4310/api/status && systemctl is-active --quiet payonce; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+cd /var/lib/payonce
+systemctl stop payonce
+runuser -u payonce -- "$app/node_modules/.bin/tsx" --tsconfig "$app/tsconfig.json" "$app/src/surfaces/cli/reset.ts"
+find /var/lib/payonce -maxdepth 1 -type f -name 'payonce.*.db' -mmin +4320 -print -delete
+systemctl start payonce
+if ! healthy; then
+  echo "payonce-morning: PayOnce did not answer within 60 s after the reset" >&2
+  exit 1
+fi
+runuser -u payonce -- node "$app/scripts/demo-morning.mjs" http://127.0.0.1:4310
