@@ -1,0 +1,8 @@
+{
+  "app": "tsx bin/payonce.ts",
+  "versionReporting": false,
+  "context": {
+    "@aws-cdk/core:enablePartitionLiterals": true,
+    "@aws-cdk/aws-iam:minimizePolicies": true
+  }
+}
