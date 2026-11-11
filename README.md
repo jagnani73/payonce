@@ -277,9 +277,11 @@ The live copy runs on one EC2 instance in ap-southeast-1 behind CloudFront, with
 ```bash
 aws login --profile payonce
 pnpm --dir infra install
-pnpm --dir infra cdk synth --profile payonce -c alertEmail=you@example.com    # review it
-pnpm --dir infra cdk deploy --profile payonce -c alertEmail=you@example.com
+pnpm --dir infra cdk synth PayOnce --profile payonce -c alertEmail=you@example.com    # review it
+pnpm --dir infra cdk deploy PayOnce --profile payonce -c alertEmail=you@example.com
 ```
+
+That serves the site on its `*.cloudfront.net` name. For the custom domain, deploy the `PayOnceCert` stack (us-east-1), add the validation CNAME it waits for and a CNAME from the domain to the distribution at your DNS, then deploy `PayOnce` again with `-c certificateArn=<the CertificateArn it printed>`.
 
 The deploy prints `Url`, `InstanceId`, `ReleaseBucket` and `DeployRoleArn`. Then:
 
@@ -315,7 +317,7 @@ The server and your local PayOnce share one Airwallex sandbox account, so each s
 
 ```bash
 aws s3 rm s3://<ReleaseBucket> --recursive --profile payonce
-pnpm --dir infra cdk destroy --profile payonce -c alertEmail=you@example.com
+pnpm --dir infra cdk destroy PayOnce PayOnceCert --profile payonce -c alertEmail=you@example.com
 aws ssm delete-parameters --profile payonce --region ap-southeast-1 --names /payonce/AWX_CLIENT_ID /payonce/AWX_API_KEY
 ```
 

@@ -24,10 +24,10 @@ PayOnce runs live on one EC2 instance in ap-southeast-1, behind CloudFront, with
 
 ### The front door
 
-- CloudFront serves `https://<id>.cloudfront.net` with its default certificate, redirects HTTP to HTTPS and talks to the origin over HTTP on port 80. Its origin is the Elastic IP's public name, `ec2-a-b-c-d.ap-southeast-1.compute.amazonaws.com`.
+- CloudFront serves `https://payonce.jagnani73.com` with an ACM certificate from the `PayOnceCert` stack in us-east-1 (CloudFront takes certificates only from there), at TLS 1.2 or later. The deploy passes the certificate's ARN as `-c certificateArn=...`; without it the stack falls back to `https://<id>.cloudfront.net` and its default certificate. The domain's DNS is outside AWS: a CNAME from `payonce` to the distribution, and ACM's validation CNAME, which must stay so the certificate renews. `/payonce/cloudfront-domain` holds whichever host is public, and `PUBLIC_ORIGIN` follows it, so the app accepts actions on that one host only. CloudFront redirects HTTP to HTTPS and talks to the origin over HTTP on port 80. Its origin is the Elastic IP's public name, `ec2-a-b-c-d.ap-southeast-1.compute.amazonaws.com`.
 - Nothing is cached (`CachingDisabled`). It forwards every viewer header, Host included, and CloudFront's own headers (`AllViewerAndCloudFrontHeaders-2022-06`), and adds the security headers policy.
 - CloudFront sends `X-Origin-Verify` with a value made of the stack id and the Elastic IP's allocation id. nginx answers 403 to any request without it, and removes it before the app sees the request.
-- nginx limits each viewer, by the address in `CloudFront-Viewer-Address`: 20 requests a second with a burst of 100, and 30 writes a minute with a burst of 20. Past either it answers 429. It takes bodies up to 3 MB, the app's own upload limit, and sends no version.
+- nginx limits each viewer, by the address in `CloudFront-Viewer-Address`: 20 requests a second with a burst of 100, and 30 writes a minute with a burst of 20. Past either it answers 429. A request without that header gets 403, since an empty key would escape both limits. It takes bodies up to 3 MB, the app's own upload limit, and sends no version.
 - The stack publishes the distribution's domain and the header value as `/payonce/cloudfront-domain` and `/payonce/origin-header`, plain SSM parameters. `payonce-env` reads them, so the instance never waits on the distribution.
 
 ### The service
