@@ -18,6 +18,7 @@ const FILES: readonly BoxFile[] = [
   { name: "payonce-morning.service", path: "/etc/systemd/system/payonce-morning.service", mode: "0644" },
   { name: "payonce-morning.timer", path: "/etc/systemd/system/payonce-morning.timer", mode: "0644" },
   { name: "payonce-env", path: "/usr/local/lib/payonce/payonce-env", mode: "0755" },
+  { name: "payonce-sandbox.sh", path: "/usr/local/lib/payonce/sandbox.sh", mode: "0644" },
   { name: "payonce-deploy", path: "/usr/local/sbin/payonce-deploy", mode: "0755" },
   { name: "payonce-morning", path: "/usr/local/sbin/payonce-morning", mode: "0755" },
   { name: "nginx-payonce.conf", path: "/etc/nginx/sites-available/payonce", mode: "0644" },

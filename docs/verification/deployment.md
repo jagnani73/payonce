@@ -18,3 +18,10 @@ Nothing was created in AWS. The only AWS calls were `cdk synth`'s read-only look
 - nft 1.0.9 from Ubuntu 24.04's package, in a throwaway user and network namespace, checked and loaded `imds-block.nft` twice.
 - `bash -n` passed on every script and on the assembled user data.
 - Not checked: shellcheck, which could not run here; the stack itself, the first boot, a deploy through SSM, CloudFront, the budgets and their actions. Those wait for the first deploy.
+
+## 2026-11-11: installing releases as payonce
+
+- In WSL, with Node 24 from nodejs.org checked against its SHASUMS256: pnpm 12.5.1 fetched its native binary on its first run, so a corepack home nobody had run it from failed read-only. Run once by its owner first, as the first boot now does, and then made read-only, it worked.
+- `pnpm install --frozen-lockfile --package-import-method copy` of a release ran in a transient unit with the deploy's sandbox properties (all but `User=`, `Group=` and the IMDS unit, which need the system manager) and finished in 8 s. Nothing in the corepack home changed, every installed file was world-readable, and the only hard links were esbuild's binary inside the release, none shared with the store. The installed server answered 200 for its status and its page.
+- `bash -n` passed on the scripts and the assembled user data, which was 13.5 KB of 16 KB, and the template 40.9 KB of 50 KiB.
+- Not checked: the `chown` to root and back, which needs root.

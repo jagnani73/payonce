@@ -47,7 +47,10 @@ export COREPACK_HOME=/var/cache/payonce/corepack COREPACK_ENABLE_DOWNLOAD_PROMPT
 mkdir -p "$COREPACK_HOME" /var/cache/payonce/pnpm-store
 corepack enable --install-directory /usr/local/bin pnpm
 corepack install -g pnpm@12.5.1
+# pnpm 12 fetches its native binary on its first run. Root runs it here, so the
+# payonce user, which installs releases, only ever reads the corepack home.
 pnpm --version
+chmod -R a+rX "$COREPACK_HOME"
 
 # AWS CLI v2 for arm64.
 curl -fsSL -o awscliv2.zip https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip

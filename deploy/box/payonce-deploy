@@ -1,8 +1,9 @@
 #!/bin/bash
 # payonce-deploy <commit sha>: the PayOnce-Deploy SSM document runs it as root.
-# Downloads releases/<sha>.tar.gz from the release bucket, installs it in
-# /opt/payonce/releases/<sha>, points /opt/payonce/current at it and restarts
-# PayOnce. If the server does not answer within 60 s, it switches back to the
+# Downloads releases/<sha>.tar.gz from the release bucket and unpacks it in
+# /opt/payonce/releases/<sha>. pnpm installs it as payonce in the sandbox, and
+# then the release belongs to root, so PayOnce runs code it cannot change. Points
+# /opt/payonce/current at it and restarts PayOnce. If the server does not answer within 60 s, it switches back to the
 # release before, restarts that, and exits 1. Keeps the newest 3 releases.
 set -euo pipefail
 umask 022
@@ -12,14 +13,16 @@ if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
   exit 2
 fi
 . /etc/payonce/stack.env
-export HOME=/root COREPACK_HOME=/var/cache/payonce/corepack COREPACK_ENABLE_DOWNLOAD_PROMPT=0 COREPACK_ENABLE_AUTO_PIN=0
-export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export HOME=/root PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+. /usr/local/lib/payonce/sandbox.sh
 
 exec 9>/run/payonce-ops.lock
 flock -w 600 9
 
 releases=/opt/payonce/releases
 target="$releases/$sha"
+store=/var/cache/payonce/pnpm-store
+pnpm_home=/var/cache/payonce/pnpm-home
 previous=$(readlink -e /opt/payonce/current 2>/dev/null || true)
 
 healthy() {
@@ -44,8 +47,18 @@ if [[ "$previous" != "$target" ]]; then
   aws s3 cp "s3://$RELEASE_BUCKET/releases/$sha.tar.gz" "$target.tar.gz" --region "$AWS_REGION" --only-show-errors
   tar -xzf "$target.tar.gz" -C "$target" --no-same-owner
   rm -f "$target.tar.gz"
-  echo "Installing dependencies"
-  (cd "$target" && pnpm install --frozen-lockfile --store-dir /var/cache/payonce/pnpm-store --reporter append-only)
+  echo "Installing dependencies as payonce"
+  install -d -o payonce -g payonce "$store" "$pnpm_home"
+  chown -R payonce:payonce "$target" "$store" "$pnpm_home"
+  # Copies, not hard links: the release then shares no file with the store, so
+  # giving it to root leaves the store payonce's. corepack's pnpm is read only.
+  as_payonce -p "WorkingDirectory=$target" -p "ReadWritePaths=$target $store $pnpm_home" -p UMask=0022 \
+    --setenv=HOME="$pnpm_home" --setenv=XDG_CACHE_HOME="$pnpm_home/cache" --setenv=XDG_STATE_HOME="$pnpm_home/state" \
+    --setenv=XDG_CONFIG_HOME="$pnpm_home/config" --setenv=XDG_DATA_HOME="$pnpm_home/data" \
+    --setenv=COREPACK_HOME=/var/cache/payonce/corepack --setenv=COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+    --setenv=COREPACK_ENABLE_AUTO_PIN=0 \
+    -- /usr/local/bin/pnpm install --frozen-lockfile --store-dir "$store" --package-import-method copy --reporter append-only
+  chown -R root:root "$target"
   touch "$target"
 fi
 

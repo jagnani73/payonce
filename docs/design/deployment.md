@@ -43,7 +43,7 @@ PayOnce runs live on one EC2 instance in ap-southeast-1, behind CloudFront, with
 
 - CI builds a release on main: `git archive` of `src`, `scripts`, `fixtures`, `deploy` and the package files, plus the built `web/dist`. It uploads it as `releases/<sha>.tar.gz` and sends the `PayOnce-Deploy` command with the commit.
 - `PayOnce-Deploy` takes one parameter, `sha`, which must match `^[0-9a-f]{40}$`, and runs `/usr/local/sbin/payonce-deploy` with it as root.
-- `payonce-deploy` unpacks the release into `/opt/payonce/releases/<sha>`, runs `pnpm install --frozen-lockfile`, points `/opt/payonce/current` at it and restarts the service. It waits up to 60 seconds for `GET /api/status` on 127.0.0.1:4310. If that fails it points back at the release before, restarts it and exits 1, and CI fails.
+- `payonce-deploy` downloads and unpacks the release into `/opt/payonce/releases/<sha>` as root. `pnpm install --frozen-lockfile` runs as `payonce` in a transient unit with the service's sandbox, which may write only the release, the pnpm store and pnpm's own folder, and copies packages instead of linking them to the store. Then the release belongs to root, so PayOnce runs code it cannot change. The script points `/opt/payonce/current` at it and restarts the service. It waits up to 60 seconds for `GET /api/status` on 127.0.0.1:4310. If that fails it points back at the release before, restarts it and exits 1, and CI fails.
 - It keeps the newest 3 releases and never removes the current one. It and the morning take the same lock, so they never run at once.
 - `infra/` is a separate pnpm workspace with its own lockfile. CI never installs it, and the release does not include it.
 - The bucket blocks public access, encrypts with SSE-S3, refuses plain HTTP and expires releases after 7 days.
@@ -60,7 +60,7 @@ PayOnce runs live on one EC2 instance in ap-southeast-1, behind CloudFront, with
 
 - `payonce-morning.timer` runs at 03:00 Singapore time (19:00 UTC). It ships disabled.
 - `payonce-morning` stops PayOnce, moves the ledger aside with `src/surfaces/cli/reset.ts`, deletes ledgers moved aside more than 3 days ago, starts PayOnce, waits for it to answer and runs `scripts/demo-morning.mjs`. That makes 5 sandbox transfers and leaves three payments waiting on a person.
-- The reset and the morning script run as `payonce` in transient units with `payonce.service`'s sandbox (`systemd-run`), never through `runuser`.
+- The reset and the morning script run as `payonce` in transient units with `payonce.service`'s sandbox, never through `runuser`. The deploy's install uses the same helper, `as_payonce` in `deploy/box/payonce-sandbox.sh`.
 
 ### Money guards
 
@@ -77,7 +77,7 @@ PayOnce runs live on one EC2 instance in ap-southeast-1, behind CloudFront, with
 - CloudFront in front gives HTTPS with no certificate or domain, and a fixed set of addresses for the security group. The origin header stops someone pointing their own distribution at the instance.
 - The instance holds no GitHub credential. CI pushes the release to S3, and SSM tells the instance to fetch it. The instance can read releases but not write them, and CI can send one command to one instance.
 - The document's regex and the script's own check mean the only thing CI controls on the box is which release runs.
-- The `payonce` user is kept from IMDS twice, by the unit and by nftables, so code PayOnce runs, its dependencies included, cannot take the instance role.
+- The `payonce` user is kept from IMDS twice, by the unit and by nftables, so code PayOnce runs, its dependencies included, cannot take the instance role. Installs run as `payonce` for the same reason: a package's install script runs during them.
 - The request TTL is longer than a day so that the requests the morning opens at 03:00 stay open until the next morning resets the ledger.
 - The instance uses standard CPU credits because unlimited ones can bill for a busy CPU.
 
@@ -95,7 +95,8 @@ PayOnce runs live on one EC2 instance in ap-southeast-1, behind CloudFront, with
 - The origin header cannot be rotated without replacing the Elastic IP or the stack. Anyone with read access to the account can read it, which is fine: the security group already admits only CloudFront.
 - The budgets' forecast needs some weeks of data, so the $20 forecast email may come late or not at all in the first month. A full month of this stack is about $20 before credits, so December may send it.
 - A stopped instance still pays for its Elastic IP and disk.
-- `pnpm install` on the instance runs as root, and runs esbuild's install script, the only one `pnpm-workspace.yaml` allows.
+- `pnpm install` runs esbuild's install script, the only one `pnpm-workspace.yaml` allows, as `payonce` in the sandbox.
+- pnpm 12 fetches its native binary into the corepack home the first time it runs. The first boot runs it as root, so `payonce` only ever reads that folder. If the folder is ever cleared, installs fail until root runs `pnpm --version` with `COREPACK_HOME=/var/cache/payonce/corepack`.
 - The AMI stays the one in `cdk.context.json`. To take a newer one, clear it with `cdk context --reset` and deploy, which replaces the instance.
 - The GitHub OIDC provider can exist once per account. If one exists already, the deploy fails on it.
 - If the morning script fails, as when Airwallex is down, the ledger is empty until the next morning or a manual run of `payonce-morning`.
