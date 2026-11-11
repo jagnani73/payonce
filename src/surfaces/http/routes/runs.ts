@@ -16,6 +16,7 @@ import {
 import type { Acted, Notice, RunsView, RunView } from "../../../views/contract.js";
 import { checkedRowViews, runsView, runView, sameFileText } from "../../../views/runs.js";
 import type { HttpApp } from "../app.js";
+import type { Places } from "../daily-cap.js";
 import { HttpError, MAX_FINDING_LENGTH, name, readJson, RUN_ID_PATTERN, sendJson, text, UPLOAD_BODY_MS } from "../http.js";
 import type { Route } from "../router.js";
 
@@ -127,9 +128,11 @@ export function runRoutes(app: HttpApp): Route[] {
       });
     }
     // Every row may turn out to pay, so a file is checked against the cap by its
-    // rows before any Airwallex read. The approval checks the rows to pay again.
+    // rows before any Airwallex read, and holds their places while it is checked.
+    // An upload starts no payment, so it lets them go when it ends, and the
+    // approval checks the rows to pay again.
     const rows: number = parsed.file.rows.length;
-    dailyCap.check(rows, `This file has ${rows} ${rows === 1 ? "row" : "rows"}`);
+    const places: Places = dailyCap.hold(rows, `This file has ${rows} ${rows === 1 ? "row" : "rows"}`);
     let runId: number;
     try {
       runId = await uploadRun(engine, parsed.file, uploadedBy);
@@ -148,6 +151,8 @@ export function runRoutes(app: HttpApp): Route[] {
         throw new HttpError(422, error.message, { code: "nothing-to-pay", rows: checkedRowViews(engine.ledger, error.rows, Date.now()) });
       }
       throw airwallexDown(error) ?? error;
+    } finally {
+      places.release();
     }
     const view: RunView = runNow(String(runId));
     return { view, notice: checkedNotice(view) };
@@ -171,18 +176,26 @@ export function runRoutes(app: HttpApp): Route[] {
       throw new HttpError(400, "Say which approval request is being approved");
     }
     // The release starts a payment for each row to pay, so every signoff is
-    // refused while they would pass today's cap.
-    if (run.state === "waiting") {
-      const toPay: number = engine.ledger
-        .runRows(run.id)
-        .filter((row: RunRow): boolean => row.action === "pay" && row.state === "waiting").length;
-      dailyCap.check(toPay, `Pay run ${run.id} pays ${toPay} ${toPay === 1 ? "row" : "rows"}`);
+    // refused while they would pass today's cap. The places are held from here,
+    // and once the approval is complete, until the release has written the rows'
+    // invoices, which it does in the transaction that ends the run's wait.
+    const toPay: number =
+      run.state === "waiting"
+        ? engine.ledger.runRows(run.id).filter((row: RunRow): boolean => row.action === "pay" && row.state === "waiting").length
+        : 0;
+    const places: Places = dailyCap.hold(toPay, `Pay run ${run.id} pays ${toPay} ${toPay === 1 ? "row" : "rows"}`);
+    let after: RunApproval;
+    try {
+      after = await inRunTurn(run.id, (): RunApproval => approveRun(engine.ledger, engine.approvals, run.id, approver, approvalId));
+    } catch (error: unknown) {
+      places.release();
+      throw error;
     }
-    const after: RunApproval = await inRunTurn(run.id, (): RunApproval =>
-      approveRun(engine.ledger, engine.approvals, run.id, approver, approvalId),
-    );
     if (after.state === "approved") {
+      places.settleWhen((): boolean => engine.ledger.run(run.id)?.state !== "waiting");
       startRelease(run.id);
+    } else {
+      places.release();
     }
     const left: number = Math.max(0, after.needed - after.signoffs.length);
     return {
