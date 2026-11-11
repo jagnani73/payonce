@@ -2,6 +2,7 @@ import { readFileSync, readdirSync, type Dirent } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { extname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { PublicOriginSetting } from "../../settings.js";
 import { sayError } from "../../text/printable.js";
 import { HttpError, sendJson } from "./http.js";
 
@@ -65,33 +66,42 @@ function matched(pattern: string, pathname: string, parts: string[]): string[] |
 // answer on every load, or read Airwallex for it, so an API GET it sends is
 // refused. The page's own requests are same-origin, and a typed address or a
 // bookmark is none. The CLI and curl send neither header.
-function crossSite(request: IncomingMessage, host: string): boolean {
+function crossSite(request: IncomingMessage, origin: string): boolean {
   const site: string | string[] | undefined = request.headers["sec-fetch-site"];
-  const origin: string | undefined = request.headers.origin;
+  const sent: string | undefined = request.headers.origin;
   return (
     (site !== undefined && site !== "same-origin" && site !== "none") ||
-    (origin !== undefined && origin !== `http://${host}`)
+    (sent !== undefined && sent !== origin)
   );
 }
 
-function guard(request: IncomingMessage, method: string, pathname: string, allowedHosts: ReadonlySet<string>): void {
-  const host: string = request.headers.host ?? "";
-  if (!allowedHosts.has(host)) {
+// allowed maps each Host the server answers to the one Origin its page has there.
+function guard(request: IncomingMessage, method: string, pathname: string, allowed: ReadonlyMap<string, string>): void {
+  const origin: string | undefined = allowed.get(request.headers.host ?? "");
+  if (origin === undefined) {
     throw new HttpError(403, "Forbidden");
   }
   if (method === "GET") {
-    if (pathname.startsWith("/api/") && crossSite(request, host)) {
+    if (pathname.startsWith("/api/") && crossSite(request, origin)) {
       throw new HttpError(403, "Forbidden");
     }
     return;
   }
   const contentType: string = request.headers["content-type"] ?? "";
   if (
-    request.headers.origin !== `http://${host}` ||
+    request.headers.origin !== origin ||
     !contentType.startsWith("application/json")
   ) {
     throw new HttpError(403, "Forbidden");
   }
+}
+
+// The start-up line for PUBLIC_ORIGIN, or null when it is unset.
+export function describePublicOrigin(setting: PublicOriginSetting): string | null {
+  if (setting.problem !== null) {
+    return setting.problem;
+  }
+  return setting.origin === null ? null : `The page also answers at ${setting.origin}, through the proxy in front of it`;
 }
 
 // Every file under web/dist/, by its path from there with forward slashes, found
@@ -140,7 +150,7 @@ function serveStatic(response: ServerResponse, pathname: string, files: Readonly
 // whose method and pattern match answers, and none is 404.
 async function route(
   routes: readonly Route[],
-  allowedHosts: ReadonlySet<string>,
+  allowed: ReadonlyMap<string, string>,
   files: ReadonlySet<string>,
   request: IncomingMessage,
   response: ServerResponse,
@@ -149,7 +159,7 @@ async function route(
   const url: URL = new URL(request.url ?? "/", `http://${HOST}`);
   const pathname: string = url.pathname;
   const parts: string[] = pathname.split("/").filter(Boolean);
-  guard(request, method, pathname, allowedHosts);
+  guard(request, method, pathname, allowed);
 
   if (parts[0] !== "api") {
     if (method !== "GET") {
@@ -170,20 +180,24 @@ async function route(
 }
 
 // The server's request handler. The page and the API answer only on the port's
-// own addresses.
+// own addresses, and at PUBLIC_ORIGIN when it is set.
 export function requestListener(
   routes: readonly Route[],
   port: number,
+  publicOrigin: PublicOriginSetting,
 ): (request: IncomingMessage, response: ServerResponse) => void {
-  const allowedHosts: ReadonlySet<string> = new Set<string>([
-    `${HOST}:${port}`,
-    `localhost:${port}`,
+  const allowed: Map<string, string> = new Map<string, string>([
+    [`${HOST}:${port}`, `http://${HOST}:${port}`],
+    [`localhost:${port}`, `http://localhost:${port}`],
   ]);
+  if (publicOrigin.host !== null && publicOrigin.origin !== null) {
+    allowed.set(publicOrigin.host, publicOrigin.origin);
+  }
   const files: ReadonlySet<string> = pageFiles();
   return (request: IncomingMessage, response: ServerResponse): void => {
     // Every answer, a CSV download or an error included, says not to guess its type.
     response.setHeader("X-Content-Type-Options", "nosniff");
-    route(routes, allowedHosts, files, request, response).catch((error: unknown): void => {
+    route(routes, allowed, files, request, response).catch((error: unknown): void => {
       const status: number = error instanceof HttpError ? error.status : 500;
       const message: string = error instanceof Error ? error.message : String(error);
       if (status === 500) {

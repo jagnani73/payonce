@@ -26,7 +26,7 @@ import { cashReport, payRunLines, type CashReport } from "../../store/read/cash.
 import { printableError, say, sayError, stampLines } from "../../text/printable.js";
 import { readInvoiceSnapshots } from "../../views/snapshot.js";
 import { httpApp, type HttpApp } from "./app.js";
-import { HOST, requestListener, type Route } from "./router.js";
+import { describePublicOrigin, HOST, requestListener, type Route } from "./router.js";
 import { alertRoutes } from "./routes/alerts.js";
 import { cashRoutes } from "./routes/cash.js";
 import { contactRoutes } from "./routes/contacts.js";
@@ -203,7 +203,7 @@ function main(): void {
     ...contactRoutes(app),
   ];
   const start: StartUp = startUp(app);
-  const server: Server = createServer(requestListener(routes, port));
+  const server: Server = createServer(requestListener(routes, port, settings.server.publicOrigin));
 
   // One failed step must not take the server, and every other incident, down with it.
   process.on("unhandledRejection", (reason: unknown): void => {
@@ -229,6 +229,12 @@ function main(): void {
     say(describeOutageRule(settings.outageRule));
     say(describeAlerts(alertSetting));
     say(describeReconSetting(reconSetting));
+    // Only when set, so a server without them prints what it always did.
+    for (const line of [describePublicOrigin(settings.server.publicOrigin)]) {
+      if (line !== null) {
+        say(line);
+      }
+    }
     // The first page load then has balances to show.
     balances.refreshIfOld();
     start.pickUpInterrupted();

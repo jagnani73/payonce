@@ -37,6 +37,16 @@ export interface ModelSettings {
   readerNames: string[];
 }
 
+// PUBLIC_ORIGIN: the https origin a proxy in front of the server serves the page
+// at, such as https://d1234.cloudfront.net. The guard takes its host and origin
+// as well as the loopback ones. Both null when it is unset or unusable, and
+// problem says why it is unusable.
+export interface PublicOriginSetting {
+  origin: string | null;
+  host: string | null;
+  problem: string | null;
+}
+
 export interface ServerSettings {
   port: number;
   webhookPort: number;
@@ -46,6 +56,7 @@ export interface ServerSettings {
   webhooks: string;
   webhookUrl: string | undefined;
   cloudflared: string;
+  publicOrigin: PublicOriginSetting;
 }
 
 export interface McpSettings {
@@ -112,6 +123,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
       webhooks: (env["WEBHOOKS"]?.trim() || "on").toLowerCase(),
       webhookUrl: env["WEBHOOK_URL"],
       cloudflared: env["CLOUDFLARED"] ?? "cloudflared",
+      publicOrigin: publicOrigin(env),
     },
     mcp: {
       ledger: env["PAYONCE_LEDGER"] ?? "",
@@ -271,6 +283,24 @@ function alertSetting(env: NodeJS.ProcessEnv): AlertSetting {
     return off(`ALERT_WEBHOOK_URL is a ${kind === "slack" ? "Slack" : "Discord"} webhook, so set ALERT_FORMAT=${kind}`);
   }
   return { target: { format, url, host: url.hostname, test: false }, problem: null };
+}
+
+// PUBLIC_ORIGIN takes an https origin alone, written as the URL parser writes it:
+// no path, query, fragment or credentials, and a lower-case host.
+function publicOrigin(env: NodeJS.ProcessEnv): PublicOriginSetting {
+  const raw: string = (env["PUBLIC_ORIGIN"] ?? "").trim();
+  if (raw === "") {
+    return { origin: null, host: null, problem: null };
+  }
+  const url: URL | null = parsedUrl(raw);
+  if (url === null || url.protocol !== "https:" || raw.replace(/\/$/, "") !== url.origin) {
+    return {
+      origin: null,
+      host: null,
+      problem: "PUBLIC_ORIGIN is not an https origin such as https://d1234.cloudfront.net, so the page answers only on 127.0.0.1 and localhost",
+    };
+  }
+  return { origin: url.origin, host: url.host, problem: null };
 }
 
 // The MCP server checks PORT is a port before it asks the server for balances.
