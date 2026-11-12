@@ -4,6 +4,8 @@ PayOnce is a payment incident agent for supplier invoices paid through Airwallex
 
 Demo video: VIDEO_LINK
 
+Live demo: https://payonce.jagnani73.com. It runs against the Airwallex sandbox, with no login: pick a name from the top bar and act as that person. Every night at 03:00 Singapore time it starts a fresh morning with three payments waiting for a person.
+
 ![PayOnce's Home screen: three payments wait for an approval, each with its reason, its amount and who can sign it](docs/images/home.jpg)
 
 ## Run it
