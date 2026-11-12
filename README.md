@@ -2,7 +2,7 @@
 
 PayOnce is a payment incident agent for supplier invoices paid through Airwallex: it sends each invoice's transfer and follows it to the bank. When something goes wrong (a failed or stuck payment, a supplier email asking for new bank details, a payout someone sent from the Airwallex web app, a rail outage), it fixes what a fixed policy says is safe and hands the rest to a person, with exact terms to approve or close. It is an entry for the Airwallex Agentic Banking Hackathon 2026, built from starter kit 3 (Payment Ops Incident Commander), and it runs against the Airwallex sandbox only, with no real money.
 
-Demo video: VIDEO_LINK
+Demo video (4:31): https://drive.google.com/file/d/1Q5hfMehzDYxvqbDQg343T4bGNX9Ufxmw/view
 
 Live demo: https://payonce.jagnani73.com. It runs against the Airwallex sandbox, with no login: pick a name from the top bar and act as that person. Every night at 03:00 Singapore time it starts a fresh morning with three payments waiting for a person.
 
